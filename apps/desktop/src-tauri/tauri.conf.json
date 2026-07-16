@@ -29,7 +29,6 @@
   },
   "bundle": {
     "active": true,
-    "icon": [],
     "targets": "all",
     "category": "Productivity",
     "shortDescription": "Local-first extensible desktop companion",
