@@ -98,6 +98,8 @@ Core 包含纯领域逻辑：Pet、Command、Event、Profile、Policy、Permissi
 | 审计 | 轮转 JSONL 或 SQLite | 保留期和导出可配置 |
 | 临时缓存 | Cache 目录 | 可安全删除和重建 |
 
+当前宠物状态实现遵循 `runtime-core → runtime-app → persistence-sqlite` 依赖方向：领域层定义状态与不变量，应用层通过 `PetRepository` 端口组织用例，SQLite 适配器负责事务和版本校验。状态写入成功后才发布到内存，具体决策见 [`adr/ADR-008-versioned-sqlite-snapshots.md`](adr/ADR-008-versioned-sqlite-snapshots.md)。初始数据库版本不包含破坏性迁移；自动备份、迁移失败回滚和只读安全模式必须在首个升级迁移前完成。
+
 ## 6. 事件契约修正
 
 事件 `source` 必须支持以下命名空间：

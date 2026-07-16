@@ -43,6 +43,16 @@ pub enum Emotion {
     Sleepy,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PetAction {
+    Idle,
+    Walk,
+    Sleep,
+    Work,
+    Celebrate,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Position {
     pub x: f64,
@@ -100,6 +110,35 @@ impl Pet {
         Ok(())
     }
 
+    /// Validates a pet restored from an external persistence boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a domain error when the name, position, or vitals violate the
+    /// same invariants enforced for newly created pets.
+    pub fn validate(&self) -> Result<(), PetError> {
+        if self.name.trim().is_empty() || self.name.chars().count() > 64 {
+            return Err(PetError::InvalidName);
+        }
+        if !self.position.x.is_finite() || !self.position.y.is_finite() {
+            return Err(PetError::InvalidPosition);
+        }
+        if self.energy > 100 || self.mood > 100 || self.affinity > 100 {
+            return Err(PetError::InvalidVitals);
+        }
+        Ok(())
+    }
+
+    pub fn apply_action(&mut self, action: PetAction) {
+        (self.state, self.emotion) = match action {
+            PetAction::Idle => (PetState::Idle, Emotion::Neutral),
+            PetAction::Walk => (PetState::Walking, Emotion::Happy),
+            PetAction::Sleep => (PetState::Sleeping, Emotion::Sleepy),
+            PetAction::Work => (PetState::Working, Emotion::Focused),
+            PetAction::Celebrate => (PetState::Interacting, Emotion::Happy),
+        };
+    }
+
     pub fn set_energy(&mut self, energy: i16) {
         self.energy = u8::try_from(energy.clamp(0, 100)).unwrap_or_default();
     }
@@ -111,6 +150,8 @@ pub enum PetError {
     InvalidName,
     #[error("pet position must be finite")]
     InvalidPosition,
+    #[error("pet vitals must be between 0 and 100")]
+    InvalidVitals,
 }
 
 #[cfg(test)]
@@ -136,5 +177,13 @@ mod tests {
             }),
             Err(PetError::InvalidPosition)
         );
+    }
+
+    #[test]
+    fn maps_actions_to_semantic_state() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.apply_action(PetAction::Work);
+        assert_eq!(pet.state, PetState::Working);
+        assert_eq!(pet.emotion, Emotion::Focused);
     }
 }

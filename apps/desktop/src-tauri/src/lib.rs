@@ -1,6 +1,8 @@
-use asterpet_runtime_core::{Command, CommandRisk, Emotion, Pet, PetState, Position};
+use asterpet_persistence_sqlite::{SqlitePersistenceError, SqlitePetRepository};
+use asterpet_runtime_app::{RuntimeError, RuntimeService};
+use asterpet_runtime_core::{Command, Pet, PetAction, Position};
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::{io, path::Path, sync::Mutex};
 use tauri::{
     AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
     menu::{Menu, MenuItem},
@@ -13,14 +15,17 @@ const PET_WINDOW_LABEL: &str = "pet";
 
 #[derive(Debug)]
 struct DesktopState {
-    pet: Mutex<Pet>,
+    runtime: RuntimeService<SqlitePetRepository>,
     click_through: Mutex<bool>,
 }
 
 impl DesktopState {
-    fn new() -> Result<Self, DesktopError> {
+    fn open(database_path: &Path) -> Result<Self, DesktopError> {
         Ok(Self {
-            pet: Mutex::new(Pet::new("Aster")?),
+            runtime: RuntimeService::initialize(
+                SqlitePetRepository::open(database_path)?,
+                "Aster",
+            )?,
             click_through: Mutex::new(false),
         })
     }
@@ -40,16 +45,6 @@ struct MovePetRequest {
     y: f64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum PetAction {
-    Idle,
-    Walk,
-    Sleep,
-    Work,
-    Celebrate,
-}
-
 #[derive(Debug, Error)]
 enum DesktopError {
     #[error("pet state is unavailable")]
@@ -59,7 +54,11 @@ enum DesktopError {
     #[error("pet position must be a finite 32-bit screen coordinate")]
     InvalidPosition,
     #[error(transparent)]
-    Pet(#[from] asterpet_runtime_core::PetError),
+    Runtime(#[from] RuntimeError),
+    #[error(transparent)]
+    Persistence(#[from] SqlitePersistenceError),
+    #[error(transparent)]
+    Io(#[from] io::Error),
     #[error(transparent)]
     Tauri(#[from] tauri::Error),
 }
@@ -76,11 +75,7 @@ impl Serialize for DesktopError {
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, DesktopError> {
-    let pet = state
-        .pet
-        .lock()
-        .map_err(|_| DesktopError::StatePoisoned)?
-        .clone();
+    let pet = state.runtime.snapshot()?;
     let click_through = *state
         .click_through
         .lock()
@@ -101,22 +96,26 @@ fn move_pet(
         x: request.x,
         y: request.y,
     };
-    state
-        .pet
-        .lock()
-        .map_err(|_| DesktopError::StatePoisoned)?
-        .move_to(position)?;
-    app.get_webview_window(PET_WINDOW_LABEL)
-        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?
-        .set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-            screen_x, screen_y,
-        )))?;
-    Command::new(
-        "pet.window.move",
-        serde_json::json!({ "x": request.x, "y": request.y }),
-        CommandRisk::Safe,
-    )
-    .map_err(|error| DesktopError::WindowUnavailable(error.to_string()))
+    let window = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
+    let previous = state.runtime.snapshot()?.position;
+    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+        screen_x, screen_y,
+    )))?;
+    match state.runtime.move_pet(position) {
+        Ok(command) => Ok(command),
+        Err(error) => {
+            if let (Ok(previous_x), Ok(previous_y)) =
+                (screen_coordinate(previous.x), screen_coordinate(previous.y))
+            {
+                let _ = window.set_position(tauri::Position::Physical(
+                    tauri::PhysicalPosition::new(previous_x, previous_y),
+                ));
+            }
+            Err(error.into())
+        }
+    }
 }
 
 fn screen_coordinate(value: f64) -> Result<i32, DesktopError> {
@@ -133,22 +132,7 @@ fn play_pet_action(
     state: State<'_, DesktopState>,
     action: PetAction,
 ) -> Result<Command, DesktopError> {
-    let (pet_state, emotion) = match action {
-        PetAction::Idle => (PetState::Idle, Emotion::Neutral),
-        PetAction::Walk => (PetState::Walking, Emotion::Happy),
-        PetAction::Sleep => (PetState::Sleeping, Emotion::Sleepy),
-        PetAction::Work => (PetState::Working, Emotion::Focused),
-        PetAction::Celebrate => (PetState::Interacting, Emotion::Happy),
-    };
-    let mut pet = state.pet.lock().map_err(|_| DesktopError::StatePoisoned)?;
-    pet.state = pet_state;
-    pet.emotion = emotion;
-    Command::new(
-        "pet.animation.play",
-        serde_json::json!({ "action": action }),
-        CommandRisk::Safe,
-    )
-    .map_err(|error| DesktopError::WindowUnavailable(error.to_string()))
+    Ok(state.runtime.play_action(action)?)
 }
 
 #[tauri::command]
@@ -179,17 +163,23 @@ fn show_control_center(app: &AppHandle) -> Result<(), DesktopError> {
 }
 
 fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
-    WebviewWindowBuilder::new(app, PET_WINDOW_LABEL, WebviewUrl::App("/?view=pet".into()))
-        .title("Aster")
-        .inner_size(260.0, 300.0)
-        .min_inner_size(180.0, 210.0)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .shadow(false)
-        .build()?;
+    let window =
+        WebviewWindowBuilder::new(app, PET_WINDOW_LABEL, WebviewUrl::App("/?view=pet".into()))
+            .title("Aster")
+            .inner_size(260.0, 300.0)
+            .min_inner_size(180.0, 210.0)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .shadow(false)
+            .build()?;
+    let position = app.state::<DesktopState>().runtime.snapshot()?.position;
+    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+        screen_coordinate(position.x)?,
+        screen_coordinate(position.y)?,
+    )))?;
     Ok(())
 }
 
@@ -239,7 +229,9 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            app.manage(DesktopState::new()?);
+            let data_directory = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&data_directory)?;
+            app.manage(DesktopState::open(&data_directory.join("runtime.sqlite3"))?);
             create_pet_window(app.handle())?;
             create_tray(app.handle())?;
             Ok(())
@@ -250,6 +242,15 @@ pub fn run() {
             {
                 api.prevent_close();
                 let _ = window.hide();
+            }
+            if let WindowEvent::Moved(position) = event
+                && window.label() == PET_WINDOW_LABEL
+            {
+                let state = window.state::<DesktopState>();
+                let _ = state.runtime.move_pet(Position {
+                    x: f64::from(position.x),
+                    y: f64::from(position.y),
+                });
             }
         })
         .invoke_handler(tauri::generate_handler![

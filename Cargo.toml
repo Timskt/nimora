@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/runtime-core", "apps/desktop/src-tauri"]
+members = [
+  "crates/persistence-sqlite",
+  "crates/runtime-app",
+  "crates/runtime-core",
+  "apps/desktop/src-tauri",
+]
 resolver = "2"
 
 [workspace.package]
@@ -11,6 +16,7 @@ rust-version = "1.97"
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+rusqlite = { version = "0.38", features = ["bundled"] }
 thiserror = "2.0"
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 uuid = { version = "1.18", features = ["v7", "serde"] }
