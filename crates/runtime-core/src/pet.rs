@@ -101,7 +101,7 @@ impl Pet {
     }
 
     pub fn set_energy(&mut self, energy: i16) {
-        self.energy = u8::try_from(energy.clamp(0, 100)).expect("clamped energy fits in u8");
+        self.energy = u8::try_from(energy.clamp(0, 100)).unwrap_or_default();
     }
 }
 
