@@ -33,6 +33,7 @@
 - 默认角色完成 idle、walk、click、drag、sleep。
 - Command、Event、Profile 和持久化可用。
 - 托盘可以恢复穿透窗口并进入安全模式。
+- 托盘菜单 ID 必须映射到显式动作；打开控制中心、恢复交互、进入/退出安全模式和退出均不得静默吞掉错误。成功动作产生关联事件，失败产生 `desktop.tray.action-failed`，未知菜单 ID 不执行任何副作用。
 - Windows 10/11 与 macOS 12+ 冒烟通过。
 
 安全模式的 M0 自动化证据至少包括：状态与原因不变量、重复进入/退出不发布假事件、Command/Event Trace 关联、IPC 映射、仓库策略检查，以及 Windows、macOS、Linux 编译测试。涉及真实窗口菜单和点击穿透的行为仍需在 Windows 与 macOS 发布候选产物上执行人工冒烟。

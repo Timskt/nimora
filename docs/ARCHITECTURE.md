@@ -106,6 +106,8 @@ Profile 激活属于“持久状态 + 原生窗口副作用”的复合操作。
 
 原生窗口移动事件不得逐帧写入 SQLite。桌面适配器使用单调递增 revision 对连续移动进行 200ms trailing-edge 合并，仅在窗口稳定后读取最终原生坐标并持久化；相同坐标不产生重复 Command/Event。托盘退出会在进程终止前同步刷新最终位置，兼顾拖拽流畅度、SSD 写放大控制和落点恢复可靠性。
 
+托盘不是绕过应用层的特权入口。打开控制中心和恢复宠物交互在原生副作用成功后分别发布 `desktop.window.control-center-opened` 与 `pet.window.interaction-restored`；失败发布 `desktop.tray.action-failed` 诊断事件。恢复交互必须先显示窗口并关闭原生鼠标穿透，再提交内存窗口策略，不能仅修改 UI 或缓存状态。
+
 Pet 交互状态转换由 Core 定义，而不是由 React 动画反推。点击进入 `interacting` 并发布 `pet.interaction.clicked`，600ms 后仅在状态仍未被新操作替换时回到 `idle`；拖拽进入最高优先级 `dragged`，原生拖拽结束后以一次持久化更新最终位置并回到 `idle`，发布 `pet.window.drag.started` 与 `pet.window.dragged`。Command 与对应 Event 共享 Trace ID，失败不得留下假事件。
 
 `dragged`、`interacting`、`recovering` 属于不可跨进程延续的瞬态。运行时加载持久快照时会将这些状态归一化为 neutral idle，并在对外提供状态前重新持久化；恢复写入失败则启动失败，不允许以内存状态掩盖磁盘不一致。

@@ -6,8 +6,8 @@ use nimora_runtime_app::{
     RuntimeService, SafetyService, SafetyServiceError,
 };
 use nimora_runtime_core::{
-    Command, Event, Pet, PetAction, PointerButton, Position, ProfileId, ProfilePolicy, RuntimeMode,
-    SafeModeReason, SafetySnapshot,
+    Command, CommandRisk, Event, EventSource, Pet, PetAction, PointerButton, Position, ProfileId,
+    ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -112,6 +112,29 @@ struct ClickPetRequest {
     x: f64,
     y: f64,
     button: PointerButton,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayAction {
+    OpenControlCenter,
+    RestoreInteraction,
+    EnterSafeMode,
+    ExitSafeMode,
+    Quit,
+    Unknown,
+}
+
+impl From<&str> for TrayAction {
+    fn from(value: &str) -> Self {
+        match value {
+            "open" => Self::OpenControlCenter,
+            "interactive" => Self::RestoreInteraction,
+            "safe-mode" => Self::EnterSafeMode,
+            "normal-mode" => Self::ExitSafeMode,
+            "quit" => Self::Quit,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -447,14 +470,79 @@ fn apply_window_policy(
     Ok(())
 }
 
-fn show_control_center(app: &AppHandle) -> Result<(), DesktopError> {
+fn publish_desktop_action(
+    state: &DesktopState,
+    command_id: &'static str,
+    event_type: &'static str,
+    data: serde_json::Value,
+) -> Result<Command, DesktopError> {
+    let command =
+        Command::new(command_id, data.clone(), CommandRisk::Safe).map_err(RuntimeError::from)?;
+    state.events.publish(
+        Event::with_trace_id(event_type, EventSource::Core, command.trace_id, data)
+            .map_err(RuntimeError::from)?,
+    )?;
+    Ok(command)
+}
+
+fn publish_tray_failure(app: &AppHandle, action: TrayAction, error: &DesktopError) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    let _ = state.events.publish(
+        Event::new(
+            "desktop.tray.action-failed",
+            EventSource::System("desktop".to_owned()),
+            serde_json::json!({
+                "action": format!("{action:?}"),
+                "error": error.to_string(),
+            }),
+        )
+        .unwrap_or_else(|event_error| {
+            unreachable!("static tray failure event contract is invalid: {event_error}")
+        }),
+    );
+}
+
+fn show_control_center(app: &AppHandle) -> Result<Command, DesktopError> {
     let window = app
         .get_webview_window(CONTROL_CENTER_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(CONTROL_CENTER_LABEL.to_owned()))?;
     window.show()?;
     window.unminimize()?;
     window.set_focus()?;
-    Ok(())
+    publish_desktop_action(
+        &app.state::<DesktopState>(),
+        "desktop.window.control-center.open",
+        "desktop.window.control-center-opened",
+        serde_json::json!({ "source": "tray" }),
+    )
+}
+
+fn restore_pet_interaction(app: &AppHandle) -> Result<Command, DesktopError> {
+    let state = app.state::<DesktopState>();
+    let previous = current_window_policy(&state)?;
+    let window = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
+    window.show()?;
+    window.unminimize()?;
+    window.set_ignore_cursor_events(false)?;
+    let next = WindowPolicy {
+        click_through: false,
+        ..previous
+    };
+    set_current_window_policy(&state, next)?;
+    publish_desktop_action(
+        &state,
+        "pet.window.interaction.restore",
+        "pet.window.interaction-restored",
+        serde_json::json!({
+            "previousClickThrough": previous.click_through,
+            "clickThrough": false,
+            "source": "tray",
+        }),
+    )
 }
 
 fn persist_pet_window_position(app: &AppHandle) -> Result<(), DesktopError> {
@@ -529,41 +617,40 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
     TrayIconBuilder::with_id("nimora-tray")
         .tooltip("Nimora · 本地运行")
         .menu(&menu)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "open" => {
-                let _ = show_control_center(app);
-            }
-            "interactive" => {
-                if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
-                    let _ = window.set_ignore_cursor_events(false);
-                    let _ = window.show();
-                    let _ = window.set_focus();
+        .on_menu_event(|app, event| {
+            let action = TrayAction::from(event.id.as_ref());
+            let result = match action {
+                TrayAction::OpenControlCenter => show_control_center(app).map(|_| ()),
+                TrayAction::RestoreInteraction => restore_pet_interaction(app).map(|_| ()),
+                TrayAction::EnterSafeMode => {
+                    if let Some(state) = app.try_state::<DesktopState>() {
+                        enter_safe_mode(app.clone(), state).map(|_| ())
+                    } else {
+                        Err(DesktopError::StatePoisoned)
+                    }
                 }
-                if let Some(state) = app.try_state::<DesktopState>()
-                    && let Ok(mut policy) = state.window_policy.lock()
-                {
-                    policy.click_through = false;
+                TrayAction::ExitSafeMode => {
+                    if let Some(state) = app.try_state::<DesktopState>() {
+                        exit_safe_mode(app.clone(), state).map(|_| ())
+                    } else {
+                        Err(DesktopError::StatePoisoned)
+                    }
                 }
+                TrayAction::Quit => persist_pet_window_position(app),
+                TrayAction::Unknown => return,
+            };
+            if let Err(error) = result {
+                publish_tray_failure(app, action, &error);
             }
-            "safe-mode" => {
-                if let Some(state) = app.try_state::<DesktopState>() {
-                    let _ = enter_safe_mode(app.clone(), state);
-                }
-            }
-            "normal-mode" => {
-                if let Some(state) = app.try_state::<DesktopState>() {
-                    let _ = exit_safe_mode(app.clone(), state);
-                }
-            }
-            "quit" => {
-                let _ = persist_pet_window_position(app);
+            if action == TrayAction::Quit {
                 app.exit(0);
             }
-            _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if matches!(event, TrayIconEvent::DoubleClick { .. }) {
-                let _ = show_control_center(tray.app_handle());
+            if matches!(event, TrayIconEvent::DoubleClick { .. })
+                && let Err(error) = show_control_center(tray.app_handle())
+            {
+                publish_tray_failure(tray.app_handle(), TrayAction::OpenControlCenter, &error);
             }
         })
         .build(app)?;
@@ -620,7 +707,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{DesktopError, PetAction, ProfilePolicy, WindowPolicy, screen_coordinate};
+    use super::{
+        DesktopError, PetAction, ProfilePolicy, TrayAction, WindowPolicy, screen_coordinate,
+    };
 
     #[test]
     fn accepts_finite_screen_coordinates() {
@@ -642,6 +731,19 @@ mod tests {
             screen_coordinate(f64::from(i32::MAX) + 1.0),
             Err(DesktopError::InvalidPosition)
         ));
+    }
+
+    #[test]
+    fn tray_menu_ids_map_to_explicit_actions() {
+        assert_eq!(TrayAction::from("open"), TrayAction::OpenControlCenter);
+        assert_eq!(
+            TrayAction::from("interactive"),
+            TrayAction::RestoreInteraction
+        );
+        assert_eq!(TrayAction::from("safe-mode"), TrayAction::EnterSafeMode);
+        assert_eq!(TrayAction::from("normal-mode"), TrayAction::ExitSafeMode);
+        assert_eq!(TrayAction::from("quit"), TrayAction::Quit);
+        assert_eq!(TrayAction::from("future-action"), TrayAction::Unknown);
     }
 
     #[test]
