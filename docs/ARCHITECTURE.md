@@ -104,6 +104,8 @@ Core 包含纯领域逻辑：Pet、Command、Event、Profile、Policy、Permissi
 
 Profile 激活属于“持久状态 + 原生窗口副作用”的复合操作。桌面适配器先应用候选窗口策略，再提交 Profile 快照；持久化失败时恢复原窗口策略。安全模式使用独立应用服务和共享事件总线，桌面菜单、IPC 和后续 Gateway、Connector、Agent Host 必须读取同一状态，不得维护各自的安全开关。
 
+原生窗口移动事件不得逐帧写入 SQLite。桌面适配器使用单调递增 revision 对连续移动进行 200ms trailing-edge 合并，仅在窗口稳定后读取最终原生坐标并持久化；相同坐标不产生重复 Command/Event。托盘退出会在进程终止前同步刷新最终位置，兼顾拖拽流畅度、SSD 写放大控制和落点恢复可靠性。
+
 ## 6. 事件契约修正
 
 事件 `source` 必须支持以下命名空间：

@@ -37,6 +37,8 @@
 
 安全模式的 M0 自动化证据至少包括：状态与原因不变量、重复进入/退出不发布假事件、Command/Event Trace 关联、IPC 映射、仓库策略检查，以及 Windows、macOS、Linux 编译测试。涉及真实窗口菜单和点击穿透的行为仍需在 Windows 与 macOS 发布候选产物上执行人工冒烟。
 
+窗口拖拽冒烟必须覆盖连续移动期间无明显卡顿、停止移动后最终落点可恢复，以及拖动后立即从托盘退出再启动仍恢复最终位置。移动事件采用 200ms trailing-edge 合并，测试不得假设每个系统 `Moved` 事件都会产生持久化事件。
+
 ### M1 Creator Foundation
 
 - Character、Skin、Theme 包 Schema 和解析器可用。

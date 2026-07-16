@@ -10,7 +10,15 @@ use nimora_runtime_core::{
     SafeModeReason, SafetySnapshot,
 };
 use serde::{Deserialize, Serialize};
-use std::{io, path::Path, sync::Mutex};
+use std::{
+    io,
+    path::Path,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 use tauri::{
     AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
     menu::{Menu, MenuItem},
@@ -20,6 +28,7 @@ use thiserror::Error;
 
 const CONTROL_CENTER_LABEL: &str = "control-center";
 const PET_WINDOW_LABEL: &str = "pet";
+const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 
 #[derive(Debug)]
 struct DesktopState {
@@ -29,6 +38,7 @@ struct DesktopState {
     events: RuntimeEventBus,
     window_policy: Mutex<WindowPolicy>,
     policy_before_safe_mode: Mutex<Option<WindowPolicy>>,
+    position_revision: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -73,6 +83,7 @@ impl DesktopState {
             events,
             window_policy: Mutex::new(window_policy),
             policy_before_safe_mode: Mutex::new(None),
+            position_revision: AtomicU64::new(0),
         })
     }
 }
@@ -388,6 +399,41 @@ fn show_control_center(app: &AppHandle) -> Result<(), DesktopError> {
     Ok(())
 }
 
+fn persist_pet_window_position(app: &AppHandle) -> Result<(), DesktopError> {
+    let window = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
+    let position = window.outer_position()?;
+    let next = Position {
+        x: f64::from(position.x),
+        y: f64::from(position.y),
+    };
+    let state = app.state::<DesktopState>();
+    if state.runtime.snapshot()?.position != next {
+        state.runtime.move_pet(next)?;
+    }
+    Ok(())
+}
+
+fn schedule_position_persistence(app: AppHandle) {
+    let revision = app
+        .state::<DesktopState>()
+        .position_revision
+        .fetch_add(1, Ordering::Relaxed)
+        + 1;
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(POSITION_WRITE_DEBOUNCE);
+        if app
+            .state::<DesktopState>()
+            .position_revision
+            .load(Ordering::Relaxed)
+            == revision
+        {
+            let _ = persist_pet_window_position(&app);
+        }
+    });
+}
+
 fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
     let policy = current_window_policy(&app.state::<DesktopState>())?;
     let window =
@@ -448,7 +494,10 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
                     let _ = exit_safe_mode(app.clone(), state);
                 }
             }
-            "quit" => app.exit(0),
+            "quit" => {
+                let _ = persist_pet_window_position(app);
+                app.exit(0);
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -483,14 +532,10 @@ pub fn run() {
                 api.prevent_close();
                 let _ = window.hide();
             }
-            if let WindowEvent::Moved(position) = event
+            if let WindowEvent::Moved(_) = event
                 && window.label() == PET_WINDOW_LABEL
             {
-                let state = window.state::<DesktopState>();
-                let _ = state.runtime.move_pet(Position {
-                    x: f64::from(position.x),
-                    y: f64::from(position.y),
-                });
+                schedule_position_persistence(window.app_handle().clone());
             }
         })
         .invoke_handler(tauri::generate_handler![
