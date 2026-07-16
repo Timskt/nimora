@@ -1,0 +1,15 @@
+node_modules/
+target/
+dist/
+coverage/
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+*.pem
+*.key
+*.p12
+.idea/
+.vscode/
+

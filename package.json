@@ -1,0 +1,21 @@
+{
+  "name": "asterpet-platform",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.1.2",
+  "engines": {
+    "node": ">=22.22.0",
+    "pnpm": ">=11.1.0"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:rust": "cargo test --workspace",
+    "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
+    "format:rust": "cargo fmt --all --check"
+  }
+}
+
