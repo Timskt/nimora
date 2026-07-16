@@ -2,8 +2,8 @@
 
 use nimora_runtime_core::{
     Command, CommandError, CommandRisk, Event, EventError, EventSource, Pet, PetAction, PetError,
-    Position, Profile, ProfileError, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason,
-    SafetySnapshot,
+    PointerButton, Position, Profile, ProfileError, ProfileId, ProfilePolicy, RuntimeMode,
+    SafeModeReason, SafetySnapshot,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -242,7 +242,10 @@ impl<R: PetRepository> RuntimeService<R> {
         default_name: &str,
         events: RuntimeEventBus,
     ) -> Result<Self, RuntimeError> {
-        let pet = if let Some(pet) = repository.load()? {
+        let pet = if let Some(mut pet) = repository.load()? {
+            if pet.recover_transient_state() {
+                repository.save(&pet)?;
+            }
             pet
         } else {
             let pet = Pet::new(default_name)?;
@@ -318,6 +321,120 @@ impl<R: PetRepository> RuntimeService<R> {
                     "action": action,
                     "before": { "state": before.state, "emotion": before.emotion },
                     "after": { "state": after.state, "emotion": after.emotion },
+                })
+            },
+        )
+    }
+
+    /// Records a semantic pointer interaction with the pet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid coordinates, forbidden transitions, or a
+    /// failed durable update.
+    pub fn click_pet(
+        &self,
+        position: Position,
+        button: PointerButton,
+    ) -> Result<Command, RuntimeError> {
+        self.update(
+            |pet| {
+                position.validate()?;
+                pet.interact()
+            },
+            || {
+                Command::new(
+                    "pet.interaction.click",
+                    serde_json::json!({ "position": position, "button": button }),
+                    CommandRisk::Safe,
+                )
+            },
+            "pet.interaction.clicked",
+            |before, after| {
+                serde_json::json!({
+                    "position": position,
+                    "button": button,
+                    "before": { "state": before.state, "emotion": before.emotion },
+                    "after": { "state": after.state, "emotion": after.emotion },
+                })
+            },
+        )
+    }
+
+    /// Returns an interaction animation to idle without overriding newer states.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the pet is no longer interacting or persistence fails.
+    pub fn finish_interaction(&self) -> Result<Command, RuntimeError> {
+        self.update(
+            Pet::finish_interaction,
+            || {
+                Command::new(
+                    "pet.interaction.finish",
+                    serde_json::json!({}),
+                    CommandRisk::Safe,
+                )
+            },
+            "pet.interaction.finished",
+            |before, after| {
+                serde_json::json!({
+                    "beforeState": before.state,
+                    "afterState": after.state,
+                })
+            },
+        )
+    }
+
+    /// Starts the highest-priority drag state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when command creation or persistence fails.
+    pub fn begin_drag(&self) -> Result<Command, RuntimeError> {
+        self.update(
+            Pet::begin_drag,
+            || {
+                Command::new(
+                    "pet.window.drag.begin",
+                    serde_json::json!({}),
+                    CommandRisk::Safe,
+                )
+            },
+            "pet.window.drag.started",
+            |before, after| {
+                serde_json::json!({
+                    "from": before.position,
+                    "beforeState": before.state,
+                    "afterState": after.state,
+                })
+            },
+        )
+    }
+
+    /// Drops a dragged pet at its final desktop position.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no drag is active, the position is invalid, or
+    /// the durable update fails.
+    pub fn drop_pet(&self, position: Position) -> Result<Command, RuntimeError> {
+        self.update(
+            |pet| pet.drop_at(position),
+            || {
+                Command::new(
+                    "pet.window.drag.end",
+                    serde_json::json!({ "position": position }),
+                    CommandRisk::Safe,
+                )
+            },
+            "pet.window.dragged",
+            |before, after| {
+                serde_json::json!({
+                    "from": before.position,
+                    "to": after.position,
+                    "beforeState": before.state,
+                    "afterState": after.state,
                 })
             },
         )
@@ -642,6 +759,20 @@ mod tests {
     }
 
     #[test]
+    fn initialization_recovers_a_persisted_transient_state() {
+        let mut pet = Pet::new("Aster").expect("pet");
+        pet.begin_drag().expect("drag");
+        let repository = MemoryRepository {
+            pet: Mutex::new(Some(pet)),
+            fail_save: AtomicBool::new(false),
+        };
+        let service = RuntimeService::initialize(repository, "Aster").expect("runtime");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.state, PetState::Idle);
+        assert_eq!(snapshot.emotion, nimora_runtime_core::Emotion::Neutral);
+    }
+
+    #[test]
     fn does_not_publish_state_when_persistence_fails() {
         let repository = MemoryRepository::default();
         let service = RuntimeService::initialize(repository, "Aster").expect("initializes");
@@ -662,6 +793,50 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, "pet.action.played");
         assert_eq!(events[0].trace_id, command.trace_id);
+    }
+
+    #[test]
+    fn click_publishes_standard_event_with_pointer_context() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let command = service
+            .click_pet(Position { x: 12.0, y: 24.0 }, PointerButton::Left)
+            .expect("click");
+        assert_eq!(
+            service.snapshot().expect("snapshot").state,
+            PetState::Interacting
+        );
+        let event = service
+            .drain_events()
+            .expect("events")
+            .pop()
+            .expect("event");
+        assert_eq!(event.event_type, "pet.interaction.clicked");
+        assert_eq!(event.trace_id, command.trace_id);
+        assert_eq!(event.data["position"]["x"], 12.0);
+        assert_eq!(event.data["button"], "left");
+    }
+
+    #[test]
+    fn drag_and_drop_publish_correlated_state_transitions() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let begin = service.begin_drag().expect("begin drag");
+        assert_eq!(
+            service.snapshot().expect("snapshot").state,
+            PetState::Dragged
+        );
+        let drop = service
+            .drop_pet(Position { x: -40.0, y: 80.0 })
+            .expect("drop");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.state, PetState::Idle);
+        assert_eq!(snapshot.position, Position { x: -40.0, y: 80.0 });
+        let events = service.drain_events().expect("events");
+        assert_eq!(events[0].event_type, "pet.window.drag.started");
+        assert_eq!(events[0].trace_id, begin.trace_id);
+        assert_eq!(events[1].event_type, "pet.window.dragged");
+        assert_eq!(events[1].trace_id, drop.trace_id);
     }
 
     #[test]

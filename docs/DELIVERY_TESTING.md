@@ -39,6 +39,8 @@
 
 窗口拖拽冒烟必须覆盖连续移动期间无明显卡顿、停止移动后最终落点可恢复，以及拖动后立即从托盘退出再启动仍恢复最终位置。移动事件采用 200ms trailing-edge 合并，测试不得假设每个系统 `Moved` 事件都会产生持久化事件。
 
+Click/Drag FSM 自动化证据必须覆盖：Sleep 被 Drag 抢占、重复 Begin 被拒绝、Drop 原子更新位置并恢复 Idle、无 Drag 时 Drop 被拒绝、点击携带坐标与按钮、600ms 收尾不覆盖更新的 Work/Sleep 状态，以及所有交互事件与 Command 的 Trace 关联。
+
 ### M1 Creator Foundation
 
 - Character、Skin、Theme 包 Schema 和解析器可用。
@@ -94,7 +96,7 @@
 
 ## 5. 必测场景
 
-- 点击宠物产生事件，官方技能响应，UI 和审计可追踪同一 Trace ID。
+- 点击宠物产生 `pet.interaction.clicked`，官方技能响应，UI 和审计可追踪同一 Trace ID。
 - 切换 Skin 时保留位置和状态，缺失动作正确回退。
 - 扩展申请网络能力但调用未授权目标时被拒绝。
 - Source Connector 重放重复外部事件时不重复执行非幂等 Command。

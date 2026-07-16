@@ -20,6 +20,19 @@ export function PetOverlay() {
     setSnapshot(next);
   }
 
+  async function interact(x: number, y: number) {
+    setMessage("今天也很棒！");
+    await desktopApi.clickPet(x, y, "left");
+    setSnapshot(await desktopApi.snapshot());
+  }
+
+  async function drag() {
+    setMessage("抓稳啦…");
+    await desktopApi.dragPet();
+    setSnapshot(await desktopApi.snapshot());
+    setMessage("安全落地");
+  }
+
   async function toggleClickThrough() {
     const enabled = !snapshot?.windowPolicy.clickThrough;
     await desktopApi.setClickThrough(enabled);
@@ -32,7 +45,14 @@ export function PetOverlay() {
 
   return (
     <main className="pet-overlay" aria-label="Nimora 桌面宠物">
-      <button className="overlay-drag-region" type="button" data-tauri-drag-region aria-label="拖动 Aster">
+      <button
+        className="overlay-drag-region"
+        type="button"
+        onPointerDown={(event) => {
+          if (event.button === 0) void drag();
+        }}
+        aria-label="拖动 Aster"
+      >
         <span className="overlay-status">{message}</span>
         <span className={`overlay-pet ${snapshot?.pet.state ?? "idle"}`} aria-hidden="true">
           <i className="overlay-ear left" /><i className="overlay-ear right" />
@@ -43,7 +63,11 @@ export function PetOverlay() {
         <span className="overlay-shadow" aria-hidden="true" />
       </button>
       <div className="overlay-actions" aria-label="宠物快捷操作">
-        <button type="button" onClick={() => void play("celebrate")} aria-label="和 Aster 互动">✦</button>
+        <button
+          type="button"
+          onClick={(event) => void interact(event.screenX, event.screenY)}
+          aria-label="和 Aster 互动"
+        >✦</button>
         <button type="button" onClick={() => void play("sleep")} aria-label="让 Aster 休息">☾</button>
         <button type="button" onClick={() => void toggleClickThrough()} aria-label="切换鼠标穿透">⌁</button>
       </div>

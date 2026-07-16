@@ -60,6 +60,8 @@ export const emotionSchema = z.enum([
   "sleepy",
 ]);
 
+export const pointerButtonSchema = z.enum(["left", "middle", "right"]);
+
 export const petSchema = z.object({
   id: z.uuid(),
   name: z.string().trim().min(1).max(64),
@@ -113,6 +115,7 @@ export const safetySnapshotSchema = z.object({
 export type NimoraEvent = z.infer<typeof eventSchema>;
 export type NimoraCommand = z.infer<typeof commandSchema>;
 export type Pet = z.infer<typeof petSchema>;
+export type PointerButton = z.infer<typeof pointerButtonSchema>;
 export type ProfilePolicy = z.infer<typeof profilePolicySchema>;
 export type Profile = z.infer<typeof profileSchema>;
 export type ProfileSnapshot = z.infer<typeof profileSnapshotSchema>;

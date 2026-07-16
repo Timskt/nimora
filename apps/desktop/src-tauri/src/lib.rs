@@ -6,7 +6,7 @@ use nimora_runtime_app::{
     RuntimeService, SafetyService, SafetyServiceError,
 };
 use nimora_runtime_core::{
-    Command, Event, Pet, PetAction, Position, ProfileId, ProfilePolicy, RuntimeMode,
+    Command, Event, Pet, PetAction, PointerButton, Position, ProfileId, ProfilePolicy, RuntimeMode,
     SafeModeReason, SafetySnapshot,
 };
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,7 @@ use std::{
     path::Path,
     sync::{
         Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -29,6 +29,7 @@ use thiserror::Error;
 const CONTROL_CENTER_LABEL: &str = "control-center";
 const PET_WINDOW_LABEL: &str = "pet";
 const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
+const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
 
 #[derive(Debug)]
 struct DesktopState {
@@ -39,6 +40,7 @@ struct DesktopState {
     window_policy: Mutex<WindowPolicy>,
     policy_before_safe_mode: Mutex<Option<WindowPolicy>>,
     position_revision: AtomicU64,
+    dragging: AtomicBool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -84,6 +86,7 @@ impl DesktopState {
             window_policy: Mutex::new(window_policy),
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
+            dragging: AtomicBool::new(false),
         })
     }
 }
@@ -101,6 +104,14 @@ struct DesktopSnapshot {
 struct MovePetRequest {
     x: f64,
     y: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClickPetRequest {
+    x: f64,
+    y: f64,
+    button: PointerButton,
 }
 
 #[derive(Debug, Error)]
@@ -318,6 +329,53 @@ fn play_pet_action(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn click_pet(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    request: ClickPetRequest,
+) -> Result<Command, DesktopError> {
+    let command = state.runtime.click_pet(
+        Position {
+            x: request.x,
+            y: request.y,
+        },
+        request.button,
+    )?;
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(CLICK_FEEDBACK_DURATION);
+        let _ = app.state::<DesktopState>().runtime.finish_interaction();
+    });
+    Ok(command)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn begin_pet_drag(state: State<'_, DesktopState>) -> Result<Command, DesktopError> {
+    let command = state.runtime.begin_drag()?;
+    state.dragging.store(true, Ordering::Release);
+    Ok(command)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn finish_pet_drag(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<Command, DesktopError> {
+    let window = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
+    let position = window.outer_position()?;
+    let command = state.runtime.drop_pet(Position {
+        x: f64::from(position.x),
+        y: f64::from(position.y),
+    })?;
+    state.dragging.store(false, Ordering::Release);
+    Ok(command)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn set_click_through(
     app: AppHandle,
     state: State<'_, DesktopState>,
@@ -409,6 +467,9 @@ fn persist_pet_window_position(app: &AppHandle) -> Result<(), DesktopError> {
         y: f64::from(position.y),
     };
     let state = app.state::<DesktopState>();
+    if state.dragging.load(Ordering::Acquire) {
+        return Ok(());
+    }
     if state.runtime.snapshot()?.position != next {
         state.runtime.move_pet(next)?;
     }
@@ -548,6 +609,9 @@ pub fn run() {
             exit_safe_mode,
             move_pet,
             play_pet_action,
+            click_pet,
+            begin_pet_drag,
+            finish_pet_drag,
             set_click_through
         ])
         .run(tauri::generate_context!())

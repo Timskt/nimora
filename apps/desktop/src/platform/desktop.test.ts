@@ -13,7 +13,8 @@ describe("desktop platform adapter", () => {
 
   it("maps typed calls to the Tauri command contract", async () => {
     const invoke = vi.fn(async () => null);
-    const api = createDesktopApi(true, invoke);
+    const startDragging = vi.fn(async () => undefined);
+    const api = createDesktopApi(true, invoke, startDragging);
     await api.drainEvents();
     await api.profiles();
     const policy = {
@@ -28,6 +29,8 @@ describe("desktop platform adapter", () => {
     await api.exitSafeMode();
     await api.movePet(24, 42);
     await api.playAction("work");
+    await api.clickPet(12, 24, "left");
+    await api.dragPet();
     await api.setClickThrough(true);
     expect(invoke.mock.calls).toEqual([
       ["drain_runtime_events"],
@@ -38,7 +41,23 @@ describe("desktop platform adapter", () => {
       ["exit_safe_mode"],
       ["move_pet", { request: { x: 24, y: 42 } }],
       ["play_pet_action", { action: "work" }],
+      ["click_pet", { request: { x: 12, y: 24, button: "left" } }],
+      ["begin_pet_drag"],
+      ["finish_pet_drag"],
       ["set_click_through", { enabled: true }],
+    ]);
+    expect(startDragging).toHaveBeenCalledOnce();
+  });
+
+  it("recovers runtime drag state when native dragging fails", async () => {
+    const invoke = vi.fn(async () => null);
+    const api = createDesktopApi(true, invoke, async () => {
+      throw new Error("native drag failed");
+    });
+    await expect(api.dragPet()).rejects.toThrow("native drag failed");
+    expect(invoke.mock.calls).toEqual([
+      ["begin_pet_drag"],
+      ["finish_pet_drag"],
     ]);
   });
 });

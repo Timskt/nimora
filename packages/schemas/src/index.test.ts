@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { eventSchema, petSchema, profileSnapshotSchema, safetySnapshotSchema } from "./index";
+import {
+  eventSchema,
+  petSchema,
+  pointerButtonSchema,
+  profileSnapshotSchema,
+  safetySnapshotSchema,
+} from "./index";
 
 describe("eventSchema", () => {
   it("accepts the versioned event wire format", () => {
@@ -89,5 +95,12 @@ describe("safetySnapshotSchema", () => {
     expect(safetySnapshotSchema.safeParse({ mode: "normal", reason: null }).success).toBe(true);
     expect(safetySnapshotSchema.safeParse({ mode: "safe", reason: null }).success).toBe(false);
     expect(safetySnapshotSchema.safeParse({ mode: "normal", reason: "crash_loop" }).success).toBe(false);
+  });
+});
+
+describe("pointerButtonSchema", () => {
+  it("accepts portable pointer buttons only", () => {
+    expect(pointerButtonSchema.safeParse("left").success).toBe(true);
+    expect(pointerButtonSchema.safeParse("touch").success).toBe(false);
   });
 });

@@ -2,11 +2,13 @@ import type {
   NimoraCommand,
   NimoraEvent,
   Pet,
+  PointerButton,
   ProfilePolicy,
   ProfileSnapshot,
   SafetySnapshot,
 } from "@nimora/schemas";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export const petActions = ["idle", "walk", "sleep", "work", "celebrate"] as const;
 export type PetAction = (typeof petActions)[number];
@@ -31,6 +33,8 @@ export interface DesktopApi {
   exitSafeMode(): Promise<NimoraCommand | null>;
   movePet(x: number, y: number): Promise<NimoraCommand | null>;
   playAction(action: PetAction): Promise<NimoraCommand | null>;
+  clickPet(x: number, y: number, button: PointerButton): Promise<NimoraCommand | null>;
+  dragPet(): Promise<NimoraCommand | null>;
   setClickThrough(enabled: boolean): Promise<void>;
 }
 
@@ -71,7 +75,11 @@ export function isNativeDesktop(scope?: Window): boolean {
   return browserWindow !== undefined && "__TAURI_INTERNALS__" in browserWindow;
 }
 
-export function createDesktopApi(native: boolean, invokeCommand: Invoke = invoke): DesktopApi {
+export function createDesktopApi(
+  native: boolean,
+  invokeCommand: Invoke = invoke,
+  startDragging: () => Promise<void> = async () => await getCurrentWindow().startDragging(),
+): DesktopApi {
   if (!native) {
     return {
       native: false,
@@ -84,6 +92,8 @@ export function createDesktopApi(native: boolean, invokeCommand: Invoke = invoke
       async exitSafeMode() { return null; },
       async movePet() { return null; },
       async playAction() { return null; },
+      async clickPet() { return null; },
+      async dragPet() { return null; },
       async setClickThrough() {},
     };
   }
@@ -99,6 +109,19 @@ export function createDesktopApi(native: boolean, invokeCommand: Invoke = invoke
     exitSafeMode: async () => await invokeCommand("exit_safe_mode") as NimoraCommand,
     movePet: async (x, y) => await invokeCommand("move_pet", { request: { x, y } }) as NimoraCommand,
     playAction: async (action) => await invokeCommand("play_pet_action", { action }) as NimoraCommand,
+    clickPet: async (x, y, button) => await invokeCommand("click_pet", {
+      request: { x, y, button },
+    }) as NimoraCommand,
+    dragPet: async () => {
+      await invokeCommand("begin_pet_drag");
+      try {
+        await startDragging();
+      } catch (error) {
+        await invokeCommand("finish_pet_drag");
+        throw error;
+      }
+      return await invokeCommand("finish_pet_drag") as NimoraCommand;
+    },
     setClickThrough: async (enabled) => { await invokeCommand("set_click_through", { enabled }); },
   };
 }
