@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { desktopApi } from "./platform/desktop";
 
 const navigation = ["概览", "角色", "自动化", "扩展", "活动", "设置"] as const;
 
@@ -15,6 +16,12 @@ export function navItemClassName(isActive: boolean): string {
 export function App() {
   const [active, setActive] = useState<(typeof navigation)[number]>("概览");
   const [quiet, setQuiet] = useState(false);
+  const [notice, setNotice] = useState(desktopApi.native ? "原生运行时已连接" : "浏览器预览模式");
+
+  async function runAction(action: "celebrate" | "work") {
+    await desktopApi.playAction(action);
+    setNotice(action === "celebrate" ? "Aster 正在回应你" : "专注场景已启动");
+  }
 
   return (
     <main className="app-shell">
@@ -65,12 +72,12 @@ export function App() {
         <div className="dashboard-grid">
           <section className="pet-stage" aria-labelledby="pet-heading">
             <div className="stage-copy">
-              <span className="pill">状态 · 平静</span>
+              <span className="pill">{notice}</span>
               <h2 id="pet-heading">晚上好，我一直在这里。</h2>
               <p>所有核心能力都在本机运行。你可以先和 Aster 打个招呼，或者开启一个安静的专注场景。</p>
               <div className="stage-actions">
-                <button className="primary-button" type="button">开始互动</button>
-                <button className="secondary-button" type="button">进入专注</button>
+                <button className="primary-button" type="button" onClick={() => void runAction("celebrate")}>开始互动</button>
+                <button className="secondary-button" type="button" onClick={() => void runAction("work")}>进入专注</button>
               </div>
             </div>
             <div className="pet-visual" aria-label="默认角色 Aster，当前状态平静">
@@ -123,7 +130,7 @@ export function App() {
             <h2>让 Aster 帮你做点什么</h2>
             <div className="quick-grid">
               <button type="button"><span>◷</span>开始计时</button>
-              <button type="button"><span>✦</span>播放动作</button>
+              <button type="button" onClick={() => void runAction("celebrate")}><span>✦</span>播放动作</button>
               <button type="button"><span>⌘</span>运行命令</button>
               <button type="button"><span>＋</span>添加能力</button>
             </div>

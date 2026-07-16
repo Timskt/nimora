@@ -80,4 +80,16 @@ tests/                     contract、integration、e2e、fixtures
 
 ## 开发基线
 
-项目当前处于规格冻结前阶段。第一批代码必须先完成 `ADR-001` 至 `ADR-006` 的验证，并以 [`docs/DELIVERY_TESTING.md`](docs/DELIVERY_TESTING.md) 的 M0 验收标准为准。所有 JavaScript/TypeScript 命令仅使用 `pnpm`，禁止使用 npm、Yarn 或 Bun。
+项目当前处于 M0 基础运行时阶段，已落地 Rust 领域核心、共享 TypeScript Schema、控制中心 UI，以及 Tauri 双窗口、系统托盘和类型化 IPC。宠物浮层支持透明置顶窗口、动作控制、鼠标穿透恢复和无 Tauri 的浏览器离线预览。后续实现仍以 [`docs/DELIVERY_TESTING.md`](docs/DELIVERY_TESTING.md) 的 M0 验收标准为准。
+
+本地开发使用 `pnpm` 与 Rust stable：
+
+```bash
+pnpm install --frozen-lockfile
+pnpm check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+pnpm --dir apps/desktop tauri dev
+```
+
+所有 JavaScript/TypeScript 命令仅使用 `pnpm`，禁止使用 npm、Yarn 或 Bun。普通浏览器执行 `pnpm --dir apps/desktop dev` 时自动进入离线预览适配器，不调用伪造的原生能力。

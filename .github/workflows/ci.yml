@@ -40,6 +40,15 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf
       - run: rustup show
       - run: cargo fmt --all --check
       - run: cargo test --workspace
@@ -59,4 +68,3 @@ jobs:
           fi
       - name: Check whitespace errors
         run: git diff --check HEAD^ HEAD || git diff --check
-
