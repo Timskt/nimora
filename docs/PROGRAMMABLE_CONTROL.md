@@ -1,4 +1,4 @@
-# DeskPet 用户编程控制与自动化规范
+# Nimora 用户编程控制与自动化规范
 
 > 版本：0.1.0-draft  
 > 更新日期：2026-07-17
@@ -128,4 +128,3 @@ pnpm deskpet extension pack ./scripts/build-companion
 - 离线、休眠恢复、时区变化和时钟回拨不造成任务风暴。
 - 事件回放可复现结果，密钥和敏感字段不进入日志、快照或导出包。
 - 同一脚本可通过语义 Command 控制序列帧、Live2D 和 VRM 角色。
-

@@ -1,4 +1,4 @@
-# DeskPet API、事件与契约治理规范
+# Nimora API、事件与契约治理规范
 
 > 版本：0.1.0-draft  
 > 更新日期：2026-07-17
@@ -71,4 +71,3 @@
 ## 9. 文档生成
 
 OpenAPI、Schema Catalog、TypeScript 类型和 Rust DTO 应从同一 Schema 来源生成。手写文档负责语义、风险和示例，不复制易漂移的字段表。
-

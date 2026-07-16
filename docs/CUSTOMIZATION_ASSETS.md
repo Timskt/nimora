@@ -1,4 +1,4 @@
-# DeskPet 自定义资源与皮肤规范
+# Nimora 自定义资源与皮肤规范
 
 > 契约：`deskpet.asset/1`  
 > 版本：0.1.0-draft  

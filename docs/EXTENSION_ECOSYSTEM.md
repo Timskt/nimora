@@ -1,4 +1,4 @@
-# DeskPet 扩展与生态规范
+# Nimora 扩展与生态规范
 
 > 版本：0.1.0-draft  
 > 更新日期：2026-07-17
@@ -65,7 +65,7 @@ any → upgrading → activated | rolled-back
 ## 5. Host API
 
 ```ts
-interface DeskPetExtensionContext {
+interface NimoraExtensionContext {
   extension: { id: string; version: string }
   commands: CommandRegistry
   events: EventClient
