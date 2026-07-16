@@ -26,6 +26,13 @@ pub trait PetRepository: Send + Sync + std::fmt::Debug {
     ///
     /// Returns a storage error when the snapshot cannot be committed.
     fn save(&self, pet: &Pet) -> Result<(), RepositoryError>;
+
+    /// Atomically stores state and its resulting event in a durable outbox.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error without committing either record.
+    fn save_with_event(&self, pet: &Pet, event: &Event) -> Result<(), RepositoryError>;
 }
 
 pub trait ProfileRepository: Send + Sync + std::fmt::Debug {
@@ -42,6 +49,17 @@ pub trait ProfileRepository: Send + Sync + std::fmt::Debug {
     ///
     /// Returns a storage error when the snapshot cannot be committed.
     fn save(&self, snapshot: &ProfileSnapshot) -> Result<(), RepositoryError>;
+
+    /// Atomically stores state and its resulting event in a durable outbox.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error without committing either record.
+    fn save_with_event(
+        &self,
+        snapshot: &ProfileSnapshot,
+        event: &Event,
+    ) -> Result<(), RepositoryError>;
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -468,7 +486,7 @@ impl<R: PetRepository> RuntimeService<R> {
             event_data(&current, &candidate),
         )?;
         let mut events = self.events.lock()?;
-        self.repository.save(&candidate)?;
+        self.repository.save_with_event(&candidate, &event)?;
         *current = candidate;
         if events.len() == EVENT_BUFFER_CAPACITY {
             events.pop_front();
@@ -603,7 +621,7 @@ impl<R: ProfileRepository> ProfileService<R> {
             serde_json::json!({ "profile": profile }),
         )?;
         let mut events = self.events.lock().map_err(ProfileServiceError::Runtime)?;
-        self.repository.save(&candidate)?;
+        self.repository.save_with_event(&candidate, &event)?;
         *current = candidate;
         if events.len() == EVENT_BUFFER_CAPACITY {
             events.pop_front();
@@ -653,7 +671,7 @@ impl<R: ProfileRepository> ProfileService<R> {
             }),
         )?;
         let mut events = self.events.lock().map_err(ProfileServiceError::Runtime)?;
-        self.repository.save(&candidate)?;
+        self.repository.save_with_event(&candidate, &event)?;
         *current = candidate;
         if events.len() == EVENT_BUFFER_CAPACITY {
             events.pop_front();
@@ -714,12 +732,14 @@ mod tests {
     #[derive(Debug, Default)]
     struct MemoryRepository {
         pet: Mutex<Option<Pet>>,
+        outbox: Mutex<Vec<Event>>,
         fail_save: AtomicBool,
     }
 
     #[derive(Debug, Default)]
     struct MemoryProfileRepository {
         snapshot: Mutex<Option<ProfileSnapshot>>,
+        outbox: Mutex<Vec<Event>>,
         fail_save: AtomicBool,
     }
 
@@ -735,6 +755,19 @@ mod tests {
             *self.snapshot.lock().expect("test lock") = Some(snapshot.clone());
             Ok(())
         }
+
+        fn save_with_event(
+            &self,
+            snapshot: &ProfileSnapshot,
+            event: &Event,
+        ) -> Result<(), RepositoryError> {
+            if self.fail_save.load(Ordering::Relaxed) {
+                return Err(RepositoryError::new("injected failure"));
+            }
+            *self.snapshot.lock().expect("test lock") = Some(snapshot.clone());
+            self.outbox.lock().expect("test lock").push(event.clone());
+            Ok(())
+        }
     }
 
     impl PetRepository for MemoryRepository {
@@ -747,6 +780,15 @@ mod tests {
                 return Err(RepositoryError::new("injected failure"));
             }
             *self.pet.lock().expect("test lock") = Some(pet.clone());
+            Ok(())
+        }
+
+        fn save_with_event(&self, pet: &Pet, event: &Event) -> Result<(), RepositoryError> {
+            if self.fail_save.load(Ordering::Relaxed) {
+                return Err(RepositoryError::new("injected failure"));
+            }
+            *self.pet.lock().expect("test lock") = Some(pet.clone());
+            self.outbox.lock().expect("test lock").push(event.clone());
             Ok(())
         }
     }
@@ -764,6 +806,7 @@ mod tests {
         pet.begin_drag().expect("drag");
         let repository = MemoryRepository {
             pet: Mutex::new(Some(pet)),
+            outbox: Mutex::new(Vec::new()),
             fail_save: AtomicBool::new(false),
         };
         let service = RuntimeService::initialize(repository, "Aster").expect("runtime");
@@ -860,6 +903,7 @@ mod tests {
                 active_profile_id: first.id,
                 profiles: vec![first, second.clone()],
             })),
+            outbox: Mutex::new(Vec::new()),
             fail_save: AtomicBool::new(false),
         };
         let bus = RuntimeEventBus::default();
