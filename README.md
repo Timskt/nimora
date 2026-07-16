@@ -80,7 +80,7 @@ tests/                     contract、integration、e2e、fixtures
 
 ## 开发基线
 
-项目当前处于 M0 基础运行时阶段，已落地 Rust 领域核心、应用用例层、版本化 SQLite 状态适配器、共享 TypeScript Schema、控制中心 UI，以及 Tauri 双窗口、系统托盘和类型化 IPC。宠物浮层支持透明置顶窗口、动作控制、鼠标穿透恢复、位置与动作状态的离线持久化，以及无 Tauri 的浏览器离线预览。数据库升级前自动备份与只读安全模式仍是后续迁移门禁；其余实现继续以 [`docs/DELIVERY_TESTING.md`](docs/DELIVERY_TESTING.md) 的 M0 验收标准为准。
+项目当前处于 M0 基础运行时阶段，已落地 Rust 领域核心、应用用例层、版本化 SQLite 状态适配器、Command/Event Trace 关联、共享 TypeScript Schema、控制中心 UI，以及 Tauri 双窗口、系统托盘和类型化 IPC。宠物浮层支持透明置顶窗口、动作控制、鼠标穿透恢复、位置与动作状态的离线持久化，以及无 Tauri 的浏览器离线预览。数据库升级前自动备份、可靠事件 Outbox 与只读安全模式仍是后续门禁；其余实现继续以 [`docs/DELIVERY_TESTING.md`](docs/DELIVERY_TESTING.md) 的 M0 验收标准为准。
 
 本地开发使用 `pnpm` 与 Rust stable：
 

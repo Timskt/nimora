@@ -114,15 +114,33 @@ impl Event {
         source: EventSource,
         data: Value,
     ) -> Result<Self, EventError> {
+        Self::with_trace_id(event_type, source, Uuid::now_v7(), data)
+    }
+
+    /// Creates a versioned event correlated with an existing execution trace.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EventError::InvalidType`] when the event type is invalid or
+    /// [`EventError::InvalidTraceId`] when the supplied trace identifier is nil.
+    pub fn with_trace_id(
+        event_type: impl Into<String>,
+        source: EventSource,
+        trace_id: Uuid,
+        data: Value,
+    ) -> Result<Self, EventError> {
         let event_type = event_type.into();
         validate_event_type(&event_type)?;
+        if trace_id.is_nil() {
+            return Err(EventError::InvalidTraceId);
+        }
         Ok(Self {
             spec: "asterpet.event/1".to_owned(),
             id: EventId::new(),
             event_type,
             source,
             timestamp: OffsetDateTime::now_utc(),
-            trace_id: Uuid::now_v7(),
+            trace_id,
             data,
         })
     }
@@ -150,6 +168,8 @@ pub enum EventError {
     InvalidSource(String),
     #[error("invalid event type: {0}")]
     InvalidType(String),
+    #[error("event trace id must not be nil")]
+    InvalidTraceId,
 }
 
 #[cfg(test)]
@@ -191,5 +211,18 @@ mod tests {
             Event::new("clicked", EventSource::Core, Value::Null),
             Err(EventError::InvalidType("clicked".to_owned()))
         );
+    }
+
+    #[test]
+    fn preserves_an_existing_trace_id() {
+        let trace_id = Uuid::now_v7();
+        let event = Event::with_trace_id(
+            "pet.position.changed",
+            EventSource::Core,
+            trace_id,
+            Value::Null,
+        )
+        .expect("event");
+        assert_eq!(event.trace_id, trace_id);
     }
 }

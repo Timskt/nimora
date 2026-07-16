@@ -84,6 +84,8 @@ Core 包含纯领域逻辑：Pet、Command、Event、Profile、Policy、Permissi
 - Query 读取状态，不产生隐式副作用。
 - Agent Tool、Automation Action 和 Gateway Endpoint 最终都映射到 Command。
 
+当前 M0 运行时在持久化成功后生成 `pet.position.changed` 或 `pet.action.played`，事件与发起 Command 共享 `traceId`。事件先进入容量为 256 的有界进程内缓冲区，并通过类型化桌面 IPC 消费；缓冲区满时淘汰最旧事件，避免慢消费者无限占用内存。持久化失败不得发布事件。持久化 Outbox、多订阅者扇出、消费游标和审计留存属于后续 Event Bus 阶段，不能将当前缓冲区当作可靠消息队列。
+
 这条规则防止四套执行逻辑分裂。
 
 ## 5. 数据与持久化

@@ -1,6 +1,6 @@
 use asterpet_persistence_sqlite::{SqlitePersistenceError, SqlitePetRepository};
 use asterpet_runtime_app::{RuntimeError, RuntimeService};
-use asterpet_runtime_core::{Command, Pet, PetAction, Position};
+use asterpet_runtime_core::{Command, Event, Pet, PetAction, Position};
 use serde::{Deserialize, Serialize};
 use std::{io, path::Path, sync::Mutex};
 use tauri::{
@@ -81,6 +81,12 @@ fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, D
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?;
     Ok(DesktopSnapshot { pet, click_through })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn drain_runtime_events(state: State<'_, DesktopState>) -> Result<Vec<Event>, DesktopError> {
+    Ok(state.runtime.drain_events()?)
 }
 
 #[tauri::command]
@@ -255,6 +261,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             desktop_snapshot,
+            drain_runtime_events,
             move_pet,
             play_pet_action,
             set_click_through

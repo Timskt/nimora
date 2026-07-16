@@ -1,9 +1,10 @@
 //! Application use cases and persistence ports for the `AsterPet` runtime.
 
 use asterpet_runtime_core::{
-    Command, CommandError, CommandRisk, Pet, PetAction, PetError, Position,
+    Command, CommandError, CommandRisk, Event, EventError, EventSource, Pet, PetAction, PetError,
+    Position,
 };
-use std::sync::Mutex;
+use std::{collections::VecDeque, sync::Mutex};
 use thiserror::Error;
 
 pub trait PetRepository: Send + Sync + std::fmt::Debug {
@@ -41,7 +42,10 @@ impl RepositoryError {
 pub struct RuntimeService<R> {
     repository: R,
     pet: Mutex<Pet>,
+    events: Mutex<VecDeque<Event>>,
 }
+
+const EVENT_BUFFER_CAPACITY: usize = 256;
 
 impl<R: PetRepository> RuntimeService<R> {
     /// Restores persisted state or creates and persists the first pet.
@@ -61,6 +65,7 @@ impl<R: PetRepository> RuntimeService<R> {
         Ok(Self {
             repository,
             pet: Mutex::new(pet),
+            events: Mutex::new(VecDeque::with_capacity(EVENT_BUFFER_CAPACITY)),
         })
     }
 
@@ -94,6 +99,10 @@ impl<R: PetRepository> RuntimeService<R> {
                     CommandRisk::Safe,
                 )
             },
+            "pet.position.changed",
+            |before, after| {
+                serde_json::json!({ "before": before.position, "after": after.position })
+            },
         )
     }
 
@@ -116,21 +125,59 @@ impl<R: PetRepository> RuntimeService<R> {
                     CommandRisk::Safe,
                 )
             },
+            "pet.action.played",
+            |before, after| {
+                serde_json::json!({
+                    "action": action,
+                    "before": { "state": before.state, "emotion": before.emotion },
+                    "after": { "state": after.state, "emotion": after.emotion },
+                })
+            },
         )
+    }
+
+    /// Removes and returns all currently buffered runtime events in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError::StatePoisoned`] if the event buffer is unavailable.
+    pub fn drain_events(&self) -> Result<Vec<Event>, RuntimeError> {
+        Ok(self
+            .events
+            .lock()
+            .map_err(|_| RuntimeError::StatePoisoned)?
+            .drain(..)
+            .collect())
     }
 
     fn update(
         &self,
         mutate: impl FnOnce(&mut Pet) -> Result<(), PetError>,
         command: impl FnOnce() -> Result<Command, CommandError>,
+        event_type: &'static str,
+        event_data: impl FnOnce(&Pet, &Pet) -> serde_json::Value,
     ) -> Result<Command, RuntimeError> {
         let mut current = self.pet.lock().map_err(|_| RuntimeError::StatePoisoned)?;
         let mut candidate = current.clone();
         mutate(&mut candidate)?;
         candidate.validate()?;
         let command = command()?;
+        let event = Event::with_trace_id(
+            event_type,
+            EventSource::Core,
+            command.trace_id,
+            event_data(&current, &candidate),
+        )?;
+        let mut events = self
+            .events
+            .lock()
+            .map_err(|_| RuntimeError::StatePoisoned)?;
         self.repository.save(&candidate)?;
         *current = candidate;
+        if events.len() == EVENT_BUFFER_CAPACITY {
+            events.pop_front();
+        }
+        events.push_back(event);
         Ok(command)
     }
 }
@@ -145,6 +192,8 @@ pub enum RuntimeError {
     Pet(#[from] PetError),
     #[error(transparent)]
     Command(#[from] CommandError),
+    #[error(transparent)]
+    Event(#[from] EventError),
 }
 
 #[cfg(test)]
@@ -187,5 +236,19 @@ mod tests {
         service.repository.fail_save.store(true, Ordering::Relaxed);
         assert!(service.play_action(PetAction::Sleep).is_err());
         assert_eq!(service.snapshot().expect("snapshot").state, PetState::Idle);
+        assert!(service.drain_events().expect("events").is_empty());
+    }
+
+    #[test]
+    fn publishes_a_correlated_event_after_persistence() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let command = service
+            .play_action(PetAction::Sleep)
+            .expect("persisted action");
+        let events = service.drain_events().expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "pet.action.played");
+        assert_eq!(events[0].trace_id, command.trace_id);
     }
 }
