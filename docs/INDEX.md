@@ -1,4 +1,4 @@
-# AsterPet 文档控制中心
+# Nimora 文档控制中心
 
 > 版本：0.1.0-draft  
 > 更新日期：2026-07-17  
@@ -38,7 +38,7 @@
 
 ## 3. 契约版本规则
 
-- 每个公开契约使用独立版本：`asterpet.event/1`、`asterpet.skill/1`、`asterpet.asset/1`。
+- 每个公开契约使用独立版本：`nimora.event/1`、`nimora.skill/1`、`nimora.asset/1`。
 - 同一主版本只能增加可选字段，不能删除字段或改变既有语义。
 - 破坏性修改创建新主版本，并至少保留一个稳定发布周期的适配层。
 - Schema 文件是机器事实来源，Markdown 负责说明语义和示例。

@@ -1,12 +1,13 @@
 [package]
-name = "asterpet-runtime-app"
+name = "nimora-runtime-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-asterpet-runtime-core = { path = "../runtime-core" }
+nimora-runtime-core = { path = "../runtime-core" }
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 

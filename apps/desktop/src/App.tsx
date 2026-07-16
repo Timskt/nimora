@@ -28,7 +28,7 @@ export function App() {
       <aside className="sidebar" aria-label="主导航">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">✦</span>
-          <span>AsterPet</span>
+          <span>Nimora</span>
         </div>
         <nav className="navigation">
           {navigation.map((item) => (

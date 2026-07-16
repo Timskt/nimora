@@ -1,3 +1,3 @@
 fn main() {
-    asterpet_desktop_lib::run();
+    nimora_desktop_lib::run();
 }

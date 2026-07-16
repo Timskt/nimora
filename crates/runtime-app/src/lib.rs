@@ -1,10 +1,14 @@
-//! Application use cases and persistence ports for the `AsterPet` runtime.
+//! Application use cases and persistence ports for the `Nimora` runtime.
 
-use asterpet_runtime_core::{
+use nimora_runtime_core::{
     Command, CommandError, CommandRisk, Event, EventError, EventSource, Pet, PetAction, PetError,
-    Position,
+    Position, Profile, ProfileError, ProfileId, ProfilePolicy,
 };
-use std::{collections::VecDeque, sync::Mutex};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 use thiserror::Error;
 
 pub trait PetRepository: Send + Sync + std::fmt::Debug {
@@ -23,8 +27,24 @@ pub trait PetRepository: Send + Sync + std::fmt::Debug {
     fn save(&self, pet: &Pet) -> Result<(), RepositoryError>;
 }
 
+pub trait ProfileRepository: Send + Sync + std::fmt::Debug {
+    /// Loads the profile collection, or `None` on first launch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the snapshot cannot be read or validated.
+    fn load(&self) -> Result<Option<ProfileSnapshot>, RepositoryError>;
+
+    /// Atomically stores the complete profile collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the snapshot cannot be committed.
+    fn save(&self, snapshot: &ProfileSnapshot) -> Result<(), RepositoryError>;
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-#[error("pet repository error: {message}")]
+#[error("runtime repository error: {message}")]
 pub struct RepositoryError {
     message: String,
 }
@@ -42,10 +62,43 @@ impl RepositoryError {
 pub struct RuntimeService<R> {
     repository: R,
     pet: Mutex<Pet>,
-    events: Mutex<VecDeque<Event>>,
+    events: RuntimeEventBus,
 }
 
 const EVENT_BUFFER_CAPACITY: usize = 256;
+
+#[derive(Debug, Clone)]
+pub struct RuntimeEventBus {
+    events: Arc<Mutex<VecDeque<Event>>>,
+}
+
+impl Default for RuntimeEventBus {
+    fn default() -> Self {
+        Self {
+            events: Arc::new(Mutex::new(VecDeque::with_capacity(EVENT_BUFFER_CAPACITY))),
+        }
+    }
+}
+
+impl RuntimeEventBus {
+    /// Removes and returns all currently buffered runtime events in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if another thread panicked while holding the buffer.
+    pub fn drain(&self) -> Result<Vec<Event>, RuntimeError> {
+        Ok(self
+            .events
+            .lock()
+            .map_err(|_| RuntimeError::StatePoisoned)?
+            .drain(..)
+            .collect())
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, VecDeque<Event>>, RuntimeError> {
+        self.events.lock().map_err(|_| RuntimeError::StatePoisoned)
+    }
+}
 
 impl<R: PetRepository> RuntimeService<R> {
     /// Restores persisted state or creates and persists the first pet.
@@ -55,6 +108,20 @@ impl<R: PetRepository> RuntimeService<R> {
     /// Returns a domain or repository error when initialization cannot finish
     /// without a valid durable snapshot.
     pub fn initialize(repository: R, default_name: &str) -> Result<Self, RuntimeError> {
+        Self::initialize_with_event_bus(repository, default_name, RuntimeEventBus::default())
+    }
+
+    /// Restores state while publishing future events to a shared runtime bus.
+    ///
+    /// # Errors
+    ///
+    /// Returns a domain or repository error when initialization cannot produce
+    /// a valid durable pet snapshot.
+    pub fn initialize_with_event_bus(
+        repository: R,
+        default_name: &str,
+        events: RuntimeEventBus,
+    ) -> Result<Self, RuntimeError> {
         let pet = if let Some(pet) = repository.load()? {
             pet
         } else {
@@ -65,7 +132,7 @@ impl<R: PetRepository> RuntimeService<R> {
         Ok(Self {
             repository,
             pet: Mutex::new(pet),
-            events: Mutex::new(VecDeque::with_capacity(EVENT_BUFFER_CAPACITY)),
+            events,
         })
     }
 
@@ -142,12 +209,7 @@ impl<R: PetRepository> RuntimeService<R> {
     ///
     /// Returns [`RuntimeError::StatePoisoned`] if the event buffer is unavailable.
     pub fn drain_events(&self) -> Result<Vec<Event>, RuntimeError> {
-        Ok(self
-            .events
-            .lock()
-            .map_err(|_| RuntimeError::StatePoisoned)?
-            .drain(..)
-            .collect())
+        self.events.drain()
     }
 
     fn update(
@@ -168,10 +230,7 @@ impl<R: PetRepository> RuntimeService<R> {
             command.trace_id,
             event_data(&current, &candidate),
         )?;
-        let mut events = self
-            .events
-            .lock()
-            .map_err(|_| RuntimeError::StatePoisoned)?;
+        let mut events = self.events.lock()?;
         self.repository.save(&candidate)?;
         *current = candidate;
         if events.len() == EVENT_BUFFER_CAPACITY {
@@ -180,6 +239,219 @@ impl<R: PetRepository> RuntimeService<R> {
         events.push_back(event);
         Ok(command)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileSnapshot {
+    pub schema_version: u32,
+    pub active_profile_id: ProfileId,
+    pub profiles: Vec<Profile>,
+}
+
+impl ProfileSnapshot {
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// Validates the version, profile identities, active reference, and domain values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when persisted profile state violates any collection or
+    /// domain invariant.
+    pub fn validate(&self) -> Result<(), ProfileServiceError> {
+        if self.schema_version != Self::SCHEMA_VERSION {
+            return Err(ProfileServiceError::UnsupportedSnapshotVersion(
+                self.schema_version,
+            ));
+        }
+        if self.profiles.is_empty() {
+            return Err(ProfileServiceError::EmptyProfiles);
+        }
+        for (index, profile) in self.profiles.iter().enumerate() {
+            profile.validate()?;
+            if self.profiles[..index]
+                .iter()
+                .any(|candidate| candidate.id == profile.id)
+            {
+                return Err(ProfileServiceError::DuplicateProfileId);
+            }
+        }
+        if !self
+            .profiles
+            .iter()
+            .any(|profile| profile.id == self.active_profile_id)
+        {
+            return Err(ProfileServiceError::ActiveProfileMissing);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct ProfileService<R> {
+    repository: R,
+    snapshot: Mutex<ProfileSnapshot>,
+    events: RuntimeEventBus,
+}
+
+impl<R: ProfileRepository> ProfileService<R> {
+    /// Restores profiles or creates the first local default profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when loading, validation, default creation, or the
+    /// first durable save fails.
+    pub fn initialize(repository: R, events: RuntimeEventBus) -> Result<Self, ProfileServiceError> {
+        let snapshot = if let Some(snapshot) = repository.load()? {
+            snapshot.validate()?;
+            snapshot
+        } else {
+            let profile = Profile::new("Default", ProfilePolicy::standard())?;
+            let snapshot = ProfileSnapshot {
+                schema_version: ProfileSnapshot::SCHEMA_VERSION,
+                active_profile_id: profile.id,
+                profiles: vec![profile],
+            };
+            repository.save(&snapshot)?;
+            snapshot
+        };
+        Ok(Self {
+            repository,
+            snapshot: Mutex::new(snapshot),
+            events,
+        })
+    }
+
+    /// Returns a consistent copy of the profile collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if another thread panicked while holding profile state.
+    pub fn snapshot(&self) -> Result<ProfileSnapshot, ProfileServiceError> {
+        Ok(self
+            .snapshot
+            .lock()
+            .map_err(|_| ProfileServiceError::StatePoisoned)?
+            .clone())
+    }
+
+    /// Creates and durably stores a new composable profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when domain validation, event creation, locking, or
+    /// persistence fails. No state or event is published before persistence.
+    pub fn create_profile(
+        &self,
+        name: impl Into<String>,
+        policy: ProfilePolicy,
+    ) -> Result<Command, ProfileServiceError> {
+        let profile = Profile::new(name, policy)?;
+        let mut current = self
+            .snapshot
+            .lock()
+            .map_err(|_| ProfileServiceError::StatePoisoned)?;
+        let mut candidate = current.clone();
+        candidate.profiles.push(profile.clone());
+        candidate.validate()?;
+        let command = Command::new(
+            "profile.collection.create",
+            serde_json::json!({ "profile": profile }),
+            CommandRisk::Safe,
+        )?;
+        let event = Event::with_trace_id(
+            "profile.collection.created",
+            EventSource::Core,
+            command.trace_id,
+            serde_json::json!({ "profile": profile }),
+        )?;
+        let mut events = self.events.lock().map_err(ProfileServiceError::Runtime)?;
+        self.repository.save(&candidate)?;
+        *current = candidate;
+        if events.len() == EVENT_BUFFER_CAPACITY {
+            events.pop_front();
+        }
+        events.push_back(event);
+        Ok(command)
+    }
+
+    /// Activates a profile only after the complete snapshot is durably stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown profile or when validation, event
+    /// creation, locking, or persistence fails. No state or event is published
+    /// before persistence succeeds.
+    pub fn switch_active(&self, profile_id: ProfileId) -> Result<Command, ProfileServiceError> {
+        let mut current = self
+            .snapshot
+            .lock()
+            .map_err(|_| ProfileServiceError::StatePoisoned)?;
+        if !current
+            .profiles
+            .iter()
+            .any(|profile| profile.id == profile_id)
+        {
+            return Err(ProfileServiceError::ProfileNotFound);
+        }
+        if current.active_profile_id == profile_id {
+            return Err(ProfileServiceError::ProfileAlreadyActive);
+        }
+        let mut candidate = current.clone();
+        let previous_profile_id = candidate.active_profile_id;
+        candidate.active_profile_id = profile_id;
+        candidate.validate()?;
+        let command = Command::new(
+            "profile.active.switch",
+            serde_json::json!({ "profileId": profile_id }),
+            CommandRisk::Safe,
+        )?;
+        let event = Event::with_trace_id(
+            "profile.active.changed",
+            EventSource::Core,
+            command.trace_id,
+            serde_json::json!({
+                "beforeProfileId": previous_profile_id,
+                "afterProfileId": profile_id,
+            }),
+        )?;
+        let mut events = self.events.lock().map_err(ProfileServiceError::Runtime)?;
+        self.repository.save(&candidate)?;
+        *current = candidate;
+        if events.len() == EVENT_BUFFER_CAPACITY {
+            events.pop_front();
+        }
+        events.push_back(event);
+        Ok(command)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ProfileServiceError {
+    #[error("profile state is unavailable")]
+    StatePoisoned,
+    #[error("profile collection must not be empty")]
+    EmptyProfiles,
+    #[error("active profile does not exist")]
+    ActiveProfileMissing,
+    #[error("profile identifiers must be unique")]
+    DuplicateProfileId,
+    #[error("profile was not found")]
+    ProfileNotFound,
+    #[error("profile is already active")]
+    ProfileAlreadyActive,
+    #[error("profile snapshot version {0} is unsupported")]
+    UnsupportedSnapshotVersion(u32),
+    #[error(transparent)]
+    Repository(#[from] RepositoryError),
+    #[error(transparent)]
+    Profile(#[from] ProfileError),
+    #[error(transparent)]
+    Command(#[from] CommandError),
+    #[error(transparent)]
+    Event(#[from] EventError),
+    #[error(transparent)]
+    Runtime(RuntimeError),
 }
 
 #[derive(Debug, Error)]
@@ -199,13 +471,33 @@ pub enum RuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use asterpet_runtime_core::PetState;
+    use nimora_runtime_core::PetState;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[derive(Debug, Default)]
     struct MemoryRepository {
         pet: Mutex<Option<Pet>>,
         fail_save: AtomicBool,
+    }
+
+    #[derive(Debug, Default)]
+    struct MemoryProfileRepository {
+        snapshot: Mutex<Option<ProfileSnapshot>>,
+        fail_save: AtomicBool,
+    }
+
+    impl ProfileRepository for MemoryProfileRepository {
+        fn load(&self) -> Result<Option<ProfileSnapshot>, RepositoryError> {
+            Ok(self.snapshot.lock().expect("test lock").clone())
+        }
+
+        fn save(&self, snapshot: &ProfileSnapshot) -> Result<(), RepositoryError> {
+            if self.fail_save.load(Ordering::Relaxed) {
+                return Err(RepositoryError::new("injected failure"));
+            }
+            *self.snapshot.lock().expect("test lock") = Some(snapshot.clone());
+            Ok(())
+        }
     }
 
     impl PetRepository for MemoryRepository {
@@ -250,5 +542,72 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, "pet.action.played");
         assert_eq!(events[0].trace_id, command.trace_id);
+    }
+
+    #[test]
+    fn persists_the_default_profile_on_first_launch() {
+        let bus = RuntimeEventBus::default();
+        let service =
+            ProfileService::initialize(MemoryProfileRepository::default(), bus).expect("profiles");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.profiles.len(), 1);
+        assert_eq!(snapshot.profiles[0].name, "Default");
+        assert_eq!(snapshot.active_profile_id, snapshot.profiles[0].id);
+    }
+
+    #[test]
+    fn profile_switch_is_durable_and_correlated() {
+        let first = Profile::new("Default", ProfilePolicy::standard()).expect("profile");
+        let second = Profile::new("Focus", ProfilePolicy::standard()).expect("profile");
+        let repository = MemoryProfileRepository {
+            snapshot: Mutex::new(Some(ProfileSnapshot {
+                schema_version: ProfileSnapshot::SCHEMA_VERSION,
+                active_profile_id: first.id,
+                profiles: vec![first, second.clone()],
+            })),
+            fail_save: AtomicBool::new(false),
+        };
+        let bus = RuntimeEventBus::default();
+        let service = ProfileService::initialize(repository, bus.clone()).expect("profiles");
+        let command = service.switch_active(second.id).expect("switch");
+        assert_eq!(
+            service.snapshot().expect("snapshot").active_profile_id,
+            second.id
+        );
+        let events = bus.drain().expect("events");
+        assert_eq!(events[0].event_type, "profile.active.changed");
+        assert_eq!(events[0].trace_id, command.trace_id);
+    }
+
+    #[test]
+    fn creates_a_valid_profile_without_activating_it() {
+        let bus = RuntimeEventBus::default();
+        let service = ProfileService::initialize(MemoryProfileRepository::default(), bus.clone())
+            .expect("profiles");
+        let active = service.snapshot().expect("snapshot").active_profile_id;
+        let command = service
+            .create_profile("Focus", ProfilePolicy::standard())
+            .expect("create");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.profiles.len(), 2);
+        assert_eq!(snapshot.active_profile_id, active);
+        let event = bus.drain().expect("events").pop().expect("event");
+        assert_eq!(event.event_type, "profile.collection.created");
+        assert_eq!(event.trace_id, command.trace_id);
+    }
+
+    #[test]
+    fn failed_profile_save_does_not_publish_state_or_event() {
+        let bus = RuntimeEventBus::default();
+        let repository = MemoryProfileRepository::default();
+        let service = ProfileService::initialize(repository, bus.clone()).expect("profiles");
+        let before = service.snapshot().expect("snapshot");
+        service.repository.fail_save.store(true, Ordering::Relaxed);
+        let second = Profile::new("Focus", ProfilePolicy::standard()).expect("profile");
+        service
+            .create_profile(second.name, second.policy)
+            .expect_err("save fails");
+        assert_eq!(service.snapshot().expect("snapshot"), before);
+        assert!(bus.drain().expect("events").is_empty());
     }
 }

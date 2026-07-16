@@ -1,6 +1,11 @@
-use asterpet_persistence_sqlite::{SqlitePersistenceError, SqlitePetRepository};
-use asterpet_runtime_app::{RuntimeError, RuntimeService};
-use asterpet_runtime_core::{Command, Event, Pet, PetAction, Position};
+use nimora_persistence_sqlite::{
+    SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
+};
+use nimora_runtime_app::{
+    ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBus,
+    RuntimeService,
+};
+use nimora_runtime_core::{Command, Event, Pet, PetAction, Position, ProfileId, ProfilePolicy};
 use serde::{Deserialize, Serialize};
 use std::{io, path::Path, sync::Mutex};
 use tauri::{
@@ -16,17 +21,35 @@ const PET_WINDOW_LABEL: &str = "pet";
 #[derive(Debug)]
 struct DesktopState {
     runtime: RuntimeService<SqlitePetRepository>,
+    profiles: ProfileService<SqliteProfileRepository>,
+    events: RuntimeEventBus,
     click_through: Mutex<bool>,
 }
 
 impl DesktopState {
     fn open(database_path: &Path) -> Result<Self, DesktopError> {
+        let events = RuntimeEventBus::default();
+        let runtime = RuntimeService::initialize_with_event_bus(
+            SqlitePetRepository::open(database_path)?,
+            "Aster",
+            events.clone(),
+        )?;
+        let profiles = ProfileService::initialize(
+            SqliteProfileRepository::open(database_path)?,
+            events.clone(),
+        )?;
+        let active = profiles.snapshot()?;
+        let click_through = active
+            .profiles
+            .iter()
+            .find(|profile| profile.id == active.active_profile_id)
+            .and_then(|profile| profile.policy.click_through)
+            .unwrap_or(false);
         Ok(Self {
-            runtime: RuntimeService::initialize(
-                SqlitePetRepository::open(database_path)?,
-                "Aster",
-            )?,
-            click_through: Mutex::new(false),
+            runtime,
+            profiles,
+            events,
+            click_through: Mutex::new(click_through),
         })
     }
 }
@@ -55,6 +78,8 @@ enum DesktopError {
     InvalidPosition,
     #[error(transparent)]
     Runtime(#[from] RuntimeError),
+    #[error(transparent)]
+    Profile(#[from] ProfileServiceError),
     #[error(transparent)]
     Persistence(#[from] SqlitePersistenceError),
     #[error(transparent)]
@@ -86,7 +111,32 @@ fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, D
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn drain_runtime_events(state: State<'_, DesktopState>) -> Result<Vec<Event>, DesktopError> {
-    Ok(state.runtime.drain_events()?)
+    Ok(state.events.drain()?)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn profile_snapshot(state: State<'_, DesktopState>) -> Result<ProfileSnapshot, DesktopError> {
+    Ok(state.profiles.snapshot()?)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn create_profile(
+    state: State<'_, DesktopState>,
+    name: String,
+    policy: ProfilePolicy,
+) -> Result<Command, DesktopError> {
+    Ok(state.profiles.create_profile(name, policy)?)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn switch_profile(
+    state: State<'_, DesktopState>,
+    profile_id: ProfileId,
+) -> Result<Command, DesktopError> {
+    Ok(state.profiles.switch_active(profile_id)?)
 }
 
 #[tauri::command]
@@ -192,11 +242,11 @@ fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
 fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
     let open = MenuItem::with_id(app, "open", "打开控制中心", true, None::<&str>)?;
     let interactive = MenuItem::with_id(app, "interactive", "恢复宠物交互", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 AsterPet", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 Nimora", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &interactive, &quit])?;
 
-    TrayIconBuilder::with_id("asterpet-tray")
-        .tooltip("AsterPet · 本地运行")
+    TrayIconBuilder::with_id("nimora-tray")
+        .tooltip("Nimora · 本地运行")
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => {
@@ -226,7 +276,7 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
     Ok(())
 }
 
-/// Starts the `AsterPet` desktop application.
+/// Starts the `Nimora` desktop application.
 ///
 /// # Panics
 ///
@@ -262,12 +312,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_snapshot,
             drain_runtime_events,
+            profile_snapshot,
+            create_profile,
+            switch_profile,
             move_pet,
             play_pet_action,
             set_click_through
         ])
         .run(tauri::generate_context!())
-        .expect("AsterPet desktop runtime failed");
+        .expect("Nimora desktop runtime failed");
 }
 
 #[cfg(test)]

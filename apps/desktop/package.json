@@ -1,5 +1,5 @@
 {
-  "name": "@asterpet/desktop",
+  "name": "@nimora/desktop",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@asterpet/schemas": "workspace:*",
+    "@nimora/schemas": "workspace:*",
     "@tauri-apps/api": "2.11.1",
     "@vitejs/plugin-react": "latest",
     "vite": "8.1.5",

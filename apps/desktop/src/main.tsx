@@ -5,7 +5,7 @@ import { PetOverlay } from "./components/PetOverlay";
 import "./styles.css";
 
 const root = document.getElementById("root");
-if (!root) throw new Error("AsterPet root element is missing");
+if (!root) throw new Error("Nimora root element is missing");
 
 export function isPetView(search: string): boolean {
   return new URLSearchParams(search).get("view") === "pet";

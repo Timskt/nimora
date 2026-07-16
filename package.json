@@ -1,5 +1,5 @@
 {
-  "name": "asterpet-platform",
+  "name": "nimora-platform",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@11.1.2",
@@ -18,4 +18,3 @@
     "format:rust": "cargo fmt --all --check"
   }
 }
-

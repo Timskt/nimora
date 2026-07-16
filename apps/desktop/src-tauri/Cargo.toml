@@ -1,21 +1,21 @@
 [package]
-name = "asterpet-desktop"
+name = "nimora-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [lib]
-name = "asterpet_desktop_lib"
+name = "nimora_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.5", features = [] }
 
 [dependencies]
-asterpet-persistence-sqlite = { path = "../../../crates/persistence-sqlite" }
-asterpet-runtime-app = { path = "../../../crates/runtime-app" }
-asterpet-runtime-core = { path = "../../../crates/runtime-core" }
+nimora-persistence-sqlite = { path = "../../../crates/persistence-sqlite" }
+nimora-runtime-app = { path = "../../../crates/runtime-app" }
+nimora-runtime-core = { path = "../../../crates/runtime-core" }
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.11", features = ["macos-private-api", "tray-icon"] }

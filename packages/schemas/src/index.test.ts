@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { eventSchema, petSchema } from "./index";
+import { eventSchema, petSchema, profileSnapshotSchema } from "./index";
 
 describe("eventSchema", () => {
   it("accepts the versioned event wire format", () => {
     const result = eventSchema.safeParse({
-      spec: "asterpet.event/1",
+      spec: "nimora.event/1",
       id: "019bf2c6-4d40-7000-8000-000000000001",
       eventType: "pet.state.changed",
       source: "core",
@@ -17,7 +17,7 @@ describe("eventSchema", () => {
 
   it("rejects unqualified event types", () => {
     const result = eventSchema.safeParse({
-      spec: "asterpet.event/1",
+      spec: "nimora.event/1",
       id: "019bf2c6-4d40-7000-8000-000000000001",
       eventType: "clicked",
       source: "core",
@@ -45,3 +45,40 @@ describe("petSchema", () => {
   });
 });
 
+describe("profileSnapshotSchema", () => {
+  it("accepts a versioned active profile collection", () => {
+    const id = "019bf2c6-4d40-7000-8000-000000000010";
+    expect(profileSnapshotSchema.safeParse({
+      schemaVersion: 1,
+      activeProfileId: id,
+      profiles: [{
+        id,
+        name: "Focus",
+        policy: {
+          alwaysOnTop: true,
+          clickThrough: false,
+          soundEnabled: true,
+          proactiveFrequency: 25,
+        },
+      }],
+    }).success).toBe(true);
+  });
+
+  it("rejects policy values outside the domain range", () => {
+    const id = "019bf2c6-4d40-7000-8000-000000000010";
+    expect(profileSnapshotSchema.safeParse({
+      schemaVersion: 1,
+      activeProfileId: id,
+      profiles: [{
+        id,
+        name: "Focus",
+        policy: {
+          alwaysOnTop: null,
+          clickThrough: null,
+          soundEnabled: null,
+          proactiveFrequency: 101,
+        },
+      }],
+    }).success).toBe(false);
+  });
+});

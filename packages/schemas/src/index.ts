@@ -10,7 +10,7 @@ export const eventSourceSchema = z.union([
 ]);
 
 export const eventSchema = z.object({
-  spec: z.literal("asterpet.event/1"),
+  spec: z.literal("nimora.event/1"),
   id: z.uuid(),
   eventType: namespacedId,
   source: eventSourceSchema,
@@ -30,7 +30,7 @@ export const commandStatusSchema = z.enum([
 ]);
 
 export const commandSchema = z.object({
-  spec: z.literal("asterpet.command/1"),
+  spec: z.literal("nimora.command/1"),
   executionId: z.uuid(),
   commandId: namespacedId,
   traceId: z.uuid(),
@@ -71,7 +71,28 @@ export const petSchema = z.object({
   affinity: z.number().int().min(0).max(100),
 });
 
+export const profilePolicySchema = z.object({
+  alwaysOnTop: z.boolean().nullable(),
+  clickThrough: z.boolean().nullable(),
+  soundEnabled: z.boolean().nullable(),
+  proactiveFrequency: z.number().int().min(0).max(100).nullable(),
+});
+
+export const profileSchema = z.object({
+  id: z.uuid(),
+  name: z.string().trim().min(1).max(64),
+  policy: profilePolicySchema,
+});
+
+export const profileSnapshotSchema = z.object({
+  schemaVersion: z.literal(1),
+  activeProfileId: z.uuid(),
+  profiles: z.array(profileSchema).min(1),
+});
+
 export type AsterEvent = z.infer<typeof eventSchema>;
 export type AsterCommand = z.infer<typeof commandSchema>;
 export type Pet = z.infer<typeof petSchema>;
-
+export type ProfilePolicy = z.infer<typeof profilePolicySchema>;
+export type Profile = z.infer<typeof profileSchema>;
+export type ProfileSnapshot = z.infer<typeof profileSnapshotSchema>;

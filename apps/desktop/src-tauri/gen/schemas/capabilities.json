@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Permissions for AsterPet first-party windows","local":true,"windows":["control-center","pet"],"permissions":["core:default"]}}
+{"default":{"identifier":"default","description":"Permissions for Nimora first-party windows","local":true,"windows":["control-center","pet"],"permissions":["core:default"]}}

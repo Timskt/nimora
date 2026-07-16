@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -29,6 +30,16 @@ pub struct ProfilePolicy {
 
 impl ProfilePolicy {
     #[must_use]
+    pub const fn standard() -> Self {
+        Self {
+            always_on_top: Some(true),
+            click_through: Some(false),
+            sound_enabled: Some(true),
+            proactive_frequency: Some(25),
+        }
+    }
+
+    #[must_use]
     pub fn merge(defaults: &Self, override_policy: &Self) -> Self {
         Self {
             always_on_top: override_policy.always_on_top.or(defaults.always_on_top),
@@ -48,6 +59,51 @@ pub struct Profile {
     pub id: ProfileId,
     pub name: String,
     pub policy: ProfilePolicy,
+}
+
+impl Profile {
+    /// Creates a validated profile with a stable generated identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProfileError::InvalidName`] when the trimmed name is empty or
+    /// longer than 64 Unicode scalar values.
+    pub fn new(name: impl Into<String>, policy: ProfilePolicy) -> Result<Self, ProfileError> {
+        let profile = Self {
+            id: ProfileId::new(),
+            name: name.into().trim().to_owned(),
+            policy,
+        };
+        profile.validate()?;
+        Ok(profile)
+    }
+
+    /// Validates a profile crossing an external persistence boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a domain error when persisted values violate current invariants.
+    pub fn validate(&self) -> Result<(), ProfileError> {
+        if self.name.trim().is_empty() || self.name.chars().count() > 64 {
+            return Err(ProfileError::InvalidName);
+        }
+        if self
+            .policy
+            .proactive_frequency
+            .is_some_and(|value| value > 100)
+        {
+            return Err(ProfileError::InvalidProactiveFrequency);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ProfileError {
+    #[error("profile name must contain 1 to 64 characters")]
+    InvalidName,
+    #[error("profile proactive frequency must be between 0 and 100")]
+    InvalidProactiveFrequency,
 }
 
 #[cfg(test)]
@@ -72,5 +128,19 @@ mod tests {
         assert_eq!(merged.always_on_top, Some(true));
         assert_eq!(merged.click_through, Some(true));
         assert_eq!(merged.proactive_frequency, Some(100));
+    }
+
+    #[test]
+    fn validates_profile_boundaries() {
+        assert_eq!(
+            Profile::new(" ", ProfilePolicy::standard()),
+            Err(ProfileError::InvalidName)
+        );
+        let mut policy = ProfilePolicy::standard();
+        policy.proactive_frequency = Some(101);
+        assert_eq!(
+            Profile::new("Work", policy),
+            Err(ProfileError::InvalidProactiveFrequency)
+        );
     }
 }

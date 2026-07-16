@@ -1,4 +1,10 @@
-import type { AsterCommand, AsterEvent, Pet } from "@asterpet/schemas";
+import type {
+  AsterCommand,
+  AsterEvent,
+  Pet,
+  ProfilePolicy,
+  ProfileSnapshot,
+} from "@nimora/schemas";
 import { invoke } from "@tauri-apps/api/core";
 
 export const petActions = ["idle", "walk", "sleep", "work", "celebrate"] as const;
@@ -13,6 +19,9 @@ export interface DesktopApi {
   readonly native: boolean;
   snapshot(): Promise<DesktopSnapshot>;
   drainEvents(): Promise<AsterEvent[]>;
+  profiles(): Promise<ProfileSnapshot>;
+  createProfile(name: string, policy: ProfilePolicy): Promise<AsterCommand | null>;
+  switchProfile(profileId: string): Promise<AsterCommand | null>;
   movePet(x: number, y: number): Promise<AsterCommand | null>;
   playAction(action: PetAction): Promise<AsterCommand | null>;
   setClickThrough(enabled: boolean): Promise<void>;
@@ -34,6 +43,21 @@ const previewSnapshot: DesktopSnapshot = {
   clickThrough: false,
 };
 
+const previewProfiles: ProfileSnapshot = {
+  schemaVersion: 1,
+  activeProfileId: "00000000-0000-4000-8000-000000000010",
+  profiles: [{
+    id: "00000000-0000-4000-8000-000000000010",
+    name: "Default",
+    policy: {
+      alwaysOnTop: true,
+      clickThrough: false,
+      soundEnabled: true,
+      proactiveFrequency: 25,
+    },
+  }],
+};
+
 export function isNativeDesktop(scope?: Window): boolean {
   const browserWindow = scope ?? (typeof window === "undefined" ? undefined : window);
   return browserWindow !== undefined && "__TAURI_INTERNALS__" in browserWindow;
@@ -45,6 +69,9 @@ export function createDesktopApi(native: boolean, invokeCommand: Invoke = invoke
       native: false,
       async snapshot() { return structuredClone(previewSnapshot); },
       async drainEvents() { return []; },
+      async profiles() { return structuredClone(previewProfiles); },
+      async createProfile() { return null; },
+      async switchProfile() { return null; },
       async movePet() { return null; },
       async playAction() { return null; },
       async setClickThrough() {},
@@ -55,6 +82,9 @@ export function createDesktopApi(native: boolean, invokeCommand: Invoke = invoke
     native: true,
     snapshot: async () => await invokeCommand("desktop_snapshot") as DesktopSnapshot,
     drainEvents: async () => await invokeCommand("drain_runtime_events") as AsterEvent[],
+    profiles: async () => await invokeCommand("profile_snapshot") as ProfileSnapshot,
+    createProfile: async (name, policy) => await invokeCommand("create_profile", { name, policy }) as AsterCommand,
+    switchProfile: async (profileId) => await invokeCommand("switch_profile", { profileId }) as AsterCommand,
     movePet: async (x, y) => await invokeCommand("move_pet", { request: { x, y } }) as AsterCommand,
     playAction: async (action) => await invokeCommand("play_pet_action", { action }) as AsterCommand,
     setClickThrough: async (enabled) => { await invokeCommand("set_click_through", { enabled }); },

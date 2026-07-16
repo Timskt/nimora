@@ -135,7 +135,7 @@ impl Event {
             return Err(EventError::InvalidTraceId);
         }
         Ok(Self {
-            spec: "asterpet.event/1".to_owned(),
+            spec: "nimora.event/1".to_owned(),
             id: EventId::new(),
             event_type,
             source,
@@ -179,9 +179,9 @@ mod tests {
 
     #[test]
     fn source_round_trips_through_wire_format() {
-        let source = EventSource::Skill("dev.asterpet.timer".to_owned());
+        let source = EventSource::Skill("dev.nimora.timer".to_owned());
         let json = serde_json::to_string(&source).expect("source serializes");
-        assert_eq!(json, r#""skill:dev.asterpet.timer""#);
+        assert_eq!(json, r#""skill:dev.nimora.timer""#);
         let decoded = serde_json::from_str::<EventSource>(&json).expect("source deserializes");
         assert_eq!(decoded, source);
     }
@@ -200,7 +200,7 @@ mod tests {
             json!({"state": "idle"}),
         )
         .expect("event is valid");
-        assert_eq!(event.spec, "asterpet.event/1");
+        assert_eq!(event.spec, "nimora.event/1");
         assert_eq!(event.event_type, "pet.state.changed");
         assert!(!event.trace_id.is_nil());
     }

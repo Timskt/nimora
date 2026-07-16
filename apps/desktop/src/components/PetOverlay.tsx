@@ -28,7 +28,7 @@ export function PetOverlay() {
   }
 
   return (
-    <main className="pet-overlay" aria-label="AsterPet 桌面宠物">
+    <main className="pet-overlay" aria-label="Nimora 桌面宠物">
       <button className="overlay-drag-region" type="button" data-tauri-drag-region aria-label="拖动 Aster">
         <span className="overlay-status">{message}</span>
         <span className={`overlay-pet ${snapshot?.pet.state ?? "idle"}`} aria-hidden="true">

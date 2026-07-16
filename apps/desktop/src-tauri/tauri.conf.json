@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AsterPet",
+  "productName": "Nimora",
   "version": "0.1.0",
-  "identifier": "dev.asterpet.desktop",
+  "identifier": "dev.nimora.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "control-center",
-        "title": "AsterPet",
+        "title": "Nimora",
         "width": 1180,
         "height": 780,
         "minWidth": 720,
@@ -32,6 +32,6 @@
     "targets": "all",
     "category": "Productivity",
     "shortDescription": "Local-first extensible desktop companion",
-    "longDescription": "AsterPet is a local-first desktop companion, automation runtime and creator platform."
+    "longDescription": "Nimora is a local-first desktop companion, automation runtime and creator platform."
   }
 }

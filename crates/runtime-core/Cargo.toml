@@ -1,5 +1,5 @@
 [package]
-name = "asterpet-runtime-core"
+name = "nimora-runtime-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,4 +14,3 @@ uuid.workspace = true
 
 [lints]
 workspace = true
-

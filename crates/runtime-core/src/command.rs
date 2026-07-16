@@ -80,7 +80,7 @@ impl Command {
         risk: CommandRisk,
     ) -> Result<Self, CommandError> {
         Ok(Self {
-            spec: "asterpet.command/1".to_owned(),
+            spec: "nimora.command/1".to_owned(),
             execution_id: Uuid::now_v7(),
             command_id: command_id.as_ref().parse()?,
             trace_id: Uuid::now_v7(),
@@ -111,7 +111,7 @@ mod tests {
             CommandRisk::Safe,
         )
         .expect("command is valid");
-        assert_eq!(command.spec, "asterpet.command/1");
+        assert_eq!(command.spec, "nimora.command/1");
         assert_eq!(command.status, CommandStatus::Pending);
     }
 

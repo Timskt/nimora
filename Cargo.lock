@@ -48,52 +48,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
-name = "asterpet-desktop"
-version = "0.1.0"
-dependencies = [
- "asterpet-persistence-sqlite",
- "asterpet-runtime-app",
- "asterpet-runtime-core",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "asterpet-persistence-sqlite"
-version = "0.1.0"
-dependencies = [
- "asterpet-runtime-app",
- "asterpet-runtime-core",
- "rusqlite",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "asterpet-runtime-app"
-version = "0.1.0"
-dependencies = [
- "asterpet-runtime-core",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "asterpet-runtime-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "time",
- "uuid",
-]
-
-[[package]]
 name = "atk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1858,6 +1812,53 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
+
+[[package]]
+name = "nimora-desktop"
+version = "0.1.0"
+dependencies = [
+ "nimora-persistence-sqlite",
+ "nimora-runtime-app",
+ "nimora-runtime-core",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "nimora-persistence-sqlite"
+version = "0.1.0"
+dependencies = [
+ "nimora-runtime-app",
+ "nimora-runtime-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "nimora-runtime-app"
+version = "0.1.0"
+dependencies = [
+ "nimora-runtime-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "nimora-runtime-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "time",
+ "uuid",
+]
 
 [[package]]
 name = "num-conv"

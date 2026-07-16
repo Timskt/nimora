@@ -10,7 +10,7 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@asterpet/schemas':
+      '@nimora/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
       '@tauri-apps/api':
