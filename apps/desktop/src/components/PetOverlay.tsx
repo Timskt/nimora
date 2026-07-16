@@ -21,9 +21,12 @@ export function PetOverlay() {
   }
 
   async function toggleClickThrough() {
-    const enabled = !snapshot?.clickThrough;
+    const enabled = !snapshot?.windowPolicy.clickThrough;
     await desktopApi.setClickThrough(enabled);
-    if (snapshot) setSnapshot({ ...snapshot, clickThrough: enabled });
+    if (snapshot) setSnapshot({
+      ...snapshot,
+      windowPolicy: { ...snapshot.windowPolicy, clickThrough: enabled },
+    });
     setMessage(enabled ? "已开启鼠标穿透，可从托盘恢复" : "可以互动啦");
   }
 

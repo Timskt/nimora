@@ -102,6 +102,8 @@ Core 包含纯领域逻辑：Pet、Command、Event、Profile、Policy、Permissi
 
 当前宠物与 Profile 状态实现遵循 `runtime-core → runtime-app → persistence-sqlite` 依赖方向：领域层定义状态与不变量，应用层通过 `PetRepository`、`ProfileRepository` 端口组织用例，SQLite 适配器负责事务和版本校验。状态写入成功后才发布到内存与共享事件缓冲区，具体决策见 [`adr/ADR-008-versioned-sqlite-snapshots.md`](adr/ADR-008-versioned-sqlite-snapshots.md)。数据库 v2 通过非破坏性增量迁移增加 Profile 根快照，并有 v1 宠物数据保留测试；自动备份、迁移失败回滚和只读安全模式必须在首个破坏性迁移前完成。
 
+Profile 激活属于“持久状态 + 原生窗口副作用”的复合操作。桌面适配器先应用候选窗口策略，再提交 Profile 快照；持久化失败时恢复原窗口策略。安全模式使用独立应用服务和共享事件总线，桌面菜单、IPC 和后续 Gateway、Connector、Agent Host 必须读取同一状态，不得维护各自的安全开关。
+
 ## 6. 事件契约修正
 
 事件 `source` 必须支持以下命名空间：

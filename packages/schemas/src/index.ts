@@ -90,9 +90,32 @@ export const profileSnapshotSchema = z.object({
   profiles: z.array(profileSchema).min(1),
 });
 
-export type AsterEvent = z.infer<typeof eventSchema>;
-export type AsterCommand = z.infer<typeof commandSchema>;
+export const runtimeModeSchema = z.enum(["normal", "safe"]);
+export const safeModeReasonSchema = z.enum([
+  "manual",
+  "crash_loop",
+  "data_recovery",
+  "policy_violation",
+]);
+export const safetySnapshotSchema = z.object({
+  mode: runtimeModeSchema,
+  reason: safeModeReasonSchema.nullable(),
+}).superRefine((snapshot, context) => {
+  if ((snapshot.mode === "safe") !== (snapshot.reason !== null)) {
+    context.addIssue({
+      code: "custom",
+      message: "safe mode requires a reason and normal mode forbids one",
+      path: ["reason"],
+    });
+  }
+});
+
+export type NimoraEvent = z.infer<typeof eventSchema>;
+export type NimoraCommand = z.infer<typeof commandSchema>;
 export type Pet = z.infer<typeof petSchema>;
 export type ProfilePolicy = z.infer<typeof profilePolicySchema>;
 export type Profile = z.infer<typeof profileSchema>;
 export type ProfileSnapshot = z.infer<typeof profileSnapshotSchema>;
+export type RuntimeMode = z.infer<typeof runtimeModeSchema>;
+export type SafeModeReason = z.infer<typeof safeModeReasonSchema>;
+export type SafetySnapshot = z.infer<typeof safetySnapshotSchema>;

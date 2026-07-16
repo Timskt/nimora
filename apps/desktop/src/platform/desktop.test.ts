@@ -24,6 +24,8 @@ describe("desktop platform adapter", () => {
     };
     await api.createProfile("Focus", policy);
     await api.switchProfile("00000000-0000-4000-8000-000000000010");
+    await api.enterSafeMode();
+    await api.exitSafeMode();
     await api.movePet(24, 42);
     await api.playAction("work");
     await api.setClickThrough(true);
@@ -32,6 +34,8 @@ describe("desktop platform adapter", () => {
       ["profile_snapshot"],
       ["create_profile", { name: "Focus", policy }],
       ["switch_profile", { profileId: "00000000-0000-4000-8000-000000000010" }],
+      ["enter_safe_mode"],
+      ["exit_safe_mode"],
       ["move_pet", { request: { x: 24, y: 42 } }],
       ["play_pet_action", { action: "work" }],
       ["set_click_through", { enabled: true }],

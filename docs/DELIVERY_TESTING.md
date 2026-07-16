@@ -35,6 +35,8 @@
 - 托盘可以恢复穿透窗口并进入安全模式。
 - Windows 10/11 与 macOS 12+ 冒烟通过。
 
+安全模式的 M0 自动化证据至少包括：状态与原因不变量、重复进入/退出不发布假事件、Command/Event Trace 关联、IPC 映射、仓库策略检查，以及 Windows、macOS、Linux 编译测试。涉及真实窗口菜单和点击穿透的行为仍需在 Windows 与 macOS 发布候选产物上执行人工冒烟。
+
 ### M1 Creator Foundation
 
 - Character、Skin、Theme 包 Schema 和解析器可用。

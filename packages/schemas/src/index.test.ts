@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { eventSchema, petSchema, profileSnapshotSchema } from "./index";
+import { eventSchema, petSchema, profileSnapshotSchema, safetySnapshotSchema } from "./index";
 
 describe("eventSchema", () => {
   it("accepts the versioned event wire format", () => {
@@ -80,5 +80,14 @@ describe("profileSnapshotSchema", () => {
         },
       }],
     }).success).toBe(false);
+  });
+});
+
+describe("safetySnapshotSchema", () => {
+  it("keeps runtime mode and reason consistent", () => {
+    expect(safetySnapshotSchema.safeParse({ mode: "safe", reason: "manual" }).success).toBe(true);
+    expect(safetySnapshotSchema.safeParse({ mode: "normal", reason: null }).success).toBe(true);
+    expect(safetySnapshotSchema.safeParse({ mode: "safe", reason: null }).success).toBe(false);
+    expect(safetySnapshotSchema.safeParse({ mode: "normal", reason: "crash_loop" }).success).toBe(false);
   });
 });

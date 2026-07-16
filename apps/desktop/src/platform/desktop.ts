@@ -1,9 +1,10 @@
 import type {
-  AsterCommand,
-  AsterEvent,
+  NimoraCommand,
+  NimoraEvent,
   Pet,
   ProfilePolicy,
   ProfileSnapshot,
+  SafetySnapshot,
 } from "@nimora/schemas";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -12,18 +13,24 @@ export type PetAction = (typeof petActions)[number];
 
 export interface DesktopSnapshot {
   pet: Pet;
-  clickThrough: boolean;
+  windowPolicy: {
+    alwaysOnTop: boolean;
+    clickThrough: boolean;
+  };
+  safety: SafetySnapshot;
 }
 
 export interface DesktopApi {
   readonly native: boolean;
   snapshot(): Promise<DesktopSnapshot>;
-  drainEvents(): Promise<AsterEvent[]>;
+  drainEvents(): Promise<NimoraEvent[]>;
   profiles(): Promise<ProfileSnapshot>;
-  createProfile(name: string, policy: ProfilePolicy): Promise<AsterCommand | null>;
-  switchProfile(profileId: string): Promise<AsterCommand | null>;
-  movePet(x: number, y: number): Promise<AsterCommand | null>;
-  playAction(action: PetAction): Promise<AsterCommand | null>;
+  createProfile(name: string, policy: ProfilePolicy): Promise<NimoraCommand | null>;
+  switchProfile(profileId: string): Promise<NimoraCommand | null>;
+  enterSafeMode(): Promise<NimoraCommand | null>;
+  exitSafeMode(): Promise<NimoraCommand | null>;
+  movePet(x: number, y: number): Promise<NimoraCommand | null>;
+  playAction(action: PetAction): Promise<NimoraCommand | null>;
   setClickThrough(enabled: boolean): Promise<void>;
 }
 
@@ -40,7 +47,8 @@ const previewSnapshot: DesktopSnapshot = {
     mood: 82,
     affinity: 34,
   },
-  clickThrough: false,
+  windowPolicy: { alwaysOnTop: true, clickThrough: false },
+  safety: { mode: "normal", reason: null },
 };
 
 const previewProfiles: ProfileSnapshot = {
@@ -72,6 +80,8 @@ export function createDesktopApi(native: boolean, invokeCommand: Invoke = invoke
       async profiles() { return structuredClone(previewProfiles); },
       async createProfile() { return null; },
       async switchProfile() { return null; },
+      async enterSafeMode() { return null; },
+      async exitSafeMode() { return null; },
       async movePet() { return null; },
       async playAction() { return null; },
       async setClickThrough() {},
@@ -81,12 +91,14 @@ export function createDesktopApi(native: boolean, invokeCommand: Invoke = invoke
   return {
     native: true,
     snapshot: async () => await invokeCommand("desktop_snapshot") as DesktopSnapshot,
-    drainEvents: async () => await invokeCommand("drain_runtime_events") as AsterEvent[],
+    drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],
     profiles: async () => await invokeCommand("profile_snapshot") as ProfileSnapshot,
-    createProfile: async (name, policy) => await invokeCommand("create_profile", { name, policy }) as AsterCommand,
-    switchProfile: async (profileId) => await invokeCommand("switch_profile", { profileId }) as AsterCommand,
-    movePet: async (x, y) => await invokeCommand("move_pet", { request: { x, y } }) as AsterCommand,
-    playAction: async (action) => await invokeCommand("play_pet_action", { action }) as AsterCommand,
+    createProfile: async (name, policy) => await invokeCommand("create_profile", { name, policy }) as NimoraCommand,
+    switchProfile: async (profileId) => await invokeCommand("switch_profile", { profileId }) as NimoraCommand,
+    enterSafeMode: async () => await invokeCommand("enter_safe_mode") as NimoraCommand,
+    exitSafeMode: async () => await invokeCommand("exit_safe_mode") as NimoraCommand,
+    movePet: async (x, y) => await invokeCommand("move_pet", { request: { x, y } }) as NimoraCommand,
+    playAction: async (action) => await invokeCommand("play_pet_action", { action }) as NimoraCommand,
     setClickThrough: async (enabled) => { await invokeCommand("set_click_through", { enabled }); },
   };
 }

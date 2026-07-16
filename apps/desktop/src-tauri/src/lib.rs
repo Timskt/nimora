@@ -3,9 +3,12 @@ use nimora_persistence_sqlite::{
 };
 use nimora_runtime_app::{
     ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBus,
-    RuntimeService,
+    RuntimeService, SafetyService, SafetyServiceError,
 };
-use nimora_runtime_core::{Command, Event, Pet, PetAction, Position, ProfileId, ProfilePolicy};
+use nimora_runtime_core::{
+    Command, Event, Pet, PetAction, Position, ProfileId, ProfilePolicy, RuntimeMode,
+    SafeModeReason, SafetySnapshot,
+};
 use serde::{Deserialize, Serialize};
 use std::{io, path::Path, sync::Mutex};
 use tauri::{
@@ -22,8 +25,32 @@ const PET_WINDOW_LABEL: &str = "pet";
 struct DesktopState {
     runtime: RuntimeService<SqlitePetRepository>,
     profiles: ProfileService<SqliteProfileRepository>,
+    safety: SafetyService,
     events: RuntimeEventBus,
-    click_through: Mutex<bool>,
+    window_policy: Mutex<WindowPolicy>,
+    policy_before_safe_mode: Mutex<Option<WindowPolicy>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowPolicy {
+    always_on_top: bool,
+    click_through: bool,
+}
+
+impl WindowPolicy {
+    const SAFE: Self = Self {
+        always_on_top: true,
+        click_through: false,
+    };
+
+    fn from_profile(policy: &ProfilePolicy) -> Self {
+        let resolved = ProfilePolicy::merge(&ProfilePolicy::standard(), policy);
+        Self {
+            always_on_top: resolved.always_on_top.unwrap_or(true),
+            click_through: resolved.click_through.unwrap_or(false),
+        }
+    }
 }
 
 impl DesktopState {
@@ -38,18 +65,14 @@ impl DesktopState {
             SqliteProfileRepository::open(database_path)?,
             events.clone(),
         )?;
-        let active = profiles.snapshot()?;
-        let click_through = active
-            .profiles
-            .iter()
-            .find(|profile| profile.id == active.active_profile_id)
-            .and_then(|profile| profile.policy.click_through)
-            .unwrap_or(false);
+        let window_policy = active_window_policy(&profiles.snapshot()?)?;
         Ok(Self {
             runtime,
             profiles,
+            safety: SafetyService::new(events.clone()),
             events,
-            click_through: Mutex::new(click_through),
+            window_policy: Mutex::new(window_policy),
+            policy_before_safe_mode: Mutex::new(None),
         })
     }
 }
@@ -58,7 +81,8 @@ impl DesktopState {
 #[serde(rename_all = "camelCase")]
 struct DesktopSnapshot {
     pet: Pet,
-    click_through: bool,
+    window_policy: WindowPolicy,
+    safety: SafetySnapshot,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,6 +96,8 @@ struct MovePetRequest {
 enum DesktopError {
     #[error("pet state is unavailable")]
     StatePoisoned,
+    #[error("operation is unavailable while safe mode is active")]
+    SafeModeActive,
     #[error("desktop window is unavailable: {0}")]
     WindowUnavailable(String),
     #[error("pet position must be a finite 32-bit screen coordinate")]
@@ -80,6 +106,10 @@ enum DesktopError {
     Runtime(#[from] RuntimeError),
     #[error(transparent)]
     Profile(#[from] ProfileServiceError),
+    #[error(transparent)]
+    Safety(#[from] SafetyServiceError),
+    #[error("operation failed ({primary}); native window policy rollback also failed ({rollback})")]
+    NativePolicyRollback { primary: String, rollback: String },
     #[error(transparent)]
     Persistence(#[from] SqlitePersistenceError),
     #[error(transparent)]
@@ -101,11 +131,16 @@ impl Serialize for DesktopError {
 #[allow(clippy::needless_pass_by_value)]
 fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, DesktopError> {
     let pet = state.runtime.snapshot()?;
-    let click_through = *state
-        .click_through
+    let window_policy = *state
+        .window_policy
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?;
-    Ok(DesktopSnapshot { pet, click_through })
+    let safety = state.safety.snapshot()?;
+    Ok(DesktopSnapshot {
+        pet,
+        window_policy,
+        safety,
+    })
 }
 
 #[tauri::command]
@@ -133,10 +168,89 @@ fn create_profile(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn switch_profile(
+    app: AppHandle,
     state: State<'_, DesktopState>,
     profile_id: ProfileId,
 ) -> Result<Command, DesktopError> {
-    Ok(state.profiles.switch_active(profile_id)?)
+    ensure_normal_mode(&state)?;
+    let snapshot = state.profiles.snapshot()?;
+    let target = snapshot
+        .profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or(ProfileServiceError::ProfileNotFound)?;
+    let next_policy = WindowPolicy::from_profile(&target.policy);
+    let previous_policy = current_window_policy(&state)?;
+    apply_window_policy(&app, previous_policy, next_policy)?;
+    match state.profiles.switch_active(profile_id) {
+        Ok(command) => {
+            set_current_window_policy(&state, next_policy)?;
+            Ok(command)
+        }
+        Err(primary) => match apply_window_policy(&app, next_policy, previous_policy) {
+            Ok(()) => Err(primary.into()),
+            Err(rollback) => Err(DesktopError::NativePolicyRollback {
+                primary: primary.to_string(),
+                rollback: rollback.to_string(),
+            }),
+        },
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn enter_safe_mode(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<Command, DesktopError> {
+    let previous_policy = current_window_policy(&state)?;
+    apply_window_policy(&app, previous_policy, WindowPolicy::SAFE)?;
+    match state.safety.enter(SafeModeReason::Manual) {
+        Ok(command) => {
+            *state
+                .policy_before_safe_mode
+                .lock()
+                .map_err(|_| DesktopError::StatePoisoned)? = Some(previous_policy);
+            set_current_window_policy(&state, WindowPolicy::SAFE)?;
+            Ok(command)
+        }
+        Err(primary) => match apply_window_policy(&app, WindowPolicy::SAFE, previous_policy) {
+            Ok(()) => Err(primary.into()),
+            Err(rollback) => Err(DesktopError::NativePolicyRollback {
+                primary: primary.to_string(),
+                rollback: rollback.to_string(),
+            }),
+        },
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn exit_safe_mode(app: AppHandle, state: State<'_, DesktopState>) -> Result<Command, DesktopError> {
+    let previous_policy = current_window_policy(&state)?;
+    let target_policy = state
+        .policy_before_safe_mode
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .unwrap_or(active_window_policy(&state.profiles.snapshot()?)?);
+    apply_window_policy(&app, previous_policy, target_policy)?;
+    match state.safety.exit() {
+        Ok(command) => {
+            *state
+                .policy_before_safe_mode
+                .lock()
+                .map_err(|_| DesktopError::StatePoisoned)? = None;
+            set_current_window_policy(&state, target_policy)?;
+            Ok(command)
+        }
+        Err(primary) => match apply_window_policy(&app, target_policy, previous_policy) {
+            Ok(()) => Err(primary.into()),
+            Err(rollback) => Err(DesktopError::NativePolicyRollback {
+                primary: primary.to_string(),
+                rollback: rollback.to_string(),
+            }),
+        },
+    }
 }
 
 #[tauri::command]
@@ -198,13 +312,69 @@ fn set_click_through(
     state: State<'_, DesktopState>,
     enabled: bool,
 ) -> Result<(), DesktopError> {
+    if enabled {
+        ensure_normal_mode(&state)?;
+    }
     app.get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?
         .set_ignore_cursor_events(enabled)?;
-    *state
-        .click_through
+    let mut policy = state
+        .window_policy
         .lock()
-        .map_err(|_| DesktopError::StatePoisoned)? = enabled;
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    policy.click_through = enabled;
+    Ok(())
+}
+
+fn ensure_normal_mode(state: &DesktopState) -> Result<(), DesktopError> {
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    Ok(())
+}
+
+fn active_window_policy(snapshot: &ProfileSnapshot) -> Result<WindowPolicy, DesktopError> {
+    snapshot
+        .profiles
+        .iter()
+        .find(|profile| profile.id == snapshot.active_profile_id)
+        .map(|profile| WindowPolicy::from_profile(&profile.policy))
+        .ok_or(ProfileServiceError::ActiveProfileMissing.into())
+}
+
+fn current_window_policy(state: &DesktopState) -> Result<WindowPolicy, DesktopError> {
+    state
+        .window_policy
+        .lock()
+        .map(|policy| *policy)
+        .map_err(|_| DesktopError::StatePoisoned)
+}
+
+fn set_current_window_policy(
+    state: &DesktopState,
+    policy: WindowPolicy,
+) -> Result<(), DesktopError> {
+    *state
+        .window_policy
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)? = policy;
+    Ok(())
+}
+
+fn apply_window_policy(
+    app: &AppHandle,
+    previous: WindowPolicy,
+    next: WindowPolicy,
+) -> Result<(), DesktopError> {
+    let window = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
+    window.set_always_on_top(next.always_on_top)?;
+    if let Err(error) = window.set_ignore_cursor_events(next.click_through) {
+        let _ = window.set_always_on_top(previous.always_on_top);
+        let _ = window.set_ignore_cursor_events(previous.click_through);
+        return Err(error.into());
+    }
     Ok(())
 }
 
@@ -219,6 +389,7 @@ fn show_control_center(app: &AppHandle) -> Result<(), DesktopError> {
 }
 
 fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
+    let policy = current_window_policy(&app.state::<DesktopState>())?;
     let window =
         WebviewWindowBuilder::new(app, PET_WINDOW_LABEL, WebviewUrl::App("/?view=pet".into()))
             .title("Aster")
@@ -227,7 +398,7 @@ fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
             .resizable(false)
             .decorations(false)
             .transparent(true)
-            .always_on_top(true)
+            .always_on_top(policy.always_on_top)
             .skip_taskbar(true)
             .shadow(false)
             .build()?;
@@ -236,14 +407,17 @@ fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
         screen_coordinate(position.x)?,
         screen_coordinate(position.y)?,
     )))?;
+    window.set_ignore_cursor_events(policy.click_through)?;
     Ok(())
 }
 
 fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
     let open = MenuItem::with_id(app, "open", "打开控制中心", true, None::<&str>)?;
     let interactive = MenuItem::with_id(app, "interactive", "恢复宠物交互", true, None::<&str>)?;
+    let safe = MenuItem::with_id(app, "safe-mode", "进入安全模式", true, None::<&str>)?;
+    let normal = MenuItem::with_id(app, "normal-mode", "退出安全模式", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Nimora", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &interactive, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &interactive, &safe, &normal, &quit])?;
 
     TrayIconBuilder::with_id("nimora-tray")
         .tooltip("Nimora · 本地运行")
@@ -259,9 +433,19 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
                     let _ = window.set_focus();
                 }
                 if let Some(state) = app.try_state::<DesktopState>()
-                    && let Ok(mut enabled) = state.click_through.lock()
+                    && let Ok(mut policy) = state.window_policy.lock()
                 {
-                    *enabled = false;
+                    policy.click_through = false;
+                }
+            }
+            "safe-mode" => {
+                if let Some(state) = app.try_state::<DesktopState>() {
+                    let _ = enter_safe_mode(app.clone(), state);
+                }
+            }
+            "normal-mode" => {
+                if let Some(state) = app.try_state::<DesktopState>() {
+                    let _ = exit_safe_mode(app.clone(), state);
                 }
             }
             "quit" => app.exit(0),
@@ -315,6 +499,8 @@ pub fn run() {
             profile_snapshot,
             create_profile,
             switch_profile,
+            enter_safe_mode,
+            exit_safe_mode,
             move_pet,
             play_pet_action,
             set_click_through
@@ -325,7 +511,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{DesktopError, PetAction, screen_coordinate};
+    use super::{DesktopError, PetAction, ProfilePolicy, WindowPolicy, screen_coordinate};
 
     #[test]
     fn accepts_finite_screen_coordinates() {
@@ -353,5 +539,29 @@ mod tests {
     fn action_contract_uses_snake_case_values() {
         let value = serde_json::to_value(PetAction::Celebrate).expect("serializable action");
         assert_eq!(value, "celebrate");
+    }
+
+    #[test]
+    fn window_policy_resolves_partial_profile_overrides() {
+        let policy = ProfilePolicy {
+            always_on_top: Some(false),
+            click_through: None,
+            sound_enabled: None,
+            proactive_frequency: None,
+        };
+        assert_eq!(
+            WindowPolicy::from_profile(&policy),
+            WindowPolicy {
+                always_on_top: false,
+                click_through: false,
+            }
+        );
+        assert_eq!(
+            WindowPolicy::SAFE,
+            WindowPolicy {
+                always_on_top: true,
+                click_through: false,
+            }
+        );
     }
 }

@@ -31,8 +31,10 @@ button:focus-visible { outline: 3px solid rgba(92, 115, 81, 0.32); outline-offse
 .nav-dot { width: 7px; height: 7px; border: 1.5px solid currentColor; border-radius: 50%; }
 .nav-item.active .nav-dot { background: currentColor; }
 .runtime-card { margin-top: auto; display: flex; gap: 11px; align-items: flex-start; border: 1px solid var(--line); background: rgba(255,255,255,.55); padding: 14px; border-radius: 13px; }
+.runtime-card.safe { border-color: rgba(153, 91, 53, .18); background: rgba(250, 239, 224, .72); }
 .runtime-card strong { font-size: 13px; }.runtime-card p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .status-dot { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: #6b9b60; box-shadow: 0 0 0 4px #e0eddd; }
+.status-dot.safe { background: #b86c3f; box-shadow: 0 0 0 4px #f1ddcc; }
 
 .workspace { padding: 0 40px 40px; overflow: hidden; }
 .topbar { height: 106px; display: flex; align-items: center; justify-content: space-between; }
@@ -40,6 +42,10 @@ button:focus-visible { outline: 3px solid rgba(92, 115, 81, 0.32); outline-offse
 .topbar h1 { margin: 0; font-size: 25px; letter-spacing: -.035em; }
 .top-actions { display: flex; align-items: center; gap: 16px; }
 .quiet-toggle { border: 0; background: transparent; color: #606158; display: flex; align-items: center; gap: 9px; cursor: pointer; }
+.safety-button { border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px; color: #65665e; background: rgba(255,255,255,.48); cursor: pointer; font-size: 11px; font-weight: 650; }
+.safety-button:hover { background: rgba(255,255,255,.85); }
+.safety-button.active { border-color: rgba(153,91,53,.24); color: #874b2d; background: #f5e4d5; }
+.safety-button:disabled { cursor: wait; opacity: .55; }
 .toggle-track { width: 34px; height: 20px; border-radius: 20px; background: #d4d4cc; padding: 3px; transition: 160ms; }.toggle-track span { display: block; width: 14px; height: 14px; border-radius: 50%; background: white; box-shadow: 0 1px 4px #9998; transition: 160ms; }.toggle-track.on { background: var(--accent); }.toggle-track.on span { transform: translateX(14px); }
 .avatar { width: 36px; height: 36px; border: 1px solid var(--line); border-radius: 50%; background: #363b31; color: white; font-size: 11px; cursor: pointer; }
 

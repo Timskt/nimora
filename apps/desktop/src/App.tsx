@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { desktopApi } from "./platform/desktop";
 
 const navigation = ["概览", "角色", "自动化", "扩展", "活动", "设置"] as const;
@@ -16,11 +16,40 @@ export function navItemClassName(isActive: boolean): string {
 export function App() {
   const [active, setActive] = useState<(typeof navigation)[number]>("概览");
   const [quiet, setQuiet] = useState(false);
+  const [safeMode, setSafeMode] = useState(false);
+  const [safetyBusy, setSafetyBusy] = useState(false);
   const [notice, setNotice] = useState(desktopApi.native ? "原生运行时已连接" : "浏览器预览模式");
+
+  useEffect(() => {
+    void desktopApi.snapshot().then((snapshot) => {
+      setSafeMode(snapshot.safety.mode === "safe");
+    }).catch(() => {
+      setNotice("运行时状态暂时不可用");
+    });
+  }, []);
 
   async function runAction(action: "celebrate" | "work") {
     await desktopApi.playAction(action);
     setNotice(action === "celebrate" ? "Aster 正在回应你" : "专注场景已启动");
+  }
+
+  async function toggleSafeMode() {
+    setSafetyBusy(true);
+    try {
+      if (safeMode) {
+        await desktopApi.exitSafeMode();
+        setSafeMode(false);
+        setNotice("已退出安全模式");
+      } else {
+        await desktopApi.enterSafeMode();
+        setSafeMode(true);
+        setNotice("安全模式已启用，受限操作已被阻止");
+      }
+    } catch {
+      setNotice("安全模式切换失败，运行状态未改变");
+    } finally {
+      setSafetyBusy(false);
+    }
   }
 
   return (
@@ -43,11 +72,11 @@ export function App() {
             </button>
           ))}
         </nav>
-        <section className="runtime-card" aria-label="运行状态">
-          <span className="status-dot" aria-hidden="true" />
+        <section className={safeMode ? "runtime-card safe" : "runtime-card"} aria-label="运行状态">
+          <span className={safeMode ? "status-dot safe" : "status-dot"} aria-hidden="true" />
           <div>
-            <strong>本地运行</strong>
-            <p>网络不是启动依赖</p>
+            <strong>{safeMode ? "安全模式" : "本地运行"}</strong>
+            <p>{safeMode ? "受限操作已被运行时阻止" : "网络不是启动依赖"}</p>
           </div>
         </section>
       </aside>
@@ -59,6 +88,15 @@ export function App() {
             <h1>{active}</h1>
           </div>
           <div className="top-actions">
+            <button
+              className={safeMode ? "safety-button active" : "safety-button"}
+              type="button"
+              disabled={safetyBusy}
+              onClick={() => void toggleSafeMode()}
+              aria-pressed={safeMode}
+            >
+              {safeMode ? "退出安全模式" : "安全模式"}
+            </button>
             <button className="quiet-toggle" type="button" onClick={() => setQuiet((value) => !value)}>
               <span className={quiet ? "toggle-track on" : "toggle-track"} aria-hidden="true">
                 <span />

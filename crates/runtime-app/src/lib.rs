@@ -2,7 +2,8 @@
 
 use nimora_runtime_core::{
     Command, CommandError, CommandRisk, Event, EventError, EventSource, Pet, PetAction, PetError,
-    Position, Profile, ProfileError, ProfileId, ProfilePolicy,
+    Position, Profile, ProfileError, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason,
+    SafetySnapshot,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -95,9 +96,128 @@ impl RuntimeEventBus {
             .collect())
     }
 
+    /// Publishes one event using the shared bounded runtime buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if another thread panicked while holding the buffer.
+    pub fn publish(&self, event: Event) -> Result<(), RuntimeError> {
+        let mut events = self.lock()?;
+        if events.len() == EVENT_BUFFER_CAPACITY {
+            events.pop_front();
+        }
+        events.push_back(event);
+        Ok(())
+    }
+
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, VecDeque<Event>>, RuntimeError> {
         self.events.lock().map_err(|_| RuntimeError::StatePoisoned)
     }
+}
+
+#[derive(Debug)]
+pub struct SafetyService {
+    snapshot: Mutex<SafetySnapshot>,
+    events: RuntimeEventBus,
+}
+
+impl SafetyService {
+    #[must_use]
+    pub const fn new(events: RuntimeEventBus) -> Self {
+        Self {
+            snapshot: Mutex::new(SafetySnapshot::normal()),
+            events,
+        }
+    }
+
+    /// Returns the current process-local operational safety state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if another thread panicked while holding safety state.
+    pub fn snapshot(&self) -> Result<SafetySnapshot, SafetyServiceError> {
+        Ok(*self
+            .snapshot
+            .lock()
+            .map_err(|_| SafetyServiceError::StatePoisoned)?)
+    }
+
+    /// Enters safe mode and publishes a correlated runtime event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when already in safe mode or when command/event state
+    /// cannot be created or published.
+    pub fn enter(&self, reason: SafeModeReason) -> Result<Command, SafetyServiceError> {
+        let mut current = self
+            .snapshot
+            .lock()
+            .map_err(|_| SafetyServiceError::StatePoisoned)?;
+        if current.mode == RuntimeMode::Safe {
+            return Err(SafetyServiceError::AlreadySafe);
+        }
+        let command = Command::new(
+            "runtime.safety.enter",
+            serde_json::json!({ "reason": reason }),
+            CommandRisk::Safe,
+        )?;
+        let event = Event::with_trace_id(
+            "runtime.safety.entered",
+            EventSource::Core,
+            command.trace_id,
+            serde_json::json!({ "reason": reason }),
+        )?;
+        self.events.publish(event)?;
+        *current = SafetySnapshot::safe(reason);
+        Ok(command)
+    }
+
+    /// Returns to normal mode after an explicit user action.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when already normal or when command/event state cannot
+    /// be created or published.
+    pub fn exit(&self) -> Result<Command, SafetyServiceError> {
+        let mut current = self
+            .snapshot
+            .lock()
+            .map_err(|_| SafetyServiceError::StatePoisoned)?;
+        if current.mode == RuntimeMode::Normal {
+            return Err(SafetyServiceError::AlreadyNormal);
+        }
+        let previous_reason = current.reason;
+        let command = Command::new(
+            "runtime.safety.exit",
+            serde_json::json!({ "previousReason": previous_reason }),
+            CommandRisk::Low,
+        )?;
+        let event = Event::with_trace_id(
+            "runtime.safety.exited",
+            EventSource::Core,
+            command.trace_id,
+            serde_json::json!({ "previousReason": previous_reason }),
+        )?;
+        self.events.publish(event)?;
+        *current = SafetySnapshot::normal();
+        Ok(command)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum SafetyServiceError {
+    #[error("safety state is unavailable")]
+    StatePoisoned,
+    #[error("runtime is already in safe mode")]
+    AlreadySafe,
+    #[error("runtime is already in normal mode")]
+    AlreadyNormal,
+    #[error(transparent)]
+    Command(#[from] CommandError),
+    #[error(transparent)]
+    Event(#[from] EventError),
+    #[error(transparent)]
+    Runtime(#[from] RuntimeError),
 }
 
 impl<R: PetRepository> RuntimeService<R> {
@@ -609,5 +729,49 @@ mod tests {
             .expect_err("save fails");
         assert_eq!(service.snapshot().expect("snapshot"), before);
         assert!(bus.drain().expect("events").is_empty());
+    }
+
+    #[test]
+    fn safety_transitions_publish_correlated_events() {
+        let bus = RuntimeEventBus::default();
+        let service = SafetyService::new(bus.clone());
+        let enter = service
+            .enter(SafeModeReason::Manual)
+            .expect("enter safe mode");
+        assert_eq!(
+            service.snapshot().expect("snapshot"),
+            SafetySnapshot::safe(SafeModeReason::Manual)
+        );
+        let exit = service.exit().expect("exit safe mode");
+        assert_eq!(
+            service.snapshot().expect("snapshot"),
+            SafetySnapshot::normal()
+        );
+        let events = bus.drain().expect("events");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, "runtime.safety.entered");
+        assert_eq!(events[0].trace_id, enter.trace_id);
+        assert_eq!(events[1].event_type, "runtime.safety.exited");
+        assert_eq!(events[1].trace_id, exit.trace_id);
+    }
+
+    #[test]
+    fn safety_rejects_duplicate_transitions_without_false_events() {
+        let bus = RuntimeEventBus::default();
+        let service = SafetyService::new(bus.clone());
+        service
+            .enter(SafeModeReason::Manual)
+            .expect("enter safe mode");
+        assert!(matches!(
+            service.enter(SafeModeReason::CrashLoop),
+            Err(SafetyServiceError::AlreadySafe)
+        ));
+        assert_eq!(bus.drain().expect("events").len(), 1);
+        service.exit().expect("exit safe mode");
+        assert!(matches!(
+            service.exit(),
+            Err(SafetyServiceError::AlreadyNormal)
+        ));
+        assert_eq!(bus.drain().expect("events").len(), 1);
     }
 }
