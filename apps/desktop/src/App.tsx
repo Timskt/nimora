@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { ProfileManager } from "./components/ProfileManager";
 import { desktopApi } from "./platform/desktop";
 
 const navigation = ["概览", "角色", "自动化", "扩展", "活动", "设置"] as const;
@@ -19,6 +20,7 @@ export function App() {
   const [safeMode, setSafeMode] = useState(false);
   const [safetyBusy, setSafetyBusy] = useState(false);
   const [notice, setNotice] = useState(desktopApi.native ? "原生运行时已连接" : "浏览器预览模式");
+  const updateNotice = useCallback((message: string) => setNotice(message), []);
 
   useEffect(() => {
     void desktopApi.snapshot().then((snapshot) => {
@@ -173,6 +175,8 @@ export function App() {
               <button type="button"><span>＋</span>添加能力</button>
             </div>
           </section>
+
+          <ProfileManager safeMode={safeMode} onNotice={updateNotice} />
         </div>
       </section>
     </main>
