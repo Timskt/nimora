@@ -7,9 +7,9 @@ coverage/
 .env.*
 !.env.example
 *.log
+*.tsbuildinfo
 *.pem
 *.key
 *.p12
 .idea/
 .vscode/
-
