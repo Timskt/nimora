@@ -17,6 +17,7 @@ nimora-asset-installer = { path = "../../../crates/asset-installer" }
 nimora-persistence-sqlite = { path = "../../../crates/persistence-sqlite" }
 nimora-runtime-app = { path = "../../../crates/runtime-app" }
 nimora-runtime-core = { path = "../../../crates/runtime-core" }
+nimora-user-code-policy = { path = "../../../crates/user-code-policy" }
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.11", features = ["macos-private-api", "tray-icon"] }

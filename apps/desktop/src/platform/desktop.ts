@@ -40,6 +40,29 @@ export interface AssetRollbackReceipt {
   quarantinedFailedVersion: boolean;
 }
 
+export type UserCodeCapability =
+  | "read-pet-state"
+  | "subscribe-events"
+  | "invoke-safe-commands"
+  | "store-local-data";
+
+export interface UserProgramManifest {
+  id: string;
+  version: string;
+  capabilities: readonly UserCodeCapability[];
+  subscriptions: readonly string[];
+  commands: readonly string[];
+  timeoutMs: number;
+  memoryBytes: number;
+}
+
+export interface ProgramPolicyReport {
+  programId: string;
+  grantedCapabilities: UserCodeCapability[];
+  timeoutMs: number;
+  memoryBytes: number;
+}
+
 export interface DesktopApi {
   readonly native: boolean;
   snapshot(): Promise<DesktopSnapshot>;
@@ -56,6 +79,7 @@ export interface DesktopApi {
   setClickThrough(enabled: boolean): Promise<void>;
   installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
   rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
+  validateUserProgram(manifest: UserProgramManifest): Promise<ProgramPolicyReport | null>;
 }
 
 type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -117,6 +141,7 @@ export function createDesktopApi(
       async setClickThrough() {},
       async installAsset() { return null; },
       async rollbackAsset() { return null; },
+      async validateUserProgram() { return null; },
     };
   }
 
@@ -147,6 +172,7 @@ export function createDesktopApi(
     setClickThrough: async (enabled) => { await invokeCommand("set_click_through", { enabled }); },
     installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
     rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,
+    validateUserProgram: async (manifest) => await invokeCommand("validate_user_program", { manifest }) as ProgramPolicyReport,
   };
 }
 

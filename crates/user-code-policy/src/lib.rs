@@ -16,6 +16,7 @@ pub enum Capability {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProgramManifest {
     pub id: String,
     pub version: String,

@@ -41,6 +41,16 @@ describe("desktop platform adapter", () => {
       ],
     });
     await api.rollbackAsset("character.example.mochi");
+    const manifest = {
+      id: "studio.example.focus",
+      version: "1.0.0",
+      capabilities: ["read-pet-state", "subscribe-events", "invoke-safe-commands"] as const,
+      subscriptions: ["pet.example.clicked"],
+      commands: ["safe.example.notify"],
+      timeoutMs: 5_000,
+      memoryBytes: 8 * 1024 * 1024,
+    };
+    await api.validateUserProgram(manifest);
     expect(invoke.mock.calls).toEqual([
       ["drain_runtime_events"],
       ["profile_snapshot"],
@@ -63,6 +73,7 @@ describe("desktop platform adapter", () => {
         ],
       } }],
       ["rollback_asset", { assetId: "character.example.mochi" }],
+      ["validate_user_program", { manifest }],
     ]);
     expect(startDragging).toHaveBeenCalledOnce();
   });

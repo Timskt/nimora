@@ -10,6 +10,7 @@ use nimora_runtime_core::{
     Command, CommandRisk, Event, EventSource, Pet, PetAction, PointerButton, Position, ProfileId,
     ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
 };
+use nimora_user_code_policy::{Capability, PolicyError, ProgramManifest, evaluate};
 use serde::{Deserialize, Serialize};
 use std::{
     io,
@@ -149,6 +150,15 @@ struct AssetRollbackReceipt {
     quarantined_failed_version: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProgramPolicyReport {
+    program_id: String,
+    granted_capabilities: Vec<Capability>,
+    timeout_ms: u64,
+    memory_bytes: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TrayAction {
     OpenControlCenter,
@@ -196,6 +206,8 @@ enum DesktopError {
     AssetInstall(#[from] InstallError),
     #[error("asset identifier must be a lowercase namespaced identifier")]
     InvalidAssetIdentifier,
+    #[error(transparent)]
+    UserCodePolicy(#[from] PolicyError),
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -503,6 +515,23 @@ fn rollback_asset(
     })
 }
 
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn validate_user_program(
+    state: State<'_, DesktopState>,
+    manifest: ProgramManifest,
+) -> Result<ProgramPolicyReport, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let policy = evaluate(manifest)?;
+    let granted_capabilities = policy.manifest.capabilities.clone();
+    Ok(ProgramPolicyReport {
+        program_id: policy.manifest.id,
+        granted_capabilities,
+        timeout_ms: policy.manifest.timeout_ms,
+        memory_bytes: policy.manifest.memory_bytes,
+    })
+}
+
 fn valid_asset_identifier(value: &str) -> bool {
     let segments = value.split('.').collect::<Vec<_>>();
     segments.len() >= 3
@@ -800,7 +829,8 @@ pub fn run() {
             finish_pet_drag,
             set_click_through,
             install_asset,
-            rollback_asset
+            rollback_asset,
+            validate_user_program
         ])
         .run(tauri::generate_context!())
         .expect("Nimora desktop runtime failed");
