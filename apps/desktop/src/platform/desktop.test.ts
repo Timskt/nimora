@@ -19,7 +19,13 @@ describe("desktop platform adapter", () => {
     expect((await api.profiles()).profiles[0]?.name).toBe("Default");
     expect((await api.agentCatalog()).tools).toHaveLength(6);
     expect((await api.agentCatalog()).providers).toHaveLength(2);
-    expect((await api.runLocalAgent("离线检查")).usage?.costMicrounits).toBe(0);
+    const result = await api.runLocalAgent("离线检查");
+    expect(result.usage?.costMicrounits).toBe(0);
+    expect((await api.agentHistory()).records[0]).toMatchObject({
+      task: { id: result.task.id },
+      prompt: "离线检查",
+      response: "[model:echo-v1] 离线检查",
+    });
     await expect(api.playAction("celebrate")).resolves.toBeNull();
   });
 
@@ -56,6 +62,29 @@ describe("desktop platform adapter", () => {
     expect(completed.task.providerId).toBe("provider:preview-scripted");
     expect(completed.pendingTools).toEqual([]);
     expect(completed.content).toBe("模块操作已经安全完成。");
+    expect((await api.agentHistory()).records[0]).toMatchObject({
+      task: { id: completed.task.id },
+      prompt: "请移动桌宠并展示工具确认",
+      response: "模块操作已经安全完成。",
+    });
+  });
+
+  it("paginates and deletes preview agent history", async () => {
+    const api = createDesktopApi(false);
+    const first = await api.runLocalAgent("第一条");
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    const second = await api.runLocalAgent("第二条");
+
+    const latest = await api.agentHistory(1);
+    expect(latest.records.map((record) => record.task.id)).toEqual([second.task.id]);
+    const older = await api.agentHistory(1, {
+      createdAtMs: latest.records[0]!.task.createdAtMs,
+      taskId: latest.records[0]!.task.id,
+    });
+    expect(older.records.map((record) => record.task.id)).toEqual([first.task.id]);
+    await expect(api.deleteAgentHistory(first.task.id)).resolves.toBe(1);
+    await expect(api.deleteAgentHistory()).resolves.toBe(1);
+    await expect(api.agentHistory()).resolves.toMatchObject({ records: [] });
   });
 
   it("cancels the whole preview provider turn when one tool is rejected", async () => {
@@ -71,10 +100,14 @@ describe("desktop platform adapter", () => {
   });
 
   it("maps typed calls to the Tauri command contract", async () => {
-    const invoke = vi.fn(async () => null);
+    const invoke = vi.fn(async (command: string) => command === "delete_agent_history"
+      ? { spec: "nimora.desktop-agent-history-delete/1", deleted: 1 }
+      : null);
     const startDragging = vi.fn(async () => undefined);
     const api = createDesktopApi(true, invoke, startDragging);
     await api.agentCatalog();
+    await api.agentHistory(25);
+    await api.deleteAgentHistory("018f0000-0000-7000-8000-000000000007");
     await api.runLocalAgent("检查本地能力");
     await api.prepareAgentTool("pet.animation.play", { action: "celebrate" });
     await api.confirmAgentTool("018f0000-0000-7000-8000-000000000004");
@@ -174,6 +207,8 @@ describe("desktop platform adapter", () => {
     await api.stopUserProgram(envelope.executionId);
     expect(invoke.mock.calls).toEqual([
       ["agent_catalog"],
+      ["agent_history_list", { request: { beforeCreatedAtMs: null, beforeTaskId: null, limit: 25 } }],
+      ["delete_agent_history", { request: { taskId: "018f0000-0000-7000-8000-000000000007" } }],
       ["run_local_agent", { request: { prompt: "检查本地能力", providerId: "provider:deterministic-local", model: "model:echo-v1" } }],
       ["prepare_agent_tool", { request: { toolId: "pet.animation.play", arguments: { action: "celebrate" } } }],
       ["confirm_agent_tool", { request: { invocationId: "018f0000-0000-7000-8000-000000000004" } }],

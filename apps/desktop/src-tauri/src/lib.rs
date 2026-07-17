@@ -27,10 +27,10 @@ use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
 };
 use nimora_persistence_sqlite::{
-    BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, DATABASE_VERSION, OutboxSnapshot,
-    ProgramPermissionGrant, SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository,
-    SqliteProfileRepository, SqliteProgramPermissionRepository, apply_pending_restore,
-    verify_database_file,
+    AgentHistoryRecord, BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord,
+    DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant, SqliteAgentHistoryRepository,
+    SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
+    SqliteProgramPermissionRepository, apply_pending_restore, verify_database_file,
 };
 use nimora_runtime_app::{
     ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBatch,
@@ -108,6 +108,8 @@ struct DesktopState {
     program_data_store: ProgramDataStore,
     program_permissions: SqliteProgramPermissionRepository,
     outbox: SqliteOutboxRepository,
+    agent_history: SqliteAgentHistoryRepository,
+    agent_history_last_error: Mutex<bool>,
     backups: BackupCoordinator,
     backup_last_error: Mutex<Option<String>>,
     diagnostic_journal: Mutex<PersistentDiagnosticJournal>,
@@ -291,6 +293,8 @@ impl DesktopState {
             program_data_store,
             program_permissions: SqliteProgramPermissionRepository::open(database_path)?,
             outbox: SqliteOutboxRepository::open(database_path)?,
+            agent_history: SqliteAgentHistoryRepository::open(database_path)?,
+            agent_history_last_error: Mutex::new(false),
             backups,
             backup_last_error: Mutex::new(None),
             diagnostic_journal: Mutex::new(diagnostic_journal),
@@ -346,6 +350,8 @@ impl DesktopState {
             program_data_store,
             program_permissions: SqliteProgramPermissionRepository::in_memory()?,
             outbox: SqliteOutboxRepository::in_memory()?,
+            agent_history: SqliteAgentHistoryRepository::in_memory()?,
+            agent_history_last_error: Mutex::new(false),
             backups,
             backup_last_error: Mutex::new(None),
             diagnostic_journal: Mutex::new(diagnostic_journal),
@@ -771,6 +777,35 @@ struct AgentProviderStatus {
     message: &'static str,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgentHistoryListRequest {
+    before_created_at_ms: Option<u64>,
+    before_task_id: Option<Uuid>,
+    limit: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentHistoryPage {
+    spec: &'static str,
+    records: Vec<AgentHistoryRecord>,
+    history_degraded: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeleteAgentHistoryRequest {
+    task_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteAgentHistoryResult {
+    spec: &'static str,
+    deleted: u64,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopAgentRunResult {
@@ -934,6 +969,47 @@ fn agent_provider_status_inner(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn agent_history_list(
+    request: AgentHistoryListRequest,
+    state: State<'_, DesktopState>,
+) -> Result<AgentHistoryPage, DesktopError> {
+    let cursor = match (request.before_created_at_ms, request.before_task_id) {
+        (Some(created_at_ms), Some(task_id)) => Some((created_at_ms, task_id)),
+        (None, None) => None,
+        _ => {
+            return Err(DesktopError::Agent(
+                "history cursor must include timestamp and task ID".to_owned(),
+            ));
+        }
+    };
+    Ok(AgentHistoryPage {
+        spec: "nimora.desktop-agent-history/1",
+        records: state.agent_history.list(cursor, request.limit)?,
+        history_degraded: *state
+            .agent_history_last_error
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn delete_agent_history(
+    request: DeleteAgentHistoryRequest,
+    state: State<'_, DesktopState>,
+) -> Result<DeleteAgentHistoryResult, DesktopError> {
+    let deleted = match request.task_id {
+        Some(task_id) => u64::from(state.agent_history.delete(task_id)?),
+        None => state.agent_history.delete_all()?,
+    };
+    Ok(DeleteAgentHistoryResult {
+        spec: "nimora.desktop-agent-history-delete/1",
+        deleted,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn run_local_agent(
     request: LocalAgentRequest,
     state: State<'_, DesktopState>,
@@ -1042,6 +1118,7 @@ fn advance_provider_agent(
         let ProviderStepOutcome::Completed { response } = outcome else {
             unreachable!();
         };
+        record_agent_history(state, &task, &model, &messages, &response);
         return Ok(ProviderAgentOutcome::Completed { task, response });
     };
     let mut turn = ProviderToolTurn::new(response).map_err(agent_error)?;
@@ -1070,6 +1147,36 @@ fn advance_provider_agent(
         confirmations,
         now_ms,
     )
+}
+
+fn record_agent_history(
+    state: &DesktopState,
+    task: &AgentTask,
+    model: &str,
+    messages: &[ProviderMessage],
+    response: &ProviderResponse,
+) {
+    let prompt = messages
+        .iter()
+        .find(|message| message.role == ProviderMessageRole::User)
+        .map(|message| message.content.clone());
+    let result = prompt
+        .ok_or(SqlitePersistenceError::InvalidAgentHistory)
+        .and_then(|prompt| {
+            AgentHistoryRecord::new(
+                task.clone(),
+                model,
+                prompt,
+                response.content.clone(),
+                response.finish_reason,
+                response.usage,
+                task.updated_at_ms,
+            )
+        })
+        .and_then(|record| state.agent_history.insert(&record));
+    if let Ok(mut degraded) = state.agent_history_last_error.lock() {
+        *degraded = result.is_err();
+    }
 }
 
 fn execute_ready_provider_tools(
@@ -4059,6 +4166,8 @@ pub fn run() {
             desktop_snapshot,
             agent_catalog,
             agent_provider_status,
+            agent_history_list,
+            delete_agent_history,
             run_local_agent,
             prepare_agent_tool,
             confirm_agent_tool,
@@ -4464,6 +4573,17 @@ mod tests {
         assert_eq!(result.task.status, AgentTaskStatus::Succeeded);
         assert_eq!(result.usage.expect("completed usage").cost_microunits, 0);
         assert!(result.pending_tools.is_empty());
+        let history = state.agent_history.list(None, 10).expect("agent history");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].task.id, result.task.id);
+        assert_eq!(history[0].prompt, "检查本地能力");
+        assert_eq!(history[0].response, "检查本地能力");
+        assert!(
+            !*state
+                .agent_history_last_error
+                .lock()
+                .expect("history state")
+        );
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 

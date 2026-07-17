@@ -68,6 +68,23 @@ export interface LocalAgentResult {
   pendingTools: AgentToolResult[];
 }
 
+export interface AgentHistoryRecord {
+  spec: "nimora.agent-history/1";
+  task: { id: string; createdAtMs: number; providerId: string; status: string };
+  model: string;
+  prompt: string;
+  response: string;
+  finishReason: string;
+  usage: { inputTokens: number; outputTokens: number; costMicrounits: number };
+  completedAtMs: number;
+}
+
+export interface AgentHistoryPage {
+  spec: "nimora.desktop-agent-history/1";
+  records: AgentHistoryRecord[];
+  historyDegraded: boolean;
+}
+
 export interface AgentToolResult {
   spec: "nimora.desktop-agent-tool-result/1";
   task: { id: string; status: string; providerId: string };
@@ -359,6 +376,8 @@ export interface DesktopApi {
   outboxSnapshot(): Promise<OutboxSnapshot>;
   agentCatalog(): Promise<AgentCatalog>;
   agentProviderStatus(providerId: string): Promise<AgentProviderStatus>;
+  agentHistory(limit?: number, before?: { createdAtMs: number; taskId: string }): Promise<AgentHistoryPage>;
+  deleteAgentHistory(taskId?: string): Promise<number>;
   runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
   prepareAgentTool(toolId: string, argumentsValue: Record<string, unknown>): Promise<AgentToolResult>;
   confirmAgentTool(invocationId: string): Promise<AgentToolResult>;
@@ -460,6 +479,29 @@ export function createDesktopApi(
   if (!native) {
     let previewAgentPendingTools: AgentToolResult[] = [];
     let previewAgentTask = { id: crypto.randomUUID(), status: "succeeded", providerId: "provider:deterministic-local" };
+    let previewAgentPrompt = "";
+    let previewAgentModel = "model:echo-v1";
+    let previewAgentHistory: AgentHistoryRecord[] = [];
+    const recordPreviewAgentHistory = (
+      task: { id: string; status: string; providerId: string },
+      prompt: string,
+      model: string,
+      response: string,
+      finishReason: string,
+      usage: AgentHistoryRecord["usage"],
+    ) => {
+      const completedAtMs = Date.now();
+      previewAgentHistory = [{
+        spec: "nimora.agent-history/1",
+        task: { ...task, createdAtMs: completedAtMs },
+        model,
+        prompt,
+        response,
+        finishReason,
+        usage,
+        completedAtMs,
+      }, ...previewAgentHistory.filter((record) => record.task.id !== task.id)];
+    };
     return {
       native: false,
       async snapshot() { return structuredClone(previewSnapshot); },
@@ -482,6 +524,20 @@ export function createDesktopApi(
           ],
         } as AgentCatalog;
       },
+      async agentHistory(limit = 20, before) {
+        const records = before
+          ? previewAgentHistory.filter((record) => record.task.createdAtMs < before.createdAtMs
+            || (record.task.createdAtMs === before.createdAtMs && record.task.id < before.taskId))
+          : previewAgentHistory;
+        return { spec: "nimora.desktop-agent-history/1", records: structuredClone(records.slice(0, limit)), historyDegraded: false };
+      },
+      async deleteAgentHistory(taskId) {
+        const previousCount = previewAgentHistory.length;
+        previewAgentHistory = taskId
+          ? previewAgentHistory.filter((record) => record.task.id !== taskId)
+          : [];
+        return previousCount - previewAgentHistory.length;
+      },
       async agentProviderStatus(providerId) {
         const scripted = providerId === "provider:preview-scripted";
         return {
@@ -497,6 +553,8 @@ export function createDesktopApi(
       async runLocalAgent(prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") {
         if (prompt.includes("移动") || prompt.includes("工具确认")) {
           previewAgentTask = { id: crypto.randomUUID(), status: "waiting_for_confirmation", providerId: "provider:preview-scripted" };
+          previewAgentPrompt = prompt;
+          previewAgentModel = model;
           const expiresAtMs = Date.now() + 300_000;
           previewAgentPendingTools = [
             { spec: "nimora.desktop-agent-tool-result/1", task: previewAgentTask, invocation: { invocationId: crypto.randomUUID(), taskId: previewAgentTask.id, traceId: crypto.randomUUID(), toolId: "pet.animation.play", arguments: { action: "celebrate" } }, effectiveRisk: "low", requiresConfirmation: true, expiresAtMs, output: null },
@@ -505,7 +563,11 @@ export function createDesktopApi(
           return { spec: "nimora.desktop-agent-result/1", status: "waitingForConfirmation", task: previewAgentTask, content: null, finishReason: null, usage: null, pendingTools: structuredClone(previewAgentPendingTools) };
         }
         previewAgentPendingTools = [];
-        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: { id: crypto.randomUUID(), status: "succeeded", providerId }, content: `[${model}] ${prompt}`, finishReason: "stop", usage: { inputTokens: Math.max(1, Math.ceil(prompt.length / 4)), outputTokens: Math.max(1, Math.ceil(prompt.length / 4)), costMicrounits: 0 }, pendingTools: [] };
+        const task = { id: crypto.randomUUID(), status: "succeeded", providerId };
+        const content = `[${model}] ${prompt}`;
+        const usage = { inputTokens: Math.max(1, Math.ceil(prompt.length / 4)), outputTokens: Math.max(1, Math.ceil(prompt.length / 4)), costMicrounits: 0 };
+        recordPreviewAgentHistory(task, prompt, model, content, "stop", usage);
+        return { spec: "nimora.desktop-agent-result/1", status: "completed", task, content, finishReason: "stop", usage, pendingTools: [] };
       },
       async prepareAgentTool(toolId, argumentsValue) {
         const invocationId = crypto.randomUUID();
@@ -521,7 +583,10 @@ export function createDesktopApi(
           return { spec: "nimora.desktop-agent-result/1", status: "waitingForConfirmation", task: previewAgentTask, content: null, finishReason: null, usage: null, pendingTools: structuredClone(previewAgentPendingTools) };
         }
         previewAgentTask = { ...previewAgentTask, status: "succeeded" };
-        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: structuredClone(previewAgentTask), content: "模块操作已经安全完成。", finishReason: "completed", usage: { inputTokens: 12, outputTokens: 8, costMicrounits: 0 }, pendingTools: [] };
+        const content = "模块操作已经安全完成。";
+        const usage = { inputTokens: 12, outputTokens: 8, costMicrounits: 0 };
+        recordPreviewAgentHistory(previewAgentTask, previewAgentPrompt, previewAgentModel, content, "completed", usage);
+        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: structuredClone(previewAgentTask), content, finishReason: "completed", usage, pendingTools: [] };
       },
       async rejectAgentTool() { previewAgentPendingTools = []; },
       async backupHealth() {
@@ -608,6 +673,8 @@ export function createDesktopApi(
     outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,
     agentCatalog: async () => await invokeCommand("agent_catalog") as AgentCatalog,
     agentProviderStatus: async (providerId) => await invokeCommand("agent_provider_status", { request: { providerId } }) as AgentProviderStatus,
+    agentHistory: async (limit = 50, before) => await invokeCommand("agent_history_list", { request: { beforeCreatedAtMs: before?.createdAtMs ?? null, beforeTaskId: before?.taskId ?? null, limit } }) as AgentHistoryPage,
+    deleteAgentHistory: async (taskId) => (await invokeCommand("delete_agent_history", { request: { taskId: taskId ?? null } }) as { deleted: number }).deleted,
     runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") => await invokeCommand("run_local_agent", { request: { prompt, providerId, model } }) as LocalAgentResult,
     prepareAgentTool: async (toolId, argumentsValue) => await invokeCommand("prepare_agent_tool", { request: { toolId, arguments: argumentsValue } }) as AgentToolResult,
     confirmAgentTool: async (invocationId) => await invokeCommand("confirm_agent_tool", { request: { invocationId } }) as AgentToolResult,

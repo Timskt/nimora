@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { desktopApi, type AgentCatalog, type AgentProviderStatus, type AgentToolResult, type LocalAgentResult } from "../platform/desktop";
+import { desktopApi, type AgentCatalog, type AgentHistoryPage, type AgentProviderStatus, type AgentToolResult, type LocalAgentResult } from "../platform/desktop";
 
 interface AgentWorkspaceProps {
   safeMode: boolean;
@@ -41,12 +41,18 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
   const [toolBusy, setToolBusy] = useState(false);
   const [toolResult, setToolResult] = useState<AgentToolResult | null>(null);
   const [turnCancelled, setTurnCancelled] = useState(false);
+  const [history, setHistory] = useState<AgentHistoryPage | null>(null);
   const activeProviderId = result?.task.providerId ?? providerId;
   const activeProvider = catalog?.providers.find((provider) => provider.id === activeProviderId);
 
   useEffect(() => {
     void desktopApi.agentCatalog().then(setCatalog).catch(() => onNotice("Agent 工具目录暂时不可用"));
+    void desktopApi.agentHistory(5).then(setHistory).catch(() => onNotice("Agent 历史暂时不可用"));
   }, [onNotice]);
+
+  async function refreshHistory() {
+    setHistory(await desktopApi.agentHistory(5));
+  }
 
   useEffect(() => {
     let current = true;
@@ -70,6 +76,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
     try {
       const next = await desktopApi.runLocalAgent(prompt.trim(), providerId, model.trim());
       setResult(next);
+      if (next.status === "completed") await refreshHistory();
       onNotice("离线 Agent 任务已完成");
     } catch {
       onNotice("Agent 任务失败，未执行任何模块操作");
@@ -85,6 +92,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
       if (approved) {
         const next = await desktopApi.confirmAgentRunTool(invocationId);
         setResult(next);
+        if (next.status === "completed") await refreshHistory();
         onNotice(next.status === "completed" ? "模块结果已返回 Provider，任务已完成" : "批准已记录，整轮工具仍等待确认");
       } else {
         await desktopApi.rejectAgentTool(invocationId);
@@ -137,6 +145,20 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
     }
   }
 
+  async function clearHistory() {
+    if (busy || !history?.records.length) return;
+    setBusy(true);
+    try {
+      await desktopApi.deleteAgentHistory();
+      await refreshHistory();
+      onNotice("Agent 历史已从本机删除");
+    } catch {
+      onNotice("Agent 历史删除失败，现有记录保持不变");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return <section className="agent-workspace" aria-labelledby="agent-heading">
     <div className="agent-main">
       <header className="agent-hero">
@@ -178,6 +200,11 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
       <div className="provider-tile"><span className="provider-glyph">⌁</span><div><strong>{activeProvider?.name ?? activeProviderId}</strong><p>{activeProvider?.locality === "network" ? "网络 Provider · 受数据策略约束" : "本地 Provider · 可离线运行"}</p></div><i>{providerStatusLabel(providerStatus)}</i></div>
       <div className="boundary-note"><strong>{safeMode ? "安全模式已启用" : recoveryMode ? "恢复模式已启用" : "确认策略正常"}</strong><p>写操作与外部副作用始终要求绑定实际参数的批准。</p></div>
       <div className="tool-catalog"><p className="card-label">模块工具</p>{catalog?.tools.map((tool) => <article key={tool.id}><span>{tool.effect === "read_only" ? "R" : "W"}</span><div><strong>{tool.title}</strong><code>{tool.id}</code></div><button className={tool.effect === "read_only" ? "read-only" : "approval"} disabled={toolBusy || safeMode || recoveryMode} onClick={() => void prepareTool(tool.id)} type="button">{agentToolAccessLabel(tool.effect)}</button></article>)}</div>
+      <section className="agent-history" aria-labelledby="agent-history-heading">
+        <div><div><p className="card-label">本机历史</p><h4 id="agent-history-heading">最近完成</h4></div><button disabled={busy || !history?.records.length} onClick={() => void clearHistory()} type="button">全部清除</button></div>
+        {history?.historyDegraded && <p className="history-warning">最近一次历史写入失败；任务结果不受影响。</p>}
+        {history?.records.length ? history.records.map((record) => <article key={record.task.id}><strong>{record.prompt}</strong><p>{record.response || "任务已完成，无文本回答"}</p><small>{record.model} · {record.usage.inputTokens + record.usage.outputTokens} tokens</small></article>) : <p className="history-empty">完成一次任务后，记录会保存在本机。</p>}
+      </section>
       {toolResult?.requiresConfirmation && <section className="tool-confirmation" aria-labelledby="tool-confirmation-heading">
         <p className="card-label">参数绑定确认</p>
         <h4 id="tool-confirmation-heading">允许这次模块操作？</h4>

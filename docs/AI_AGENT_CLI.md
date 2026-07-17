@@ -1,7 +1,7 @@
 # Nimora AI Agent 与 CLI 架构规范
 
 > 版本：0.1.0-draft  
-> 更新日期：2026-07-17  
+> 更新日期：2026-07-18
 > 状态：实现基线
 
 ## 1. 产品边界
@@ -62,6 +62,15 @@ flowchart LR
 - 工具执行单步必须校验 Task/Trace 归属，在真正调用模块 Capability Gateway Backend 前扣减工具预算，并重新验证批准指纹。
 
 首个生产工具目录位于 `crates/agent-tools`，当前公开 `asset.catalog.read`、`pet.state.read`、`profile.state.read`、`runtime.health.read`、`pet.animation.play` 与 `pet.position.move`。目录只包含 Tool Descriptor 和固定模块 Adapter，不暴露 `DesktopState`、Repository、Tauri Command、任意命令字符串或文件路径。只读授权使用可扩展能力集合；资源目录只返回已验证资产摘要，运行健康只返回启动、安全、Outbox 与备份摘要，不包含日志、用户正文、路径或密钥。两个写工具固定映射到 `safe.pet.animate` 和 `safe.pet.move`，模型无法把参数中的字符串提升为 Gateway 命令；Invocation ID 作为幂等键、Task/Trace 作为关联上下文进入共享 Capability Gateway。只读工具允许 Safe 自动执行，两个写工具即使基础风险为 Low 也必须绑定实际参数批准。
+
+### 3.1 桌面任务历史生命周期
+
+- 桌面宿主只在 Provider 得到最终完成结果后写入 `SqliteAgentHistoryRepository`；等待确认、拒绝、取消和未完成 Turn 不生成伪历史。
+- 记录保留 Task、Provider、模型、最初用户 Prompt、最终 Response、Finish Reason、Usage 与完成时间，并使用 Task ID 保证只写一次。
+- 历史写入是旁路持久化：失败只设置 `historyDegraded`，不得把已完成任务或已经发生的工具副作用改报为失败；后续成功写入会清除降级标记。
+- 桌面 IPC 只提供有界稳定游标分页、单条删除和全部删除。游标的 `createdAtMs` 与 `taskId` 必须同时提供，避免不稳定翻页。
+- Recovery Mode 使用独立内存仓储，不读取不可用主库；历史删除不影响角色、Profile、任务状态或工具结果。
+- Prompt 与 Response 不自动进入诊断包、事件日志或模型可调用工具，也不暴露给用户代码 Gateway。浏览器 Preview 使用同契约的会话内存实现，仅用于离线 UI 验证。
 
 ## 4. 任务生命周期与预算
 
