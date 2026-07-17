@@ -89,6 +89,11 @@ ID / 标题 / 优先级 / 前置条件
 | AST-018 | Sprite Clips 契约 | 拒绝缺少 `pet.idle`、路径逃逸、非法动作名、空帧、超限帧数和非法时长 | P0 |
 | AST-019 | 宿主 Renderer Descriptor | 复验 Sprite Manifest、Clips、后端与 inventory 后返回无文件系统路径的 `nimora.renderer/1`；失败明确回退内置角色 | P0 |
 | AST-020 | 只读角色资源协议 | 仅 Pet 窗口可读取活动包清单内图片；拒绝未知 Host、查询参数、非 GET、编码穿越、非图片、非活动包和安全模式请求 | P0 |
+| AST-021 | Sprite Sequence 实际渲染 | Pet Overlay 按每帧 `durationMs` 切换受控图片 URL，非循环动作停在末帧，动作切换从首帧开始 | P0 |
+| AST-022 | Sprite Atlas 实际渲染 | Canvas 按描述符裁切 Atlas 帧，尊重画布、锚点、缩放与 pixel-art 设置，不暴露文件系统路径 | P0 |
+| AST-023 | Sprite 渲染失败回退 | 图片加载失败、Canvas context 缺失或帧超出图片实际边界时立即显示内置 Aster，Pet 交互保持可用 | P0 |
+| AST-024 | 动画资源清理与减少动画 | 减少动画时固定首帧；动作、角色切换和卸载后无遗留 Timer、Image handler 或重复监听器 | P0 |
+| AST-025 | 活动角色热切换 | 激活角色及进入/退出安全模式后只向 Pet 窗口发出描述符刷新事件，已打开 Overlay 无需重启即可切换或回退 | P0 |
 | MODEL-001 | 导入合法 Live2D/VRM/glTF 模型 | 完成校验、映射与预览，可原子安装 | P0 |
 | MODEL-002 | 导入路径穿越、远程 URI、Zip Bomb 或畸形网格 | 拒绝且 Core 与已安装资源不受影响 | P0 |
 | MODEL-003 | Adapter 崩溃或 GPU context 丢失 | 恢复默认角色，可重建渲染实例 | P0 |

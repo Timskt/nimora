@@ -73,6 +73,7 @@ export interface CharacterRendererSnapshot {
   anchor: { x: number; y: number };
   defaultScale: number;
   pixelArt: boolean;
+  fallbacks: Record<string, string>;
   clips: SpriteClips | null;
   fallbackReason: string | null;
 }
@@ -300,6 +301,7 @@ export function createDesktopApi(
           anchor: { x: 0.5, y: 1 },
           defaultScale: 1,
           pixelArt: false,
+          fallbacks: {},
           clips: null,
           fallbackReason: null,
         };

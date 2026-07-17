@@ -39,7 +39,7 @@ use std::{
     time::Duration,
 };
 use tauri::{
-    AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
     menu::{Menu, MenuItem},
     tray::{TrayIconBuilder, TrayIconEvent},
 };
@@ -51,6 +51,7 @@ const BUILTIN_CHARACTER_ID: &str = "builtin.aster";
 const ACTIVE_CHARACTER_SPEC: &str = "nimora.active-character/1";
 const ACTIVE_CHARACTER_FILE: &str = ".active-character.json";
 const PET_WINDOW_LABEL: &str = "pet";
+const CHARACTER_RENDERER_CHANGED_EVENT: &str = "nimora://character-renderer-changed";
 const ASSET_PROTOCOL: &str = "nimora-asset";
 const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
@@ -256,6 +257,7 @@ struct CharacterRendererSnapshot {
     anchor: RenderAnchor,
     default_scale: f64,
     pixel_art: bool,
+    fallbacks: std::collections::BTreeMap<String, String>,
     clips: Option<SpriteClips>,
     fallback_reason: Option<String>,
 }
@@ -583,6 +585,7 @@ fn enter_safe_mode(
                 .lock()
                 .map_err(|_| DesktopError::StatePoisoned)? = Some(previous_policy);
             set_current_window_policy(&state, WindowPolicy::SAFE)?;
+            app.emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
             Ok(command)
         }
         Err(primary) => match apply_window_policy(&app, WindowPolicy::SAFE, previous_policy) {
@@ -612,6 +615,7 @@ fn exit_safe_mode(app: AppHandle, state: State<'_, DesktopState>) -> Result<Comm
                 .lock()
                 .map_err(|_| DesktopError::StatePoisoned)? = None;
             set_current_window_policy(&state, target_policy)?;
+            app.emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
             Ok(command)
         }
         Err(primary) => match apply_window_policy(&app, target_policy, previous_policy) {
@@ -784,6 +788,7 @@ fn active_character_renderer(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn activate_character(
+    app: AppHandle,
     state: State<'_, DesktopState>,
     asset_id: String,
 ) -> Result<ActiveCharacterSnapshot, DesktopError> {
@@ -802,7 +807,9 @@ fn activate_character(
         }
     }
     persist_active_character(&state.asset_store, &asset_id)?;
-    resolve_active_character(&state.asset_store, RuntimeMode::Normal)
+    let snapshot = resolve_active_character(&state.asset_store, RuntimeMode::Normal)?;
+    app.emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
+    Ok(snapshot)
 }
 
 fn resolve_active_character(
@@ -896,6 +903,7 @@ fn installed_renderer(
         anchor: renderer.anchor,
         default_scale: renderer.default_scale,
         pixel_art: renderer.pixel_art,
+        fallbacks: renderer.fallbacks,
         clips: Some(renderer.clips),
         fallback_reason: None,
     }
@@ -914,6 +922,7 @@ fn builtin_renderer(fallback_reason: Option<String>) -> CharacterRendererSnapsho
         anchor: RenderAnchor { x: 0.5, y: 1.0 },
         default_scale: 1.0,
         pixel_art: false,
+        fallbacks: std::collections::BTreeMap::new(),
         clips: None,
         fallback_reason,
     }

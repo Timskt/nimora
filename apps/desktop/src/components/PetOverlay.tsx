@@ -1,16 +1,60 @@
-import { useEffect, useState } from "react";
-import type { DesktopSnapshot, PetAction } from "../platform/desktop";
+import { useCallback, useEffect, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
+import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
+
+const CHARACTER_RENDERER_CHANGED_EVENT = "nimora://character-renderer-changed";
 
 export function PetOverlay() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
+  const [renderer, setRenderer] = useState<CharacterRendererSnapshot | null>(null);
+  const [rendererFailed, setRendererFailed] = useState(false);
   const [message, setMessage] = useState("正在醒来…");
 
+  const refreshRenderer = useCallback(async () => {
+    const descriptor = await desktopApi.activeCharacterRenderer();
+    setRenderer(descriptor);
+    setRendererFailed(false);
+  }, []);
+
   useEffect(() => {
-    void desktopApi.snapshot().then((value) => {
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+    void Promise.all([desktopApi.snapshot(), desktopApi.activeCharacterRenderer()]).then(([value, descriptor]) => {
+      if (disposed) return;
       setSnapshot(value);
+      setRenderer(descriptor);
+      setRendererFailed(false);
       setMessage(desktopApi.native ? "本地运行" : "浏览器预览");
+    }).catch(() => {
+      if (disposed) return;
+      setMessage("角色资源不可用，已使用内置角色");
     });
+    if (desktopApi.native) {
+      void listen(CHARACTER_RENDERER_CHANGED_EVENT, () => {
+        void refreshRenderer().catch(() => {
+          if (!disposed) {
+            setRendererFailed(true);
+            setMessage("角色资源不可用，已使用内置角色");
+          }
+        });
+      }).then((disposeListener) => {
+        if (disposed) disposeListener();
+        else unlisten = disposeListener;
+      }).catch(() => {
+        if (!disposed) setMessage("角色更新监听不可用");
+      });
+    }
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [refreshRenderer]);
+
+  const handleRendererFailure = useCallback(() => {
+    setRendererFailed(true);
+    setMessage("角色图片加载失败，已使用内置角色");
   }, []);
 
   async function play(action: PetAction) {
@@ -54,12 +98,20 @@ export function PetOverlay() {
         aria-label="拖动 Aster"
       >
         <span className="overlay-status">{message}</span>
-        <span className={`overlay-pet ${snapshot?.pet.state ?? "idle"}`} aria-hidden="true">
-          <i className="overlay-ear left" /><i className="overlay-ear right" />
-          <i className="overlay-star">✦</i>
-          <i className="overlay-eye left" /><i className="overlay-eye right" />
-          <i className="overlay-mouth" />
-        </span>
+        {renderer && renderer.backend !== "built-in" && !rendererFailed ? (
+          <SpriteRenderer
+            descriptor={renderer}
+            action={petStateAction(snapshot?.pet.state ?? "idle")}
+            onFailure={handleRendererFailure}
+          />
+        ) : (
+          <span className={`overlay-pet ${snapshot?.pet.state ?? "idle"}`} aria-hidden="true">
+            <i className="overlay-ear left" /><i className="overlay-ear right" />
+            <i className="overlay-star">✦</i>
+            <i className="overlay-eye left" /><i className="overlay-eye right" />
+            <i className="overlay-mouth" />
+          </span>
+        )}
         <span className="overlay-shadow" aria-hidden="true" />
       </button>
       <div className="overlay-actions" aria-label="宠物快捷操作">

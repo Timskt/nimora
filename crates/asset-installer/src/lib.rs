@@ -110,8 +110,8 @@ struct AssetManifestHeader {
     entrypoints: Option<AssetEntrypoints>,
     #[serde(default)]
     capabilities: Vec<String>,
-    #[serde(default = "empty_json_object")]
-    fallbacks: serde_json::Value,
+    #[serde(default)]
+    fallbacks: BTreeMap<String, String>,
     #[serde(default)]
     locales: Vec<String>,
     integrity: AssetIntegrityReference,
@@ -157,6 +157,7 @@ pub struct AssetRendererDescriptor {
     pub anchor: RenderAnchor,
     pub default_scale: f64,
     pub pixel_art: bool,
+    pub fallbacks: BTreeMap<String, String>,
     pub clips: SpriteClips,
 }
 
@@ -476,6 +477,7 @@ fn load_sprite_renderer(
         anchor: render.anchor.clone(),
         default_scale: render.default_scale,
         pixel_art: render.pixel_art,
+        fallbacks: manifest.fallbacks.clone(),
         clips,
     }))
 }
@@ -651,7 +653,9 @@ fn validate_manifest_header(manifest: &AssetManifestHeader) -> Result<(), Instal
             .all(|capability| valid_asset_identifier(capability))
         || manifest.locales.len() > 32
         || !manifest.locales.iter().all(|locale| valid_locale(locale))
-        || !manifest.fallbacks.is_object()
+        || !manifest.fallbacks.iter().all(|(action, fallback)| {
+            valid_asset_identifier(action) && valid_asset_identifier(fallback)
+        })
     {
         return Err(InstallError::InvalidMetadata(
             "manifest header violates nimora.asset/1".to_owned(),
@@ -670,10 +674,6 @@ fn validate_manifest_header(manifest: &AssetManifestHeader) -> Result<(), Instal
         }
     }
     Ok(())
-}
-
-fn empty_json_object() -> serde_json::Value {
-    serde_json::Value::Object(serde_json::Map::new())
 }
 
 fn valid_locale(value: &str) -> bool {
@@ -1025,7 +1025,7 @@ mod tests {
             },
             "entrypoints": { "clips": "animations/clips.json" },
             "capabilities": [],
-            "fallbacks": {},
+            "fallbacks": { "pet.sleep": "pet.idle" },
             "locales": ["en"],
             "integrity": { "algorithm": "sha256", "files": "integrity.json" }
         }))
@@ -1091,6 +1091,10 @@ mod tests {
         let renderer = inspect_asset_renderer(&root).unwrap();
         assert_eq!(renderer.backend, "sprite-atlas");
         assert_eq!(renderer.canvas.width, 512);
+        assert_eq!(
+            renderer.fallbacks.get("pet.sleep").map(String::as_str),
+            Some("pet.idle")
+        );
         match renderer.clips {
             SpriteClips::SpriteAtlas { image, clips, .. } => {
                 assert_eq!(image, Path::new("sprites/atlas.webp"));
