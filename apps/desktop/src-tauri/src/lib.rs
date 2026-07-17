@@ -1,4 +1,7 @@
-use nimora_asset_installer::{InstallError, InstallFile, install_asset_package, rollback_latest};
+use nimora_asset_installer::{
+    AssetPackageSummary, InstallError, InstallFile, inspect_asset_package, install_asset_package,
+    rollback_latest,
+};
 use nimora_persistence_sqlite::{
     ProgramPermissionGrant, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
     SqliteProgramPermissionRepository,
@@ -218,6 +221,20 @@ struct AssetRollbackReceipt {
     asset_id: String,
     active_path: PathBuf,
     quarantined_failed_version: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AssetCatalogSnapshot {
+    assets: Vec<AssetPackageSummary>,
+    rejected: Vec<RejectedAssetPackage>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RejectedAssetPackage {
+    directory: String,
+    reason: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -687,6 +704,48 @@ fn install_asset(
         active_path: result.install.active_path,
         replaced_previous: result.install.backup_path.is_some(),
     })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn asset_catalog(state: State<'_, DesktopState>) -> Result<AssetCatalogSnapshot, DesktopError> {
+    inspect_asset_catalog(&state.asset_store)
+}
+
+fn inspect_asset_catalog(asset_store: &Path) -> Result<AssetCatalogSnapshot, DesktopError> {
+    std::fs::create_dir_all(asset_store)?;
+    let mut assets = Vec::new();
+    let mut rejected = Vec::new();
+    for entry in std::fs::read_dir(asset_store)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let directory = entry.file_name().to_string_lossy().into_owned();
+        if directory.contains(".backup.")
+            || directory.contains(".failed.")
+            || directory.contains(".staging.")
+        {
+            continue;
+        }
+        match inspect_asset_package(&entry.path()) {
+            Ok(asset) if asset.id == directory => assets.push(asset),
+            Ok(asset) => rejected.push(RejectedAssetPackage {
+                directory,
+                reason: format!(
+                    "manifest id {} does not match installed directory",
+                    asset.id
+                ),
+            }),
+            Err(error) => rejected.push(RejectedAssetPackage {
+                directory,
+                reason: error.to_string(),
+            }),
+        }
+    }
+    assets.sort_by(|left, right| left.id.cmp(&right.id));
+    rejected.sort_by(|left, right| left.directory.cmp(&right.directory));
+    Ok(AssetCatalogSnapshot { assets, rejected })
 }
 
 #[tauri::command]
@@ -1839,6 +1898,7 @@ pub fn run() {
             begin_pet_drag,
             finish_pet_drag,
             set_click_through,
+            asset_catalog,
             install_asset,
             rollback_asset,
             install_user_program,
@@ -1867,8 +1927,8 @@ pub fn run() {
 mod tests {
     use super::{
         DesktopError, PetAction, ProfilePolicy, TrayAction, WindowPolicy,
-        ensure_program_permissions, parse_user_program_plan, permission_grant, screen_coordinate,
-        user_program_input, valid_asset_identifier,
+        ensure_program_permissions, inspect_asset_catalog, parse_user_program_plan,
+        permission_grant, screen_coordinate, user_program_input, valid_asset_identifier,
     };
     use nimora_persistence_sqlite::SqliteProgramPermissionRepository;
     use nimora_runtime_core::{Event, EventSource};
@@ -1879,6 +1939,20 @@ mod tests {
     fn accepts_finite_screen_coordinates() {
         assert_eq!(screen_coordinate(42.6).expect("valid coordinate"), 43);
         assert_eq!(screen_coordinate(-12.4).expect("valid coordinate"), -12);
+    }
+
+    #[test]
+    fn catalog_quarantines_corrupt_packages_without_failing_the_snapshot() {
+        let root = std::env::temp_dir().join("nimora-corrupt-asset-catalog");
+        let package = root.join("character.example.broken");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("manifest.json"), b"not-json").unwrap();
+        let snapshot = inspect_asset_catalog(&root).unwrap();
+        assert!(snapshot.assets.is_empty());
+        assert_eq!(snapshot.rejected.len(), 1);
+        assert_eq!(snapshot.rejected[0].directory, "character.example.broken");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1922,7 +1996,7 @@ mod tests {
             version: "1.0.0".to_owned(),
             capabilities: vec![],
             subscriptions: vec![],
-            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::default(),
+            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::Serial,
             event_queue_capacity: 16,
             commands: vec![],
             timeout_ms: 1_000,
@@ -1942,7 +2016,7 @@ mod tests {
             version: "1.0.0".to_owned(),
             capabilities: vec![Capability::ReadPetState],
             subscriptions: vec![],
-            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::default(),
+            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::Serial,
             event_queue_capacity: 16,
             commands: vec![],
             timeout_ms: 1_000,
@@ -1962,7 +2036,7 @@ mod tests {
             version: "1.0.0".to_owned(),
             capabilities: vec![Capability::ReadProfileState],
             subscriptions: vec![],
-            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::default(),
+            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::Serial,
             event_queue_capacity: 16,
             commands: vec![],
             timeout_ms: 1_000,
@@ -1990,7 +2064,7 @@ mod tests {
             version: "1.0.0".to_owned(),
             capabilities: vec![Capability::SubscribeEvents],
             subscriptions: vec!["pet.example.clicked".to_owned()],
-            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::default(),
+            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::Serial,
             event_queue_capacity: 16,
             commands: vec![],
             timeout_ms: 1_000,
@@ -2026,7 +2100,7 @@ mod tests {
                 Capability::StoreLocalData,
             ],
             subscriptions: vec![],
-            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::default(),
+            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::Serial,
             event_queue_capacity: 16,
             commands: vec![],
             timeout_ms: 1_000,
@@ -2052,7 +2126,7 @@ mod tests {
             version: "1.0.0".to_owned(),
             capabilities: vec![],
             subscriptions: vec![],
-            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::default(),
+            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::Serial,
             event_queue_capacity: 16,
             commands: vec![],
             timeout_ms: 1_000,

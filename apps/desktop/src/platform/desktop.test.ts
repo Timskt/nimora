@@ -33,6 +33,7 @@ describe("desktop platform adapter", () => {
     await api.clickPet(12, 24, "left");
     await api.dragPet();
     await api.setClickThrough(true);
+    await api.assetCatalog();
     await api.installAsset({
       sourcePath: "/tmp/nimora-import",
     });
@@ -42,6 +43,8 @@ describe("desktop platform adapter", () => {
       version: "1.0.0",
       capabilities: ["read-pet-state", "subscribe-events", "invoke-safe-commands"] as const,
       subscriptions: ["pet.example.clicked"],
+      eventConcurrency: "serial" as const,
+      eventQueueCapacity: 16,
       commands: ["safe.example.notify"],
       timeoutMs: 5_000,
       memoryBytes: 8 * 1024 * 1024,
@@ -95,6 +98,7 @@ describe("desktop platform adapter", () => {
       ["begin_pet_drag"],
       ["finish_pet_drag"],
       ["set_click_through", { enabled: true }],
+      ["asset_catalog"],
       ["install_asset", { request: {
         sourcePath: "/tmp/nimora-import",
       } }],

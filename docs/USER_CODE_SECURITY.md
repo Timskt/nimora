@@ -68,7 +68,7 @@
 
 运行时事件总线为 UI 主缓冲和每个程序订阅维护独立队列，任何消费者都不能通过 drain 抢走其他消费者的事件。程序订阅必须来自完整性校验通过、精确授权且声明 `subscribe-events` 的已安装 Manifest；Rust 根据 Manifest 创建过滤器，Renderer 不能提交事件正文或扩大事件类型。每个会话最多缓存 64 条、全局最多 32 个会话；慢消费者只丢弃自身最旧事件并获得累计 `dropped` 计数，不阻塞 Core。关闭、Drop、撤权、程序升级、回滚或进入安全模式都会注销会话并释放队列。`execute_next_user_program_event` 只从 Rust 订阅中弹出一条可信事件，随后重新加载 active 安装版本、复验完整性和精确权限，并构造深度只读的 `nimora.input.trigger = { type: "event", event }`；IPC 不接受事件正文。当前入口仍由宿主请求推进，后台自动调度循环与失败诊断将在下一阶段接入。
 
-事件触发并发策略属于已签名 Manifest 身份的一部分。`serial`（默认）按顺序执行并使用有界队列，`drop` 在已有运行时丢弃新触发，`cancel-previous` 在新触发到达时取消旧执行；`eventQueueCapacity` 默认 16、最大 64，Rust 订阅按该值实际分配。策略或容量变化会改变 Manifest 内容并要求重新安装与精确授权，Renderer 不得在运行时覆盖这些值。当前后台自动循环仅开放已完整接线的 `serial`，其他策略在执行层完成并发 Worker 取消接线前会被明确拒绝，而不会静默退化为串行。
+事件触发并发策略属于已签名 Manifest 身份的一部分。Manifest 必须显式声明 `eventConcurrency` 与 `eventQueueCapacity`：`serial` 按顺序执行并使用有界队列，`drop` 在已有运行时丢弃新触发，`cancel-previous` 在新触发到达时取消旧执行；容量范围为 1–64，Rust 订阅按声明值实际分配。字段缺失、策略未知或容量越界都会拒绝安装。策略或容量变化会改变 Manifest 内容并要求重新安装与精确授权，Renderer 不得在运行时覆盖这些值。当前后台自动循环仅开放已完整接线的 `serial`，其他策略在执行层完成并发 Worker 取消接线前会被明确拒绝，而不会静默退化为串行。
 
 `start_user_program_event_loop` 为一个订阅最多创建一个命名宿主线程，空队列采用 50 ms 有界轮询；会话被关闭、撤权、升级、回滚或安全模式清理后循环自动退出。`user_program_event_session_status` 只读公开自动运行状态、成功执行数、累计队列丢弃数和最后错误，便于 Creator Studio 呈现诊断而不暴露事件注入入口。
 

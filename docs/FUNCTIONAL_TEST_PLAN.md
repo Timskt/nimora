@@ -82,6 +82,7 @@ ID / 标题 / 优先级 / 前置条件
 | AST-011 | 减少动画 | 系统设置启用后资源不能强制大幅运动 | P0 |
 | AST-012 | 版权元数据 | 缺少许可证或发布者信息时不能发布 | P1 |
 | AST-013 | Renderer 伪造身份或清单 | IPC 不接受 Asset ID 与文件清单；宿主从包内 Manifest 和完整性文件推导并复验 | P0 |
+| AST-014 | Catalog 遇到损坏包 | 损坏包进入 rejected 诊断，其它包和默认角色继续可用，WebView 不获得资源路径 | P0 |
 | MODEL-001 | 导入合法 Live2D/VRM/glTF 模型 | 完成校验、映射与预览，可原子安装 | P0 |
 | MODEL-002 | 导入路径穿越、远程 URI、Zip Bomb 或畸形网格 | 拒绝且 Core 与已安装资源不受影响 | P0 |
 | MODEL-003 | Adapter 崩溃或 GPU context 丢失 | 恢复默认角色，可重建渲染实例 | P0 |

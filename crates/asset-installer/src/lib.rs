@@ -1,6 +1,7 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs,
     io::{self, Read},
     path::{Component, Path, PathBuf},
@@ -71,6 +72,24 @@ pub struct AssetPackageInstallResult {
     pub install: InstallResult,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetPackageSummary {
+    pub id: String,
+    pub asset_type: String,
+    pub version: String,
+    pub name: BTreeMap<String, String>,
+    pub renderer_backend: Option<String>,
+}
+
+#[derive(Debug)]
+struct ValidatedAssetPackage {
+    summary: AssetPackageSummary,
+    files: Vec<InstallFile>,
+    integrity_path: PathBuf,
+    integrity_bytes: Vec<u8>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AssetManifestHeader {
@@ -79,12 +98,12 @@ struct AssetManifestHeader {
     #[serde(rename = "type")]
     asset_type: String,
     version: String,
-    name: serde_json::Value,
+    name: BTreeMap<String, String>,
     publisher: String,
     license: String,
     engines: serde_json::Value,
     #[serde(default)]
-    render: Option<serde_json::Value>,
+    render: Option<AssetRenderHeader>,
     #[serde(default)]
     entrypoints: Option<serde_json::Value>,
     #[serde(default)]
@@ -94,6 +113,14 @@ struct AssetManifestHeader {
     #[serde(default)]
     locales: Vec<String>,
     integrity: AssetIntegrityReference,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AssetRenderHeader {
+    backend: String,
+    #[serde(flatten)]
+    remaining: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,6 +157,34 @@ pub fn install_asset_package(
     source_root: &Path,
     asset_store: &Path,
 ) -> Result<AssetPackageInstallResult, InstallError> {
+    let package = load_asset_package(source_root)?;
+    let active_path = asset_store.join(&package.summary.id);
+    let install = install_atomically_with_generated(
+        source_root,
+        &active_path,
+        &package.files,
+        &[GeneratedInstallFile {
+            relative_path: package.integrity_path,
+            contents: package.integrity_bytes,
+        }],
+    )?;
+    Ok(AssetPackageInstallResult {
+        asset_id: package.summary.id,
+        version: package.summary.version,
+        install,
+    })
+}
+
+/// Verifies an expanded package without changing the filesystem.
+///
+/// # Errors
+///
+/// Returns an error when metadata or any declared file violates the package contract.
+pub fn inspect_asset_package(source_root: &Path) -> Result<AssetPackageSummary, InstallError> {
+    Ok(load_asset_package(source_root)?.summary)
+}
+
+fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, InstallError> {
     let manifest_bytes = read_metadata(source_root, Path::new(MANIFEST_FILE))?;
     let manifest: AssetManifestHeader = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
@@ -160,21 +215,73 @@ pub fn install_asset_package(
         })
         .collect::<Result<Vec<_>, _>>()?;
     validate_integrity_document(&files, integrity.total_bytes, integrity_path)?;
-    let active_path = asset_store.join(&manifest.id);
-    let install = install_atomically_with_generated(
-        source_root,
-        &active_path,
-        &files,
-        &[GeneratedInstallFile {
-            relative_path: integrity_path.to_path_buf(),
-            contents: integrity_bytes,
-        }],
-    )?;
-    Ok(AssetPackageInstallResult {
-        asset_id: manifest.id,
-        version: manifest.version,
-        install,
+    validate_package_tree(source_root, &files, integrity_path)?;
+    for file in &files {
+        validate_file(
+            &source_root.join(safe_relative_path(&file.relative_path)?),
+            file,
+        )?;
+    }
+    Ok(ValidatedAssetPackage {
+        summary: AssetPackageSummary {
+            id: manifest.id,
+            asset_type: manifest.asset_type,
+            version: manifest.version,
+            name: manifest.name,
+            renderer_backend: manifest.render.map(|render| {
+                let _ = render.remaining;
+                render.backend
+            }),
+        },
+        files,
+        integrity_path: integrity_path.to_path_buf(),
+        integrity_bytes,
     })
+}
+
+fn validate_package_tree(
+    source_root: &Path,
+    files: &[InstallFile],
+    integrity_path: &Path,
+) -> Result<(), InstallError> {
+    let canonical_root = source_root.canonicalize()?;
+    let mut expected = files
+        .iter()
+        .map(|file| safe_relative_path(&file.relative_path).map(Path::to_path_buf))
+        .collect::<Result<std::collections::HashSet<_>, _>>()?;
+    expected.insert(integrity_path.to_path_buf());
+    let mut discovered = std::collections::HashSet::with_capacity(expected.len());
+    let mut directories = vec![canonical_root.clone()];
+    while let Some(directory) = directories.pop() {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let metadata = fs::symlink_metadata(entry.path())?;
+            let relative = entry
+                .path()
+                .strip_prefix(&canonical_root)
+                .map_err(|_| InstallError::EscapedSource(entry.path()))?
+                .to_path_buf();
+            if metadata.file_type().is_symlink() {
+                return Err(InstallError::EscapedSource(relative));
+            }
+            if metadata.is_dir() {
+                directories.push(entry.path());
+            } else if metadata.is_file() {
+                discovered.insert(relative);
+            } else {
+                return Err(InstallError::InvalidMetadata(format!(
+                    "unsupported package entry: {}",
+                    relative.display()
+                )));
+            }
+        }
+    }
+    if discovered != expected {
+        return Err(InstallError::InvalidMetadata(
+            "package tree does not exactly match the integrity inventory".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn read_metadata(source_root: &Path, relative_path: &Path) -> Result<Vec<u8>, InstallError> {
@@ -211,9 +318,19 @@ fn validate_manifest_header(manifest: &AssetManifestHeader) -> Result<(), Instal
         || !valid_asset_identifier(&manifest.id)
         || !valid_asset_identifier(&manifest.publisher)
         || !supported_types.contains(&manifest.asset_type.as_str())
+        || (["character", "skin"].contains(&manifest.asset_type.as_str())
+            && manifest.render.is_none())
+        || manifest.render.as_ref().is_some_and(|render| {
+            !["sprite-sequence", "sprite-atlas", "live2d", "vrm", "gltf"]
+                .contains(&render.backend.as_str())
+        })
         || !valid_semver(&manifest.version)
         || manifest.license.trim().is_empty()
-        || !valid_localized_text(&manifest.name)
+        || manifest.name.is_empty()
+        || !manifest
+            .name
+            .iter()
+            .all(|(locale, text)| valid_locale(locale) && !text.trim().is_empty())
         || manifest
             .engines
             .get("nimora")
@@ -239,15 +356,6 @@ fn validate_manifest_header(manifest: &AssetManifestHeader) -> Result<(), Instal
 
 fn empty_json_object() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
-}
-
-fn valid_localized_text(value: &serde_json::Value) -> bool {
-    value.as_object().is_some_and(|entries| {
-        !entries.is_empty()
-            && entries.iter().all(|(locale, text)| {
-                valid_locale(locale) && text.as_str().is_some_and(|text| !text.trim().is_empty())
-            })
-    })
 }
 
 fn valid_locale(value: &str) -> bool {
@@ -576,6 +684,13 @@ mod tests {
             "publisher": "publisher.example",
             "license": "MIT",
             "engines": { "nimora": ">=0.1.0" },
+            "render": {
+                "backend": "sprite-atlas",
+                "canvas": { "width": 512, "height": 512 },
+                "anchor": { "x": 0.5, "y": 1.0 },
+                "defaultScale": 1.0,
+                "pixelArt": false
+            },
             "capabilities": [],
             "fallbacks": {},
             "locales": ["en"],
@@ -644,6 +759,18 @@ mod tests {
         let error = install_asset_package(&source, &store).unwrap_err();
         assert!(matches!(error, InstallError::InvalidMetadata(_)));
         assert!(!store.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inspection_rejects_untracked_files() {
+        let root = std::env::temp_dir().join("nimora-package-untracked");
+        let source = root.join("source");
+        let _ = fs::remove_dir_all(&root);
+        write_asset_package(&source, "character.example.mochi");
+        fs::write(source.join("injected.js"), b"unexpected").unwrap();
+        let error = inspect_asset_package(&source).unwrap_err();
+        assert!(matches!(error, InstallError::InvalidMetadata(_)));
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -44,6 +44,19 @@ export interface AssetRollbackReceipt {
   quarantinedFailedVersion: boolean;
 }
 
+export interface AssetPackageSummary {
+  id: string;
+  assetType: "character" | "skin" | "theme" | "behavior" | "voice" | "interaction" | "bundle";
+  version: string;
+  name: Record<string, string>;
+  rendererBackend: "sprite-sequence" | "sprite-atlas" | "live2d" | "vrm" | "gltf" | null;
+}
+
+export interface AssetCatalogSnapshot {
+  assets: AssetPackageSummary[];
+  rejected: Array<{ directory: string; reason: string }>;
+}
+
 export type UserCodeCapability =
   | "read-pet-state"
   | "read-profile-state"
@@ -56,8 +69,8 @@ export interface UserProgramManifest {
   version: string;
   capabilities: readonly UserCodeCapability[];
   subscriptions: readonly string[];
-  eventConcurrency?: "serial" | "drop" | "cancel-previous";
-  eventQueueCapacity?: number;
+  eventConcurrency: "serial" | "drop" | "cancel-previous";
+  eventQueueCapacity: number;
   commands: readonly string[];
   timeoutMs: number;
   memoryBytes: number;
@@ -172,6 +185,7 @@ export interface DesktopApi {
   clickPet(x: number, y: number, button: PointerButton): Promise<NimoraCommand | null>;
   dragPet(): Promise<NimoraCommand | null>;
   setClickThrough(enabled: boolean): Promise<void>;
+  assetCatalog(): Promise<AssetCatalogSnapshot>;
   installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
   rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
   validateUserProgram(manifest: UserProgramManifest): Promise<ProgramPolicyReport | null>;
@@ -251,6 +265,7 @@ export function createDesktopApi(
       async clickPet() { return null; },
       async dragPet() { return null; },
       async setClickThrough() {},
+      async assetCatalog() { return { assets: [], rejected: [] }; },
       async installAsset() { return null; },
       async rollbackAsset() { return null; },
       async validateUserProgram() { return null; },
@@ -298,6 +313,7 @@ export function createDesktopApi(
       return await invokeCommand("finish_pet_drag") as NimoraCommand;
     },
     setClickThrough: async (enabled) => { await invokeCommand("set_click_through", { enabled }); },
+    assetCatalog: async () => await invokeCommand("asset_catalog") as AssetCatalogSnapshot,
     installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
     rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,
     validateUserProgram: async (manifest) => await invokeCommand("validate_user_program", { manifest }) as ProgramPolicyReport,

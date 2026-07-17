@@ -16,14 +16,9 @@ const MAX_OUTPUT_BYTES: u64 = 1024 * 1024;
 const MAX_CONCURRENT_EXECUTIONS: usize = 8;
 const MAX_EVENT_QUEUE_CAPACITY: usize = 64;
 
-const fn default_event_queue_capacity() -> usize {
-    16
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EventConcurrencyPolicy {
-    #[default]
     Serial,
     Drop,
     CancelPrevious,
@@ -156,9 +151,7 @@ pub struct ProgramManifest {
     pub version: String,
     pub capabilities: Vec<Capability>,
     pub subscriptions: Vec<String>,
-    #[serde(default)]
     pub event_concurrency: EventConcurrencyPolicy,
-    #[serde(default = "default_event_queue_capacity")]
     pub event_queue_capacity: usize,
     pub commands: Vec<String>,
     pub timeout_ms: u64,
@@ -507,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn deserializes_backward_compatible_event_defaults() {
+    fn rejects_manifest_without_explicit_event_policy() {
         let value = serde_json::json!({
             "id": "studio.example.focus",
             "version": "1.0.0",
@@ -517,9 +510,8 @@ mod tests {
             "timeoutMs": 5000,
             "memoryBytes": 8_388_608
         });
-        let manifest: ProgramManifest = serde_json::from_value(value).unwrap();
-        assert_eq!(manifest.event_concurrency, EventConcurrencyPolicy::Serial);
-        assert_eq!(manifest.event_queue_capacity, 16);
+        let error = serde_json::from_value::<ProgramManifest>(value).unwrap_err();
+        assert!(error.to_string().contains("eventConcurrency"));
     }
 
     #[test]

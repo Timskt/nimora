@@ -1,4 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { AssetCatalogSnapshot, AssetPackageSummary } from "../platform/desktop";
+import { desktopApi } from "../platform/desktop";
 
 const backends = ["Sprite Atlas", "Live2D Cubism", "VRM", "glTF"] as const;
 type Backend = (typeof backends)[number];
@@ -14,7 +16,15 @@ export function CreatorStudio() {
   const [backend, setBackend] = useState<Backend>("Sprite Atlas");
   const [skinTone, setSkinTone] = useState("#d8d0f0");
   const [draftSaved, setDraftSaved] = useState(false);
+  const [catalog, setCatalog] = useState<AssetCatalogSnapshot | null>(null);
+  const [catalogError, setCatalogError] = useState(false);
   const completion = useMemo(() => checks.filter((check) => check.status === "通过").length, []);
+
+  useEffect(() => {
+    void desktopApi.assetCatalog()
+      .then(setCatalog)
+      .catch(() => setCatalogError(true));
+  }, []);
 
   function saveDraft() {
     setDraftSaved(true);
@@ -67,10 +77,40 @@ export function CreatorStudio() {
         </div>
       </div>
 
+      <section className="asset-catalog" aria-labelledby="asset-catalog-heading">
+        <div className="section-heading">
+          <div><p className="card-label">INSTALLED ASSETS</p><h3 id="asset-catalog-heading">本机资源目录</h3></div>
+          <strong>{catalog?.assets.length ?? 0} 个可用</strong>
+        </div>
+        {catalogError ? <p className="catalog-empty error">资源目录暂时不可读取，当前角色不受影响。</p> : null}
+        {!catalogError && catalog === null ? <p className="catalog-empty">正在验证已安装资源…</p> : null}
+        {catalog?.assets.length === 0 ? <p className="catalog-empty">尚未安装第三方资源，默认角色继续离线可用。</p> : null}
+        {catalog && catalog.assets.length > 0 ? <ul className="asset-list">
+          {catalog.assets.map((asset) => <AssetCatalogItem asset={asset} key={asset.id} />)}
+        </ul> : null}
+        {catalog && catalog.rejected.length > 0 ? <details className="rejected-assets">
+          <summary>{catalog.rejected.length} 个资源未通过健康检查</summary>
+          <ul>{catalog.rejected.map((asset) => <li key={asset.directory}><strong>{asset.directory}</strong><span>{asset.reason}</span></li>)}</ul>
+        </details> : null}
+      </section>
+
       <div className="creator-checks">
         <div className="section-heading"><div><p className="card-label">PACKAGE HEALTH</p><h3>发布前检查</h3></div><strong>{completion}/{checks.length} 已通过</strong></div>
         <ul>{checks.map((check) => <li key={check.label}><span className={check.status === "通过" ? "check-icon pass" : "check-icon pending"}>{check.status === "通过" ? "✓" : "!"}</span><div><strong>{check.label}</strong><p>{check.detail}</p></div><span className="check-status">{check.status}</span></li>)}</ul>
       </div>
     </section>
   );
+}
+
+function AssetCatalogItem({ asset }: { asset: AssetPackageSummary }) {
+  const displayName = assetDisplayName(asset);
+  return <li>
+    <span className="asset-kind">{asset.assetType.slice(0, 1).toUpperCase()}</span>
+    <div><strong>{displayName}</strong><p>{asset.id} · {asset.version}</p></div>
+    <span className="asset-backend">{asset.rendererBackend ?? "无渲染后端"}</span>
+  </li>;
+}
+
+export function assetDisplayName(asset: AssetPackageSummary): string {
+  return asset.name["zh-CN"] ?? asset.name.en ?? Object.values(asset.name)[0] ?? asset.id;
 }

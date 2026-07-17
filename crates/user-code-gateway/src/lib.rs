@@ -264,7 +264,7 @@ mod tests {
                 Capability::StoreLocalData,
             ],
             subscriptions: vec![],
-            event_concurrency: EventConcurrencyPolicy::default(),
+            event_concurrency: EventConcurrencyPolicy::Serial,
             event_queue_capacity: 16,
             commands: vec!["safe.pet.animate".into()],
             timeout_ms: 5_000,
