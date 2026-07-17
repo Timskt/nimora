@@ -1,0 +1,17 @@
+[package]
+name = "nimora-automation-agent-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nimora-agent-runtime = { path = "../agent-runtime" }
+nimora-automation-runtime = { path = "../automation-runtime" }
+nimora-runtime-core = { path = "../runtime-core" }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

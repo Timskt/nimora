@@ -63,6 +63,7 @@ flowchart LR
 - Provider 续跑消息保留 Assistant 的结构化 Tool Call、Provider Call ID 与 Tool ID；Tool Result 必须引用先前尚未解析的同一调用。未知工具、错配工具、孤立结果和重复结果在进入 Adapter 前拒绝，避免模型把无关模块输出冒充成已授权调用结果。
 - `ProviderToolTurn` 以 Provider 原始调用顺序聚合一个 Turn 的结果；未完成、错配和重复结果不能生成续跑消息。宿主因此可以并行执行只读调用、逐项等待写操作确认，但只能在全部调用成功后把完整结果交回 Provider。
 - 工具执行单步必须校验 Task/Trace 归属，在真正调用模块 Capability Gateway Backend 前扣减工具预算，并重新验证批准指纹。
+- Automation 反向创建 AI Task 由 `crates/automation-agent-bridge` 承担：固定 `agent.task.run` Command 映射为 `AgentTaskRequest`，要求 Medium 以上风险和幂等键，并继承 Automation Trace、调用深度及根剩余预算；准入时间与根剩余预算只能由宿主 `AutomationAgentContext` 注入，规则参数携带同名字段会因未知字段而拒绝。Bridge 不持有 Provider，宿主只能通过 `AgentTaskSubmitter` 接入统一 Agent Service。
 
 首个生产工具目录位于 `crates/agent-tools`，当前公开十三项工具：`asset.catalog.read`、`automation.definition.validate`、`character.state.read`、`pet.action.catalog.read`、`pet.state.read`、`profile.state.read`、`program.catalog.read`、`runtime.health.read`、`pet.animation.play`、`pet.position.move`、`profile.active.switch`、`character.active.switch` 与 `program.installed.execute`。目录只包含 Tool Descriptor 和固定模块 Adapter，不暴露 `DesktopState`、Repository、Tauri Command、任意命令字符串或文件路径。只读授权使用可扩展能力集合；自动化验证接收有界定义与测试事件，只调用 `AutomationEngine` 的 Dry-run 模式并返回 `planned`、不匹配或校验失败结果，Backend 若收到任何真实 Command 会失败；资源目录只返回已验证资产摘要，角色状态只返回当前 Asset ID、渲染后端、画布/锚点和能力布尔值，主动剔除模型路径与资源 URL；动作目录直接从 Runtime 的 `PetAction` 当前词汇生成，并指明对应写工具与参数，避免 Provider 猜测动作；程序目录只返回完整性复验通过的已安装程序身份、Manifest 声明、预算与精确版本授权摘要，损坏项只计数，不返回源码、安装路径、Worker 路径或宿主句柄；运行健康只返回启动、安全、Outbox 与备份摘要，不包含日志、用户正文、路径或密钥。
 

@@ -204,6 +204,11 @@ ID / 标题 / 优先级 / 前置条件
 
 ## 13. AI Agent
 
+- Automation Live Run 的 `agent.task.run` 必须在 Submitter 前经过调用方、Provider、Tool、数据等级、主动性、调用深度和父级剩余预算准入。
+- 标记为不可信的 Automation 动态上下文在 Context Admission 与注入检测完成前必须 fail-closed，且永久拒绝不得重试。
+- Automation AI Action 必须要求 Medium 以上风险和稳定幂等键；普通 Command 必须继续进入原 Automation Backend。
+- Automation 规则不能声明或扩大宿主准入时间与根剩余预算；伪造 `nowMs`、`rootRemainingBudget` 或其它未知字段必须在 Submitter 前拒绝。
+
 | ID | 场景 | 预期结果 | P |
 |---|---|---|---:|
 | AGT-001 | Safe Tool | 展示计划并按用户设置执行 | P0 |

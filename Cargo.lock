@@ -2185,6 +2185,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nimora-automation-agent-bridge"
+version = "0.1.0"
+dependencies = [
+ "nimora-agent-runtime",
+ "nimora-automation-runtime",
+ "nimora-runtime-core",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "nimora-automation-runtime"
 version = "0.1.0"
 dependencies = [

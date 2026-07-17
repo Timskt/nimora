@@ -5,6 +5,7 @@ members = [
   "crates/agent-provider-worker",
   "crates/agent-tools",
   "crates/automation-runtime",
+  "crates/automation-agent-bridge",
   "crates/diagnostics-bundle",
   "crates/asset-installer",
   "crates/model-importer",
