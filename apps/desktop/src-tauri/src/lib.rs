@@ -14,6 +14,7 @@ use nimora_user_code_gateway::{
     CapabilityBackend, CapabilityGateway, CapabilityResponse, GatewayEnvelope, GatewayError,
 };
 use nimora_user_code_host::{WorkerConfig, WorkerMessage, WorkerProcess};
+use nimora_user_code_package::{ProgramPackageError, install_program_atomically, rollback_program};
 use nimora_user_code_policy::{
     Capability, ExecutionController, ExecutionHandle, ExecutionPolicy, PolicyError,
     ProgramManifest, WorkerError, evaluate,
@@ -54,6 +55,7 @@ struct DesktopState {
     position_revision: AtomicU64,
     dragging: AtomicBool,
     asset_store: PathBuf,
+    program_store: PathBuf,
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
     execution_controller: ExecutionController,
 }
@@ -87,7 +89,11 @@ impl WindowPolicy {
 }
 
 impl DesktopState {
-    fn open(database_path: &Path, asset_store: PathBuf) -> Result<Self, DesktopError> {
+    fn open(
+        database_path: &Path,
+        asset_store: PathBuf,
+        program_store: PathBuf,
+    ) -> Result<Self, DesktopError> {
         let events = RuntimeEventBus::default();
         let runtime = RuntimeService::initialize_with_event_bus(
             SqlitePetRepository::open(database_path)?,
@@ -109,6 +115,7 @@ impl DesktopState {
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
             asset_store,
+            program_store,
             user_programs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
         })
@@ -166,6 +173,31 @@ struct AssetInstallReceipt {
 #[serde(rename_all = "camelCase")]
 struct AssetRollbackReceipt {
     asset_id: String,
+    active_path: PathBuf,
+    quarantined_failed_version: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallUserProgramRequest {
+    source_path: PathBuf,
+    manifest: ProgramManifest,
+    files: Vec<InstallAssetFile>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProgramInstallReceipt {
+    program_id: String,
+    version: String,
+    active_path: PathBuf,
+    replaced_previous: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProgramRollbackReceipt {
+    program_id: String,
     active_path: PathBuf,
     quarantined_failed_version: bool,
 }
@@ -266,6 +298,8 @@ enum DesktopError {
     UserCodeHost(String),
     #[error(transparent)]
     UserCodeGateway(#[from] GatewayError),
+    #[error(transparent)]
+    UserCodePackage(#[from] ProgramPackageError),
     #[error("user program execution was not found")]
     UserProgramNotFound,
     #[error(transparent)]
@@ -573,6 +607,51 @@ fn rollback_asset(
     let result = rollback_latest(&state.asset_store.join(&asset_id))?;
     Ok(AssetRollbackReceipt {
         asset_id,
+        active_path: result.active_path,
+        quarantined_failed_version: result.quarantined_path.is_some(),
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn install_user_program(
+    state: State<'_, DesktopState>,
+    request: InstallUserProgramRequest,
+) -> Result<UserProgramInstallReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let files = request
+        .files
+        .into_iter()
+        .map(|file| InstallFile {
+            relative_path: file.relative_path,
+            bytes: file.bytes,
+            sha256: file.sha256,
+        })
+        .collect::<Vec<_>>();
+    let result = install_program_atomically(
+        &request.source_path,
+        &state.program_store,
+        request.manifest,
+        &files,
+    )?;
+    Ok(UserProgramInstallReceipt {
+        program_id: result.program_id,
+        version: result.version,
+        active_path: result.active_path,
+        replaced_previous: result.backup_path.is_some(),
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn rollback_user_program(
+    state: State<'_, DesktopState>,
+    program_id: String,
+) -> Result<UserProgramRollbackReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let result = rollback_program(&state.program_store, &program_id)?;
+    Ok(UserProgramRollbackReceipt {
+        program_id,
         active_path: result.active_path,
         quarantined_failed_version: result.quarantined_path.is_some(),
     })
@@ -1123,6 +1202,7 @@ pub fn run() {
             app.manage(DesktopState::open(
                 &data_directory.join("runtime.sqlite3"),
                 data_directory.join("assets"),
+                data_directory.join("programs"),
             )?);
             create_pet_window(app.handle())?;
             create_tray(app.handle())?;
@@ -1157,6 +1237,8 @@ pub fn run() {
             set_click_through,
             install_asset,
             rollback_asset,
+            install_user_program,
+            rollback_user_program,
             validate_user_program,
             start_user_program,
             execute_user_program,

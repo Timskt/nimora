@@ -2154,6 +2154,7 @@ dependencies = [
  "nimora-runtime-core",
  "nimora-user-code-gateway",
  "nimora-user-code-host",
+ "nimora-user-code-package",
  "nimora-user-code-policy",
  "serde",
  "serde_json",
@@ -2213,6 +2214,17 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "nimora-user-code-package"
+version = "0.1.0"
+dependencies = [
+ "nimora-asset-installer",
+ "nimora-user-code-policy",
+ "serde_json",
+ "sha2",
  "thiserror 2.0.18",
 ]
 

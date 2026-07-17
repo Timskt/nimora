@@ -75,6 +75,25 @@ export interface UserProgramExecutionReceipt {
   responses: UserProgramCapabilityResponse[];
 }
 
+export interface InstallUserProgramRequest {
+  sourcePath: string;
+  manifest: UserProgramManifest;
+  files: InstallAssetRequest["files"];
+}
+
+export interface UserProgramInstallReceipt {
+  programId: string;
+  version: string;
+  activePath: string;
+  replacedPrevious: boolean;
+}
+
+export interface UserProgramRollbackReceipt {
+  programId: string;
+  activePath: string;
+  quarantinedFailedVersion: boolean;
+}
+
 export type UserProgramCapabilityRequest =
   | { type: "readPetState" }
   | { type: "invokeCommand"; command: string; arguments: unknown };
@@ -107,6 +126,8 @@ export interface DesktopApi {
   installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
   rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
   validateUserProgram(manifest: UserProgramManifest): Promise<ProgramPolicyReport | null>;
+  installUserProgram(request: InstallUserProgramRequest): Promise<UserProgramInstallReceipt | null>;
+  rollbackUserProgram(programId: string): Promise<UserProgramRollbackReceipt | null>;
   startUserProgram(manifest: UserProgramManifest): Promise<UserProgramSessionReceipt | null>;
   executeUserProgram(manifest: UserProgramManifest, source: string): Promise<UserProgramExecutionReceipt | null>;
   invokeUserProgramCapability(envelope: UserProgramGatewayEnvelope): Promise<UserProgramCapabilityResponse | null>;
@@ -173,6 +194,8 @@ export function createDesktopApi(
       async installAsset() { return null; },
       async rollbackAsset() { return null; },
       async validateUserProgram() { return null; },
+      async installUserProgram() { return null; },
+      async rollbackUserProgram() { return null; },
       async startUserProgram() { return null; },
       async executeUserProgram() { return null; },
       async invokeUserProgramCapability() { return null; },
@@ -208,6 +231,8 @@ export function createDesktopApi(
     installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
     rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,
     validateUserProgram: async (manifest) => await invokeCommand("validate_user_program", { manifest }) as ProgramPolicyReport,
+    installUserProgram: async (request) => await invokeCommand("install_user_program", { request }) as UserProgramInstallReceipt,
+    rollbackUserProgram: async (programId) => await invokeCommand("rollback_user_program", { programId }) as UserProgramRollbackReceipt,
     startUserProgram: async (manifest) => await invokeCommand("start_user_program", { manifest }) as UserProgramSessionReceipt,
     executeUserProgram: async (manifest, source) => await invokeCommand("execute_user_program", { manifest, source }) as UserProgramExecutionReceipt,
     invokeUserProgramCapability: async (envelope) => await invokeCommand("invoke_user_program_capability", { envelope }) as UserProgramCapabilityResponse,

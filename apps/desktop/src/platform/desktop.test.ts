@@ -51,6 +51,16 @@ describe("desktop platform adapter", () => {
       memoryBytes: 8 * 1024 * 1024,
     };
     await api.validateUserProgram(manifest);
+    const programRequest = {
+      sourcePath: "/tmp/nimora-program",
+      manifest,
+      files: [
+        { relativePath: "manifest.json", bytes: 512, sha256: "c".repeat(64) },
+        { relativePath: "main.js", bytes: 64, sha256: "d".repeat(64) },
+      ],
+    };
+    await api.installUserProgram(programRequest);
+    await api.rollbackUserProgram(manifest.id);
     await api.startUserProgram(manifest);
     await api.executeUserProgram(manifest, "({ commands: [] })");
     const envelope = {
@@ -84,6 +94,8 @@ describe("desktop platform adapter", () => {
       } }],
       ["rollback_asset", { assetId: "character.example.mochi" }],
       ["validate_user_program", { manifest }],
+      ["install_user_program", { request: programRequest }],
+      ["rollback_user_program", { programId: manifest.id }],
       ["start_user_program", { manifest }],
       ["execute_user_program", { manifest, source: "({ commands: [] })" }],
       ["invoke_user_program_capability", { envelope }],
