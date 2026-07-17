@@ -226,6 +226,10 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-020 | 单步协调恢复 | Provider 与 Tool 每次仅推进一个确定性步骤，暂停或崩溃后不会隐式重放副作用 | P0 |
 | AGT-021 | CLI stdout/stderr | 成功时 stdout 仅一个 JSON 文档且 stderr 为空；失败时 stdout 为空且 stderr 为稳定 JSON 错误 | P0 |
 | AGT-022 | CLI 离线 stdin | 256 KiB 内任务可由 stdin 离线执行；超限、未知字段和缺失 `--output json` 被稳定拒绝 | P0 |
+| AGT-023 | Ollama Worker 隔离 | Provider Registry 经真实 sidecar 访问 loopback mock，桌面 Core 不直接建立 HTTP 连接 | P0 |
+| AGT-024 | Ollama SSRF 边界 | IPv4/IPv6 loopback 可用；非 loopback、零端口、凭据和超时越界在连接前拒绝 | P0 |
+| AGT-025 | Worker 输出背压 | stdout 被并发有界读取；超限、畸形 JSON、异常退出、超时和取消均终止且不泄漏传输细节 | P0 |
+| AGT-026 | Ollama Tool Call | Function name/arguments 转为 Runtime Tool Call，后续仍经过 Tool Registry 和 Capability Gateway | P0 |
 
 ## 14. 信任中心与安全模式
 

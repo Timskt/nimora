@@ -81,7 +81,7 @@ running → paused → running
 
 ## 5. Provider Adapter
 
-当前 `nimora.agent-provider/1` Rust 契约已覆盖能力集合发现、本地/网络属性、结构化 Tool Call、取消、Token 用量、费用、上下文窗口、有界请求响应和稳定错误分类。能力使用可扩展集合而非固定布尔字段，新增 Provider 能力不要求破坏描述结构。流式事件协议和真实网络 Adapter 尚未实现。首批适配目标：
+当前 `nimora.agent-provider/1` Rust 契约已覆盖能力集合发现、本地/网络属性、结构化 Tool Call、取消、Token 用量、费用、上下文窗口、有界请求响应和稳定错误分类。能力使用可扩展集合而非固定布尔字段，新增 Provider 能力不要求破坏描述结构。流式事件协议和 OpenAI-compatible Adapter 尚未实现。首批适配目标：
 
 - OpenAI-compatible HTTPS Provider。
 - Ollama 与其它显式配置的本地回环 Provider。
@@ -90,6 +90,8 @@ running → paused → running
 Provider 只能看到任务授权的数据视图，不接触 Secure Store。凭据由宿主按 Provider ID 注入请求 Adapter；错误返回稳定类别，不把 Key、完整请求或底层网络细节写入 UI 和诊断包。
 
 运行时当前强制：最多 64 个 Adapter、256 条消息、256 KiB 消息正文、1 MiB 响应正文、32 个 Tool Call 和 10 分钟单次超时；离线模式在调用 Adapter 前拒绝网络 Provider。Provider 返回的未知 Tool、非对象参数、错配 Request ID、超出输出预算或不一致 Finish Reason 全部 fail-closed。
+
+`crates/agent-provider-worker` 已实现真实 Ollama `/api/chat` 非流式 Adapter。HTTP 只能由独立 sidecar 发往 IPv4/IPv6 loopback，禁止远程地址、凭据和重定向；Worker 协议、HTTP Header、Body、stdout、超时与取消均有硬边界。宿主并发读取有限 stdout，防止管道背压死锁，并在取消或超时后强制终止进程。当前尚未接入发布包的签名 sidecar 发现，因此正式 CLI 和桌面不会接受任意可执行路径。
 
 ## 6. CLI
 
