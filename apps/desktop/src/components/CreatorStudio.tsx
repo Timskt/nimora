@@ -324,7 +324,7 @@ export function ModelProbeReportCard({ report }: { report: ModelProbeReport }) {
       <div><dt>材质资源</dt><dd>{report.materials} 材质 · {report.textures} 纹理</dd></div>
       <div><dt>动态能力</dt><dd>{report.animations} 动画 · {report.skins} 骨骼蒙皮</dd></div>
     </dl>
-    <p className="asset-preview-warning">结构验证通过后可生成带 SHA-256 清单的标准 Character 包；当前仍不会真实渲染模型，也不证明版权、许可证或 OS 级沙箱隔离。</p>
+    <p className="asset-preview-warning">结构验证通过后可生成带 SHA-256 清单的标准 Character 包，并在激活后由 Pet Overlay 真实渲染 GLB；此检查本身不是安装前 3D 预览，也不证明版权、许可证、发布者签名或 OS/GPU 沙箱隔离。</p>
   </div>;
 }
 

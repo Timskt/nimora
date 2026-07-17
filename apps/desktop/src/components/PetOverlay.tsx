@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
+import { RendererErrorBoundary } from "./RendererErrorBoundary";
 import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
 
 const CHARACTER_RENDERER_CHANGED_EVENT = "nimora://character-renderer-changed";
@@ -104,9 +105,11 @@ export function PetOverlay() {
         <span className="overlay-status">{message}</span>
         {renderer && renderer.backend !== "built-in" && !rendererFailed ? (
           renderer.backend === "gltf" ? (
-            <Suspense fallback={null}>
-              <GltfRenderer descriptor={renderer} onFailure={handleRendererFailure} />
-            </Suspense>
+            <RendererErrorBoundary resetKey={renderer.assetId} onFailure={handleRendererFailure}>
+              <Suspense fallback={<GltfLoadingPlaceholder descriptor={renderer} />}>
+                <GltfRenderer descriptor={renderer} onFailure={handleRendererFailure} />
+              </Suspense>
+            </RendererErrorBoundary>
           ) : (
             <SpriteRenderer
               descriptor={renderer}
@@ -135,4 +138,8 @@ export function PetOverlay() {
       </div>
     </main>
   );
+}
+
+function GltfLoadingPlaceholder({ descriptor }: { descriptor: CharacterRendererSnapshot }) {
+  return <span className="gltf-renderer gltf-renderer-loading" aria-hidden="true" style={{ aspectRatio: `${descriptor.canvas.width} / ${descriptor.canvas.height}` }} />;
 }

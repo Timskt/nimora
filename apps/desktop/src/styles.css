@@ -78,6 +78,7 @@ body.pet-window { min-width: 0; overflow: hidden; background: transparent; user-
 .sprite-renderer, .gltf-renderer { display: block; width: min(72vw, 180px); height: auto; max-height: 72vh; user-select: none; pointer-events: none; }
 .sprite-renderer { object-fit: contain; transform: scale(var(--sprite-scale, 1)); }
 .gltf-renderer { background: transparent; touch-action: none; }
+.gltf-renderer-loading { background: radial-gradient(circle at 50% 62%, rgba(115,98,228,.08), transparent 64%); }
 .overlay-ear { position: absolute; top: -27px; width: 52px; height: 66px; z-index: -1; background: #e5def5; }.overlay-ear.left { left: 1px; border-radius: 82% 14% 44% 28%; transform: rotate(-20deg); }.overlay-ear.right { right: 1px; border-radius: 14% 82% 28% 44%; transform: rotate(20deg); }
 .overlay-star { position: absolute; left: 50%; top: 25px; transform: translateX(-50%); color: #7362e4; font-size: 24px; font-style: normal; text-shadow: 0 3px 8px rgba(115,98,228,.24); }
 .overlay-eye { position: absolute; top: 77px; width: 10px; height: 15px; border-radius: 50%; background: #3e365f; }.overlay-eye.left { left: 38px; }.overlay-eye.right { right: 38px; }.overlay-mouth { position: absolute; left: calc(50% - 8px); top: 105px; width: 16px; height: 8px; border-bottom: 2px solid #665d82; border-radius: 50%; }
