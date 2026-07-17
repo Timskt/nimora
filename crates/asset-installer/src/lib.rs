@@ -35,6 +35,8 @@ pub enum InstallError {
     SizeMismatch(PathBuf),
     #[error("asset SHA-256 does not match inventory: {0}")]
     HashMismatch(PathBuf),
+    #[error("no previous asset version is available")]
+    BackupUnavailable,
     #[error("filesystem operation failed: {0}")]
     Io(#[from] io::Error),
 }
@@ -43,6 +45,12 @@ pub enum InstallError {
 pub struct InstallResult {
     pub active_path: PathBuf,
     pub backup_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RollbackResult {
+    pub active_path: PathBuf,
+    pub quarantined_path: Option<PathBuf>,
 }
 
 /// Copies a validated inventory into a staging directory and activates it atomically.
@@ -85,6 +93,7 @@ pub fn install_atomically(
             }
             fs::copy(source, destination)?;
         }
+        validate_inventory(&staging, files)?;
         let backup = if active_path.exists() {
             let backup = unique_sibling(active_path, "backup");
             fs::rename(active_path, &backup)?;
@@ -107,6 +116,58 @@ pub fn install_atomically(
         fs::remove_dir_all(&staging)?;
     }
     result
+}
+
+/// Restores the newest backup next to an active asset directory.
+///
+/// # Errors
+///
+/// Returns an error when no backup exists or a filesystem operation fails.
+pub fn rollback_latest(active_path: &Path) -> Result<RollbackResult, InstallError> {
+    let backup = latest_backup(active_path)?.ok_or(InstallError::BackupUnavailable)?;
+    let quarantine = active_path
+        .exists()
+        .then(|| unique_sibling(active_path, "failed"));
+    if let Some(quarantine_path) = &quarantine {
+        fs::rename(active_path, quarantine_path)?;
+    }
+    if let Err(error) = fs::rename(&backup, active_path) {
+        if let Some(quarantine_path) = &quarantine {
+            fs::rename(quarantine_path, active_path)?;
+        }
+        return Err(InstallError::Io(error));
+    }
+    Ok(RollbackResult {
+        active_path: active_path.to_path_buf(),
+        quarantined_path: quarantine,
+    })
+}
+
+fn validate_inventory(root: &Path, files: &[InstallFile]) -> Result<(), InstallError> {
+    for file in files {
+        validate_file(&root.join(safe_relative_path(&file.relative_path)?), file)?;
+    }
+    Ok(())
+}
+
+fn latest_backup(active_path: &Path) -> Result<Option<PathBuf>, InstallError> {
+    let parent = active_path
+        .parent()
+        .ok_or_else(|| InstallError::UnsafePath(active_path.to_path_buf()))?;
+    let prefix = format!(
+        "{}.backup.",
+        active_path
+            .file_name()
+            .ok_or_else(|| InstallError::UnsafePath(active_path.to_path_buf()))?
+            .to_string_lossy()
+    );
+    let mut backups = fs::read_dir(parent)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    backups.sort_unstable();
+    Ok(backups.pop())
 }
 
 fn validate_budget(files: &[InstallFile]) -> Result<(), InstallError> {
@@ -278,6 +339,28 @@ mod tests {
         .unwrap_err();
         assert!(matches!(error, InstallError::HashMismatch(_)));
         assert_eq!(fs::read(active.join("old.txt")).unwrap(), b"old");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restores_latest_backup_and_quarantines_failed_version() {
+        let root = std::env::temp_dir().join("nimora-installer-rollback");
+        let active = root.join("character.example.mochi");
+        let older = root.join("character.example.mochi.backup.1");
+        let latest = root.join("character.example.mochi.backup.2");
+        fs::create_dir_all(&active).unwrap();
+        fs::create_dir_all(&older).unwrap();
+        fs::create_dir_all(&latest).unwrap();
+        fs::write(active.join("version"), b"broken").unwrap();
+        fs::write(older.join("version"), b"one").unwrap();
+        fs::write(latest.join("version"), b"two").unwrap();
+        let result = rollback_latest(&active).unwrap();
+        assert_eq!(fs::read(active.join("version")).unwrap(), b"two");
+        assert_eq!(
+            fs::read(result.quarantined_path.unwrap().join("version")).unwrap(),
+            b"broken"
+        );
+        assert!(older.exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

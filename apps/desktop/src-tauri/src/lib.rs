@@ -1,4 +1,4 @@
-use nimora_asset_installer::{InstallError, InstallFile, install_atomically};
+use nimora_asset_installer::{InstallError, InstallFile, install_atomically, rollback_latest};
 use nimora_persistence_sqlite::{
     SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
 };
@@ -139,6 +139,14 @@ struct AssetInstallReceipt {
     asset_id: String,
     active_path: PathBuf,
     replaced_previous: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AssetRollbackReceipt {
+    asset_id: String,
+    active_path: PathBuf,
+    quarantined_failed_version: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -477,6 +485,24 @@ fn install_asset(
     })
 }
 
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn rollback_asset(
+    state: State<'_, DesktopState>,
+    asset_id: String,
+) -> Result<AssetRollbackReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    if !valid_asset_identifier(&asset_id) {
+        return Err(DesktopError::InvalidAssetIdentifier);
+    }
+    let result = rollback_latest(&state.asset_store.join(&asset_id))?;
+    Ok(AssetRollbackReceipt {
+        asset_id,
+        active_path: result.active_path,
+        quarantined_failed_version: result.quarantined_path.is_some(),
+    })
+}
+
 fn valid_asset_identifier(value: &str) -> bool {
     let segments = value.split('.').collect::<Vec<_>>();
     segments.len() >= 3
@@ -773,7 +799,8 @@ pub fn run() {
             begin_pet_drag,
             finish_pet_drag,
             set_click_through,
-            install_asset
+            install_asset,
+            rollback_asset
         ])
         .run(tauri::generate_context!())
         .expect("Nimora desktop runtime failed");

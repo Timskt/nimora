@@ -40,6 +40,7 @@ describe("desktop platform adapter", () => {
         { relativePath: "sprites/idle.webp", bytes: 42, sha256: "b".repeat(64) },
       ],
     });
+    await api.rollbackAsset("character.example.mochi");
     expect(invoke.mock.calls).toEqual([
       ["drain_runtime_events"],
       ["profile_snapshot"],
@@ -61,6 +62,7 @@ describe("desktop platform adapter", () => {
           { relativePath: "sprites/idle.webp", bytes: 42, sha256: "b".repeat(64) },
         ],
       } }],
+      ["rollback_asset", { assetId: "character.example.mochi" }],
     ]);
     expect(startDragging).toHaveBeenCalledOnce();
   });

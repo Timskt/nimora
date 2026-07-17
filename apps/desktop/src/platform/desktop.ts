@@ -34,6 +34,12 @@ export interface AssetInstallReceipt {
   replacedPrevious: boolean;
 }
 
+export interface AssetRollbackReceipt {
+  assetId: string;
+  activePath: string;
+  quarantinedFailedVersion: boolean;
+}
+
 export interface DesktopApi {
   readonly native: boolean;
   snapshot(): Promise<DesktopSnapshot>;
@@ -49,6 +55,7 @@ export interface DesktopApi {
   dragPet(): Promise<NimoraCommand | null>;
   setClickThrough(enabled: boolean): Promise<void>;
   installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
+  rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
 }
 
 type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -109,6 +116,7 @@ export function createDesktopApi(
       async dragPet() { return null; },
       async setClickThrough() {},
       async installAsset() { return null; },
+      async rollbackAsset() { return null; },
     };
   }
 
@@ -138,6 +146,7 @@ export function createDesktopApi(
     },
     setClickThrough: async (enabled) => { await invokeCommand("set_click_through", { enabled }); },
     installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
+    rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,
   };
 }
 
