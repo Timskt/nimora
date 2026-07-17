@@ -26,6 +26,7 @@ pub struct AgentGatewayPolicy {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CapabilityRequest {
     ReadPetState,
+    ReadPetActionCatalog,
     ReadProfileState,
     ReadCharacterState,
     ReadAssetCatalog,
@@ -40,6 +41,7 @@ pub enum CapabilityRequest {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CapabilityResponse {
     PetState { value: Value },
+    PetActionCatalog { value: Value },
     ProfileState { value: Value },
     CharacterState { value: Value },
     AssetCatalog { value: Value },
@@ -57,6 +59,15 @@ pub trait CapabilityBackend: std::fmt::Debug + Send + Sync {
     ///
     /// Returns a backend-specific error when state cannot be read.
     fn read_pet_state(&self) -> Result<Value, String>;
+
+    /// Returns the bounded action vocabulary accepted by the pet runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend-specific error when the action catalog cannot be read.
+    fn read_pet_action_catalog(&self) -> Result<Value, String> {
+        Err("pet action catalog capability is unavailable".to_owned())
+    }
 
     /// Returns a serialized Profile snapshot without exposing its repository.
     ///
@@ -194,10 +205,10 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
                     .map(|value| CapabilityResponse::ProfileState { value })
                     .map_err(GatewayError::Backend)
             }
-            CapabilityRequest::ReadCharacterState => Err(GatewayError::CapabilityDenied),
-            CapabilityRequest::ReadAssetCatalog | CapabilityRequest::ReadRuntimeHealth => {
-                Err(GatewayError::CapabilityDenied)
-            }
+            CapabilityRequest::ReadPetActionCatalog
+            | CapabilityRequest::ReadCharacterState
+            | CapabilityRequest::ReadAssetCatalog
+            | CapabilityRequest::ReadRuntimeHealth => Err(GatewayError::CapabilityDenied),
             CapabilityRequest::ReadLocalData { key } => {
                 if !policy.can_store_local_data {
                     return Err(GatewayError::CapabilityDenied);
@@ -271,6 +282,15 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
                     .map(|value| CapabilityResponse::PetState { value })
                     .map_err(GatewayError::Backend)
             }
+            CapabilityRequest::ReadPetActionCatalog => {
+                if !policy.read_capabilities.contains("pet.action.catalog") {
+                    return Err(GatewayError::CapabilityDenied);
+                }
+                self.backend
+                    .read_pet_action_catalog()
+                    .map(|value| CapabilityResponse::PetActionCatalog { value })
+                    .map_err(GatewayError::Backend)
+            }
             CapabilityRequest::ReadProfileState => {
                 if !policy.read_capabilities.contains("profile.state") {
                     return Err(GatewayError::CapabilityDenied);
@@ -342,6 +362,10 @@ mod tests {
     impl CapabilityBackend for Backend {
         fn read_pet_state(&self) -> Result<Value, String> {
             Ok(json!({"state": "idle"}))
+        }
+
+        fn read_pet_action_catalog(&self) -> Result<Value, String> {
+            Ok(json!({"actions": ["idle", "walk", "sleep", "work", "celebrate"]}))
         }
 
         fn read_profile_state(&self) -> Result<Value, String> {
@@ -552,6 +576,18 @@ mod tests {
             &policy,
             &execution,
             envelope(&execution, CapabilityRequest::ReadCharacterState),
+        );
+        assert_eq!(result, Err(GatewayError::CapabilityDenied));
+    }
+
+    #[test]
+    fn user_programs_do_not_inherit_agent_action_catalog() {
+        let policy = policy();
+        let execution = ExecutionController::default().admit(&policy).unwrap();
+        let result = CapabilityGateway::new(Backend).dispatch(
+            &policy,
+            &execution,
+            envelope(&execution, CapabilityRequest::ReadPetActionCatalog),
         );
         assert_eq!(result, Err(GatewayError::CapabilityDenied));
     }

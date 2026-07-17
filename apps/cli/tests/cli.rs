@@ -119,6 +119,7 @@ fn tool_catalog_exposes_gateway_backed_module_capabilities() {
         vec![
             "asset.catalog.read",
             "character.state.read",
+            "pet.action.catalog.read",
             "pet.animation.play",
             "pet.position.move",
             "pet.state.read",

@@ -3751,6 +3751,19 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
         .map_err(|error| error.to_string())
     }
 
+    fn read_pet_action_catalog(&self) -> Result<serde_json::Value, String> {
+        let actions = PetAction::ALL
+            .into_iter()
+            .map(|action| serde_json::to_value(action).map_err(|error| error.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(serde_json::json!({
+            "spec": "nimora.pet-action-catalog/1",
+            "actions": actions,
+            "commandTool": "pet.animation.play",
+            "argument": "action"
+        }))
+    }
+
     fn read_profile_state(&self) -> Result<serde_json::Value, String> {
         serde_json::to_value(
             self.state
@@ -4565,6 +4578,7 @@ mod tests {
             [
                 "asset.catalog.read".to_owned(),
                 "character.state.read".to_owned(),
+                "pet.action.catalog.read".to_owned(),
                 "pet.animation.play".to_owned(),
                 "pet.position.move".to_owned(),
                 "pet.state.read".to_owned(),
@@ -4589,6 +4603,20 @@ mod tests {
         assert!(!serialized.contains("assetBaseUrl"));
         assert!(!serialized.contains("model"));
         std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn pet_action_catalog_matches_runtime_vocabulary() {
+        let (_root, state) = normal_desktop_state();
+        let value = DesktopCapabilityBackend { state: &state }
+            .read_pet_action_catalog()
+            .expect("pet action catalog");
+        assert_eq!(value["spec"], "nimora.pet-action-catalog/1");
+        assert_eq!(
+            value["actions"],
+            json!(["idle", "walk", "sleep", "work", "celebrate"])
+        );
+        assert_eq!(value["commandTool"], "pet.animation.play");
     }
 
     #[test]

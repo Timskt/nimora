@@ -517,6 +517,7 @@ export function createDesktopApi(
           tools: [
             { id: "asset.catalog.read", title: "Read asset catalog", description: "Reads installed character assets and active selection.", baseRisk: "safe", effect: "read_only" },
             { id: "character.state.read", title: "Read character state", description: "Reads the active character and path-free renderer capabilities.", baseRisk: "safe", effect: "read_only" },
+            { id: "pet.action.catalog.read", title: "Read pet action catalog", description: "Reads the exact actions accepted by the pet runtime.", baseRisk: "safe", effect: "read_only" },
             { id: "pet.animation.play", title: "Play pet animation", description: "Plays one validated pet action through the Capability Gateway.", baseRisk: "low", effect: "reversible_write" },
             { id: "pet.position.move", title: "Move pet", description: "Moves the pet through the Capability Gateway.", baseRisk: "low", effect: "reversible_write" },
             { id: "pet.state.read", title: "Read pet state", description: "Reads current pet state.", baseRisk: "safe", effect: "read_only" },

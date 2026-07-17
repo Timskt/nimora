@@ -27,6 +27,10 @@ impl CapabilityBackend for Backend {
         Ok(json!({"state": "idle"}))
     }
 
+    fn read_pet_action_catalog(&self) -> Result<Value, String> {
+        Ok(json!({"actions": ["idle", "walk", "sleep", "work", "celebrate"]}))
+    }
+
     fn read_profile_state(&self) -> Result<Value, String> {
         Ok(json!({"activeProfileId": "profile:default"}))
     }
@@ -124,6 +128,7 @@ fn module_catalog_and_health_reads_use_explicit_gateway_capabilities() {
     for (tool_id, expected_key) in [
         ("asset.catalog.read", "activeAssetId"),
         ("character.state.read", "renderer"),
+        ("pet.action.catalog.read", "actions"),
         ("runtime.health.read", "startup"),
     ] {
         let mut task = task();

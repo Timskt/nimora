@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use std::{collections::BTreeSet, time::Duration};
 
 const PET_STATE_READ: &str = "pet.state.read";
+const PET_ACTION_CATALOG_READ: &str = "pet.action.catalog.read";
 const PROFILE_STATE_READ: &str = "profile.state.read";
 const CHARACTER_STATE_READ: &str = "character.state.read";
 const ASSET_CATALOG_READ: &str = "asset.catalog.read";
@@ -43,6 +44,14 @@ pub fn production_tool_descriptors() -> Result<Vec<ToolDescriptor>, AgentRuntime
             PET_STATE_READ,
             "Read pet state",
             "Reads the current pet state through the Capability Gateway.",
+            empty_object_schema(),
+            CommandRisk::Safe,
+            ToolEffect::ReadOnly,
+        )?,
+        descriptor(
+            PET_ACTION_CATALOG_READ,
+            "Read pet action catalog",
+            "Reads the exact action vocabulary accepted by the pet runtime through the Capability Gateway.",
             empty_object_schema(),
             CommandRisk::Safe,
             ToolEffect::ReadOnly,
@@ -134,6 +143,7 @@ impl<B: CapabilityBackend> GatewayToolBackend<B> {
             read_capabilities: BTreeSet::from([
                 "asset.catalog".to_owned(),
                 "character.state".to_owned(),
+                "pet.action.catalog".to_owned(),
                 "pet.state".to_owned(),
                 "profile.state".to_owned(),
                 "runtime.health".to_owned(),
@@ -155,6 +165,10 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
             PET_STATE_READ => {
                 require_empty_arguments(&invocation.arguments)?;
                 CapabilityRequest::ReadPetState
+            }
+            PET_ACTION_CATALOG_READ => {
+                require_empty_arguments(&invocation.arguments)?;
+                CapabilityRequest::ReadPetActionCatalog
             }
             PROFILE_STATE_READ => {
                 require_empty_arguments(&invocation.arguments)?;
@@ -196,6 +210,7 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
             .map_err(|error| error.to_string())?;
         match response {
             CapabilityResponse::PetState { value }
+            | CapabilityResponse::PetActionCatalog { value }
             | CapabilityResponse::ProfileState { value }
             | CapabilityResponse::CharacterState { value }
             | CapabilityResponse::AssetCatalog { value }

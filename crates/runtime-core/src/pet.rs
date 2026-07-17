@@ -53,6 +53,16 @@ pub enum PetAction {
     Celebrate,
 }
 
+impl PetAction {
+    pub const ALL: [Self; 5] = [
+        Self::Idle,
+        Self::Walk,
+        Self::Sleep,
+        Self::Work,
+        Self::Celebrate,
+    ];
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PointerButton {
