@@ -18,7 +18,8 @@ use nimora_asset_installer::{
     read_verified_asset_image, read_verified_asset_model, rollback_latest,
 };
 use nimora_automation_agent_bridge::{
-    AgentTaskSubmitter, AutomationAgentBridge, AutomationAgentContext, AutomationAgentTask,
+    AgentTaskSubmissionError, AgentTaskSubmissionOutcome, AgentTaskSubmitter,
+    AutomationAgentBridge, AutomationAgentContext, AutomationAgentTask,
 };
 use nimora_automation_capability_bridge::{AutomationCapabilityBridge, AutomationCapabilityPolicy};
 use nimora_automation_runtime::{
@@ -889,22 +890,49 @@ struct DesktopAutomationAgentSubmitter<'a> {
 }
 
 impl AgentTaskSubmitter for DesktopAutomationAgentSubmitter<'_> {
-    fn submit(&self, task: AutomationAgentTask) -> Result<(), String> {
+    fn submit(
+        &self,
+        task: AutomationAgentTask,
+    ) -> Result<AgentTaskSubmissionOutcome, AgentTaskSubmissionError> {
         if task.model.trim().is_empty() || task.model.len() > 128 {
-            return Err("automation Agent model is invalid".to_owned());
+            return Err(AgentTaskSubmissionError::permanent(
+                "automation Agent model is invalid",
+            ));
         }
-        ensure_normal_mode(self.state).map_err(|error| error.to_string())?;
-        if self
+        ensure_normal_mode(self.state)
+            .map_err(|error| AgentTaskSubmissionError::permanent(error.to_string()))?;
+        if let Some(existing) = self
             .state
             .automation_agent_journal
             .get_by_key(task.admission.root_task_id, &task.idempotency_key)
-            .map_err(|error| error.to_string())?
-            .is_some()
+            .map_err(|error| AgentTaskSubmissionError::transient(error.to_string()))?
         {
-            return Ok(());
+            return match existing.status {
+                AutomationAgentJournalStatus::Submitted
+                | AutomationAgentJournalStatus::WaitingForConfirmation => {
+                    Ok(AgentTaskSubmissionOutcome::DuplicateActive)
+                }
+                AutomationAgentJournalStatus::Completed => {
+                    Ok(AgentTaskSubmissionOutcome::DuplicateCompleted)
+                }
+                AutomationAgentJournalStatus::Failed => Err(AgentTaskSubmissionError::permanent(
+                    "prior automation Agent task failed",
+                )),
+                AutomationAgentJournalStatus::Cancelled => {
+                    Err(AgentTaskSubmissionError::permanent(
+                        "prior automation Agent task was cancelled",
+                    ))
+                }
+                AutomationAgentJournalStatus::Interrupted => {
+                    Err(AgentTaskSubmissionError::permanent(
+                        "prior automation Agent task was interrupted",
+                    ))
+                }
+            };
         }
         let task_id = task.admission.task.id;
-        let submitted_at_ms = current_time_ms().map_err(|error| error.to_string())?;
+        let submitted_at_ms = current_time_ms()
+            .map_err(|error| AgentTaskSubmissionError::transient(error.to_string()))?;
         let journal_entry = AutomationAgentJournalEntry::new(
             task.admission.root_task_id,
             task.idempotency_key.clone(),
@@ -912,15 +940,17 @@ impl AgentTaskSubmitter for DesktopAutomationAgentSubmitter<'_> {
             task.model.clone(),
             submitted_at_ms,
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AgentTaskSubmissionError::permanent(error.to_string()))?;
         self.state
             .automation_agent_journal
             .submit(&journal_entry)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| AgentTaskSubmissionError::transient(error.to_string()))?;
         match self.execute(task) {
-            Ok(outcome) => self
-                .record_outcome(task_id, &outcome)
-                .map_err(|error| error.to_string()),
+            Ok(outcome) => {
+                self.record_outcome(task_id, &outcome)
+                    .map_err(|error| AgentTaskSubmissionError::transient(error.to_string()))?;
+                Ok(AgentTaskSubmissionOutcome::Accepted)
+            }
             Err(error) => {
                 let bounded_error = error.chars().take(4 * 1024).collect::<String>();
                 self.state
@@ -928,11 +958,13 @@ impl AgentTaskSubmitter for DesktopAutomationAgentSubmitter<'_> {
                     .transition(
                         task_id,
                         AutomationAgentJournalStatus::Failed,
-                        current_time_ms().map_err(|clock| clock.to_string())?,
+                        current_time_ms().map_err(|clock| {
+                            AgentTaskSubmissionError::transient(clock.to_string())
+                        })?,
                         Some(&bounded_error),
                     )
-                    .map_err(|journal| journal.to_string())?;
-                Err(error)
+                    .map_err(|journal| AgentTaskSubmissionError::transient(journal.to_string()))?;
+                Err(AgentTaskSubmissionError::permanent(error))
             }
         }
     }
@@ -5165,12 +5197,16 @@ mod tests {
         ProviderRegistry, ProviderRequest, ProviderResponse, ProviderToolCall, ProviderUsage,
     };
     use nimora_asset_installer::{GltfCharacterMetadata, ModelAnimationBinding};
+    use nimora_automation_agent_bridge::{
+        AgentTaskSubmissionOutcome, AgentTaskSubmitter, AutomationAgentTask,
+    };
     use nimora_diagnostics_bundle::{
         DiagnosticComponent, DiagnosticEventCode, DiagnosticSeverity, PersistentDiagnosticJournal,
     };
     use nimora_persistence_sqlite::{
-        AutomationJournalStatus, AutomationRunStart, BackupCoordinator, BackupPolicy,
-        SqliteAutomationJournal, SqliteProgramPermissionRepository,
+        AutomationAgentJournalEntry, AutomationAgentJournalStatus, AutomationJournalStatus,
+        AutomationRunStart, BackupCoordinator, BackupPolicy, SqliteAutomationJournal,
+        SqliteProgramPermissionRepository,
     };
     use nimora_runtime_core::{Event, EventSource, Position, RuntimeMode};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
@@ -5515,6 +5551,54 @@ mod tests {
         .expect("live automation request")
     }
 
+    fn agent_automation_request(
+        automation_id: &str,
+        event_type: &str,
+        idempotency_key: &str,
+        instruction: &str,
+    ) -> AutomationTestRequest {
+        serde_json::from_value(json!({
+            "definition": {
+                "spec": "nimora.automation/1",
+                "id": automation_id,
+                "name": "Agent automation",
+                "enabled": true,
+                "trigger": { "eventType": event_type },
+                "conditions": [],
+                "actions": [{
+                    "id": "run-agent",
+                    "command": "agent.task.run",
+                    "arguments": {
+                        "requester": "automation:desktop",
+                        "providerId": "provider:deterministic-local",
+                        "model": "model:echo-v1",
+                        "instruction": instruction,
+                        "toolAllowlist": [],
+                        "classification": "personal",
+                        "autonomy": "draft",
+                        "budget": {
+                            "maxSteps": 4,
+                            "maxToolCalls": 0,
+                            "maxElapsedMs": 30000,
+                            "maxInputTokens": 1000,
+                            "maxOutputTokens": 500,
+                            "maxCostMicrounits": 0
+                        },
+                        "contextTrust": "trusted"
+                    },
+                    "risk": "medium",
+                    "retrySafe": true,
+                    "idempotencyKey": idempotency_key,
+                    "compensation": null
+                }],
+                "policy": { "timeoutMs": 30000, "failure": "stop" }
+            },
+            "eventType": event_type,
+            "eventData": {}
+        }))
+        .expect("Agent automation request")
+    }
+
     #[test]
     fn live_automation_changes_pet_through_gateway_and_completes_journal() {
         let (root, state) = normal_desktop_state();
@@ -5627,6 +5711,85 @@ mod tests {
         assert_eq!(
             child.status,
             nimora_persistence_sqlite::AutomationAgentJournalStatus::Completed
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn automation_agent_idempotency_distinguishes_safe_duplicates_from_failed_history() {
+        let (root, state) = normal_desktop_state();
+        let request = agent_automation_request(
+            "local.agent.idempotency",
+            "agent.idempotency.test",
+            "completed-key",
+            "Verify idempotency.",
+        );
+        let run = run_live_automation(&state, request).expect("Agent automation run");
+        let completed = state
+            .automation_agent_journal
+            .list_by_run(run.run_id)
+            .expect("run children")
+            .into_iter()
+            .next()
+            .expect("completed child");
+        let submitter = super::DesktopAutomationAgentSubmitter { state: &state };
+        let duplicate = AutomationAgentTask {
+            admission: completed.admission.clone(),
+            model: completed.model.clone(),
+            instruction: "must not execute again".to_owned(),
+            idempotency_key: completed.idempotency_key.clone(),
+        };
+        assert_eq!(
+            submitter.submit(duplicate).expect("completed duplicate"),
+            AgentTaskSubmissionOutcome::DuplicateCompleted
+        );
+
+        let mut failed_admission = completed.admission.clone();
+        failed_admission.task.id = Uuid::now_v7();
+        let failed = AutomationAgentJournalEntry::new(
+            run.run_id,
+            "failed-key",
+            failed_admission.clone(),
+            completed.model.clone(),
+            completed.updated_at_ms.saturating_add(1),
+        )
+        .expect("failed entry");
+        state
+            .automation_agent_journal
+            .submit(&failed)
+            .expect("submit failed fixture");
+        assert_eq!(
+            submitter
+                .submit(AutomationAgentTask {
+                    admission: failed_admission.clone(),
+                    model: failed.model.clone(),
+                    instruction: "must remain active".to_owned(),
+                    idempotency_key: failed.idempotency_key.clone(),
+                })
+                .expect("active duplicate"),
+            AgentTaskSubmissionOutcome::DuplicateActive
+        );
+        state
+            .automation_agent_journal
+            .transition(
+                failed_admission.task.id,
+                AutomationAgentJournalStatus::Failed,
+                failed.updated_at_ms.saturating_add(1),
+                Some("provider failed"),
+            )
+            .expect("mark failed");
+        let error = submitter
+            .submit(AutomationAgentTask {
+                admission: failed_admission,
+                model: failed.model,
+                instruction: "must not retry".to_owned(),
+                idempotency_key: failed.idempotency_key,
+            })
+            .expect_err("failed duplicate");
+        assert!(!error.transient);
+        assert_eq!(
+            state.agent_history.list(None, 10).expect("history").len(),
+            1
         );
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }

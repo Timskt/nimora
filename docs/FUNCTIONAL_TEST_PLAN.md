@@ -361,10 +361,11 @@ ID / 标题 / 优先级 / 前置条件
 | AAG-005 | Provider 续跑失败 | Journal 从活跃态进入失败态并保存有界错误，不永久停留在等待态 | P0 |
 | AAG-006 | 桌面进程重启 | submitted/waiting 统一恢复为 interrupted，不自动重放 Prompt 或工具副作用 | P0 |
 | AAG-007 | 按 Task/Run 查询 | Task 返回唯一生命周期；Run 最多返回 64 项并按提交时间稳定排序 | P1 |
-| AAG-008 | 同 Run 幂等重试 | 相同幂等键不二次调用 Provider；历史失败不得伪装成新的成功执行 | P0 |
+| AAG-008 | 同 Run 幂等重试 | submitted/waiting 返回 DuplicateActive，completed 返回 DuplicateCompleted；failed/cancelled/interrupted 永久失败且不二次调用 Provider | P0 |
 | AAG-009 | 用户按 Task 取消运行中 Provider | 同一共享取消令牌到达当前 Provider step；本地 Adapter 退出，Worker Provider 强杀子进程 | P0 |
 | AAG-010 | Safe Mode 遇到尚未请求工具的 Provider | 活跃注册表中的任务全部收到取消，不依赖待批准队列是否已有项目 | P0 |
 | AAG-011 | 递归与批准后续跑取消 | 每一轮复用原 Task 的取消令牌，取消后不得创建下一 Provider step 或模块副作用 | P0 |
+| AAG-012 | Bridge 错误分类 | 永久提交错误只尝试一次；明确瞬态宿主错误按 Action 策略重试，错误字符串不参与分类判断 | P0 |
 
 - 每次提交：Unit、Schema、核心 Contract。
 - 每次合并：核心 Integration、Pet/Asset/Permission P0。

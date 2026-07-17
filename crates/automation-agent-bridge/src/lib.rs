@@ -18,13 +18,47 @@ pub struct AutomationAgentTask {
     pub idempotency_key: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentTaskSubmissionOutcome {
+    Accepted,
+    DuplicateActive,
+    DuplicateCompleted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentTaskSubmissionError {
+    pub message: String,
+    pub transient: bool,
+}
+
+impl AgentTaskSubmissionError {
+    #[must_use]
+    pub fn permanent(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            transient: false,
+        }
+    }
+
+    #[must_use]
+    pub fn transient(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            transient: true,
+        }
+    }
+}
+
 pub trait AgentTaskSubmitter: std::fmt::Debug + Send + Sync {
     /// Submits one already-admitted task to the host Agent service.
     ///
     /// # Errors
     ///
     /// Returns a stable error without exposing Provider or host internals.
-    fn submit(&self, task: AutomationAgentTask) -> Result<(), String>;
+    fn submit(
+        &self,
+        task: AutomationAgentTask,
+    ) -> Result<AgentTaskSubmissionOutcome, AgentTaskSubmissionError>;
 }
 
 pub trait AutomationAgentContext: std::fmt::Debug + Send + Sync {
@@ -145,9 +179,10 @@ where
                 instruction: arguments.instruction,
                 idempotency_key,
             })
+            .map(|_| ())
             .map_err(|error| ActionFailure {
-                message: error,
-                transient: true,
+                message: error.message,
+                transient: error.transient,
             })
     }
 }
@@ -224,10 +259,31 @@ mod tests {
         tasks: Mutex<Vec<AutomationAgentTask>>,
     }
 
+    #[derive(Debug)]
+    struct FailingSubmitter {
+        transient: bool,
+    }
+
     impl AgentTaskSubmitter for Submitter {
-        fn submit(&self, task: AutomationAgentTask) -> Result<(), String> {
+        fn submit(
+            &self,
+            task: AutomationAgentTask,
+        ) -> Result<AgentTaskSubmissionOutcome, AgentTaskSubmissionError> {
             self.tasks.lock().expect("tasks").push(task);
-            Ok(())
+            Ok(AgentTaskSubmissionOutcome::Accepted)
+        }
+    }
+
+    impl AgentTaskSubmitter for FailingSubmitter {
+        fn submit(
+            &self,
+            _task: AutomationAgentTask,
+        ) -> Result<AgentTaskSubmissionOutcome, AgentTaskSubmissionError> {
+            Err(if self.transient {
+                AgentTaskSubmissionError::transient("temporary Agent service failure")
+            } else {
+                AgentTaskSubmissionError::permanent("prior Agent task failed")
+            })
         }
     }
 
@@ -367,6 +423,31 @@ mod tests {
         .expect("run");
         assert_eq!(run.steps[0].attempts, 1);
         assert!(bridge.submitter.tasks.lock().expect("tasks").is_empty());
+    }
+
+    #[test]
+    fn submission_error_classification_controls_automation_retries() {
+        for (transient, expected_attempts) in [(false, 1), (true, 3)] {
+            let bridge = AutomationAgentBridge::new(
+                Fallback::default(),
+                FailingSubmitter { transient },
+                TrustedContext {
+                    now_ms: 1_000,
+                    remaining_budget: budget(3, 1),
+                },
+                policy(),
+            );
+            let run = AutomationEngine::run(
+                &definition("trusted"),
+                &event(),
+                RunMode::Live,
+                &bridge,
+                &Uncancelled,
+            )
+            .expect("classified failed run");
+            assert_eq!(run.status, AutomationRunStatus::Failed);
+            assert_eq!(run.steps[0].attempts, expected_attempts);
+        }
     }
 
     #[test]
