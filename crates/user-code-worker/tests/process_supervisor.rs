@@ -17,6 +17,7 @@ fn supervisor_runs_real_worker_process() {
     let request = WorkerMessage::Run {
         manifest: json!({"id": "integration.example.test"}),
         source: "({ value: 42 })".to_owned(),
+        input: json!(null),
     };
     let mut process =
         WorkerProcess::spawn(worker_config(Duration::from_secs(2)), &request).unwrap();
@@ -33,6 +34,7 @@ fn supervisor_terminates_an_infinite_worker() {
     let request = WorkerMessage::Run {
         manifest: json!({"id": "integration.example.loop"}),
         source: "while (true) {}".to_owned(),
+        input: json!(null),
     };
     let mut process =
         WorkerProcess::spawn(worker_config(Duration::from_millis(100)), &request).unwrap();

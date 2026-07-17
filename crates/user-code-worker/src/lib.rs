@@ -33,12 +33,23 @@ impl std::fmt::Display for EngineError {
 /// Returns an error for oversized source, JavaScript failures, or values that
 /// cannot be converted to JSON.
 pub fn evaluate(source: &str) -> Result<serde_json::Value, EngineError> {
+    evaluate_with_input(source, &serde_json::Value::Null)
+}
+
+pub fn evaluate_with_input(
+    source: &str,
+    input: &serde_json::Value,
+) -> Result<serde_json::Value, EngineError> {
     if source.len() > MAX_SOURCE_BYTES {
         return Err(EngineError::SourceTooLarge);
     }
+    let input = serde_json::to_string(input)
+        .map_err(|error| EngineError::ResultSerialization(error.to_string()))?;
+    let wrapped_source =
+        format!("const nimora = Object.freeze({{ input: Object.freeze({input}) }});\n{source}");
     let mut context = Context::default();
     let result = context
-        .eval(Source::from_bytes(source))
+        .eval(Source::from_bytes(wrapped_source.as_bytes()))
         .map_err(|error| EngineError::JavaScript(error.to_string()))?;
     result
         .to_json(&mut context)
@@ -49,7 +60,7 @@ pub fn evaluate(source: &str) -> Result<serde_json::Value, EngineError> {
 #[must_use]
 pub fn execute(message: WorkerMessage) -> WorkerMessage {
     match message {
-        WorkerMessage::Run { source, .. } => match evaluate(&source) {
+        WorkerMessage::Run { source, input, .. } => match evaluate_with_input(&source, &input) {
             Ok(value) => WorkerMessage::Result { value },
             Err(error) => WorkerMessage::Error {
                 code: "engine-error".to_owned(),
@@ -90,7 +101,20 @@ mod tests {
         let response = execute(WorkerMessage::Run {
             manifest: json!({}),
             source: "throw new Error('boom')".to_owned(),
+            input: json!(null),
         });
         assert!(matches!(response, WorkerMessage::Error { code, .. } if code == "engine-error"));
+    }
+
+    #[test]
+    fn exposes_only_the_read_only_input_snapshot() {
+        assert_eq!(
+            evaluate_with_input(
+                "({ name: nimora.input.name, process: typeof process })",
+                &json!({"name": "Aster"})
+            )
+            .unwrap(),
+            json!({"name": "Aster", "process": "undefined"})
+        );
     }
 }

@@ -18,6 +18,8 @@ pub enum WorkerMessage {
     Run {
         manifest: serde_json::Value,
         source: String,
+        #[serde(default)]
+        input: serde_json::Value,
     },
     Cancel,
     Result {
