@@ -7,6 +7,7 @@ pub use backup::{
     apply_pending_restore,
 };
 
+use nimora_agent_runtime::{AgentTask, ProviderFinishReason, ProviderUsage};
 use nimora_runtime_app::{
     PetRepository, ProfileRepository, ProfileServiceError, ProfileSnapshot, RepositoryError,
 };
@@ -21,6 +22,9 @@ const PET_SNAPSHOT_VERSION: u32 = 1;
 const PROFILE_SNAPSHOT_VERSION: u32 = 1;
 const MAX_OUTBOX_BATCH: usize = 256;
 const MAX_OUTBOX_ERROR_BYTES: usize = 4 * 1024;
+const AGENT_HISTORY_VERSION: u32 = 1;
+const MAX_AGENT_HISTORY_CONTENT_BYTES: usize = 256 * 1024;
+const MAX_AGENT_HISTORY_PAGE: usize = 200;
 
 #[derive(Debug)]
 pub struct SqlitePetRepository {
@@ -35,6 +39,220 @@ pub struct SqliteProgramPermissionRepository {
 #[derive(Debug)]
 pub struct SqliteOutboxRepository {
     connection: Mutex<Connection>,
+}
+
+#[derive(Debug)]
+pub struct SqliteAgentHistoryRepository {
+    connection: Mutex<Connection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentHistoryRecord {
+    pub spec: String,
+    pub task: AgentTask,
+    pub model: String,
+    pub prompt: String,
+    pub response: String,
+    pub finish_reason: ProviderFinishReason,
+    pub usage: ProviderUsage,
+    pub completed_at_ms: u64,
+}
+
+impl AgentHistoryRecord {
+    /// Creates one bounded, completed Agent history record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for inconsistent task state, invalid model/content, or timestamps.
+    pub fn new(
+        task: AgentTask,
+        model: impl Into<String>,
+        prompt: impl Into<String>,
+        response: impl Into<String>,
+        finish_reason: ProviderFinishReason,
+        usage: ProviderUsage,
+        completed_at_ms: u64,
+    ) -> Result<Self, SqlitePersistenceError> {
+        let model = model.into();
+        let prompt = prompt.into();
+        let response = response.into();
+        if task.status != nimora_agent_runtime::AgentTaskStatus::Succeeded
+            || model.trim().is_empty()
+            || model.len() > 128
+            || prompt.is_empty()
+            || prompt.len() > MAX_AGENT_HISTORY_CONTENT_BYTES
+            || response.len() > MAX_AGENT_HISTORY_CONTENT_BYTES
+            || completed_at_ms < task.created_at_ms
+        {
+            return Err(SqlitePersistenceError::InvalidAgentHistory);
+        }
+        Ok(Self {
+            spec: "nimora.agent-history/1".to_owned(),
+            task,
+            model,
+            prompt,
+            response,
+            finish_reason,
+            usage,
+            completed_at_ms,
+        })
+    }
+}
+
+impl SqliteAgentHistoryRepository {
+    /// Opens Agent history in the shared application database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot be opened or initialized.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, SqlitePersistenceError> {
+        Self::from_connection(Connection::open(path)?)
+    }
+
+    /// Creates isolated Agent history for tests.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot be initialized.
+    pub fn in_memory() -> Result<Self, SqlitePersistenceError> {
+        Self::from_connection(Connection::open_in_memory()?)
+    }
+
+    fn from_connection(mut connection: Connection) -> Result<Self, SqlitePersistenceError> {
+        prepare_connection(&mut connection)?;
+        Ok(Self {
+            connection: Mutex::new(connection),
+        })
+    }
+
+    /// Inserts one completed record exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid records, duplicate tasks, or storage failures.
+    pub fn insert(&self, record: &AgentHistoryRecord) -> Result<(), SqlitePersistenceError> {
+        validate_agent_history(record)?;
+        let payload = serde_json::to_string(record)?;
+        let created_at_ms = i64::try_from(record.task.created_at_ms)
+            .map_err(|_| SqlitePersistenceError::InvalidAgentHistory)?;
+        let completed_at_ms = i64::try_from(record.completed_at_ms)
+            .map_err(|_| SqlitePersistenceError::InvalidAgentHistory)?;
+        self.connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?
+            .execute(
+                "INSERT INTO agent_history
+                    (task_id, trace_id, provider_id, created_at_ms, completed_at_ms, schema_version, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    record.task.id.to_string(),
+                    record.task.trace_id.to_string(),
+                    record.task.provider_id,
+                    created_at_ms,
+                    completed_at_ms,
+                    AGENT_HISTORY_VERSION,
+                    payload
+                ],
+            )?;
+        Ok(())
+    }
+
+    /// Lists newest records using a stable `(created_at_ms, task_id)` cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid bounds or malformed persisted records.
+    pub fn list(
+        &self,
+        before: Option<(u64, uuid::Uuid)>,
+        limit: usize,
+    ) -> Result<Vec<AgentHistoryRecord>, SqlitePersistenceError> {
+        if limit == 0 || limit > MAX_AGENT_HISTORY_PAGE {
+            return Err(SqlitePersistenceError::InvalidAgentHistory);
+        }
+        let limit =
+            i64::try_from(limit).map_err(|_| SqlitePersistenceError::InvalidAgentHistory)?;
+        let (before_ms, before_id) = before
+            .map(|(created_at_ms, task_id)| {
+                i64::try_from(created_at_ms)
+                    .map(|value| (value, task_id.to_string()))
+                    .map_err(|_| SqlitePersistenceError::InvalidAgentHistory)
+            })
+            .transpose()?
+            .unwrap_or((i64::MAX, "~".to_owned()));
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
+        let mut statement = connection.prepare(
+            "SELECT schema_version, payload FROM agent_history
+             WHERE created_at_ms < ?1 OR (created_at_ms = ?1 AND task_id < ?2)
+             ORDER BY created_at_ms DESC, task_id DESC LIMIT ?3",
+        )?;
+        let rows = statement.query_map(params![before_ms, before_id, limit], |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.map(|row| {
+            let (version, payload) = row?;
+            if version != AGENT_HISTORY_VERSION {
+                return Err(SqlitePersistenceError::UnsupportedAgentHistoryVersion(
+                    version,
+                ));
+            }
+            let record = serde_json::from_str(&payload)?;
+            validate_agent_history(&record)?;
+            Ok(record)
+        })
+        .collect()
+    }
+
+    /// Deletes one task history record without affecting runtime state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when storage cannot be updated.
+    pub fn delete(&self, task_id: uuid::Uuid) -> Result<bool, SqlitePersistenceError> {
+        Ok(self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?
+            .execute(
+                "DELETE FROM agent_history WHERE task_id = ?1",
+                params![task_id.to_string()],
+            )?
+            == 1)
+    }
+
+    /// Deletes all Agent history and returns the number removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when storage cannot be updated.
+    pub fn delete_all(&self) -> Result<u64, SqlitePersistenceError> {
+        self.connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?
+            .execute("DELETE FROM agent_history", [])?
+            .try_into()
+            .map_err(|_| SqlitePersistenceError::InvalidAgentHistory)
+    }
+}
+
+fn validate_agent_history(record: &AgentHistoryRecord) -> Result<(), SqlitePersistenceError> {
+    if record.spec != "nimora.agent-history/1" {
+        return Err(SqlitePersistenceError::InvalidAgentHistory);
+    }
+    AgentHistoryRecord::new(
+        record.task.clone(),
+        record.model.clone(),
+        record.prompt.clone(),
+        record.response.clone(),
+        record.finish_reason,
+        record.usage,
+        record.completed_at_ms,
+    )?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -602,6 +820,17 @@ fn prepare_connection(connection: &mut Connection) -> Result<(), SqlitePersisten
                     granted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (program_id, program_version)
                 );
+                CREATE TABLE agent_history (
+                    task_id TEXT PRIMARY KEY,
+                    trace_id TEXT NOT NULL,
+                    provider_id TEXT NOT NULL,
+                    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+                    completed_at_ms INTEGER NOT NULL CHECK (completed_at_ms >= created_at_ms),
+                    schema_version INTEGER NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX agent_history_created_idx
+                    ON agent_history(created_at_ms DESC, task_id DESC);
                 PRAGMA user_version = 1;",
         )?;
         transaction.commit()?;
@@ -824,6 +1053,10 @@ pub enum SqlitePersistenceError {
     InvalidPermissionGrant,
     #[error("outbox request is invalid")]
     InvalidOutboxRequest,
+    #[error("Agent history record or request is invalid")]
+    InvalidAgentHistory,
+    #[error("Agent history version {0} is unsupported")]
+    UnsupportedAgentHistoryVersion(u32),
     #[error("outbox lease is not owned by this consumer")]
     OutboxLeaseNotOwned,
     #[error("backup or restore request is invalid")]
@@ -1369,6 +1602,96 @@ mod tests {
         assert!(matches!(
             repository.purge_delivered(0, 0),
             Err(SqlitePersistenceError::InvalidOutboxRequest)
+        ));
+    }
+
+    fn agent_history_record(created_at_ms: u64, prompt: &str) -> AgentHistoryRecord {
+        let mut task = AgentTask::new(
+            nimora_agent_runtime::AgentTaskOrigin::Desktop,
+            "desktop:test-user",
+            "provider:deterministic-local",
+            nimora_agent_runtime::AgentBudget::default(),
+            created_at_ms,
+        )
+        .expect("task");
+        task.transition(
+            nimora_agent_runtime::AgentTaskStatus::Planning,
+            created_at_ms,
+        )
+        .expect("planning");
+        task.transition(
+            nimora_agent_runtime::AgentTaskStatus::Succeeded,
+            created_at_ms + 1,
+        )
+        .expect("succeeded");
+        AgentHistoryRecord::new(
+            task,
+            "model:echo-v1",
+            prompt,
+            format!("response:{prompt}"),
+            ProviderFinishReason::Completed,
+            ProviderUsage {
+                input_tokens: 3,
+                output_tokens: 2,
+                cost_microunits: 0,
+            },
+            created_at_ms + 1,
+        )
+        .expect("history record")
+    }
+
+    #[test]
+    fn agent_history_round_trips_with_stable_cursor_pagination() {
+        let repository = SqliteAgentHistoryRepository::in_memory().expect("database");
+        let oldest = agent_history_record(100, "oldest");
+        let middle = agent_history_record(200, "middle");
+        let newest = agent_history_record(300, "newest");
+        for record in [&oldest, &middle, &newest] {
+            repository.insert(record).expect("insert history");
+        }
+
+        let first_page = repository.list(None, 2).expect("first page");
+        assert_eq!(first_page, [newest.clone(), middle.clone()]);
+        let cursor = (first_page[1].task.created_at_ms, first_page[1].task.id);
+        assert_eq!(
+            repository.list(Some(cursor), 2).expect("next page"),
+            [oldest]
+        );
+    }
+
+    #[test]
+    fn agent_history_is_insert_once_and_privacy_deletable() {
+        let repository = SqliteAgentHistoryRepository::in_memory().expect("database");
+        let first = agent_history_record(100, "private prompt");
+        let second = agent_history_record(200, "another prompt");
+        repository.insert(&first).expect("insert first");
+        repository.insert(&second).expect("insert second");
+        assert!(repository.insert(&first).is_err());
+        assert!(repository.delete(first.task.id).expect("delete one"));
+        assert!(!repository.delete(first.task.id).expect("delete missing"));
+        assert_eq!(repository.delete_all().expect("delete all"), 1);
+        assert!(repository.list(None, 10).expect("empty history").is_empty());
+    }
+
+    #[test]
+    fn agent_history_rejects_unbounded_content_and_queries() {
+        let repository = SqliteAgentHistoryRepository::in_memory().expect("database");
+        assert!(matches!(
+            repository.list(None, MAX_AGENT_HISTORY_PAGE + 1),
+            Err(SqlitePersistenceError::InvalidAgentHistory)
+        ));
+        let valid = agent_history_record(100, "prompt");
+        assert!(matches!(
+            AgentHistoryRecord::new(
+                valid.task,
+                "model:echo-v1",
+                "x".repeat(MAX_AGENT_HISTORY_CONTENT_BYTES + 1),
+                "response",
+                ProviderFinishReason::Completed,
+                valid.usage,
+                valid.completed_at_ms,
+            ),
+            Err(SqlitePersistenceError::InvalidAgentHistory)
         ));
     }
 }

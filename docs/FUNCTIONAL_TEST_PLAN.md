@@ -237,6 +237,7 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-047 | Agent 运行健康读取 | `runtime.health.read` 只返回启动、安全、Outbox 与备份健康摘要，不含日志、正文、路径、密钥或任意诊断文件 | P0 |
 | AGT-048 | 可扩展读能力策略 | Agent Task/Trace 必须精确匹配，未列入 `read_capabilities` 的读取在 Backend 前拒绝；用户程序不自动继承 Agent 专用读能力 | P0 |
 | AGT-049 | Ollama Worker 双轮闭环 | 真实独立 Worker 首轮解析结构化 Tool Call；宿主按原 Call ID 回填 Tool Result 后再次经过 Worker 请求 `/api/chat`，最终回答、Finish Reason 与关联载荷均正确 | P0 |
+| AGT-050 | Agent 历史仓储 | 完成任务以 Task ID 只写一次；版本化载荷、内容上限、稳定时间游标分页、单条删除与全部删除均可验证，删除不影响运行状态 | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |

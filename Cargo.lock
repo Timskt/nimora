@@ -2247,12 +2247,14 @@ dependencies = [
 name = "nimora-persistence-sqlite"
 version = "0.1.0"
 dependencies = [
+ "nimora-agent-runtime",
  "nimora-runtime-app",
  "nimora-runtime-core",
  "rusqlite",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
