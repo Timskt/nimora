@@ -48,6 +48,40 @@ export interface BackupHealth {
   lastError: string | null;
 }
 
+export interface DiagnosticReport {
+  spec: "nimora.diagnostic-report/1";
+  generatedAtMs: number;
+  application: { name: string; version: string };
+  system: { os: string; architecture: string };
+  runtime: {
+    startupMode: "normal" | "recovery";
+    startupReason: string | null;
+    safetyMode: "normal" | "safe";
+    outboxPending: number;
+    outboxDeadLetter: number;
+  };
+  dataProtection: {
+    databaseSchema: number;
+    backupCount: number;
+    latestBackupAtMs: number | null;
+    pendingRestore: boolean;
+    lastBackupError: boolean;
+  };
+  privacy: {
+    includesLogs: false;
+    includesUserContent: false;
+    includesSecrets: false;
+    includesFilePaths: false;
+    automaticallyUploaded: false;
+  };
+}
+
+export interface DiagnosticBundleReceipt {
+  spec: "nimora.diagnostic-bundle-receipt/1";
+  bytes: number;
+  sha256: string;
+}
+
 export interface InstallAssetRequest {
   sourcePath: string;
 }
@@ -281,6 +315,8 @@ export interface DesktopApi {
   backupHealth(): Promise<BackupHealth>;
   createBackup(): Promise<BackupRecord | null>;
   requestDatabaseRestore(backupId: string): Promise<void>;
+  previewDiagnosticReport(): Promise<DiagnosticReport>;
+  exportDiagnostics(destinationPath: string): Promise<DiagnosticBundleReceipt | null>;
   profiles(): Promise<ProfileSnapshot>;
   createProfile(name: string, policy: ProfilePolicy): Promise<NimoraCommand | null>;
   switchProfile(profileId: string): Promise<NimoraCommand | null>;
@@ -383,6 +419,18 @@ export function createDesktopApi(
       },
       async createBackup() { return null; },
       async requestDatabaseRestore() {},
+      async previewDiagnosticReport() {
+        return {
+          spec: "nimora.diagnostic-report/1",
+          generatedAtMs: Date.now(),
+          application: { name: "Nimora", version: "0.1.0" },
+          system: { os: "browser-preview", architecture: "web" },
+          runtime: { startupMode: previewRecoveryMode ? "recovery" : "normal", startupReason: previewRecoveryMode ? "database-unavailable" : null, safetyMode: "normal", outboxPending: 0, outboxDeadLetter: 0 },
+          dataProtection: { databaseSchema: 1, backupCount: previewRecoveryMode ? 1 : 0, latestBackupAtMs: previewRecoveryMode ? 1_784_294_125_392 : null, pendingRestore: false, lastBackupError: false },
+          privacy: { includesLogs: false, includesUserContent: false, includesSecrets: false, includesFilePaths: false, automaticallyUploaded: false },
+        };
+      },
+      async exportDiagnostics() { return null; },
       async profiles() { return structuredClone(previewProfiles); },
       async createProfile() { return null; },
       async switchProfile() { return null; },
@@ -447,6 +495,8 @@ export function createDesktopApi(
     backupHealth: async () => await invokeCommand("backup_health") as BackupHealth,
     createBackup: async () => await invokeCommand("create_backup") as BackupRecord,
     requestDatabaseRestore: async (backupId) => { await invokeCommand("request_database_restore", { backupId }); },
+    previewDiagnosticReport: async () => await invokeCommand("preview_diagnostic_report") as DiagnosticReport,
+    exportDiagnostics: async (destinationPath) => await invokeCommand("export_diagnostics", { request: { destinationPath } }) as DiagnosticBundleReceipt,
     profiles: async () => await invokeCommand("profile_snapshot") as ProfileSnapshot,
     createProfile: async (name, policy) => await invokeCommand("create_profile", { name, policy }) as NimoraCommand,
     switchProfile: async (profileId) => await invokeCommand("switch_profile", { profileId }) as NimoraCommand,

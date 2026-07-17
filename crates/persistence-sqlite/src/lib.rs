@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Mutex, time::Duration};
 use thiserror::Error;
 
-const DATABASE_VERSION: i64 = 1;
+pub const DATABASE_VERSION: i64 = 1;
 const PET_SNAPSHOT_VERSION: u32 = 1;
 const PROFILE_SNAPSHOT_VERSION: u32 = 1;
 const MAX_OUTBOX_BATCH: usize = 256;

@@ -5,11 +5,15 @@ use nimora_asset_installer::{
     inspect_asset_source_preview, install_asset_source, install_gltf_character,
     read_verified_asset_image, read_verified_asset_model, rollback_latest,
 };
+use nimora_diagnostics_bundle::{
+    ApplicationSummary, DataProtectionSummary, DiagnosticBundleError, DiagnosticBundleReceipt,
+    DiagnosticReport, PrivacySummary, RuntimeSummary, SystemSummary, export_diagnostic_bundle,
+};
 use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
 };
 use nimora_persistence_sqlite::{
-    BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, OutboxSnapshot,
+    BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, DATABASE_VERSION, OutboxSnapshot,
     ProgramPermissionGrant, SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository,
     SqliteProfileRepository, SqliteProgramPermissionRepository, apply_pending_restore,
     verify_database_file,
@@ -45,7 +49,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
     AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
@@ -300,6 +304,12 @@ struct InstallAssetRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExportAssetRequest {
     source_path: PathBuf,
+    destination_path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExportDiagnosticRequest {
     destination_path: PathBuf,
 }
 
@@ -578,6 +588,8 @@ enum DesktopError {
     #[error(transparent)]
     Persistence(#[from] SqlitePersistenceError),
     #[error(transparent)]
+    DiagnosticBundle(#[from] DiagnosticBundleError),
+    #[error(transparent)]
     AssetInstall(#[from] InstallError),
     #[error("asset identifier must be a lowercase namespaced identifier")]
     InvalidAssetIdentifier,
@@ -721,6 +733,93 @@ fn request_database_restore(
     ensure_safe_mode_inactive(&state)?;
     state.backups.request_restore(&backup_id)?;
     Ok(())
+}
+
+fn diagnostic_report(state: &DesktopState) -> Result<DiagnosticReport, DesktopError> {
+    let safety = state.safety.snapshot()?;
+    let outbox = state.outbox.snapshot()?;
+    let mut backup_health = state.backups.health()?;
+    let last_error = state
+        .backup_last_error
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    backup_health.last_error.clone_from(&last_error);
+    let generated_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(SqlitePersistenceError::from)?
+        .as_millis()
+        .try_into()
+        .map_err(|_| SqlitePersistenceError::InvalidBackupRequest)?;
+    Ok(DiagnosticReport {
+        spec: "nimora.diagnostic-report/1".to_owned(),
+        generated_at_ms,
+        application: ApplicationSummary {
+            name: "Nimora".to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+        },
+        system: SystemSummary {
+            os: std::env::consts::OS.to_owned(),
+            architecture: std::env::consts::ARCH.to_owned(),
+        },
+        runtime: RuntimeSummary {
+            startup_mode: match state.startup.mode {
+                StartupMode::Normal => "normal",
+                StartupMode::Recovery => "recovery",
+            }
+            .to_owned(),
+            startup_reason: state.startup.reason.map(str::to_owned),
+            safety_mode: match safety.mode {
+                RuntimeMode::Normal => "normal",
+                RuntimeMode::Safe => "safe",
+            }
+            .to_owned(),
+            outbox_pending: outbox.pending,
+            outbox_dead_letter: outbox.dead_letter,
+        },
+        data_protection: DataProtectionSummary {
+            database_schema: u32::try_from(DATABASE_VERSION)
+                .map_err(|_| SqlitePersistenceError::InvalidBackupRequest)?,
+            backup_count: backup_health.available.len() as u64,
+            latest_backup_at_ms: backup_health.latest.map(|record| record.created_at_ms),
+            pending_restore: backup_health.pending_restore.is_some(),
+            last_backup_error: backup_health.last_error.is_some(),
+        },
+        privacy: PrivacySummary {
+            includes_logs: false,
+            includes_user_content: false,
+            includes_secrets: false,
+            includes_file_paths: false,
+            automatically_uploaded: false,
+        },
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn preview_diagnostic_report(
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+) -> Result<DiagnosticReport, DesktopError> {
+    if window.label() != CONTROL_CENTER_LABEL {
+        return Err(DesktopError::WindowForbidden);
+    }
+    diagnostic_report(&state)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn export_diagnostics(
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+    request: ExportDiagnosticRequest,
+) -> Result<DiagnosticBundleReceipt, DesktopError> {
+    if window.label() != CONTROL_CENTER_LABEL {
+        return Err(DesktopError::WindowForbidden);
+    }
+    Ok(export_diagnostic_bundle(
+        &diagnostic_report(&state)?,
+        &request.destination_path,
+    )?)
 }
 
 #[tauri::command]
@@ -2878,6 +2977,8 @@ pub fn run() {
             backup_health,
             create_backup,
             request_database_restore,
+            preview_diagnostic_report,
+            export_diagnostics,
             profile_snapshot,
             create_profile,
             switch_profile,
@@ -2978,12 +3079,12 @@ mod tests {
     use super::{
         ACTIVE_CHARACTER_FILE, AssetInstallReceipt, BUILTIN_CHARACTER_ID, DesktopError,
         DesktopState, PetAction, ProfilePolicy, StartupMode, TrayAction,
-        UserProgramRollbackReceipt, WindowPolicy, ensure_normal_mode, ensure_program_permissions,
-        inspect_asset_catalog, install_gltf_character, parse_asset_protocol_path,
-        parse_user_program_plan, permission_grant, persist_active_character,
-        resolve_active_character, resolve_character_renderer, screen_coordinate,
-        serve_asset_protocol, user_program_input, valid_asset_identifier, validate_model_source,
-        validate_package_source, validate_requested_animation_map,
+        UserProgramRollbackReceipt, WindowPolicy, diagnostic_report, ensure_normal_mode,
+        ensure_program_permissions, inspect_asset_catalog, install_gltf_character,
+        parse_asset_protocol_path, parse_user_program_plan, permission_grant,
+        persist_active_character, resolve_active_character, resolve_character_renderer,
+        screen_coordinate, serve_asset_protocol, user_program_input, valid_asset_identifier,
+        validate_model_source, validate_package_source, validate_requested_animation_map,
     };
     use nimora_asset_installer::{GltfCharacterMetadata, ModelAnimationBinding};
     use nimora_persistence_sqlite::{
@@ -3016,6 +3117,16 @@ mod tests {
             ensure_normal_mode(&state),
             Err(DesktopError::RecoveryModeActive)
         ));
+        let diagnostic = diagnostic_report(&state).expect("diagnostic preview");
+        assert_eq!(diagnostic.runtime.startup_mode, "recovery");
+        assert_eq!(
+            diagnostic.runtime.startup_reason.as_deref(),
+            Some("database-unavailable")
+        );
+        assert!(!diagnostic.privacy.includes_secrets);
+        assert!(!diagnostic.privacy.includes_user_content);
+        assert!(!diagnostic.privacy.includes_file_paths);
+        assert!(!diagnostic.privacy.automatically_uploaded);
         assert_eq!(
             std::fs::read(&database).expect("preserved database"),
             corrupt_bytes

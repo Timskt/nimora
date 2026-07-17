@@ -8,6 +8,13 @@ describe("desktop platform adapter", () => {
     expect((await api.snapshot()).pet.name).toBe("Aster");
     await expect(api.drainEvents()).resolves.toEqual([]);
     await expect(api.outboxSnapshot()).resolves.toEqual({ pending: 0, leased: 0, delivered: 0, deadLetter: 0 });
+    expect((await api.previewDiagnosticReport()).privacy).toEqual({
+      includesLogs: false,
+      includesUserContent: false,
+      includesSecrets: false,
+      includesFilePaths: false,
+      automaticallyUploaded: false,
+    });
     expect((await api.profiles()).profiles[0]?.name).toBe("Default");
     await expect(api.playAction("celebrate")).resolves.toBeNull();
   });
@@ -21,6 +28,8 @@ describe("desktop platform adapter", () => {
     await api.backupHealth();
     await api.createBackup();
     await api.requestDatabaseRestore("runtime-1700000000000.sqlite3");
+    await api.previewDiagnosticReport();
+    await api.exportDiagnostics("/tmp/support.nimora-diagnostics.zip");
     await api.profiles();
     const policy = {
       mode: "focus" as const,
@@ -112,6 +121,8 @@ describe("desktop platform adapter", () => {
       ["backup_health"],
       ["create_backup"],
       ["request_database_restore", { backupId: "runtime-1700000000000.sqlite3" }],
+      ["preview_diagnostic_report"],
+      ["export_diagnostics", { request: { destinationPath: "/tmp/support.nimora-diagnostics.zip" } }],
       ["profile_snapshot"],
       ["create_profile", { name: "Focus", policy }],
       ["switch_profile", { profileId: "00000000-0000-4000-8000-000000000010" }],

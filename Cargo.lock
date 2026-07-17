@@ -2153,6 +2153,7 @@ name = "nimora-desktop"
 version = "0.1.0"
 dependencies = [
  "nimora-asset-installer",
+ "nimora-diagnostics-bundle",
  "nimora-model-importer",
  "nimora-persistence-sqlite",
  "nimora-runtime-app",
@@ -2169,6 +2170,17 @@ dependencies = [
  "tauri-plugin-dialog",
  "thiserror 2.0.18",
  "uuid",
+]
+
+[[package]]
+name = "nimora-diagnostics-bundle"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "zip",
 ]
 
 [[package]]

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import type { BackupHealth } from "../platform/desktop";
+import { save } from "@tauri-apps/plugin-dialog";
+import type { BackupHealth, DiagnosticReport } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 export function formatBackupBytes(bytes: number): string {
@@ -18,10 +19,38 @@ export function backupActionDisabled(recoveryMode: boolean, busy: boolean): bool
 
 export function DataProtection({ recoveryMode, onNotice }: DataProtectionProps) {
   const [health, setHealth] = useState<BackupHealth | null>(null);
+  const [diagnostic, setDiagnostic] = useState<DiagnosticReport | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function refresh() {
-    setHealth(await desktopApi.backupHealth());
+    const [nextHealth, nextDiagnostic] = await Promise.all([
+      desktopApi.backupHealth(),
+      desktopApi.previewDiagnosticReport(),
+    ]);
+    setHealth(nextHealth);
+    setDiagnostic(nextDiagnostic);
+  }
+
+  async function exportDiagnostics() {
+    if (!desktopApi.native) {
+      onNotice("浏览器预览不会创建诊断包");
+      return;
+    }
+    const destinationPath = await save({
+      title: "导出 Nimora 脱敏诊断包",
+      defaultPath: `nimora-${Date.now()}.nimora-diagnostics.zip`,
+      filters: [{ name: "Nimora diagnostics", extensions: ["zip"] }],
+    });
+    if (typeof destinationPath !== "string") return;
+    setBusy(true);
+    try {
+      const receipt = await desktopApi.exportDiagnostics(destinationPath);
+      onNotice(receipt ? `脱敏诊断包已保存 · ${formatBackupBytes(receipt.bytes)}` : "诊断包未写入");
+    } catch {
+      onNotice("诊断包导出失败，目标文件未被覆盖");
+    } finally {
+      setBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -72,7 +101,7 @@ export function DataProtection({ recoveryMode, onNotice }: DataProtectionProps) 
     {health?.lastError && <p className="backup-error" role="alert">自动备份失败：{health.lastError}</p>}
     <div className="backup-list">
       {!health && <p className="supporting">正在读取本地备份…</p>}
-      {health?.available.length === 0 && <p className="supporting">尚无可恢复备份。主数据库仍被保留，请勿手动覆盖；可交由后续诊断或人工提取流程处理。</p>}
+      {health?.available.length === 0 && <p className="supporting">尚无可恢复备份。主数据库仍被保留，请勿手动覆盖；请先导出脱敏诊断包，再进入人工数据提取流程。</p>}
       {health?.available.map((record, index) => <article className="backup-row" key={record.id}>
         <div>
           <strong>{index === 0 ? "最新备份" : "历史备份"}</strong>
@@ -83,5 +112,17 @@ export function DataProtection({ recoveryMode, onNotice }: DataProtectionProps) 
         </button>
       </article>)}
     </div>
+    <section className="diagnostic-panel" aria-labelledby="diagnostic-heading">
+      <div>
+        <p className="card-label">支持与诊断</p>
+        <h3 id="diagnostic-heading">导出前内容预览</h3>
+        <p>仅包含应用/系统版本、运行模式、Schema、备份和 Outbox 计数。</p>
+      </div>
+      <ul className="privacy-list" aria-label="诊断包隐私边界">
+        <li>不含密钥</li><li>不含用户正文</li><li>不含文件路径</li><li>不会自动上传</li>
+      </ul>
+      {diagnostic && <p className="diagnostic-summary">{diagnostic.system.os} · {diagnostic.system.architecture} · Schema {diagnostic.dataProtection.databaseSchema} · {diagnostic.runtime.startupMode === "recovery" ? "恢复模式" : "正常模式"}</p>}
+      <button className="secondary-button" type="button" disabled={busy || !diagnostic} onClick={() => void exportDiagnostics()}>导出脱敏诊断包</button>
+    </section>
   </section>;
 }

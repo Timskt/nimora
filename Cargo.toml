@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/diagnostics-bundle",
   "crates/asset-installer",
   "crates/model-importer",
   "crates/user-code-policy",
@@ -29,6 +30,7 @@ rusqlite = { version = "0.38", features = ["backup", "bundled"] }
 thiserror = "2.0"
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 uuid = { version = "1.18", features = ["v7", "serde"] }
+zip = { version = "7.2", default-features = false, features = ["deflate"] }
 boa_engine = "0.21.1"
 
 [workspace.lints.rust]
