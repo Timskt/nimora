@@ -31,6 +31,7 @@ flowchart LR
 3. Tool Adapter 只能调用 Capability Gateway，不能持有 Repository、数据库连接、窗口句柄或 Provider 密钥。
 4. Agent 输出是数据，不是授权。输出要产生副作用时必须形成新的 Tool Invocation 并重新授权。
 5. Automation 子 Agent 的 `submitted`、`waiting_for_confirmation`、`completed`、`failed`、`cancelled`、`interrupted` 状态可按 Task 或根 Run 查询；重启不会保存 Prompt 或静默续跑，而是把活跃任务标记为 `interrupted`。
+6. 每个桌面 Provider Task 绑定一个宿主拥有的共享 `CancellationFlag`。用户按 Task 取消、工具拒绝/过期和 Safe Mode 会先设置 Flag；递归 Provider step 与批准后续跑复用同一 Flag，隔离 Worker 观察取消后强制终止子进程，再由 Journal 收敛终态。
 5. 双向调用共享 Trace，但 Trace ID 不是权限凭证；权限由调用方身份、Capability、预算和批准证明共同决定。
 
 ## 3. 模块调用 AI 契约

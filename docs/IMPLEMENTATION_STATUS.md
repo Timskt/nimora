@@ -39,7 +39,7 @@
 
 ## 执行规则
 
-AI 双向模块交互的当前审计与完整实施蓝图见 [`AI_MODULE_INTERACTIONS.md`](AI_MODULE_INTERACTIONS.md)。现阶段 AI 到 Pet、Profile、Character、Asset、Program、Diagnostics 和 Automation Validation 已形成生产工具链；宿主无关的 `AgentTaskGateway` 已完成调用方、Provider、Tool、数据等级、主动性、递归深度和父级剩余预算交集准入，Desktop 对话、Desktop 独立 Tool、CLI 与 Live Automation 入口均已迁移。Live Automation 子 Agent 已具备持久幂等准入、等待批准/完成/失败/取消/重启中断生命周期及按 Task/Run 查询；Prompt 不落盘，重启后明确中断而非无授权续跑。Skill、Connector 与 User Program 尚未接入生产 Agent 执行入口，因此反向模块链路仍不算全部贯通。
+AI 双向模块交互的当前审计与完整实施蓝图见 [`AI_MODULE_INTERACTIONS.md`](AI_MODULE_INTERACTIONS.md)。现阶段 AI 到 Pet、Profile、Character、Asset、Program、Diagnostics 和 Automation Validation 已形成生产工具链；宿主无关的 `AgentTaskGateway` 已完成调用方、Provider、Tool、数据等级、主动性、递归深度和父级剩余预算交集准入，Desktop 对话、Desktop 独立 Tool、CLI 与 Live Automation 入口均已迁移。Live Automation 子 Agent 已具备持久幂等准入、等待批准/完成/失败/取消/重启中断生命周期及按 Task/Run 查询；桌面活跃任务注册表把用户取消、拒绝、确认过期与 Safe Mode 传播到递归 Provider step 和隔离 Worker，Worker 会强杀取消的子进程；Prompt 不落盘，重启后明确中断而非无授权续跑。Skill、Connector 与 User Program 尚未接入生产 Agent 执行入口，因此反向模块链路仍不算全部贯通。
 
 1. 每次开发从本矩阵选择一个或多个可形成真实纵切的缺口，但不得删除其余缺口。
 2. 新发现的有价值能力必须加入矩阵或对应权威规格，不依赖聊天记忆。

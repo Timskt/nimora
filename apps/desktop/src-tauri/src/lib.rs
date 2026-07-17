@@ -132,6 +132,7 @@ struct DesktopState {
     active_user_program_workers: Mutex<HashMap<Uuid, ActiveUserProgramWorker>>,
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
     pending_agent_tools: Mutex<HashMap<Uuid, PendingAgentTool>>,
+    active_agent_tasks: Mutex<HashMap<Uuid, CancellationFlag>>,
     execution_controller: ExecutionController,
     ollama_worker: Option<PathBuf>,
     startup: StartupStatus,
@@ -169,6 +170,24 @@ struct PendingProviderAgent {
     turn: ProviderToolTurn,
     approvals: Vec<Option<ApprovedProviderTool>>,
     remaining_confirmations: usize,
+    cancellation: CancellationFlag,
+}
+
+#[derive(Debug)]
+struct ActiveAgentTaskGuard<'a> {
+    tasks: &'a Mutex<HashMap<Uuid, CancellationFlag>>,
+    task_id: Uuid,
+    retain: bool,
+}
+
+impl Drop for ActiveAgentTaskGuard<'_> {
+    fn drop(&mut self) {
+        if !self.retain
+            && let Ok(mut tasks) = self.tasks.lock()
+        {
+            tasks.remove(&self.task_id);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -326,6 +345,7 @@ impl DesktopState {
             active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
             pending_agent_tools: Mutex::new(HashMap::new()),
+            active_agent_tasks: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
             ollama_worker,
             startup: StartupStatus {
@@ -387,6 +407,7 @@ impl DesktopState {
             active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
             pending_agent_tools: Mutex::new(HashMap::new()),
+            active_agent_tasks: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
             ollama_worker,
             startup: StartupStatus {
@@ -919,6 +940,7 @@ impl AgentTaskSubmitter for DesktopAutomationAgentSubmitter<'_> {
 
 impl DesktopAutomationAgentSubmitter<'_> {
     fn execute(&self, task: AutomationAgentTask) -> Result<ProviderAgentOutcome, String> {
+        let task_id = task.admission.task.id;
         let providers = desktop_provider_registry(self.state).map_err(|error| error.to_string())?;
         let tool_allowlist = task
             .admission
@@ -940,6 +962,7 @@ impl DesktopAutomationAgentSubmitter<'_> {
             512,
             true,
             tool_allowlist,
+            provider_agent_cancellation(self.state, task_id).map_err(|error| error.to_string())?,
         )
         .map_err(|error| error.to_string())
     }
@@ -1040,6 +1063,40 @@ fn automation_run_agent_tasks(
         .automation_agent_journal
         .list_by_run(run_id)
         .map_err(Into::into)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri managed state command arguments are owned extractors"
+)]
+fn cancel_agent_task(task_id: &str, state: State<'_, DesktopState>) -> Result<bool, DesktopError> {
+    let task_id = Uuid::parse_str(task_id)
+        .map_err(|_| SqlitePersistenceError::InvalidAutomationAgentJournal)?;
+    cancel_agent_task_inner(&state, task_id)
+}
+
+fn cancel_agent_task_inner(state: &DesktopState, task_id: Uuid) -> Result<bool, DesktopError> {
+    let active = state
+        .active_agent_tasks
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .contains_key(&task_id);
+    let journal_active = state
+        .automation_agent_journal
+        .get_by_task_id(task_id)?
+        .is_some_and(|entry| {
+            matches!(
+                entry.status,
+                AutomationAgentJournalStatus::Submitted
+                    | AutomationAgentJournalStatus::WaitingForConfirmation
+            )
+        });
+    if !active && !journal_active {
+        return Ok(false);
+    }
+    cancel_automation_agent_task(state, task_id)?;
+    Ok(true)
 }
 
 fn dry_run_automation(
@@ -1357,6 +1414,7 @@ fn run_local_agent_inner(
     let providers = desktop_provider_registry(state)?;
     let now_ms = current_time_ms()?;
     let task = admit_desktop_agent_task(request.provider_id, now_ms)?;
+    let cancellation = provider_agent_cancellation(state, task.id)?;
     let tool_allowlist = production_agent_tool_allowlist()?;
     let outcome = advance_provider_agent(
         &providers,
@@ -1372,6 +1430,7 @@ fn run_local_agent_inner(
         512,
         true,
         tool_allowlist,
+        cancellation,
     )?;
     Ok(desktop_agent_run_result(outcome))
 }
@@ -1451,7 +1510,14 @@ fn advance_provider_agent(
     max_output_tokens: u64,
     offline: bool,
     tool_allowlist: BTreeSet<String>,
+    cancellation: CancellationFlag,
 ) -> Result<ProviderAgentOutcome, DesktopError> {
+    let task_id = task.id;
+    let mut active_guard = ActiveAgentTaskGuard {
+        tasks: &state.active_agent_tasks,
+        task_id,
+        retain: false,
+    };
     let tools = production_tool_registry().map_err(agent_error)?;
     let coordinator = AgentCoordinator::new(providers, &tools);
     let now_ms = current_time_ms()?;
@@ -1464,7 +1530,7 @@ fn advance_provider_agent(
                 max_output_tokens,
                 context: ProviderExecutionContext {
                     timeout: Duration::from_secs(30),
-                    cancellation: CancellationFlag::default(),
+                    cancellation: cancellation.clone(),
                     credential_reference: None,
                 },
                 offline,
@@ -1491,7 +1557,7 @@ fn advance_provider_agent(
     )?;
     if confirmations.is_empty() {
         messages.extend(turn.continuation_messages().map_err(agent_error)?);
-        return advance_provider_agent(
+        let result = advance_provider_agent(
             providers,
             state,
             task,
@@ -1500,9 +1566,12 @@ fn advance_provider_agent(
             max_output_tokens,
             offline,
             tool_allowlist,
+            cancellation,
         );
+        active_guard.retain = matches!(result, Ok(ProviderAgentOutcome::Waiting { .. }));
+        return result;
     }
-    register_provider_confirmations(
+    let result = register_provider_confirmations(
         state,
         task,
         model,
@@ -1513,7 +1582,21 @@ fn advance_provider_agent(
         turn,
         confirmations,
         now_ms,
-    )
+        cancellation,
+    );
+    active_guard.retain = matches!(result, Ok(ProviderAgentOutcome::Waiting { .. }));
+    result
+}
+
+fn provider_agent_cancellation(
+    state: &DesktopState,
+    task_id: Uuid,
+) -> Result<CancellationFlag, DesktopError> {
+    let mut tasks = state
+        .active_agent_tasks
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    Ok(tasks.entry(task_id).or_default().clone())
 }
 
 fn record_agent_history(
@@ -1606,6 +1689,7 @@ fn register_provider_confirmations(
     turn: ProviderToolTurn,
     confirmations: Vec<(PlannedToolCall, CommandRisk)>,
     now_ms: u64,
+    cancellation: CancellationFlag,
 ) -> Result<ProviderAgentOutcome, DesktopError> {
     if task.status != AgentTaskStatus::WaitingForConfirmation {
         task.transition(AgentTaskStatus::WaitingForConfirmation, now_ms)
@@ -1622,6 +1706,7 @@ fn register_provider_confirmations(
         turn,
         approvals: (0..confirmations.len()).map(|_| None).collect(),
         remaining_confirmations: confirmations.len(),
+        cancellation,
     }));
     let mut pending_store = state
         .pending_agent_tools
@@ -1867,6 +1952,9 @@ fn confirm_agent_tool_with_registry(
         .ok_or_else(|| DesktopError::Agent("pending Agent tool was not found".to_owned()))?;
     let now_ms = current_time_ms()?;
     if pending.expires_at_ms <= now_ms {
+        if let Some(task_id) = automation_agent_task_id(&pending.context)? {
+            cancel_automation_agent_task(state, task_id)?;
+        }
         cancel_pending_provider_siblings(state, &pending.context)?;
         return Err(DesktopError::Agent(
             "pending Agent tool confirmation expired".to_owned(),
@@ -2018,6 +2106,7 @@ fn confirm_provider_agent_tool(
     let max_output_tokens = session_guard.max_output_tokens;
     let offline = session_guard.offline;
     let tool_allowlist = session_guard.tool_allowlist.clone();
+    let cancellation = session_guard.cancellation.clone();
     drop(session_guard);
     let continuation = advance_provider_agent(
         providers,
@@ -2028,6 +2117,7 @@ fn confirm_provider_agent_tool(
         max_output_tokens,
         offline,
         tool_allowlist,
+        cancellation,
     )?;
     let final_task = match &continuation {
         ProviderAgentOutcome::Completed { task, .. }
@@ -2103,6 +2193,14 @@ fn automation_agent_task_id(
 }
 
 fn cancel_automation_agent_task(state: &DesktopState, task_id: Uuid) -> Result<(), DesktopError> {
+    if let Some(cancellation) = state
+        .active_agent_tasks
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .remove(&task_id)
+    {
+        cancellation.cancel();
+    }
     if state
         .automation_agent_journal
         .get_by_task_id(task_id)?
@@ -2524,7 +2622,7 @@ fn enter_safe_mode(
 }
 
 fn cancel_all_pending_agent_tools(state: &DesktopState) -> Result<(), DesktopError> {
-    let task_ids = {
+    let mut task_ids = {
         let mut pending = state
             .pending_agent_tools
             .lock()
@@ -2539,6 +2637,14 @@ fn cancel_all_pending_agent_tools(state: &DesktopState) -> Result<(), DesktopErr
         pending.clear();
         task_ids
     };
+    task_ids.extend(
+        state
+            .active_agent_tasks
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?
+            .keys()
+            .copied(),
+    );
     for task_id in task_ids {
         cancel_automation_agent_task(state, task_id)?;
     }
@@ -4862,6 +4968,7 @@ pub fn run() {
             automation_run_status,
             automation_agent_task_status,
             automation_run_agent_tasks,
+            cancel_agent_task,
             agent_provider_status,
             agent_history_list,
             delete_agent_history,
@@ -5040,22 +5147,22 @@ mod tests {
         CapabilityBackend, DesktopCapabilityBackend, DesktopError, DesktopState, LocalAgentRequest,
         PetAction, PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest, StartupMode,
         TrayAction, UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
-        cancel_all_pending_agent_tools, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
-        default_agent_model, default_agent_provider_id, diagnostic_report, ensure_normal_mode,
-        ensure_program_permissions, inspect_asset_catalog, install_gltf_character,
-        open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
-        permission_grant, persist_active_character, prepare_agent_tool_inner,
-        reject_agent_tool_inner, resolve_active_character, resolve_character_renderer,
-        run_live_automation, run_local_agent_inner, screen_coordinate, serve_asset_protocol,
-        test_automation, user_program_input, valid_asset_identifier, validate_model_source,
-        validate_package_source, validate_requested_animation_map,
+        cancel_agent_task_inner, cancel_all_pending_agent_tools, confirm_agent_tool_inner,
+        confirm_agent_tool_with_registry, default_agent_model, default_agent_provider_id,
+        diagnostic_report, ensure_normal_mode, ensure_program_permissions, inspect_asset_catalog,
+        install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
+        parse_user_program_plan, permission_grant, persist_active_character,
+        prepare_agent_tool_inner, reject_agent_tool_inner, resolve_active_character,
+        resolve_character_renderer, run_live_automation, run_local_agent_inner, screen_coordinate,
+        serve_asset_protocol, test_automation, user_program_input, valid_asset_identifier,
+        validate_model_source, validate_package_source, validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
-        AgentBudget, AgentTask, AgentTaskOrigin, AgentTaskStatus, DataClassification,
-        ProviderAdapter, ProviderCapabilities, ProviderCapability, ProviderDescriptor,
-        ProviderError, ProviderExecutionContext, ProviderFinishReason, ProviderLocality,
-        ProviderMessage, ProviderMessageRole, ProviderRegistry, ProviderRequest, ProviderResponse,
-        ProviderToolCall, ProviderUsage,
+        AgentBudget, AgentTask, AgentTaskOrigin, AgentTaskStatus, CancellationFlag,
+        DataClassification, ProviderAdapter, ProviderCapabilities, ProviderCapability,
+        ProviderDescriptor, ProviderError, ProviderErrorKind, ProviderExecutionContext,
+        ProviderFinishReason, ProviderLocality, ProviderMessage, ProviderMessageRole,
+        ProviderRegistry, ProviderRequest, ProviderResponse, ProviderToolCall, ProviderUsage,
     };
     use nimora_asset_installer::{GltfCharacterMetadata, ModelAnimationBinding};
     use nimora_diagnostics_bundle::{
@@ -5068,7 +5175,15 @@ mod tests {
     use nimora_runtime_core::{Event, EventSource, Position, RuntimeMode};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
-    use std::{collections::BTreeSet, path::Path};
+    use std::{
+        collections::BTreeSet,
+        path::Path,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
     use uuid::Uuid;
 
     fn normal_desktop_state() -> (std::path::PathBuf, DesktopState) {
@@ -5135,6 +5250,52 @@ mod tests {
     #[derive(Debug)]
     struct MultiWriteDesktopProvider {
         descriptor: ProviderDescriptor,
+    }
+
+    #[derive(Debug)]
+    struct BlockingDesktopProvider {
+        descriptor: ProviderDescriptor,
+        started: Arc<AtomicBool>,
+    }
+
+    impl BlockingDesktopProvider {
+        fn new(started: Arc<AtomicBool>) -> Self {
+            Self {
+                descriptor: ProviderDescriptor::new(
+                    "provider:blocking-test",
+                    "Blocking Test Provider",
+                    ProviderLocality::Local,
+                    4_096,
+                    512,
+                    ProviderCapabilities {
+                        supported: BTreeSet::from([ProviderCapability::Cancellation]),
+                    },
+                )
+                .expect("provider descriptor"),
+                started,
+            }
+        }
+    }
+
+    impl ProviderAdapter for BlockingDesktopProvider {
+        fn descriptor(&self) -> &ProviderDescriptor {
+            &self.descriptor
+        }
+
+        fn complete(
+            &self,
+            _request: &ProviderRequest,
+            context: &ProviderExecutionContext,
+        ) -> Result<ProviderResponse, ProviderError> {
+            self.started.store(true, Ordering::Release);
+            while !context.cancellation.is_cancelled() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(ProviderError::new(
+                ProviderErrorKind::Cancelled,
+                "provider request was cancelled",
+            ))
+        }
     }
 
     impl TwoStepDesktopProvider {
@@ -5766,6 +5927,7 @@ mod tests {
             128,
             true,
             BTreeSet::from(["pet.position.move".to_owned()]),
+            CancellationFlag::default(),
         )
         .expect("first provider step");
         let super::ProviderAgentOutcome::Waiting { pending, .. } = outcome else {
@@ -5824,6 +5986,7 @@ mod tests {
             128,
             true,
             BTreeSet::from(["runtime.health.read".to_owned()]),
+            CancellationFlag::default(),
         );
         assert!(matches!(result, Err(DesktopError::Agent(_))));
         assert!(
@@ -5869,6 +6032,7 @@ mod tests {
             128,
             true,
             BTreeSet::from(["pet.position.move".to_owned()]),
+            CancellationFlag::default(),
         )
         .expect("first provider step");
         let run_result = super::desktop_agent_run_result(outcome);
@@ -5991,6 +6155,85 @@ mod tests {
                 &state
             )
             .is_err()
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn user_cancellation_reaches_an_inflight_provider_step() {
+        let (root, state) = normal_desktop_state();
+        let started = Arc::new(AtomicBool::new(false));
+        let mut providers = ProviderRegistry::default();
+        providers
+            .register(BlockingDesktopProvider::new(Arc::clone(&started)))
+            .expect("register provider");
+        let task = AgentTask::new(
+            AgentTaskOrigin::Desktop,
+            "desktop:test-user",
+            "provider:blocking-test",
+            AgentBudget::default(),
+            super::current_time_ms().expect("clock"),
+        )
+        .expect("task");
+        let task_id = task.id;
+        let cancellation =
+            super::provider_agent_cancellation(&state, task_id).expect("register cancellation");
+
+        std::thread::scope(|scope| {
+            let execution = scope.spawn(|| {
+                super::advance_provider_agent(
+                    &providers,
+                    &state,
+                    task,
+                    "model:blocking-test".to_owned(),
+                    vec![ProviderMessage::text(
+                        ProviderMessageRole::User,
+                        "等待取消",
+                        DataClassification::Personal,
+                        true,
+                    )],
+                    512,
+                    true,
+                    BTreeSet::new(),
+                    cancellation,
+                )
+            });
+            while !started.load(Ordering::Acquire) {
+                std::thread::yield_now();
+            }
+            assert!(cancel_agent_task_inner(&state, task_id).expect("cancel task"));
+            assert!(execution.join().expect("provider thread").is_err());
+        });
+        assert!(
+            state
+                .active_agent_tasks
+                .lock()
+                .expect("active tasks")
+                .is_empty()
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn safe_mode_cancels_provider_tasks_before_they_request_tools() {
+        let (root, state) = normal_desktop_state();
+        let task_id = Uuid::now_v7();
+        let cancellation = CancellationFlag::default();
+        state
+            .active_agent_tasks
+            .lock()
+            .expect("active tasks")
+            .insert(task_id, cancellation.clone());
+
+        cancel_all_pending_agent_tools(&state).expect("cancel active Agent tasks");
+
+        assert!(cancellation.is_cancelled());
+        assert!(
+            state
+                .active_agent_tasks
+                .lock()
+                .expect("active tasks")
+                .is_empty()
         );
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
