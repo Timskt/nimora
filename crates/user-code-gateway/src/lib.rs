@@ -17,6 +17,7 @@ pub struct GatewayEnvelope {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CapabilityRequest {
     ReadPetState,
+    ReadProfileState,
     ReadLocalData { key: String },
     WriteLocalData { key: String, value: Value },
     DeleteLocalData { key: String },
@@ -27,6 +28,7 @@ pub enum CapabilityRequest {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CapabilityResponse {
     PetState { value: Value },
+    ProfileState { value: Value },
     LocalData { value: Option<Value> },
     LocalDataWritten,
     LocalDataDeleted { deleted: bool },
@@ -40,6 +42,13 @@ pub trait CapabilityBackend: std::fmt::Debug + Send + Sync {
     ///
     /// Returns a backend-specific error when state cannot be read.
     fn read_pet_state(&self) -> Result<Value, String>;
+
+    /// Returns a serialized Profile snapshot without exposing its repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend-specific error when Profile state cannot be read.
+    fn read_profile_state(&self) -> Result<Value, String>;
 
     /// Reads a value from the program's isolated local-data namespace.
     ///
@@ -134,6 +143,15 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
                     .map(|value| CapabilityResponse::PetState { value })
                     .map_err(GatewayError::Backend)
             }
+            CapabilityRequest::ReadProfileState => {
+                if !policy.can_read_profile_state {
+                    return Err(GatewayError::CapabilityDenied);
+                }
+                self.backend
+                    .read_profile_state()
+                    .map(|value| CapabilityResponse::ProfileState { value })
+                    .map_err(GatewayError::Backend)
+            }
             CapabilityRequest::ReadLocalData { key } => {
                 if !policy.can_store_local_data {
                     return Err(GatewayError::CapabilityDenied);
@@ -198,6 +216,10 @@ mod tests {
             Ok(json!({"state": "idle"}))
         }
 
+        fn read_profile_state(&self) -> Result<Value, String> {
+            Ok(json!({"activeProfileId": "profile-1"}))
+        }
+
         fn read_local_data(&self, _program_id: &str, key: &str) -> Result<Option<Value>, String> {
             Ok(Some(json!({"key": key})))
         }
@@ -237,6 +259,7 @@ mod tests {
             version: "1.0.0".into(),
             capabilities: vec![
                 Capability::ReadPetState,
+                Capability::ReadProfileState,
                 Capability::InvokeSafeCommands,
                 Capability::StoreLocalData,
             ],
@@ -352,5 +375,40 @@ mod tests {
                 value: Some(json!({"key": "settings"}))
             }
         );
+    }
+
+    #[test]
+    fn dispatches_authorized_profile_state() {
+        let policy = policy();
+        let execution = ExecutionController::default().admit(&policy).unwrap();
+        let response = CapabilityGateway::new(Backend)
+            .dispatch(
+                &policy,
+                &execution,
+                envelope(&execution, CapabilityRequest::ReadProfileState),
+            )
+            .unwrap();
+        assert_eq!(
+            response,
+            CapabilityResponse::ProfileState {
+                value: json!({"activeProfileId": "profile-1"})
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_profile_state_without_explicit_capability() {
+        let mut manifest = policy().manifest;
+        manifest
+            .capabilities
+            .retain(|capability| *capability != Capability::ReadProfileState);
+        let policy = evaluate(manifest).unwrap();
+        let execution = ExecutionController::default().admit(&policy).unwrap();
+        let result = CapabilityGateway::new(Backend).dispatch(
+            &policy,
+            &execution,
+            envelope(&execution, CapabilityRequest::ReadProfileState),
+        );
+        assert_eq!(result, Err(GatewayError::CapabilityDenied));
     }
 }

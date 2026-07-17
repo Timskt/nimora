@@ -47,7 +47,7 @@ export default defineScript({
 脚本 API 仅包含：
 
 - `events.subscribe`：订阅有 Schema 的事件，支持过滤、去抖和背压策略。
-- `queries.get`：读取授权状态，不产生副作用。
+- `queries.get`：读取授权状态，不产生副作用；当前已接入宠物状态与 Profile 快照适配器。
 - `commands.execute/preview/undo`：执行注册命令并继承风险、确认、审计和幂等规则。
 - `storage`：脚本命名空间的配额存储。
 - `schedule`：持久化定时任务，支持时区、休眠补偿和错过策略。

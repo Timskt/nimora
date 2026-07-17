@@ -132,6 +132,7 @@ export interface UserProgramEventSessionStatus {
 
 export type UserProgramCapabilityRequest =
   | { type: "readPetState" }
+  | { type: "readProfileState" }
   | { type: "readLocalData"; key: string }
   | { type: "writeLocalData"; key: string; value: unknown }
   | { type: "deleteLocalData"; key: string }
@@ -146,6 +147,7 @@ export interface UserProgramGatewayEnvelope {
 
 export type UserProgramCapabilityResponse =
   | { type: "petState"; value: unknown }
+  | { type: "profileState"; value: ProfileSnapshot }
   | { type: "localData"; value: unknown | null }
   | { type: "localDataWritten" }
   | { type: "localDataDeleted"; deleted: boolean }

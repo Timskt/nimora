@@ -143,6 +143,7 @@ impl<T> EventTriggerScheduler<T> {
 #[serde(rename_all = "kebab-case")]
 pub enum Capability {
     ReadPetState,
+    ReadProfileState,
     SubscribeEvents,
     InvokeSafeCommands,
     StoreLocalData,
@@ -169,6 +170,7 @@ pub struct ProgramManifest {
 pub struct ExecutionPolicy {
     pub manifest: ProgramManifest,
     pub can_read_pet_state: bool,
+    pub can_read_profile_state: bool,
     pub can_subscribe_events: bool,
     pub can_invoke_commands: bool,
     pub can_store_local_data: bool,
@@ -413,6 +415,9 @@ pub fn evaluate(manifest: ProgramManifest) -> Result<ExecutionPolicy, PolicyErro
     }
     Ok(ExecutionPolicy {
         can_read_pet_state: manifest.capabilities.contains(&Capability::ReadPetState),
+        can_read_profile_state: manifest
+            .capabilities
+            .contains(&Capability::ReadProfileState),
         can_subscribe_events,
         can_invoke_commands,
         can_store_local_data: manifest.capabilities.contains(&Capability::StoreLocalData),
@@ -463,6 +468,7 @@ mod tests {
     fn evaluates_declared_safe_capabilities() {
         let policy = evaluate(manifest()).unwrap();
         assert!(policy.can_read_pet_state);
+        assert!(!policy.can_read_profile_state);
         assert!(policy.can_subscribe_events);
         assert!(policy.can_invoke_commands);
     }

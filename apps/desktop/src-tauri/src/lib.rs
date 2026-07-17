@@ -1067,6 +1067,7 @@ fn permission_grant(manifest: &ProgramManifest) -> ProgramPermissionGrant {
         .iter()
         .map(|capability| match capability {
             Capability::ReadPetState => "read-pet-state",
+            Capability::ReadProfileState => "read-profile-state",
             Capability::SubscribeEvents => "subscribe-events",
             Capability::InvokeSafeCommands => "invoke-safe-commands",
             Capability::StoreLocalData => "store-local-data",
@@ -1182,12 +1183,7 @@ fn execute_user_program_source(
         workers: &state.active_user_program_workers,
         execution_id,
     };
-    let pet = if policy.can_read_pet_state {
-        Some(serde_json::to_value(state.runtime.snapshot()?)?)
-    } else {
-        None
-    };
-    let input = user_program_input(&policy, pet, event);
+    let input = authorized_user_program_input(state, &policy, event)?;
     let request = WorkerMessage::Run {
         manifest: serde_json::to_value(manifest)?,
         source,
@@ -1276,6 +1272,7 @@ fn parse_user_program_plan(value: serde_json::Value) -> Result<UserProgramPlan, 
 fn user_program_input(
     policy: &ExecutionPolicy,
     pet: Option<serde_json::Value>,
+    profile: Option<serde_json::Value>,
     event: Option<Event>,
 ) -> serde_json::Value {
     let mut input =
@@ -1285,6 +1282,11 @@ fn user_program_input(
     {
         input.insert("pet".to_owned(), pet);
     }
+    if policy.can_read_profile_state
+        && let Some(profile) = profile
+    {
+        input.insert("profile".to_owned(), profile);
+    }
     if let Some(event) = event {
         input.insert(
             "trigger".to_owned(),
@@ -1292,6 +1294,24 @@ fn user_program_input(
         );
     }
     serde_json::Value::Object(input)
+}
+
+fn authorized_user_program_input(
+    state: &DesktopState,
+    policy: &ExecutionPolicy,
+    event: Option<Event>,
+) -> Result<serde_json::Value, DesktopError> {
+    let pet = if policy.can_read_pet_state {
+        Some(serde_json::to_value(state.runtime.snapshot()?)?)
+    } else {
+        None
+    };
+    let profile = if policy.can_read_profile_state {
+        Some(serde_json::to_value(state.profiles.snapshot()?)?)
+    } else {
+        None
+    };
+    Ok(user_program_input(policy, pet, profile, event))
 }
 
 fn worker_config(app: &AppHandle, execution: &ExecutionHandle) -> WorkerConfig {
@@ -1457,6 +1477,16 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
         serde_json::to_value(
             self.state
                 .runtime
+                .snapshot()
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn read_profile_state(&self) -> Result<serde_json::Value, String> {
+        serde_json::to_value(
+            self.state
+                .profiles
                 .snapshot()
                 .map_err(|error| error.to_string())?,
         )
@@ -1915,7 +1945,7 @@ mod tests {
         })
         .expect("valid policy");
         assert_eq!(
-            user_program_input(&policy, Some(json!({"name": "private"})), None),
+            user_program_input(&policy, Some(json!({"name": "private"})), None, None),
             json!({"schemaVersion": 1})
         );
     }
@@ -1935,8 +1965,36 @@ mod tests {
         })
         .expect("valid policy");
         assert_eq!(
-            user_program_input(&policy, Some(json!({"name": "Aster"})), None),
+            user_program_input(&policy, Some(json!({"name": "Aster"})), None, None),
             json!({"schemaVersion": 1, "pet": {"name": "Aster"}})
+        );
+    }
+
+    #[test]
+    fn includes_profile_state_after_explicit_read_capability() {
+        let policy = evaluate(ProgramManifest {
+            id: "studio.example.profile-read".to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities: vec![Capability::ReadProfileState],
+            subscriptions: vec![],
+            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::default(),
+            event_queue_capacity: 16,
+            commands: vec![],
+            timeout_ms: 1_000,
+            memory_bytes: 1024 * 1024,
+        })
+        .expect("valid policy");
+        assert_eq!(
+            user_program_input(
+                &policy,
+                None,
+                Some(json!({"activeProfileId": "profile-1"})),
+                None,
+            ),
+            json!({
+                "schemaVersion": 1,
+                "profile": {"activeProfileId": "profile-1"}
+            })
         );
     }
 
@@ -1960,7 +2018,7 @@ mod tests {
             json!({"button": "left"}),
         )
         .expect("valid event");
-        let input = user_program_input(&policy, None, Some(event));
+        let input = user_program_input(&policy, None, None, Some(event));
         assert_eq!(input["schemaVersion"], 1);
         assert_eq!(input["trigger"]["type"], "event");
         assert_eq!(
@@ -1977,6 +2035,7 @@ mod tests {
             version: "1.0.0".to_owned(),
             capabilities: vec![
                 Capability::ReadPetState,
+                Capability::ReadProfileState,
                 Capability::SubscribeEvents,
                 Capability::InvokeSafeCommands,
                 Capability::StoreLocalData,
@@ -1992,6 +2051,7 @@ mod tests {
             grant.capabilities,
             [
                 "read-pet-state",
+                "read-profile-state",
                 "subscribe-events",
                 "invoke-safe-commands",
                 "store-local-data",

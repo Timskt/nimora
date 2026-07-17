@@ -82,6 +82,10 @@ describe("desktop platform adapter", () => {
       request: { type: "invokeCommand" as const, command: "safe.pet.animate", arguments: { action: "work" } },
     };
     await api.invokeUserProgramCapability(envelope);
+    await api.invokeUserProgramCapability({
+      ...envelope,
+      request: { type: "readProfileState" as const },
+    });
     await api.stopUserProgram(envelope.executionId);
     expect(invoke.mock.calls).toEqual([
       ["drain_runtime_events"],
@@ -121,6 +125,10 @@ describe("desktop platform adapter", () => {
       ["execute_user_program", { manifest, source: "({ commands: [] })" }],
       ["execute_installed_user_program", { programId: manifest.id }],
       ["invoke_user_program_capability", { envelope }],
+      ["invoke_user_program_capability", { envelope: {
+        ...envelope,
+        request: { type: "readProfileState" },
+      } }],
       ["stop_user_program", { executionId: envelope.executionId }],
     ]);
     expect(startDragging).toHaveBeenCalledOnce();

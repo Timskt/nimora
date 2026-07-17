@@ -36,7 +36,7 @@
 
 `nimora-user-code-host` 提供独立进程 Supervisor 和版本化 JSONL 协议。Supervisor 不在进程内执行用户代码：它启动外部 Worker，关闭标准错误继承，限制协议输出，等待终态消息，并在取消、超时、输出超限或 Worker 崩溃时终止对应进程。Supervisor 本身不授予能力；Worker 的请求仍必须经过 Capability Gateway 和策略层。
 
-`nimora-user-code-gateway` 已实现逐次能力授权。每个请求必须携带与准入句柄一致的 `executionId`、非空 `traceId` 和可选 `idempotencyKey`；读取宠物状态需要 `read-pet-state`，本地数据需要 `store-local-data`，调用命令需要 `invoke-safe-commands`，且命令必须出现在当前程序版本的 Manifest 白名单中。Gateway 只把 JSON 值交给 `CapabilityBackend`，因此其它模块可以通过后端适配器暴露语义能力，而不会把 Core、数据库、Renderer 或 Tauri 句柄交给用户代码。
+`nimora-user-code-gateway` 已实现逐次能力授权。每个请求必须携带与准入句柄一致的 `executionId`、非空 `traceId` 和可选 `idempotencyKey`；读取宠物状态需要 `read-pet-state`，读取当前 Profile 快照需要 `read-profile-state`，本地数据需要 `store-local-data`，调用命令需要 `invoke-safe-commands`，且命令必须出现在当前程序版本的 Manifest 白名单中。Gateway 只把 JSON 值交给 `CapabilityBackend`，因此其它模块可以通过后端适配器暴露语义能力，而不会把 Core、数据库、Renderer 或 Tauri 句柄交给用户代码。
 
 桌面端已提供 `start_user_program`、`invoke_user_program_capability` 和 `stop_user_program` 会话入口，并注册首个 Runtime 后端：读取宠物快照、`safe.pet.animate` 和 `safe.pet.move`。进入安全模式会取消并移除全部活动会话；Gateway 传入的 Trace ID 与幂等键会写入实际 Runtime Command。未注册命令即使名称位于 `safe.*` 且出现在 Manifest 中，也会被后端拒绝。
 
