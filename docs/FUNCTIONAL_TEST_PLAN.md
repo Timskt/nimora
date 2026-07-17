@@ -241,6 +241,7 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-035 | 桌面拒绝与强停 | 拒绝、过期、Safe Mode 和 Recovery Mode 均撤销或拒绝待确认 Invocation；退出 Safe Mode 后旧确认不可恢复 | P0 |
 | AGT-036 | Provider Tool Result 关联 | 续跑消息保留 Assistant Tool Call；Tool Result 必须匹配先前 Call ID 与 Tool ID，孤立、错配和重复结果均在 Provider Adapter 前拒绝 | P0 |
 | AGT-037 | Ollama Tool 续跑载荷 | Worker 向真实 loopback `/api/chat` 发送结构化 Assistant Tool Call 及关联 Tool Result，而不是无关联文本；响应继续经过有界协议校验 | P0 |
+| AGT-038 | 多调用 Turn 原子续跑 | 同一 Provider Turn 按原始顺序聚合结果；缺失、未知、工具错配或重复结果均不能生成下一 Provider Step 的消息 | P0 |
 
 ## 14. 信任中心与安全模式
 

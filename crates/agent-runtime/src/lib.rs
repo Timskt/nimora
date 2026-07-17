@@ -12,7 +12,7 @@ mod provider;
 
 pub use coordinator::{
     AgentCoordinator, CoordinatorError, PlannedToolCall, ProviderStepInput, ProviderStepOutcome,
-    ToolStepOutcome,
+    ProviderToolTurn, ToolStepOutcome,
 };
 pub use deterministic::DeterministicLocalProvider;
 pub use provider::{
@@ -293,6 +293,13 @@ const fn valid_transition(current: AgentTaskStatus, next: AgentTaskStatus) -> bo
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ToolId(String);
+
+impl ToolId {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 impl FromStr for ToolId {
     type Err = AgentRuntimeError;

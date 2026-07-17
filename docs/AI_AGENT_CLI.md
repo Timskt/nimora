@@ -58,6 +58,7 @@ flowchart LR
 - Tool Backend 只能收到描述、受控参数、Trace 和超时，不获得 Provider 凭据或 Agent 内部记忆。
 - `AgentCoordinator` 把模型推进与工具执行拆成独立的确定性单步：Provider 返回的 Tool Call 先转换为新的 `ToolInvocation`，再经过 Registry admission；模型响应不能直接触发 Backend。
 - Provider 续跑消息保留 Assistant 的结构化 Tool Call、Provider Call ID 与 Tool ID；Tool Result 必须引用先前尚未解析的同一调用。未知工具、错配工具、孤立结果和重复结果在进入 Adapter 前拒绝，避免模型把无关模块输出冒充成已授权调用结果。
+- `ProviderToolTurn` 以 Provider 原始调用顺序聚合一个 Turn 的结果；未完成、错配和重复结果不能生成续跑消息。宿主因此可以并行执行只读调用、逐项等待写操作确认，但只能在全部调用成功后把完整结果交回 Provider。
 - 工具执行单步必须校验 Task/Trace 归属，在真正调用模块 Capability Gateway Backend 前扣减工具预算，并重新验证批准指纹。
 
 首个生产工具目录位于 `crates/agent-tools`，当前公开 `pet.state.read`、`profile.state.read`、`pet.animation.play` 与 `pet.position.move`。目录只包含 Tool Descriptor 和固定模块 Adapter，不暴露 `DesktopState`、Repository、Tauri Command、任意命令字符串或文件路径。两个写工具固定映射到 `safe.pet.animate` 和 `safe.pet.move`，模型无法把参数中的字符串提升为 Gateway 命令；Invocation ID 作为幂等键、Task/Trace 作为关联上下文进入共享 Capability Gateway。只读工具允许 Safe 自动执行，两个写工具即使基础风险为 Low 也必须绑定实际参数批准。

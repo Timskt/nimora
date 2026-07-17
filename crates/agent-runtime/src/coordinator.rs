@@ -4,6 +4,7 @@ use super::{
     ToolAdmission, ToolApproval, ToolBackend, ToolInvocation, ToolRegistry, ToolRiskEvaluator,
 };
 use serde_json::Value;
+use std::collections::BTreeMap;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -11,6 +12,81 @@ pub struct PlannedToolCall {
     pub provider_call_id: String,
     pub invocation: ToolInvocation,
     pub admission: ToolAdmission,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderToolTurn {
+    response: ProviderResponse,
+    results: BTreeMap<String, Value>,
+}
+
+impl ProviderToolTurn {
+    /// Starts aggregation for one validated Provider tool-call response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the response is not a non-empty tool-call turn.
+    pub fn new(response: ProviderResponse) -> Result<Self, CoordinatorError> {
+        if response.finish_reason != ProviderFinishReason::ToolCalls
+            || response.tool_calls.is_empty()
+        {
+            return Err(CoordinatorError::InvalidToolTurn);
+        }
+        Ok(Self {
+            response,
+            results: BTreeMap::new(),
+        })
+    }
+
+    /// Records exactly one result against its original Provider call and tool identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unknown, mismatched, or duplicate calls.
+    pub fn record_result(
+        &mut self,
+        provider_call_id: &str,
+        tool_id: &str,
+        output: Value,
+    ) -> Result<(), CoordinatorError> {
+        let call = self
+            .response
+            .tool_calls
+            .iter()
+            .find(|call| call.id == provider_call_id)
+            .ok_or(CoordinatorError::ToolResultCorrelationMismatch)?;
+        if call.tool_id.as_str() != tool_id || self.results.contains_key(provider_call_id) {
+            return Err(CoordinatorError::ToolResultCorrelationMismatch);
+        }
+        self.results.insert(provider_call_id.to_owned(), output);
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.results.len() == self.response.tool_calls.len()
+    }
+
+    /// Produces the Assistant call and ordered Tool results for the next Provider step.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error until every call in the turn has exactly one result.
+    pub fn continuation_messages(&self) -> Result<Vec<ProviderMessage>, CoordinatorError> {
+        if !self.is_complete() {
+            return Err(CoordinatorError::IncompleteToolTurn);
+        }
+        let mut messages = Vec::with_capacity(self.response.tool_calls.len() + 1);
+        messages.push(ProviderMessage::assistant_tool_calls(&self.response));
+        for call in &self.response.tool_calls {
+            let output = self
+                .results
+                .get(&call.id)
+                .ok_or(CoordinatorError::IncompleteToolTurn)?;
+            messages.push(ProviderMessage::tool_result(call, output)?);
+        }
+        Ok(messages)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +130,12 @@ pub enum CoordinatorError {
     Provider(#[from] ProviderError),
     #[error("provider request does not belong to the task")]
     CorrelationMismatch,
+    #[error("provider response is not a valid tool turn")]
+    InvalidToolTurn,
+    #[error("tool result does not match the provider turn")]
+    ToolResultCorrelationMismatch,
+    #[error("provider tool turn is incomplete")]
+    IncompleteToolTurn,
 }
 
 #[derive(Debug)]
@@ -315,6 +397,47 @@ mod tests {
             ToolAdmission::ConfirmationRequired { .. }
         ));
         assert_eq!(task.usage.tool_calls, 0);
+    }
+
+    #[test]
+    fn provider_tool_turn_releases_only_complete_correlated_results() {
+        let (providers, tools, mut task) = fixture();
+        let coordinator = AgentCoordinator::new(&providers, &tools);
+        let ProviderStepOutcome::ToolCalls { response, .. } = coordinator
+            .provider_step(&mut task, input())
+            .expect("provider step")
+        else {
+            panic!("expected tool calls");
+        };
+        let mut turn = ProviderToolTurn::new(response).expect("tool turn");
+        assert!(matches!(
+            turn.continuation_messages(),
+            Err(CoordinatorError::IncompleteToolTurn)
+        ));
+        assert!(matches!(
+            turn.record_result("call:1", "pet.position.move", json!({})),
+            Err(CoordinatorError::ToolResultCorrelationMismatch)
+        ));
+        turn.record_result(
+            "call:1",
+            "profile.appearance.update",
+            json!({"updated": true}),
+        )
+        .expect("matching result");
+        assert!(turn.is_complete());
+        let messages = turn.continuation_messages().expect("continuation");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, ProviderMessageRole::Assistant);
+        assert_eq!(messages[1].role, ProviderMessageRole::Tool);
+        assert_eq!(messages[1].tool_call_id.as_deref(), Some("call:1"));
+        assert!(matches!(
+            turn.record_result(
+                "call:1",
+                "profile.appearance.update",
+                json!({"updated": true})
+            ),
+            Err(CoordinatorError::ToolResultCorrelationMismatch)
+        ));
     }
 
     #[test]
