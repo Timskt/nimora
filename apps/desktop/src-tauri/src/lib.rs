@@ -10,9 +10,16 @@ use nimora_runtime_core::{
     Command, CommandRisk, Event, EventSource, Pet, PetAction, PointerButton, Position, ProfileId,
     ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
 };
-use nimora_user_code_policy::{Capability, PolicyError, ProgramManifest, evaluate};
+use nimora_user_code_gateway::{
+    CapabilityBackend, CapabilityGateway, CapabilityResponse, GatewayEnvelope, GatewayError,
+};
+use nimora_user_code_policy::{
+    Capability, ExecutionController, ExecutionHandle, ExecutionPolicy, PolicyError,
+    ProgramManifest, WorkerError, evaluate,
+};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     io,
     path::{Path, PathBuf},
     sync::{
@@ -27,6 +34,7 @@ use tauri::{
     tray::{TrayIconBuilder, TrayIconEvent},
 };
 use thiserror::Error;
+use uuid::Uuid;
 
 const CONTROL_CENTER_LABEL: &str = "control-center";
 const PET_WINDOW_LABEL: &str = "pet";
@@ -44,6 +52,14 @@ struct DesktopState {
     position_revision: AtomicU64,
     dragging: AtomicBool,
     asset_store: PathBuf,
+    user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
+    execution_controller: ExecutionController,
+}
+
+#[derive(Debug)]
+struct UserProgramSession {
+    policy: ExecutionPolicy,
+    execution: ExecutionHandle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -91,6 +107,8 @@ impl DesktopState {
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
             asset_store,
+            user_programs: Mutex::new(HashMap::new()),
+            execution_controller: ExecutionController::default(),
         })
     }
 }
@@ -159,6 +177,15 @@ struct ProgramPolicyReport {
     memory_bytes: u64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProgramSessionReceipt {
+    execution_id: Uuid,
+    program_id: String,
+    timeout_ms: u64,
+    memory_bytes: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TrayAction {
     OpenControlCenter,
@@ -208,6 +235,12 @@ enum DesktopError {
     InvalidAssetIdentifier,
     #[error(transparent)]
     UserCodePolicy(#[from] PolicyError),
+    #[error(transparent)]
+    UserCodeWorker(#[from] WorkerError),
+    #[error(transparent)]
+    UserCodeGateway(#[from] GatewayError),
+    #[error("user program execution was not found")]
+    UserProgramNotFound,
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -303,6 +336,7 @@ fn enter_safe_mode(
     apply_window_policy(&app, previous_policy, WindowPolicy::SAFE)?;
     match state.safety.enter(SafeModeReason::Manual) {
         Ok(command) => {
+            cancel_all_user_programs(&state)?;
             *state
                 .policy_before_safe_mode
                 .lock()
@@ -530,6 +564,135 @@ fn validate_user_program(
         timeout_ms: policy.manifest.timeout_ms,
         memory_bytes: policy.manifest.memory_bytes,
     })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn start_user_program(
+    state: State<'_, DesktopState>,
+    manifest: ProgramManifest,
+) -> Result<UserProgramSessionReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let policy = evaluate(manifest)?;
+    let execution = state.execution_controller.admit(&policy)?;
+    let execution_id = execution.execution_id();
+    let receipt = UserProgramSessionReceipt {
+        execution_id,
+        program_id: policy.manifest.id.clone(),
+        timeout_ms: policy.manifest.timeout_ms,
+        memory_bytes: policy.manifest.memory_bytes,
+    };
+    state
+        .user_programs
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .insert(execution_id, UserProgramSession { policy, execution });
+    Ok(receipt)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn invoke_user_program_capability(
+    state: State<'_, DesktopState>,
+    envelope: GatewayEnvelope,
+) -> Result<CapabilityResponse, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let execution_id = envelope
+        .execution_id
+        .parse::<Uuid>()
+        .map_err(|_| DesktopError::UserProgramNotFound)?;
+    let sessions = state
+        .user_programs
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    let session = sessions
+        .get(&execution_id)
+        .ok_or(DesktopError::UserProgramNotFound)?;
+    Ok(
+        CapabilityGateway::new(DesktopCapabilityBackend { state: &state }).dispatch(
+            &session.policy,
+            &session.execution,
+            envelope,
+        )?,
+    )
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn stop_user_program(
+    state: State<'_, DesktopState>,
+    execution_id: Uuid,
+) -> Result<(), DesktopError> {
+    let session = state
+        .user_programs
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .remove(&execution_id)
+        .ok_or(DesktopError::UserProgramNotFound)?;
+    session.execution.cancel();
+    Ok(())
+}
+
+fn cancel_all_user_programs(state: &DesktopState) -> Result<(), DesktopError> {
+    let mut sessions = state
+        .user_programs
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    for session in sessions.values() {
+        session.execution.cancel();
+    }
+    sessions.clear();
+    Ok(())
+}
+
+#[derive(Debug)]
+struct DesktopCapabilityBackend<'a> {
+    state: &'a DesktopState,
+}
+
+impl CapabilityBackend for DesktopCapabilityBackend<'_> {
+    fn read_pet_state(&self) -> Result<serde_json::Value, String> {
+        serde_json::to_value(
+            self.state
+                .runtime
+                .snapshot()
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn invoke_command(
+        &self,
+        command: &str,
+        arguments: serde_json::Value,
+        trace_id: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let mut result = match command {
+            "safe.pet.animate" => {
+                let action = serde_json::from_value::<PetAction>(
+                    arguments
+                        .get("action")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
+                .map_err(|error| error.to_string())?;
+                self.state.runtime.play_action(action)
+            }
+            "safe.pet.move" => {
+                let position = serde_json::from_value::<Position>(arguments)
+                    .map_err(|error| error.to_string())?;
+                self.state.runtime.move_pet(position)
+            }
+            _ => return Err("command has no registered desktop backend".to_owned()),
+        }
+        .map_err(|error| error.to_string())?;
+        result.trace_id = trace_id
+            .parse::<Uuid>()
+            .map_err(|error| error.to_string())?;
+        result.idempotency_key = idempotency_key.map(ToOwned::to_owned);
+        serde_json::to_value(result).map_err(|error| error.to_string())
+    }
 }
 
 fn valid_asset_identifier(value: &str) -> bool {
@@ -830,7 +993,10 @@ pub fn run() {
             set_click_through,
             install_asset,
             rollback_asset,
-            validate_user_program
+            validate_user_program,
+            start_user_program,
+            invoke_user_program_capability,
+            stop_user_program
         ])
         .run(tauri::generate_context!())
         .expect("Nimora desktop runtime failed");

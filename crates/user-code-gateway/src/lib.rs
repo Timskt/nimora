@@ -2,6 +2,7 @@ use nimora_user_code_policy::{ExecutionHandle, ExecutionPolicy, WorkerError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,8 +51,8 @@ pub trait CapabilityBackend: std::fmt::Debug + Send + Sync {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum GatewayError {
-    #[error("execution or trace identifier is missing")]
-    MissingContext,
+    #[error("execution or trace identifier is invalid")]
+    InvalidContext,
     #[error("execution identifier does not match the admitted worker")]
     ExecutionMismatch,
     #[error("capability was not granted")]
@@ -88,8 +89,10 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
         envelope: GatewayEnvelope,
     ) -> Result<CapabilityResponse, GatewayError> {
         execution.checkpoint()?;
-        if envelope.execution_id.trim().is_empty() || envelope.trace_id.trim().is_empty() {
-            return Err(GatewayError::MissingContext);
+        if envelope.execution_id.parse::<Uuid>().is_err()
+            || envelope.trace_id.parse::<Uuid>().is_err()
+        {
+            return Err(GatewayError::InvalidContext);
         }
         if envelope.execution_id != execution.execution_id().to_string() {
             return Err(GatewayError::ExecutionMismatch);
@@ -171,7 +174,7 @@ mod tests {
     fn envelope(execution: &ExecutionHandle, request: CapabilityRequest) -> GatewayEnvelope {
         GatewayEnvelope {
             execution_id: execution.execution_id().to_string(),
-            trace_id: "trace-1".into(),
+            trace_id: Uuid::now_v7().to_string(),
             idempotency_key: Some("once-1".into()),
             request,
         }

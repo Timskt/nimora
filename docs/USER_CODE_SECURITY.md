@@ -36,6 +36,8 @@
 
 `nimora-user-code-gateway` 已实现逐次能力授权。每个请求必须携带与准入句柄一致的 `executionId`、非空 `traceId` 和可选 `idempotencyKey`；读取宠物状态需要 `read-pet-state`，调用命令需要 `invoke-safe-commands`，且命令必须出现在当前程序版本的 Manifest 白名单中。Gateway 只把 JSON 值交给 `CapabilityBackend`，因此其它模块可以通过后端适配器暴露语义能力，而不会把 Core、数据库、Renderer 或 Tauri 句柄交给用户代码。
 
+桌面端已提供 `start_user_program`、`invoke_user_program_capability` 和 `stop_user_program` 会话入口，并注册首个 Runtime 后端：读取宠物快照、`safe.pet.animate` 和 `safe.pet.move`。进入安全模式会取消并移除全部活动会话；Gateway 传入的 Trace ID 与幂等键会写入实际 Runtime Command。未注册命令即使名称位于 `safe.*` 且出现在 Manifest 中，也会被后端拒绝。
+
 ## 模块调用模型
 
 ```text
@@ -59,4 +61,4 @@ User Code
 - 审计日志、失败重试上限和安全模式联动。
 - 离线环境中仍可运行已安装代码，但不能绕过本地策略。
 
-当前仓库已完成 Manifest 策略评估、Tauri 校验入口、Worker 准入边界、独立进程 Supervisor、逐请求 Capability Gateway、取消/截止时间/输出预算和契约测试；JS/WASM 引擎适配、强制内存限制、桌面模块后端注册和用户代码安装生命周期尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。
+当前仓库已完成 Manifest 策略评估、Tauri 会话入口、Worker 准入边界、独立进程 Supervisor、逐请求 Capability Gateway、首个桌面 Runtime 后端、取消/截止时间/输出预算和契约测试；JS/WASM 引擎适配、强制内存限制、更多模块后端和用户代码安装生命周期尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。

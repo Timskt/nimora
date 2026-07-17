@@ -51,6 +51,15 @@ describe("desktop platform adapter", () => {
       memoryBytes: 8 * 1024 * 1024,
     };
     await api.validateUserProgram(manifest);
+    await api.startUserProgram(manifest);
+    const envelope = {
+      executionId: "018f0000-0000-7000-8000-000000000001",
+      traceId: "018f0000-0000-7000-8000-000000000002",
+      idempotencyKey: "action-1",
+      request: { type: "invokeCommand" as const, command: "safe.pet.animate", arguments: { action: "work" } },
+    };
+    await api.invokeUserProgramCapability(envelope);
+    await api.stopUserProgram(envelope.executionId);
     expect(invoke.mock.calls).toEqual([
       ["drain_runtime_events"],
       ["profile_snapshot"],
@@ -74,6 +83,9 @@ describe("desktop platform adapter", () => {
       } }],
       ["rollback_asset", { assetId: "character.example.mochi" }],
       ["validate_user_program", { manifest }],
+      ["start_user_program", { manifest }],
+      ["invoke_user_program_capability", { envelope }],
+      ["stop_user_program", { executionId: envelope.executionId }],
     ]);
     expect(startDragging).toHaveBeenCalledOnce();
   });

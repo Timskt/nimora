@@ -18,10 +18,12 @@ nimora-persistence-sqlite = { path = "../../../crates/persistence-sqlite" }
 nimora-runtime-app = { path = "../../../crates/runtime-app" }
 nimora-runtime-core = { path = "../../../crates/runtime-core" }
 nimora-user-code-policy = { path = "../../../crates/user-code-policy" }
+nimora-user-code-gateway = { path = "../../../crates/user-code-gateway" }
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.11", features = ["macos-private-api", "tray-icon"] }
 thiserror.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

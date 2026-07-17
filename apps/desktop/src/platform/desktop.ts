@@ -63,6 +63,28 @@ export interface ProgramPolicyReport {
   memoryBytes: number;
 }
 
+export interface UserProgramSessionReceipt {
+  executionId: string;
+  programId: string;
+  timeoutMs: number;
+  memoryBytes: number;
+}
+
+export type UserProgramCapabilityRequest =
+  | { type: "readPetState" }
+  | { type: "invokeCommand"; command: string; arguments: unknown };
+
+export interface UserProgramGatewayEnvelope {
+  executionId: string;
+  traceId: string;
+  idempotencyKey?: string;
+  request: UserProgramCapabilityRequest;
+}
+
+export type UserProgramCapabilityResponse =
+  | { type: "petState"; value: unknown }
+  | { type: "commandAccepted"; value: NimoraCommand };
+
 export interface DesktopApi {
   readonly native: boolean;
   snapshot(): Promise<DesktopSnapshot>;
@@ -80,6 +102,9 @@ export interface DesktopApi {
   installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
   rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
   validateUserProgram(manifest: UserProgramManifest): Promise<ProgramPolicyReport | null>;
+  startUserProgram(manifest: UserProgramManifest): Promise<UserProgramSessionReceipt | null>;
+  invokeUserProgramCapability(envelope: UserProgramGatewayEnvelope): Promise<UserProgramCapabilityResponse | null>;
+  stopUserProgram(executionId: string): Promise<void>;
 }
 
 type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -142,6 +167,9 @@ export function createDesktopApi(
       async installAsset() { return null; },
       async rollbackAsset() { return null; },
       async validateUserProgram() { return null; },
+      async startUserProgram() { return null; },
+      async invokeUserProgramCapability() { return null; },
+      async stopUserProgram() {},
     };
   }
 
@@ -173,6 +201,9 @@ export function createDesktopApi(
     installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
     rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,
     validateUserProgram: async (manifest) => await invokeCommand("validate_user_program", { manifest }) as ProgramPolicyReport,
+    startUserProgram: async (manifest) => await invokeCommand("start_user_program", { manifest }) as UserProgramSessionReceipt,
+    invokeUserProgramCapability: async (envelope) => await invokeCommand("invoke_user_program_capability", { envelope }) as UserProgramCapabilityResponse,
+    stopUserProgram: async (executionId) => { await invokeCommand("stop_user_program", { executionId }); },
   };
 }
 

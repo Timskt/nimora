@@ -1829,12 +1829,14 @@ dependencies = [
  "nimora-persistence-sqlite",
  "nimora-runtime-app",
  "nimora-runtime-core",
+ "nimora-user-code-gateway",
  "nimora-user-code-policy",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
@@ -1878,6 +1880,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
