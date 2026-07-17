@@ -30,6 +30,20 @@ export interface OutboxSnapshot {
   deadLetter: number;
 }
 
+export interface BackupRecord {
+  id: string;
+  createdAtMs: number;
+  bytes: number;
+}
+
+export interface BackupHealth {
+  due: boolean;
+  latest: BackupRecord | null;
+  available: BackupRecord[];
+  pendingRestore: string | null;
+  lastError: string | null;
+}
+
 export interface InstallAssetRequest {
   sourcePath: string;
 }
@@ -260,6 +274,9 @@ export interface DesktopApi {
   snapshot(): Promise<DesktopSnapshot>;
   drainEvents(): Promise<NimoraEvent[]>;
   outboxSnapshot(): Promise<OutboxSnapshot>;
+  backupHealth(): Promise<BackupHealth>;
+  createBackup(): Promise<BackupRecord | null>;
+  requestDatabaseRestore(backupId: string): Promise<void>;
   profiles(): Promise<ProfileSnapshot>;
   createProfile(name: string, policy: ProfilePolicy): Promise<NimoraCommand | null>;
   switchProfile(profileId: string): Promise<NimoraCommand | null>;
@@ -348,6 +365,9 @@ export function createDesktopApi(
       async snapshot() { return structuredClone(previewSnapshot); },
       async drainEvents() { return []; },
       async outboxSnapshot() { return { pending: 0, leased: 0, delivered: 0, deadLetter: 0 }; },
+      async backupHealth() { return { due: true, latest: null, available: [], pendingRestore: null, lastError: null }; },
+      async createBackup() { return null; },
+      async requestDatabaseRestore() {},
       async profiles() { return structuredClone(previewProfiles); },
       async createProfile() { return null; },
       async switchProfile() { return null; },
@@ -409,6 +429,9 @@ export function createDesktopApi(
     snapshot: async () => await invokeCommand("desktop_snapshot") as DesktopSnapshot,
     drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],
     outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,
+    backupHealth: async () => await invokeCommand("backup_health") as BackupHealth,
+    createBackup: async () => await invokeCommand("create_backup") as BackupRecord,
+    requestDatabaseRestore: async (backupId) => { await invokeCommand("request_database_restore", { backupId }); },
     profiles: async () => await invokeCommand("profile_snapshot") as ProfileSnapshot,
     createProfile: async (name, policy) => await invokeCommand("create_profile", { name, policy }) as NimoraCommand,
     switchProfile: async (profileId) => await invokeCommand("switch_profile", { profileId }) as NimoraCommand,

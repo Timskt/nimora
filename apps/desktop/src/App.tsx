@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ProfileManager } from "./components/ProfileManager";
 import { CreatorStudio } from "./components/CreatorStudio";
+import { DataProtection } from "./components/DataProtection";
 import type { OutboxSnapshot } from "./platform/desktop";
 import { desktopApi } from "./platform/desktop";
 
@@ -107,7 +108,7 @@ export function App() {
           </div>
         </header>
 
-        {active === "角色" || active === "扩展" ? <CreatorStudio /> : <div className="dashboard-grid">
+        {active === "角色" || active === "扩展" ? <CreatorStudio /> : active === "设置" ? <DataProtection onNotice={updateNotice} /> : <div className="dashboard-grid">
           <section className="pet-stage" aria-labelledby="pet-heading">
             <div className="stage-copy">
               <span className="pill">{notice}</span>

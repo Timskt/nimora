@@ -19,7 +19,7 @@
 |---|---|---|---|
 | 桌宠窗口与交互 | 部分实现 | Tauri 透明双窗口、拖拽、置顶、穿透、托盘、安全模式、Click/Drag FSM 与 Rust 测试 | Windows/macOS 真机冒烟、多屏/DPI、WebView 崩溃恢复、长稳验证 |
 | UI 与设计系统 | 部分实现 | Control Center、Creator Studio、Overlay、Token 与组件样式、前端单测和构建 | 浏览器真实截图、键盘/读屏/200% 缩放、关键状态视觉回归、跨平台像素审查 |
-| Profile 与离线状态 | 部分实现 | 唯一 SQLite Schema、离线 Profile、原子快照与 Online Backup API | 自动备份调度、恢复 UI、只读故障启动、休眠与时钟异常场景 |
+| Profile 与离线状态 | 部分实现 | 唯一 SQLite Schema、离线 Profile、6 小时备份调度、15 分钟检查、保留 12 份、Online Backup 一致性验证、启动前原子恢复、设置 UI、Rust/TS 测试与 Chrome 实测 | 只读故障启动、休眠与时钟异常、跨平台真机故障注入、导出与跨设备备份 |
 | Event 与持久 Outbox | 部分实现 | 事务写入、租约、ACK、重试、死信、清理、健康状态和自动化测试 | 具体幂等消费者、跨重启投递恢复、Connector 投递审计 |
 | Sprite 角色与皮肤 | 部分实现 | 严格包契约、安全导入导出、序列/图集真实渲染、动作 fallback | 独立预览实例、命中区编辑、连续切换泄漏与性能门禁 |
 | glTF/GLB 角色 | 部分实现 | 独立 Worker 探测、命名动画报告、可编辑标准动作映射、原子安装、受控协议、Three.js 真渲染、cross-fade、framing、释放与失败回退 | 独立预览、持续切换与 GPU 压测、真实截图和跨平台验证 |

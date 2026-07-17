@@ -18,6 +18,9 @@ describe("desktop platform adapter", () => {
     const api = createDesktopApi(true, invoke, startDragging);
     await api.drainEvents();
     await api.outboxSnapshot();
+    await api.backupHealth();
+    await api.createBackup();
+    await api.requestDatabaseRestore("runtime-1700000000000.sqlite3");
     await api.profiles();
     const policy = {
       mode: "focus" as const,
@@ -106,6 +109,9 @@ describe("desktop platform adapter", () => {
     expect(invoke.mock.calls).toEqual([
       ["drain_runtime_events"],
       ["outbox_snapshot"],
+      ["backup_health"],
+      ["create_backup"],
+      ["request_database_restore", { backupId: "runtime-1700000000000.sqlite3" }],
       ["profile_snapshot"],
       ["create_profile", { name: "Focus", policy }],
       ["switch_profile", { profileId: "00000000-0000-4000-8000-000000000010" }],

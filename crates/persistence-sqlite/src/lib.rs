@@ -1,5 +1,12 @@
 //! `SQLite` persistence adapters for the `Nimora` runtime.
 
+mod backup;
+
+pub use backup::{
+    BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, PendingRestore,
+    apply_pending_restore,
+};
+
 use nimora_runtime_app::{
     PetRepository, ProfileRepository, ProfileServiceError, ProfileSnapshot, RepositoryError,
 };
@@ -806,6 +813,8 @@ pub enum SqlitePersistenceError {
     InvalidOutboxRequest,
     #[error("outbox lease is not owned by this consumer")]
     OutboxLeaseNotOwned,
+    #[error("backup or restore request is invalid")]
+    InvalidBackupRequest,
     #[error("pet snapshot metadata and payload versions do not match")]
     SnapshotVersionMismatch,
     #[error(transparent)]
@@ -816,6 +825,20 @@ pub enum SqlitePersistenceError {
     Pet(#[from] nimora_runtime_core::PetError),
     #[error(transparent)]
     Profile(#[from] ProfileServiceError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    SystemClock(#[from] std::time::SystemTimeError),
+}
+
+fn verify_database_file(path: &Path) -> Result<(), SqlitePersistenceError> {
+    let mut connection = Connection::open(path)?;
+    prepare_connection(&mut connection)?;
+    let integrity: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    if integrity != "ok" {
+        return Err(SqlitePersistenceError::InvalidBackupRequest);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

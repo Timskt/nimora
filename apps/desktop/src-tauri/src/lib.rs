@@ -9,8 +9,9 @@ use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
 };
 use nimora_persistence_sqlite::{
-    OutboxSnapshot, ProgramPermissionGrant, SqliteOutboxRepository, SqlitePersistenceError,
-    SqlitePetRepository, SqliteProfileRepository, SqliteProgramPermissionRepository,
+    BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, OutboxSnapshot,
+    ProgramPermissionGrant, SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository,
+    SqliteProfileRepository, SqliteProgramPermissionRepository, apply_pending_restore,
 };
 use nimora_runtime_app::{
     ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBatch,
@@ -84,6 +85,8 @@ struct DesktopState {
     program_data_store: ProgramDataStore,
     program_permissions: SqliteProgramPermissionRepository,
     outbox: SqliteOutboxRepository,
+    backups: BackupCoordinator,
+    backup_last_error: Mutex<Option<String>>,
     user_program_event_sessions: Mutex<HashMap<Uuid, UserProgramEventSession>>,
     active_user_program_workers: Mutex<HashMap<Uuid, ActiveUserProgramWorker>>,
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
@@ -158,6 +161,7 @@ impl DesktopState {
         database_path: &Path,
         asset_store: PathBuf,
         program_store: PathBuf,
+        backups: BackupCoordinator,
     ) -> Result<Self, DesktopError> {
         let events = RuntimeEventBus::default();
         let runtime = RuntimeService::initialize_with_event_bus(
@@ -187,6 +191,8 @@ impl DesktopState {
             program_data_store,
             program_permissions: SqliteProgramPermissionRepository::open(database_path)?,
             outbox: SqliteOutboxRepository::open(database_path)?,
+            backups,
+            backup_last_error: Mutex::new(None),
             user_program_event_sessions: Mutex::new(HashMap::new()),
             active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
@@ -586,6 +592,66 @@ fn outbox_snapshot(
         return Err(DesktopError::WindowForbidden);
     }
     Ok(state.outbox.snapshot()?)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn backup_health(
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+) -> Result<BackupHealth, DesktopError> {
+    if window.label() != CONTROL_CENTER_LABEL {
+        return Err(DesktopError::WindowForbidden);
+    }
+    let mut health = state.backups.health()?;
+    let last_error = state
+        .backup_last_error
+        .lock()
+        .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
+    health.last_error.clone_from(&last_error);
+    Ok(health)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn create_backup(
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+) -> Result<BackupRecord, DesktopError> {
+    if window.label() != CONTROL_CENTER_LABEL {
+        return Err(DesktopError::WindowForbidden);
+    }
+    ensure_normal_mode(&state)?;
+    match state.backups.create_now() {
+        Ok(record) => {
+            *state
+                .backup_last_error
+                .lock()
+                .map_err(|_| SqlitePersistenceError::StatePoisoned)? = None;
+            Ok(record)
+        }
+        Err(error) => {
+            if let Ok(mut last_error) = state.backup_last_error.lock() {
+                *last_error = Some(error.to_string());
+            }
+            Err(error.into())
+        }
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn request_database_restore(
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+    backup_id: String,
+) -> Result<(), DesktopError> {
+    if window.label() != CONTROL_CENTER_LABEL {
+        return Err(DesktopError::WindowForbidden);
+    }
+    ensure_normal_mode(&state)?;
+    state.backups.request_restore(&backup_id)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2709,18 +2775,7 @@ pub fn run() {
                 .body(response.body)
                 .expect("static asset protocol response is valid")
         })
-        .setup(|app| {
-            let data_directory = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&data_directory)?;
-            app.manage(DesktopState::open(
-                &data_directory.join("runtime.sqlite3"),
-                data_directory.join("assets"),
-                data_directory.join("programs"),
-            )?);
-            create_pet_window(app.handle())?;
-            create_tray(app.handle())?;
-            Ok(())
-        })
+        .setup(setup_application)
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event
                 && window.label() == CONTROL_CENTER_LABEL
@@ -2738,6 +2793,9 @@ pub fn run() {
             desktop_snapshot,
             drain_runtime_events,
             outbox_snapshot,
+            backup_health,
+            create_backup,
+            request_database_restore,
             profile_snapshot,
             create_profile,
             switch_profile,
@@ -2779,6 +2837,44 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("Nimora desktop runtime failed");
+}
+
+fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let data_directory = app.path().app_data_dir()?;
+    std::fs::create_dir_all(&data_directory)?;
+    let database_path = data_directory.join("runtime.sqlite3");
+    let backup_directory = data_directory.join("backups");
+    apply_pending_restore(&database_path, &backup_directory)?;
+    let backups =
+        BackupCoordinator::new(&database_path, &backup_directory, BackupPolicy::default());
+    app.manage(DesktopState::open(
+        &database_path,
+        data_directory.join("assets"),
+        data_directory.join("programs"),
+        backups,
+    )?);
+    let backup_app = app.handle().clone();
+    std::thread::spawn(move || {
+        loop {
+            let state = backup_app.state::<DesktopState>();
+            match state.backups.create_if_due() {
+                Ok(_) => {
+                    if let Ok(mut last_error) = state.backup_last_error.lock() {
+                        *last_error = None;
+                    }
+                }
+                Err(error) => {
+                    if let Ok(mut last_error) = state.backup_last_error.lock() {
+                        *last_error = Some(error.to_string());
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_mins(15));
+        }
+    });
+    create_pet_window(app.handle())?;
+    create_tray(app.handle())?;
+    Ok(())
 }
 
 #[cfg(test)]
