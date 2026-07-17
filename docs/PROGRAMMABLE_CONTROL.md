@@ -75,6 +75,7 @@ any → disabled → deleted
 - 正式运行使用 `execute_installed_user_program(programId)` 从激活版本加载源码；执行前根据安装器生成的 `.nimora-integrity.json` 复验程序身份、版本、完整 inventory、文件大小和 SHA-256，缺失、篡改、额外文件或符号链接都会阻止 Worker 启动，升级与回滚版本携带各自的锁文件。直接提交源码的入口仅用于 Creator Studio 草稿预览，不能替代安装版本身份。
 - 休眠恢复、时钟跳变和离线期间按声明的 missed-run policy 处理。
 - 事件订阅使用独立有界队列，不消费 UI 或其他程序的事件；当前每会话 64 条、全局 32 个会话，满载时丢弃该会话最旧事件并报告 `dropped`，安全模式、撤权、升级与回滚会取消会话。事件过滤器只能来自已安装 Manifest，Renderer 不能注入事件正文。
+- Manifest 使用 `eventConcurrency` 声明 `serial`、`drop` 或 `cancel-previous`，并以 `eventQueueCapacity` 声明 1–64 的每程序触发队列；旧程序缺省为 `serial` 和 16，保证升级兼容。该策略由 Rust 调度器执行，不能由 Renderer 临时放宽。
 
 ## 6. 权限与信任
 

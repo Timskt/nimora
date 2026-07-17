@@ -51,6 +51,8 @@ export interface UserProgramManifest {
   version: string;
   capabilities: readonly UserCodeCapability[];
   subscriptions: readonly string[];
+  eventConcurrency?: "serial" | "drop" | "cancel-previous";
+  eventQueueCapacity?: number;
   commands: readonly string[];
   timeoutMs: number;
   memoryBytes: number;

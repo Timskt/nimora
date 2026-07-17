@@ -131,7 +131,9 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nimora_user_code_policy::{Capability, ExecutionController, ProgramManifest, evaluate};
+    use nimora_user_code_policy::{
+        Capability, EventConcurrencyPolicy, ExecutionController, ProgramManifest, evaluate,
+    };
     use serde_json::json;
 
     #[derive(Debug)]
@@ -164,6 +166,8 @@ mod tests {
             version: "1.0.0".into(),
             capabilities: vec![Capability::ReadPetState, Capability::InvokeSafeCommands],
             subscriptions: vec![],
+            event_concurrency: EventConcurrencyPolicy::default(),
+            event_queue_capacity: 16,
             commands: vec!["safe.pet.animate".into()],
             timeout_ms: 5_000,
             memory_bytes: 8 * 1024 * 1024,

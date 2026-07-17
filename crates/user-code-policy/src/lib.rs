@@ -13,6 +13,20 @@ const MAX_RUNTIME_MS: u64 = 30_000;
 const MAX_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: u64 = 1024 * 1024;
 const MAX_CONCURRENT_EXECUTIONS: usize = 8;
+const MAX_EVENT_QUEUE_CAPACITY: usize = 64;
+
+const fn default_event_queue_capacity() -> usize {
+    16
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EventConcurrencyPolicy {
+    #[default]
+    Serial,
+    Drop,
+    CancelPrevious,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -30,6 +44,10 @@ pub struct ProgramManifest {
     pub version: String,
     pub capabilities: Vec<Capability>,
     pub subscriptions: Vec<String>,
+    #[serde(default)]
+    pub event_concurrency: EventConcurrencyPolicy,
+    #[serde(default = "default_event_queue_capacity")]
+    pub event_queue_capacity: usize,
     pub commands: Vec<String>,
     pub timeout_ms: u64,
     pub memory_bytes: u64,
@@ -184,6 +202,8 @@ pub enum PolicyError {
     InvalidVersion,
     #[error("program declares too many subscriptions")]
     TooManySubscriptions,
+    #[error("event queue capacity must be between 1 and 64")]
+    InvalidEventQueueCapacity,
     #[error("program declares too many commands")]
     TooManyCommands,
     #[error("program timeout exceeds the 30 second limit")]
@@ -214,6 +234,11 @@ pub fn evaluate(manifest: ProgramManifest) -> Result<ExecutionPolicy, PolicyErro
     }
     if manifest.subscriptions.len() > MAX_SUBSCRIPTIONS {
         return Err(PolicyError::TooManySubscriptions);
+    }
+    if manifest.event_queue_capacity == 0
+        || manifest.event_queue_capacity > MAX_EVENT_QUEUE_CAPACITY
+    {
+        return Err(PolicyError::InvalidEventQueueCapacity);
     }
     if manifest.commands.len() > MAX_COMMANDS {
         return Err(PolicyError::TooManyCommands);
@@ -284,6 +309,8 @@ mod tests {
                 Capability::InvokeSafeCommands,
             ],
             subscriptions: vec!["pet.example.clicked".into()],
+            event_concurrency: EventConcurrencyPolicy::Serial,
+            event_queue_capacity: 16,
             commands: vec!["safe.example.notify".into()],
             timeout_ms: 5_000,
             memory_bytes: 8 * 1024 * 1024,
@@ -322,6 +349,29 @@ mod tests {
         let mut value = manifest();
         value.timeout_ms = MAX_RUNTIME_MS + 1;
         assert_eq!(evaluate(value), Err(PolicyError::TimeoutExceeded));
+    }
+
+    #[test]
+    fn rejects_invalid_event_queue_capacity() {
+        let mut value = manifest();
+        value.event_queue_capacity = MAX_EVENT_QUEUE_CAPACITY + 1;
+        assert_eq!(evaluate(value), Err(PolicyError::InvalidEventQueueCapacity));
+    }
+
+    #[test]
+    fn deserializes_backward_compatible_event_defaults() {
+        let value = serde_json::json!({
+            "id": "studio.example.focus",
+            "version": "1.0.0",
+            "capabilities": ["subscribe-events"],
+            "subscriptions": ["pet.example.clicked"],
+            "commands": [],
+            "timeoutMs": 5000,
+            "memoryBytes": 8_388_608
+        });
+        let manifest: ProgramManifest = serde_json::from_value(value).unwrap();
+        assert_eq!(manifest.event_concurrency, EventConcurrencyPolicy::Serial);
+        assert_eq!(manifest.event_queue_capacity, 16);
     }
 
     #[test]

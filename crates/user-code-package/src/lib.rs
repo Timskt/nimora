@@ -2,7 +2,7 @@ use nimora_asset_installer::{
     GeneratedInstallFile, InstallError, InstallFile, InstallResult, RollbackResult,
     install_atomically_with_generated, rollback_latest,
 };
-use nimora_user_code_policy::{PolicyError, ProgramManifest, evaluate};
+use nimora_user_code_policy::{EventConcurrencyPolicy, PolicyError, ProgramManifest, evaluate};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -144,6 +144,8 @@ pub fn rollback_program(
         version: "0.0.0".to_owned(),
         capabilities: vec![],
         subscriptions: vec![],
+        event_concurrency: EventConcurrencyPolicy::default(),
+        event_queue_capacity: 16,
         commands: vec![],
         timeout_ms: 1,
         memory_bytes: 1,
@@ -286,6 +288,8 @@ fn validate_program_id(program_id: &str) -> Result<(), ProgramPackageError> {
         version: "0.0.0".to_owned(),
         capabilities: vec![],
         subscriptions: vec![],
+        event_concurrency: EventConcurrencyPolicy::default(),
+        event_queue_capacity: 16,
         commands: vec![],
         timeout_ms: 1,
         memory_bytes: 1,
@@ -353,6 +357,8 @@ mod tests {
             version: version.to_owned(),
             capabilities: vec![],
             subscriptions: vec![],
+            event_concurrency: EventConcurrencyPolicy::default(),
+            event_queue_capacity: 16,
             commands: vec![],
             timeout_ms: 1_000,
             memory_bytes: 1024 * 1024,
