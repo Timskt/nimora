@@ -36,9 +36,10 @@ use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
 };
 use nimora_persistence_sqlite::{
-    AgentHistoryRecord, AutomationJournalEntry, AutomationRunStart, BackupCoordinator,
-    BackupHealth, BackupPolicy, BackupRecord, DATABASE_VERSION, OutboxSnapshot,
-    ProgramPermissionGrant, SqliteAgentHistoryRepository, SqliteAutomationJournal,
+    AgentHistoryRecord, AutomationAgentJournalEntry, AutomationAgentJournalStatus,
+    AutomationJournalEntry, AutomationRunStart, BackupCoordinator, BackupHealth, BackupPolicy,
+    BackupRecord, DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant,
+    SqliteAgentHistoryRepository, SqliteAutomationAgentJournal, SqliteAutomationJournal,
     SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
     SqliteProgramPermissionRepository, apply_pending_restore, verify_database_file,
 };
@@ -101,7 +102,6 @@ const MAX_MODEL_BYTES: u64 = 80 * 1024 * 1024;
 const MODEL_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PENDING_AGENT_TOOLS: usize = 32;
 const AGENT_TOOL_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
-const MAX_AUTOMATION_AGENT_SUBMISSIONS: usize = 4_096;
 const AUTOMATION_AGENT_REQUESTER: &str = "automation:desktop";
 
 #[derive(Debug)]
@@ -123,7 +123,7 @@ struct DesktopState {
     outbox: SqliteOutboxRepository,
     agent_history: SqliteAgentHistoryRepository,
     automation_journal: SqliteAutomationJournal,
-    automation_agent_submissions: Mutex<HashMap<(Uuid, String), Uuid>>,
+    automation_agent_journal: SqliteAutomationAgentJournal,
     agent_history_last_error: Mutex<bool>,
     backups: BackupCoordinator,
     backup_last_error: Mutex<Option<String>>,
@@ -297,6 +297,8 @@ impl DesktopState {
         )?);
         let automation_journal = SqliteAutomationJournal::open(database_path)?;
         automation_journal.recover_running(current_time_ms()?, "desktop process restarted")?;
+        let automation_agent_journal = SqliteAutomationAgentJournal::open(database_path)?;
+        automation_agent_journal.recover_active(current_time_ms()?)?;
         Ok(Self {
             native_app,
             runtime,
@@ -315,7 +317,7 @@ impl DesktopState {
             outbox: SqliteOutboxRepository::open(database_path)?,
             agent_history: SqliteAgentHistoryRepository::open(database_path)?,
             automation_journal,
-            automation_agent_submissions: Mutex::new(HashMap::new()),
+            automation_agent_journal,
             agent_history_last_error: Mutex::new(false),
             backups,
             backup_last_error: Mutex::new(None),
@@ -376,7 +378,7 @@ impl DesktopState {
             outbox: SqliteOutboxRepository::in_memory()?,
             agent_history: SqliteAgentHistoryRepository::in_memory()?,
             automation_journal: SqliteAutomationJournal::in_memory()?,
-            automation_agent_submissions: Mutex::new(HashMap::new()),
+            automation_agent_journal: SqliteAutomationAgentJournal::in_memory()?,
             agent_history_last_error: Mutex::new(false),
             backups,
             backup_last_error: Mutex::new(None),
@@ -871,33 +873,52 @@ impl AgentTaskSubmitter for DesktopAutomationAgentSubmitter<'_> {
             return Err("automation Agent model is invalid".to_owned());
         }
         ensure_normal_mode(self.state).map_err(|error| error.to_string())?;
-        let submission_key = (task.admission.root_task_id, task.idempotency_key.clone());
+        if self
+            .state
+            .automation_agent_journal
+            .get_by_key(task.admission.root_task_id, &task.idempotency_key)
+            .map_err(|error| error.to_string())?
+            .is_some()
         {
-            let mut submissions = self
-                .state
-                .automation_agent_submissions
-                .lock()
-                .map_err(|_| "automation Agent submission state is unavailable".to_owned())?;
-            if submissions.contains_key(&submission_key) {
-                return Ok(());
-            }
-            if submissions.len() >= MAX_AUTOMATION_AGENT_SUBMISSIONS {
-                return Err("automation Agent submission capacity is exhausted".to_owned());
-            }
-            submissions.insert(submission_key.clone(), task.admission.task.id);
+            return Ok(());
         }
-        let result = self.execute(task);
-        if result.is_err()
-            && let Ok(mut submissions) = self.state.automation_agent_submissions.lock()
-        {
-            submissions.remove(&submission_key);
+        let task_id = task.admission.task.id;
+        let submitted_at_ms = current_time_ms().map_err(|error| error.to_string())?;
+        let journal_entry = AutomationAgentJournalEntry::new(
+            task.admission.root_task_id,
+            task.idempotency_key.clone(),
+            task.admission.clone(),
+            task.model.clone(),
+            submitted_at_ms,
+        )
+        .map_err(|error| error.to_string())?;
+        self.state
+            .automation_agent_journal
+            .submit(&journal_entry)
+            .map_err(|error| error.to_string())?;
+        match self.execute(task) {
+            Ok(outcome) => self
+                .record_outcome(task_id, &outcome)
+                .map_err(|error| error.to_string()),
+            Err(error) => {
+                let bounded_error = error.chars().take(4 * 1024).collect::<String>();
+                self.state
+                    .automation_agent_journal
+                    .transition(
+                        task_id,
+                        AutomationAgentJournalStatus::Failed,
+                        current_time_ms().map_err(|clock| clock.to_string())?,
+                        Some(&bounded_error),
+                    )
+                    .map_err(|journal| journal.to_string())?;
+                Err(error)
+            }
         }
-        result
     }
 }
 
 impl DesktopAutomationAgentSubmitter<'_> {
-    fn execute(&self, task: AutomationAgentTask) -> Result<(), String> {
+    fn execute(&self, task: AutomationAgentTask) -> Result<ProviderAgentOutcome, String> {
         let providers = desktop_provider_registry(self.state).map_err(|error| error.to_string())?;
         let tool_allowlist = task
             .admission
@@ -920,8 +941,26 @@ impl DesktopAutomationAgentSubmitter<'_> {
             true,
             tool_allowlist,
         )
-        .map(|_| ())
         .map_err(|error| error.to_string())
+    }
+
+    fn record_outcome(
+        &self,
+        task_id: Uuid,
+        outcome: &ProviderAgentOutcome,
+    ) -> Result<(), SqlitePersistenceError> {
+        let status = match outcome {
+            ProviderAgentOutcome::Completed { .. } => AutomationAgentJournalStatus::Completed,
+            ProviderAgentOutcome::Waiting { .. } => {
+                AutomationAgentJournalStatus::WaitingForConfirmation
+            }
+        };
+        self.state.automation_agent_journal.transition(
+            task_id,
+            status,
+            current_time_ms().map_err(|_| SqlitePersistenceError::InvalidAutomationAgentJournal)?,
+            None,
+        )
     }
 }
 
@@ -967,6 +1006,40 @@ fn automation_run_status(
     let run_id =
         Uuid::parse_str(run_id).map_err(|_| SqlitePersistenceError::InvalidAutomationJournal)?;
     state.automation_journal.get(run_id).map_err(Into::into)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri managed state command arguments are owned extractors"
+)]
+fn automation_agent_task_status(
+    task_id: &str,
+    state: State<'_, DesktopState>,
+) -> Result<Option<AutomationAgentJournalEntry>, DesktopError> {
+    let task_id = Uuid::parse_str(task_id)
+        .map_err(|_| SqlitePersistenceError::InvalidAutomationAgentJournal)?;
+    state
+        .automation_agent_journal
+        .get_by_task_id(task_id)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri managed state command arguments are owned extractors"
+)]
+fn automation_run_agent_tasks(
+    run_id: &str,
+    state: State<'_, DesktopState>,
+) -> Result<Vec<AutomationAgentJournalEntry>, DesktopError> {
+    let run_id = Uuid::parse_str(run_id)
+        .map_err(|_| SqlitePersistenceError::InvalidAutomationAgentJournal)?;
+    state
+        .automation_agent_journal
+        .list_by_run(run_id)
+        .map_err(Into::into)
 }
 
 fn dry_run_automation(
@@ -1801,7 +1874,8 @@ fn confirm_agent_tool_with_registry(
     }
     let tools = production_tool_registry().map_err(agent_error)?;
     let coordinator = AgentCoordinator::new(providers, &tools);
-    match pending.context.clone() {
+    let automation_task_id = automation_agent_task_id(&pending.context)?;
+    let result = match pending.context.clone() {
         PendingAgentToolContext::Standalone { task } => {
             confirm_standalone_agent_tool(state, &coordinator, pending, task, now_ms)
         }
@@ -1819,7 +1893,11 @@ fn confirm_agent_tool_with_registry(
             &session,
             now_ms,
         ),
+    };
+    if let (Some(task_id), Err(error)) = (automation_task_id, &result) {
+        fail_automation_agent_task(state, task_id, error)?;
     }
+    result
 }
 
 fn confirm_standalone_agent_tool(
@@ -1955,6 +2033,7 @@ fn confirm_provider_agent_tool(
         ProviderAgentOutcome::Completed { task, .. }
         | ProviderAgentOutcome::Waiting { task, .. } => task.clone(),
     };
+    record_automation_agent_outcome(state, &continuation)?;
     Ok((
         completed_agent_tool_result(
             pending,
@@ -1981,6 +2060,93 @@ fn completed_agent_tool_result(
         expires_at_ms: None,
         output: Some(output),
     }
+}
+
+fn record_automation_agent_outcome(
+    state: &DesktopState,
+    outcome: &ProviderAgentOutcome,
+) -> Result<(), DesktopError> {
+    let (task_id, target) = match outcome {
+        ProviderAgentOutcome::Completed { task, .. } => {
+            (task.id, AutomationAgentJournalStatus::Completed)
+        }
+        ProviderAgentOutcome::Waiting { task, .. } => (
+            task.id,
+            AutomationAgentJournalStatus::WaitingForConfirmation,
+        ),
+    };
+    let Some(entry) = state.automation_agent_journal.get_by_task_id(task_id)? else {
+        return Ok(());
+    };
+    if entry.status == target {
+        return Ok(());
+    }
+    state
+        .automation_agent_journal
+        .transition(task_id, target, current_time_ms()?, None)?;
+    Ok(())
+}
+
+fn automation_agent_task_id(
+    context: &PendingAgentToolContext,
+) -> Result<Option<Uuid>, DesktopError> {
+    let PendingAgentToolContext::ProviderTurn { session, .. } = context else {
+        return Ok(None);
+    };
+    Ok(Some(
+        session
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?
+            .task
+            .id,
+    ))
+}
+
+fn cancel_automation_agent_task(state: &DesktopState, task_id: Uuid) -> Result<(), DesktopError> {
+    if state
+        .automation_agent_journal
+        .get_by_task_id(task_id)?
+        .is_some_and(|entry| {
+            matches!(
+                entry.status,
+                AutomationAgentJournalStatus::Submitted
+                    | AutomationAgentJournalStatus::WaitingForConfirmation
+            )
+        })
+    {
+        state.automation_agent_journal.transition(
+            task_id,
+            AutomationAgentJournalStatus::Cancelled,
+            current_time_ms()?,
+            Some("pending Agent task was cancelled"),
+        )?;
+    }
+    Ok(())
+}
+
+fn fail_automation_agent_task(
+    state: &DesktopState,
+    task_id: Uuid,
+    error: &DesktopError,
+) -> Result<(), DesktopError> {
+    let Some(entry) = state.automation_agent_journal.get_by_task_id(task_id)? else {
+        return Ok(());
+    };
+    if !matches!(
+        entry.status,
+        AutomationAgentJournalStatus::Submitted
+            | AutomationAgentJournalStatus::WaitingForConfirmation
+    ) {
+        return Ok(());
+    }
+    let bounded_error = error.to_string().chars().take(4 * 1024).collect::<String>();
+    state.automation_agent_journal.transition(
+        task_id,
+        AutomationAgentJournalStatus::Failed,
+        current_time_ms()?,
+        Some(&bounded_error),
+    )?;
+    Ok(())
 }
 
 fn desktop_provider_registry(state: &DesktopState) -> Result<ProviderRegistry, DesktopError> {
@@ -2040,7 +2206,11 @@ fn reject_agent_tool_inner(
         .map_err(|_| DesktopError::StatePoisoned)?
         .remove(&request.invocation_id)
         .ok_or_else(|| DesktopError::Agent("pending Agent tool was not found".to_owned()))?;
+    let automation_task_id = automation_agent_task_id(&pending.context)?;
     cancel_pending_provider_siblings(state, &pending.context)?;
+    if let Some(task_id) = automation_task_id {
+        cancel_automation_agent_task(state, task_id)?;
+    }
     Ok(())
 }
 
@@ -2354,11 +2524,24 @@ fn enter_safe_mode(
 }
 
 fn cancel_all_pending_agent_tools(state: &DesktopState) -> Result<(), DesktopError> {
-    state
-        .pending_agent_tools
-        .lock()
-        .map_err(|_| DesktopError::StatePoisoned)?
-        .clear();
+    let task_ids = {
+        let mut pending = state
+            .pending_agent_tools
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?;
+        let task_ids = pending
+            .values()
+            .map(|item| automation_agent_task_id(&item.context))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        pending.clear();
+        task_ids
+    };
+    for task_id in task_ids {
+        cancel_automation_agent_task(state, task_id)?;
+    }
     Ok(())
 }
 
@@ -4629,6 +4812,10 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
 ///
 /// Panics when the Tauri runtime cannot initialize. This is unrecoverable
 /// before application state and diagnostics are available.
+#[expect(
+    clippy::too_many_lines,
+    reason = "desktop bootstrap enumerates the complete audited Tauri command surface"
+)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -4673,6 +4860,8 @@ pub fn run() {
             test_automation,
             run_automation,
             automation_run_status,
+            automation_agent_task_status,
+            automation_run_agent_tasks,
             agent_provider_status,
             agent_history_list,
             delete_agent_history,
@@ -5268,13 +5457,15 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].task.origin, AgentTaskOrigin::Automation);
         assert_eq!(history[0].task.trace_id, run.trace_id);
+        let child = state
+            .automation_agent_journal
+            .get_by_task_id(history[0].task.id)
+            .expect("child journal query")
+            .expect("child journal entry");
+        assert_eq!(child.run_id, run.run_id);
         assert_eq!(
-            state
-                .automation_agent_submissions
-                .lock()
-                .expect("submissions")
-                .len(),
-            1
+            child.status,
+            nimora_persistence_sqlite::AutomationAgentJournalStatus::Completed
         );
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }

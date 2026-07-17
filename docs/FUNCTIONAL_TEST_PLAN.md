@@ -350,6 +350,19 @@ ID / 标题 / 优先级 / 前置条件
 
 ## 18. 回归策略
 
+### 17.1 Automation 与 Agent 生命周期
+
+| ID | 场景 | 预期结果 | P |
+|---|---|---|---:|
+| AAG-001 | Live Automation 创建 Agent 子任务 | Provider 调用前持久写入根 Run、Task、幂等键、准入快照和模型，不保存 Prompt | P0 |
+| AAG-002 | Agent 请求写模块能力 | Journal 进入等待确认，批准前 Runtime 与模块无副作用 | P0 |
+| AAG-003 | 批准后 Provider 续跑 | 工具经共享 Capability Gateway 执行，Provider 完成后 Journal 进入完成态 | P0 |
+| AAG-004 | 用户拒绝或 Safe Mode 撤销 | 同 Turn 待批准项全部撤销，Journal 进入取消态且无副作用 | P0 |
+| AAG-005 | Provider 续跑失败 | Journal 从活跃态进入失败态并保存有界错误，不永久停留在等待态 | P0 |
+| AAG-006 | 桌面进程重启 | submitted/waiting 统一恢复为 interrupted，不自动重放 Prompt 或工具副作用 | P0 |
+| AAG-007 | 按 Task/Run 查询 | Task 返回唯一生命周期；Run 最多返回 64 项并按提交时间稳定排序 | P1 |
+| AAG-008 | 同 Run 幂等重试 | 相同幂等键不二次调用 Provider；历史失败不得伪装成新的成功执行 | P0 |
+
 - 每次提交：Unit、Schema、核心 Contract。
 - 每次合并：核心 Integration、Pet/Asset/Permission P0。
 - 每夜：完整功能回归、恶意包、网络故障和 UI 截图对比。

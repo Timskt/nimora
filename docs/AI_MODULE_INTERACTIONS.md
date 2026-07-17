@@ -8,6 +8,8 @@
 
 本文定义 AI Runtime 与 Nimora 其它模块之间的双向调用方式。AI 不是拥有全局权限的中枢，而是可被模块调用、也可通过受控工具调用模块的普通运行时。所有交互必须可授权、可取消、可审计、可降级、可测试，并在离线或 Provider 不可用时保持非 AI 功能正常运行。
 
+当前桌面 Live Automation 已能通过 `agent.task.run` 创建受约束子 Agent：Automation 的根 Run ID、幂等键、准入快照、模型及生命周期进入 SQLite Journal；AI 请求模块能力时仍必须经过 Tool Registry、风险计算、用户批准和共享 Capability Gateway，不能因调用源是 Automation 而绕过模块边界。
+
 ## 2. 唯一双向通路
 
 ```mermaid
@@ -28,6 +30,7 @@ flowchart LR
 2. AI 调用模块，只能选择 Tool Registry 中已注册的工具，不能生成任意 Command 名称。
 3. Tool Adapter 只能调用 Capability Gateway，不能持有 Repository、数据库连接、窗口句柄或 Provider 密钥。
 4. Agent 输出是数据，不是授权。输出要产生副作用时必须形成新的 Tool Invocation 并重新授权。
+5. Automation 子 Agent 的 `submitted`、`waiting_for_confirmation`、`completed`、`failed`、`cancelled`、`interrupted` 状态可按 Task 或根 Run 查询；重启不会保存 Prompt 或静默续跑，而是把活跃任务标记为 `interrupted`。
 5. 双向调用共享 Trace，但 Trace ID 不是权限凭证；权限由调用方身份、Capability、预算和批准证明共同决定。
 
 ## 3. 模块调用 AI 契约

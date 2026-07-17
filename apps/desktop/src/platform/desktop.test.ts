@@ -128,6 +128,8 @@ describe("desktop platform adapter", () => {
       : null);
     const startDragging = vi.fn(async () => undefined);
     const api = createDesktopApi(true, invoke, startDragging);
+    await api.automationAgentTaskStatus("018f0000-0000-7000-8000-000000000008");
+    await api.automationRunAgentTasks("018f0000-0000-7000-8000-000000000009");
     await api.agentCatalog();
     await api.agentHistory(25);
     await api.deleteAgentHistory("018f0000-0000-7000-8000-000000000007");
@@ -229,6 +231,8 @@ describe("desktop platform adapter", () => {
     });
     await api.stopUserProgram(envelope.executionId);
     expect(invoke.mock.calls).toEqual([
+      ["automation_agent_task_status", { taskId: "018f0000-0000-7000-8000-000000000008" }],
+      ["automation_run_agent_tasks", { runId: "018f0000-0000-7000-8000-000000000009" }],
       ["agent_catalog"],
       ["agent_history_list", { request: { beforeCreatedAtMs: null, beforeTaskId: null, limit: 25 } }],
       ["delete_agent_history", { request: { taskId: "018f0000-0000-7000-8000-000000000007" } }],

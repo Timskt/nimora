@@ -1,8 +1,12 @@
 //! `SQLite` persistence adapters for the `Nimora` runtime.
 
+mod automation_agent_journal;
 mod automation_journal;
 mod backup;
 
+pub use automation_agent_journal::{
+    AutomationAgentJournalEntry, AutomationAgentJournalStatus, SqliteAutomationAgentJournal,
+};
 pub use automation_journal::{
     AutomationJournalEntry, AutomationJournalStatus, AutomationRunStart, SqliteAutomationJournal,
 };
@@ -849,10 +853,45 @@ fn prepare_connection(connection: &mut Connection) -> Result<(), SqlitePersisten
                 );
                 CREATE INDEX automation_run_journal_updated_idx
                     ON automation_run_journal(updated_at_ms DESC, run_id DESC);
+                CREATE TABLE automation_agent_journal (
+                    task_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('submitted', 'waiting_for_confirmation',
+                        'completed', 'failed', 'cancelled', 'interrupted')),
+                    submitted_at_ms INTEGER NOT NULL CHECK (submitted_at_ms >= 0),
+                    updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= submitted_at_ms),
+                    schema_version INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    UNIQUE (run_id, idempotency_key)
+                );
+                CREATE INDEX automation_agent_journal_updated_idx
+                    ON automation_agent_journal(updated_at_ms DESC, task_id DESC);
                 PRAGMA user_version = 1;",
         )?;
         transaction.commit()?;
     }
+    ensure_current_schema_extensions(connection)?;
+    Ok(())
+}
+
+fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), SqlitePersistenceError> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS automation_agent_journal (
+            task_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('submitted', 'waiting_for_confirmation',
+                'completed', 'failed', 'cancelled', 'interrupted')),
+            submitted_at_ms INTEGER NOT NULL CHECK (submitted_at_ms >= 0),
+            updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= submitted_at_ms),
+            schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            UNIQUE (run_id, idempotency_key)
+        );
+        CREATE INDEX IF NOT EXISTS automation_agent_journal_updated_idx
+            ON automation_agent_journal(updated_at_ms DESC, task_id DESC);",
+    )?;
     Ok(())
 }
 
@@ -1075,8 +1114,12 @@ pub enum SqlitePersistenceError {
     InvalidAgentHistory,
     #[error("Automation journal record or state transition is invalid")]
     InvalidAutomationJournal,
+    #[error("Automation Agent journal record or state transition is invalid")]
+    InvalidAutomationAgentJournal,
     #[error("Automation journal version {0} is unsupported")]
     UnsupportedAutomationJournalVersion(u32),
+    #[error("Automation Agent journal version {0} is unsupported")]
+    UnsupportedAutomationAgentJournalVersion(u32),
     #[error("Agent history version {0} is unsupported")]
     UnsupportedAgentHistoryVersion(u32),
     #[error("outbox lease is not owned by this consumer")]
