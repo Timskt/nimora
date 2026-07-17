@@ -42,7 +42,7 @@
 
 Click/Drag FSM 自动化证据必须覆盖：Sleep 被 Drag 抢占、重复 Begin 被拒绝、Drop 原子更新位置并恢复 Idle、无 Drag 时 Drop 被拒绝、点击携带坐标与按钮、600ms 收尾不覆盖更新的 Work/Sleep 状态，以及所有交互事件与 Command 的 Trace 关联。
 
-SQLite 事务 Outbox 自动化证据必须覆盖：空库一次性创建当前首版 Schema、任何未知数据库版本均被明确拒绝、宠物动作与 Profile 创建/切换写入完整 Event、Outbox JSON 可反序列化，以及重复 Event ID 使快照更新与事件插入整体回滚。首个稳定版前不得添加开发期中间版本迁移。当前门禁只证明事务持久化；在实现消费者 ACK、持久游标、重试、死信和清理测试前，不得宣称可靠投递或 exactly-once。
+SQLite 事务 Outbox 自动化证据必须覆盖：空库一次性创建当前首版 Schema、任何未知数据库版本均被明确拒绝、宠物动作与 Profile 创建/切换写入完整 Event、Outbox JSON 可反序列化，以及重复 Event ID 使快照更新与事件插入整体回滚。领取协议还必须覆盖批量上限、Immediate 事务租约、租约过期重领、旧所有者 ACK 拒绝、延迟重试、最大次数死信、状态计数和只清理已确认记录。首个稳定版前不得添加开发期中间版本迁移。具体消费者仍须通过幂等投递和崩溃恢复测试；任何阶段都不得宣称 exactly-once。
 
 离线恢复自动化证据必须使用 SQLite Online Backup API，而不是复制主库或 WAL 文件：备份必须包含活动 WAL 中的页面，备份副本重新打开后必须恢复最新快照。备份失败不得覆盖可恢复的源数据库。
 

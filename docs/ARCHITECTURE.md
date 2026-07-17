@@ -87,7 +87,7 @@ Core 包含纯领域逻辑：Pet、Command、Event、Profile、Policy、Permissi
 - Query 读取状态，不产生隐式副作用。
 - Agent Tool、Automation Action 和 Gateway Endpoint 最终都映射到 Command。
 
-当前 M0 运行时在状态变更前生成领域 Event，事件与发起 Command 共享 `traceId`。SQLite v3 将宠物或 Profile 快照及对应 Event 在同一事务中写入 `event_outbox`，任一写入失败则整体回滚；事务成功后，事件再进入容量为 256 的有界进程内缓冲区并通过类型化桌面 IPC 消费。该缓冲区满时淘汰最旧事件，只负责进程内即时 UI。当前 Outbox 尚无消费者确认、投递游标、重试、死信或清理协议，因此只证明“状态与事件原子持久化”，不能称为已完成的可靠消息队列或 exactly-once 投递。
+当前 M0 运行时在状态变更前生成领域 Event，事件与发起 Command 共享 `traceId`。当前唯一 SQLite Schema 将宠物或 Profile 快照及对应 Event 在同一事务中写入 `event_outbox`，任一写入失败则整体回滚；事务成功后，事件再进入容量为 256 的有界进程内缓冲区并通过类型化桌面 IPC 消费。该缓冲区满时淘汰最旧事件，只负责进程内即时 UI。持久 Outbox 提供有界有序领取、消费者租约、过期重领、所有权 ACK、延迟重试、最大尝试次数死信、健康计数和有界已确认清理；领取使用 SQLite Immediate 事务防止并发消费者重复占有同一记录。具体 Connector 仍需实现幂等投递与退避策略，因此当前只能证明可构建 at-least-once 消费，不宣称 exactly-once 或已有外部投递服务。
 
 这条规则防止四套执行逻辑分裂。
 
@@ -103,7 +103,7 @@ Core 包含纯领域逻辑：Pet、Command、Event、Profile、Policy、Permissi
 | 审计 | 轮转 JSONL 或 SQLite | 保留期和导出可配置 |
 | 临时缓存 | Cache 目录 | 可安全删除和重建 |
 
-当前宠物与 Profile 状态实现遵循 `runtime-core → runtime-app → persistence-sqlite` 依赖方向：领域层定义状态与不变量，应用层通过 `PetRepository`、`ProfileRepository` 端口组织用例，SQLite 适配器负责事务、版本校验和 Online Backup API。状态与对应 Event 原子提交后才发布到内存与共享事件缓冲区，具体决策见 [`adr/ADR-008-versioned-sqlite-snapshots.md`](adr/ADR-008-versioned-sqlite-snapshots.md)。尚未发布的数据库采用唯一首版 Schema，一次事务创建宠物快照、Profile 快照、事务 Outbox 和用户程序权限表，不保留开发期中间迁移；测试覆盖初始化、未知版本拒绝、事件载荷反序列化、重复事件 ID 导致快照和事件整体回滚，以及 WAL 状态在线备份恢复。真实版本升级前的备份调度、消费 ACK、投递重试和只读安全模式仍是后续工作。
+当前宠物与 Profile 状态实现遵循 `runtime-core → runtime-app → persistence-sqlite` 依赖方向：领域层定义状态与不变量，应用层通过 `PetRepository`、`ProfileRepository` 端口组织用例，SQLite 适配器负责事务、版本校验、持久 Outbox 和 Online Backup API。状态与对应 Event 原子提交后才发布到内存与共享事件缓冲区，具体决策见 [`adr/ADR-008-versioned-sqlite-snapshots.md`](adr/ADR-008-versioned-sqlite-snapshots.md)。尚未发布的数据库采用唯一首版 Schema，一次事务创建宠物快照、Profile 快照、事务 Outbox 和用户程序权限表，不保留开发期中间迁移；测试覆盖初始化、未知版本拒绝、事件载荷反序列化、重复事件 ID 整体回滚、租约/ACK/重试/死信/清理，以及 WAL 状态在线备份恢复。真实版本升级前的备份调度、具体 Outbox 消费者和只读安全模式仍是后续工作。
 
 Profile 激活属于“持久状态 + 原生窗口副作用”的复合操作。桌面适配器先应用候选窗口策略，再提交 Profile 快照；持久化失败时恢复原窗口策略。安全模式使用独立应用服务和共享事件总线，桌面菜单、IPC 和后续 Gateway、Connector、Agent Host 必须读取同一状态，不得维护各自的安全开关。
 

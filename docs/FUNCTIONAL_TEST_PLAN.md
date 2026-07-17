@@ -232,6 +232,9 @@ ID / 标题 / 优先级 / 前置条件
 | CFG-007 | Work 场景能力 | 切换为 `work` 只应用用户配置与默认呈现，不永久隐藏或拒绝已授权能力 | P0 |
 | CFG-008 | 场景类型契约 | Profile 必须包含合法 `mode`；缺失或未知类型拒绝且不覆盖当前配置 | P0 |
 | CFG-009 | 场景类型扩展 | Companion、Work、Focus、Creator、Developer、Presentation、Offline 均可保存、恢复和切换 | P1 |
+| CFG-010 | Outbox 租约与 ACK | 并发领取不重复占有；租约过期可重领；旧所有者 ACK/失败回报被拒绝；成功进入 delivered | P0 |
+| CFG-011 | Outbox 重试与死信 | 失败在 `availableAt` 前不可重领，达到最大尝试次数进入 dead-letter，死信不会自动再次投递 | P0 |
+| CFG-012 | Outbox 健康与清理 | Control Center 只显示状态计数且 Pet 窗口无权读取；清理有批量上限并且只删除截止时间前的 delivered 记录 | P0 |
 
 ## 16. UI、设计与可访问性
 

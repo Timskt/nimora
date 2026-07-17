@@ -23,6 +23,13 @@ export interface DesktopSnapshot {
   safety: SafetySnapshot;
 }
 
+export interface OutboxSnapshot {
+  pending: number;
+  leased: number;
+  delivered: number;
+  deadLetter: number;
+}
+
 export interface InstallAssetRequest {
   sourcePath: string;
 }
@@ -232,6 +239,7 @@ export interface DesktopApi {
   readonly native: boolean;
   snapshot(): Promise<DesktopSnapshot>;
   drainEvents(): Promise<NimoraEvent[]>;
+  outboxSnapshot(): Promise<OutboxSnapshot>;
   profiles(): Promise<ProfileSnapshot>;
   createProfile(name: string, policy: ProfilePolicy): Promise<NimoraCommand | null>;
   switchProfile(profileId: string): Promise<NimoraCommand | null>;
@@ -318,6 +326,7 @@ export function createDesktopApi(
       native: false,
       async snapshot() { return structuredClone(previewSnapshot); },
       async drainEvents() { return []; },
+      async outboxSnapshot() { return { pending: 0, leased: 0, delivered: 0, deadLetter: 0 }; },
       async profiles() { return structuredClone(previewProfiles); },
       async createProfile() { return null; },
       async switchProfile() { return null; },
@@ -375,6 +384,7 @@ export function createDesktopApi(
     native: true,
     snapshot: async () => await invokeCommand("desktop_snapshot") as DesktopSnapshot,
     drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],
+    outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,
     profiles: async () => await invokeCommand("profile_snapshot") as ProfileSnapshot,
     createProfile: async (name, policy) => await invokeCommand("create_profile", { name, policy }) as NimoraCommand,
     switchProfile: async (profileId) => await invokeCommand("switch_profile", { profileId }) as NimoraCommand,

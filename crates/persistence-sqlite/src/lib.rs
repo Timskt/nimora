@@ -4,7 +4,7 @@ use nimora_runtime_app::{
     PetRepository, ProfileRepository, ProfileServiceError, ProfileSnapshot, RepositoryError,
 };
 use nimora_runtime_core::{Event, Pet};
-use rusqlite::{Connection, OptionalExtension, backup::Backup, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, backup::Backup, params};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Mutex, time::Duration};
 use thiserror::Error;
@@ -12,6 +12,8 @@ use thiserror::Error;
 const DATABASE_VERSION: i64 = 1;
 const PET_SNAPSHOT_VERSION: u32 = 1;
 const PROFILE_SNAPSHOT_VERSION: u32 = 1;
+const MAX_OUTBOX_BATCH: usize = 256;
+const MAX_OUTBOX_ERROR_BYTES: usize = 4 * 1024;
 
 #[derive(Debug)]
 pub struct SqlitePetRepository {
@@ -21,6 +23,294 @@ pub struct SqlitePetRepository {
 #[derive(Debug)]
 pub struct SqliteProgramPermissionRepository {
     connection: Mutex<Connection>,
+}
+
+#[derive(Debug)]
+pub struct SqliteOutboxRepository {
+    connection: Mutex<Connection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutboxDelivery {
+    pub event: Event,
+    pub attempt: u32,
+    pub lease_until_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutboxSnapshot {
+    pub pending: u64,
+    pub leased: u64,
+    pub delivered: u64,
+    pub dead_letter: u64,
+}
+
+impl SqliteOutboxRepository {
+    /// Opens the durable event outbox in the shared application database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot be opened or initialized.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, SqlitePersistenceError> {
+        Self::from_connection(Connection::open(path)?)
+    }
+
+    /// Creates an isolated outbox for tests and ephemeral tools.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot be initialized.
+    pub fn in_memory() -> Result<Self, SqlitePersistenceError> {
+        Self::from_connection(Connection::open_in_memory()?)
+    }
+
+    fn from_connection(mut connection: Connection) -> Result<Self, SqlitePersistenceError> {
+        prepare_connection(&mut connection)?;
+        Ok(Self {
+            connection: Mutex::new(connection),
+        })
+    }
+
+    /// Atomically leases an ordered batch. Expired leases become claimable again.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid bounds, malformed persisted events, or storage failures.
+    pub fn claim(
+        &self,
+        consumer: &str,
+        now_ms: i64,
+        lease_ms: u64,
+        limit: usize,
+    ) -> Result<Vec<OutboxDelivery>, SqlitePersistenceError> {
+        validate_consumer(consumer)?;
+        if now_ms < 0
+            || lease_ms == 0
+            || lease_ms > i64::MAX as u64
+            || limit == 0
+            || limit > MAX_OUTBOX_BATCH
+        {
+            return Err(SqlitePersistenceError::InvalidOutboxRequest);
+        }
+        let lease_ms =
+            i64::try_from(lease_ms).map_err(|_| SqlitePersistenceError::InvalidOutboxRequest)?;
+        let limit =
+            i64::try_from(limit).map_err(|_| SqlitePersistenceError::InvalidOutboxRequest)?;
+        let lease_until_ms = now_ms
+            .checked_add(lease_ms)
+            .ok_or(SqlitePersistenceError::InvalidOutboxRequest)?;
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let rows = {
+            let mut statement = transaction.prepare(
+                "SELECT event_id, payload, delivery_attempts
+                 FROM event_outbox
+                 WHERE (status = 'pending' AND available_at_ms <= ?1)
+                    OR (status = 'leased' AND lease_until_ms <= ?1)
+                 ORDER BY created_at, event_id
+                 LIMIT ?2",
+            )?;
+            statement
+                .query_map(params![now_ms, limit], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, u32>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let mut deliveries = Vec::with_capacity(rows.len());
+        for (event_id, payload, attempts) in rows {
+            let attempt = attempts
+                .checked_add(1)
+                .ok_or(SqlitePersistenceError::InvalidOutboxRequest)?;
+            transaction.execute(
+                "UPDATE event_outbox
+                 SET status = 'leased', delivery_attempts = ?1, lease_owner = ?2,
+                     lease_until_ms = ?3, last_error = NULL
+                 WHERE event_id = ?4",
+                params![attempt, consumer, lease_until_ms, event_id],
+            )?;
+            deliveries.push(OutboxDelivery {
+                event: serde_json::from_str(&payload)?,
+                attempt,
+                lease_until_ms,
+            });
+        }
+        transaction.commit()?;
+        Ok(deliveries)
+    }
+
+    /// Acknowledges one delivery owned by the consumer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lease is missing, owned by another consumer, or storage fails.
+    pub fn acknowledge(
+        &self,
+        consumer: &str,
+        event_id: &str,
+        delivered_at_ms: i64,
+    ) -> Result<(), SqlitePersistenceError> {
+        validate_consumer(consumer)?;
+        if event_id.trim().is_empty() || delivered_at_ms < 0 {
+            return Err(SqlitePersistenceError::InvalidOutboxRequest);
+        }
+        let changed = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?
+            .execute(
+                "UPDATE event_outbox SET status = 'delivered', delivered_at_ms = ?1,
+                    lease_owner = NULL, lease_until_ms = NULL, last_error = NULL
+                 WHERE event_id = ?2 AND status = 'leased' AND lease_owner = ?3
+                   AND lease_until_ms > ?1",
+                params![delivered_at_ms, event_id, consumer],
+            )?;
+        if changed != 1 {
+            return Err(SqlitePersistenceError::OutboxLeaseNotOwned);
+        }
+        Ok(())
+    }
+
+    /// Releases a failed delivery for retry or moves it to the dead-letter state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid policy, missing lease ownership, or storage failures.
+    pub fn fail(
+        &self,
+        consumer: &str,
+        event_id: &str,
+        now_ms: i64,
+        retry_after_ms: u64,
+        max_attempts: u32,
+        error: &str,
+    ) -> Result<bool, SqlitePersistenceError> {
+        validate_consumer(consumer)?;
+        if event_id.trim().is_empty()
+            || now_ms < 0
+            || max_attempts == 0
+            || error.is_empty()
+            || error.len() > MAX_OUTBOX_ERROR_BYTES
+            || retry_after_ms > i64::MAX as u64
+        {
+            return Err(SqlitePersistenceError::InvalidOutboxRequest);
+        }
+        let retry_after_ms = i64::try_from(retry_after_ms)
+            .map_err(|_| SqlitePersistenceError::InvalidOutboxRequest)?;
+        let available_at_ms = now_ms
+            .checked_add(retry_after_ms)
+            .ok_or(SqlitePersistenceError::InvalidOutboxRequest)?;
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let attempts = transaction.query_row(
+            "SELECT delivery_attempts FROM event_outbox WHERE event_id = ?1 AND status = 'leased' AND lease_owner = ?2 AND lease_until_ms > ?3",
+            params![event_id, consumer, now_ms],
+            |row| row.get::<_, u32>(0),
+        ).optional()?.ok_or(SqlitePersistenceError::OutboxLeaseNotOwned)?;
+        let dead_letter = attempts >= max_attempts;
+        transaction.execute(
+            "UPDATE event_outbox SET status = ?1, available_at_ms = ?2,
+                lease_owner = NULL, lease_until_ms = NULL, last_error = ?3
+             WHERE event_id = ?4",
+            params![
+                if dead_letter {
+                    "dead-letter"
+                } else {
+                    "pending"
+                },
+                available_at_ms,
+                error,
+                event_id
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(dead_letter)
+    }
+
+    /// Returns durable queue counts without exposing event payloads.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot be queried.
+    pub fn snapshot(&self) -> Result<OutboxSnapshot, SqlitePersistenceError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
+        let count = |status: &str| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM event_outbox WHERE status = ?1",
+                params![status],
+                |row| row.get::<_, i64>(0),
+            )
+        };
+        Ok(OutboxSnapshot {
+            pending: count("pending")?
+                .try_into()
+                .map_err(|_| SqlitePersistenceError::InvalidOutboxRequest)?,
+            leased: count("leased")?
+                .try_into()
+                .map_err(|_| SqlitePersistenceError::InvalidOutboxRequest)?,
+            delivered: count("delivered")?
+                .try_into()
+                .map_err(|_| SqlitePersistenceError::InvalidOutboxRequest)?,
+            dead_letter: count("dead-letter")?
+                .try_into()
+                .map_err(|_| SqlitePersistenceError::InvalidOutboxRequest)?,
+        })
+    }
+
+    /// Deletes an ordered bounded batch of acknowledged records older than the cutoff.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid bounds or storage failures.
+    pub fn purge_delivered(
+        &self,
+        before_ms: i64,
+        limit: usize,
+    ) -> Result<usize, SqlitePersistenceError> {
+        if before_ms < 0 || limit == 0 || limit > MAX_OUTBOX_BATCH {
+            return Err(SqlitePersistenceError::InvalidOutboxRequest);
+        }
+        let limit =
+            i64::try_from(limit).map_err(|_| SqlitePersistenceError::InvalidOutboxRequest)?;
+        Ok(self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?
+            .execute(
+                "DELETE FROM event_outbox WHERE event_id IN (
+                SELECT event_id FROM event_outbox
+                WHERE status = 'delivered' AND delivered_at_ms < ?1
+                ORDER BY delivered_at_ms, event_id LIMIT ?2
+             )",
+                params![before_ms, limit],
+            )?)
+    }
+}
+
+fn validate_consumer(consumer: &str) -> Result<(), SqlitePersistenceError> {
+    if consumer.is_empty()
+        || consumer.len() > 128
+        || !consumer
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(SqlitePersistenceError::InvalidOutboxRequest);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,10 +574,20 @@ fn prepare_connection(connection: &mut Connection) -> Result<(), SqlitePersisten
                     event_type TEXT NOT NULL,
                     trace_id TEXT NOT NULL,
                     payload TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'leased', 'delivered', 'dead-letter')),
+                    delivery_attempts INTEGER NOT NULL DEFAULT 0 CHECK (delivery_attempts >= 0),
+                    available_at_ms INTEGER NOT NULL DEFAULT 0 CHECK (available_at_ms >= 0),
+                    lease_owner TEXT,
+                    lease_until_ms INTEGER,
+                    last_error TEXT,
+                    delivered_at_ms INTEGER,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE INDEX event_outbox_created_at_idx
                     ON event_outbox(created_at, event_id);
+                CREATE INDEX event_outbox_delivery_idx
+                    ON event_outbox(status, available_at_ms, lease_until_ms, created_at, event_id);
                 CREATE TABLE user_program_permission_grant (
                     program_id TEXT NOT NULL,
                     program_version TEXT NOT NULL,
@@ -502,6 +802,10 @@ pub enum SqlitePersistenceError {
     UnsupportedProfileSnapshotVersion(u32),
     #[error("user program permission grant is invalid")]
     InvalidPermissionGrant,
+    #[error("outbox request is invalid")]
+    InvalidOutboxRequest,
+    #[error("outbox lease is not owned by this consumer")]
+    OutboxLeaseNotOwned,
     #[error("pet snapshot metadata and payload versions do not match")]
     SnapshotVersionMismatch,
     #[error(transparent)]
@@ -829,6 +1133,181 @@ mod tests {
         assert!(matches!(
             SqlitePetRepository::from_connection(connection),
             Err(SqlitePersistenceError::UnsupportedDatabaseVersion(2))
+        ));
+    }
+
+    fn enqueue_outbox(repository: &SqliteOutboxRepository, event: &Event) {
+        repository
+            .connection
+            .lock()
+            .expect("lock")
+            .execute(
+                "INSERT INTO event_outbox (event_id, event_type, trace_id, payload)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    event.id.to_string(),
+                    event.event_type,
+                    event.trace_id.to_string(),
+                    serde_json::to_string(event).expect("payload"),
+                ],
+            )
+            .expect("enqueue");
+    }
+
+    fn outbox_event(state: &str) -> Event {
+        Event::new(
+            "pet.state.changed",
+            EventSource::Core,
+            serde_json::json!({ "state": state }),
+        )
+        .expect("event")
+    }
+
+    #[test]
+    fn outbox_claim_ack_and_purge_are_bounded_and_owned() {
+        let repository = SqliteOutboxRepository::in_memory().expect("database");
+        let first = outbox_event("idle");
+        let second = outbox_event("sleeping");
+        enqueue_outbox(&repository, &first);
+        enqueue_outbox(&repository, &second);
+
+        let deliveries = repository
+            .claim("connector.audit", 1_000, 500, 1)
+            .expect("claim");
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].attempt, 1);
+        assert!(matches!(
+            repository.acknowledge(
+                "connector.other",
+                &deliveries[0].event.id.to_string(),
+                1_100
+            ),
+            Err(SqlitePersistenceError::OutboxLeaseNotOwned)
+        ));
+        repository
+            .acknowledge(
+                "connector.audit",
+                &deliveries[0].event.id.to_string(),
+                1_100,
+            )
+            .expect("acknowledge");
+        assert_eq!(
+            repository.snapshot().expect("snapshot"),
+            OutboxSnapshot {
+                pending: 1,
+                leased: 0,
+                delivered: 1,
+                dead_letter: 0,
+            }
+        );
+        assert_eq!(repository.purge_delivered(1_101, 1).expect("purge"), 1);
+        assert_eq!(repository.snapshot().expect("snapshot").delivered, 0);
+    }
+
+    #[test]
+    fn outbox_expired_lease_is_reclaimed_without_stale_ack() {
+        let repository = SqliteOutboxRepository::in_memory().expect("database");
+        let event = outbox_event("working");
+        enqueue_outbox(&repository, &event);
+
+        repository
+            .claim("connector.first", 2_000, 100, 1)
+            .expect("first claim");
+        assert!(matches!(
+            repository.acknowledge("connector.first", &event.id.to_string(), 2_100),
+            Err(SqlitePersistenceError::OutboxLeaseNotOwned)
+        ));
+        let reclaimed = repository
+            .claim("connector.second", 2_100, 100, 1)
+            .expect("reclaim");
+        assert_eq!(reclaimed[0].attempt, 2);
+        assert!(matches!(
+            repository.acknowledge("connector.first", &event.id.to_string(), 2_150),
+            Err(SqlitePersistenceError::OutboxLeaseNotOwned)
+        ));
+        repository
+            .acknowledge("connector.second", &event.id.to_string(), 2_150)
+            .expect("ack");
+    }
+
+    #[test]
+    fn outbox_failure_retries_after_delay_then_dead_letters() {
+        let repository = SqliteOutboxRepository::in_memory().expect("database");
+        let event = outbox_event("sleeping");
+        enqueue_outbox(&repository, &event);
+
+        repository
+            .claim("connector.audit", 3_000, 500, 1)
+            .expect("claim");
+        assert!(
+            !repository
+                .fail(
+                    "connector.audit",
+                    &event.id.to_string(),
+                    3_100,
+                    250,
+                    2,
+                    "temporary"
+                )
+                .expect("retry")
+        );
+        assert!(
+            repository
+                .claim("connector.audit", 3_349, 500, 1)
+                .expect("early claim")
+                .is_empty()
+        );
+        let retry = repository
+            .claim("connector.audit", 3_350, 500, 1)
+            .expect("retry claim");
+        assert_eq!(retry[0].attempt, 2);
+        assert!(
+            repository
+                .fail(
+                    "connector.audit",
+                    &event.id.to_string(),
+                    3_400,
+                    250,
+                    2,
+                    "permanent"
+                )
+                .expect("dead letter")
+        );
+        assert_eq!(
+            repository.snapshot().expect("snapshot"),
+            OutboxSnapshot {
+                pending: 0,
+                leased: 0,
+                delivered: 0,
+                dead_letter: 1,
+            }
+        );
+        assert!(
+            repository
+                .claim("connector.audit", 4_000, 500, 1)
+                .expect("claim")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn outbox_rejects_unbounded_or_ambiguous_requests() {
+        let repository = SqliteOutboxRepository::in_memory().expect("database");
+        assert!(matches!(
+            repository.claim("", 0, 1, 1),
+            Err(SqlitePersistenceError::InvalidOutboxRequest)
+        ));
+        assert!(matches!(
+            repository.claim("connector/audit", 0, 1, 1),
+            Err(SqlitePersistenceError::InvalidOutboxRequest)
+        ));
+        assert!(matches!(
+            repository.claim("connector.audit", 0, 1, MAX_OUTBOX_BATCH + 1),
+            Err(SqlitePersistenceError::InvalidOutboxRequest)
+        ));
+        assert!(matches!(
+            repository.purge_delivered(0, 0),
+            Err(SqlitePersistenceError::InvalidOutboxRequest)
         ));
     }
 }

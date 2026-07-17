@@ -8,8 +8,8 @@ use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
 };
 use nimora_persistence_sqlite::{
-    ProgramPermissionGrant, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
-    SqliteProgramPermissionRepository,
+    OutboxSnapshot, ProgramPermissionGrant, SqliteOutboxRepository, SqlitePersistenceError,
+    SqlitePetRepository, SqliteProfileRepository, SqliteProgramPermissionRepository,
 };
 use nimora_runtime_app::{
     ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBatch,
@@ -80,6 +80,7 @@ struct DesktopState {
     program_store: PathBuf,
     program_data_store: ProgramDataStore,
     program_permissions: SqliteProgramPermissionRepository,
+    outbox: SqliteOutboxRepository,
     user_program_event_sessions: Mutex<HashMap<Uuid, UserProgramEventSession>>,
     active_user_program_workers: Mutex<HashMap<Uuid, ActiveUserProgramWorker>>,
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
@@ -177,6 +178,7 @@ impl DesktopState {
             program_store,
             program_data_store,
             program_permissions: SqliteProgramPermissionRepository::open(database_path)?,
+            outbox: SqliteOutboxRepository::open(database_path)?,
             user_program_event_sessions: Mutex::new(HashMap::new()),
             active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
@@ -555,6 +557,18 @@ fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, D
 #[allow(clippy::needless_pass_by_value)]
 fn drain_runtime_events(state: State<'_, DesktopState>) -> Result<Vec<Event>, DesktopError> {
     Ok(state.events.drain()?)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn outbox_snapshot(
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+) -> Result<OutboxSnapshot, DesktopError> {
+    if window.label() != CONTROL_CENTER_LABEL {
+        return Err(DesktopError::WindowForbidden);
+    }
+    Ok(state.outbox.snapshot()?)
 }
 
 #[tauri::command]
@@ -2421,6 +2435,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_snapshot,
             drain_runtime_events,
+            outbox_snapshot,
             profile_snapshot,
             create_profile,
             switch_profile,

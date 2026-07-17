@@ -1,15 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { ProfileManager } from "./components/ProfileManager";
 import { CreatorStudio } from "./components/CreatorStudio";
+import type { OutboxSnapshot } from "./platform/desktop";
 import { desktopApi } from "./platform/desktop";
 
 const navigation = ["概览", "角色", "自动化", "扩展", "活动", "设置"] as const;
-
-const activities = [
-  { title: "专注场景已准备", meta: "本地自动化 · 刚刚", tone: "mint" },
-  { title: "角色资源健康", meta: "默认角色 · 2 分钟前", tone: "violet" },
-  { title: "离线能力可用", meta: "核心运行时 · 5 分钟前", tone: "amber" },
-] as const;
 
 export function navItemClassName(isActive: boolean): string {
   return isActive ? "nav-item active" : "nav-item";
@@ -20,12 +15,14 @@ export function App() {
   const [quiet, setQuiet] = useState(false);
   const [safeMode, setSafeMode] = useState(false);
   const [safetyBusy, setSafetyBusy] = useState(false);
+  const [outbox, setOutbox] = useState<OutboxSnapshot | null>(null);
   const [notice, setNotice] = useState(desktopApi.native ? "原生运行时已连接" : "浏览器预览模式");
   const updateNotice = useCallback((message: string) => setNotice(message), []);
 
   useEffect(() => {
-    void desktopApi.snapshot().then((snapshot) => {
+    void Promise.all([desktopApi.snapshot(), desktopApi.outboxSnapshot()]).then(([snapshot, nextOutbox]) => {
       setSafeMode(snapshot.safety.mode === "safe");
+      setOutbox(nextOutbox);
     }).catch(() => {
       setNotice("运行时状态暂时不可用");
     });
@@ -156,7 +153,7 @@ export function App() {
               <button className="text-button" type="button">查看全部</button>
             </div>
             <ul>
-              {activities.map((activity) => (
+              {runtimeActivities(outbox).map((activity) => (
                 <li key={activity.title}>
                   <span className={`activity-icon ${activity.tone}`} aria-hidden="true" />
                   <div><strong>{activity.title}</strong><p>{activity.meta}</p></div>
@@ -182,4 +179,14 @@ export function App() {
       </section>
     </main>
   );
+}
+
+export function runtimeActivities(outbox: OutboxSnapshot | null) {
+  if (!outbox) return [{ title: "正在读取持久事件健康", meta: "SQLite Outbox · 本地诊断", tone: "amber" }] as const;
+  const queueHealthy = outbox.deadLetter === 0;
+  return [
+    { title: queueHealthy ? "持久事件队列健康" : `${outbox.deadLetter} 条事件需要处理`, meta: `${outbox.pending} 待投递 · ${outbox.leased} 租约中`, tone: queueHealthy ? "mint" : "amber" },
+    { title: "角色资源健康", meta: "默认角色 · 本地复验", tone: "violet" },
+    { title: "离线能力可用", meta: "核心运行时 · 无网络启动依赖", tone: "amber" },
+  ] as const;
 }
