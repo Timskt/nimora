@@ -1,6 +1,6 @@
 # Nimora 用户代码安全边界
 
-> 状态：策略层已实现，执行沙箱仍在开发中
+> 状态：策略层与独立 Worker Supervisor 已实现，具体 JS/WASM 引擎仍在开发中
 
 ## 目标
 
@@ -32,6 +32,8 @@
 
 `ExecutionController` 已提供 Worker 准入边界：默认最多同时执行 8 个用户程序，每个执行句柄携带取消令牌、绝对截止时间、Manifest 内存预算和 1 MiB 输出上限。Worker 必须在事件循环和能力调用前执行 `checkpoint`，并通过 `record_output` 计量日志、返回值和标准输出；句柄释放时自动归还并发槽位。
 
+`nimora-user-code-host` 提供独立进程 Supervisor 和版本化 JSONL 协议。Supervisor 不在进程内执行用户代码：它启动外部 Worker，关闭标准错误继承，限制协议输出，等待终态消息，并在取消、超时、输出超限或 Worker 崩溃时终止对应进程。Supervisor 本身不授予能力；Worker 的请求仍必须经过 Capability Gateway 和策略层。
+
 ## 模块调用模型
 
 ```text
@@ -55,4 +57,4 @@ User Code
 - 审计日志、失败重试上限和安全模式联动。
 - 离线环境中仍可运行已安装代码，但不能绕过本地策略。
 
-当前仓库已完成 Manifest 策略评估、Tauri Gateway、Worker 准入/取消/截止时间/输出预算和契约测试；独立进程或 WASM/JS 引擎尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。
+当前仓库已完成 Manifest 策略评估、Tauri Gateway、Worker 准入边界、独立进程 Supervisor、取消/截止时间/输出预算和契约测试；JS/WASM 引擎适配、强制内存限制、Capability Gateway 实际路由和用户代码安装生命周期尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。
