@@ -100,7 +100,7 @@ Core 包含纯领域逻辑：Pet、Command、Event、Profile、Policy、Permissi
 | 审计 | 轮转 JSONL 或 SQLite | 保留期和导出可配置 |
 | 临时缓存 | Cache 目录 | 可安全删除和重建 |
 
-当前宠物与 Profile 状态实现遵循 `runtime-core → runtime-app → persistence-sqlite` 依赖方向：领域层定义状态与不变量，应用层通过 `PetRepository`、`ProfileRepository` 端口组织用例，SQLite 适配器负责事务、版本校验和 Online Backup API。状态与对应 Event 原子提交后才发布到内存与共享事件缓冲区，具体决策见 [`adr/ADR-008-versioned-sqlite-snapshots.md`](adr/ADR-008-versioned-sqlite-snapshots.md)。数据库 v3 通过非破坏性增量迁移增加事务 Outbox；测试覆盖 v1 宠物数据升级、v2 宠物与 Profile 双快照升级、事件载荷反序列化、重复事件 ID 导致快照和事件整体回滚，以及 WAL 状态在线备份恢复。自动迁移前调度、消费 ACK、投递重试和只读安全模式仍是后续工作。
+当前宠物与 Profile 状态实现遵循 `runtime-core → runtime-app → persistence-sqlite` 依赖方向：领域层定义状态与不变量，应用层通过 `PetRepository`、`ProfileRepository` 端口组织用例，SQLite 适配器负责事务、版本校验和 Online Backup API。状态与对应 Event 原子提交后才发布到内存与共享事件缓冲区，具体决策见 [`adr/ADR-008-versioned-sqlite-snapshots.md`](adr/ADR-008-versioned-sqlite-snapshots.md)。尚未发布的数据库采用唯一首版 Schema，一次事务创建宠物快照、Profile 快照、事务 Outbox 和用户程序权限表，不保留开发期中间迁移；测试覆盖初始化、未知版本拒绝、事件载荷反序列化、重复事件 ID 导致快照和事件整体回滚，以及 WAL 状态在线备份恢复。真实版本升级前的备份调度、消费 ACK、投递重试和只读安全模式仍是后续工作。
 
 Profile 激活属于“持久状态 + 原生窗口副作用”的复合操作。桌面适配器先应用候选窗口策略，再提交 Profile 快照；持久化失败时恢复原窗口策略。安全模式使用独立应用服务和共享事件总线，桌面菜单、IPC 和后续 Gateway、Connector、Agent Host 必须读取同一状态，不得维护各自的安全开关。
 

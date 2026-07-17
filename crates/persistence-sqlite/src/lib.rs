@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Mutex, time::Duration};
 use thiserror::Error;
 
-const DATABASE_VERSION: i64 = 4;
+const DATABASE_VERSION: i64 = 1;
 const PET_SNAPSHOT_VERSION: u32 = 1;
 const PROFILE_SNAPSHOT_VERSION: u32 = 1;
 
@@ -32,7 +32,7 @@ pub struct ProgramPermissionGrant {
 }
 
 impl SqliteProgramPermissionRepository {
-    /// Opens the shared application database and applies pending migrations.
+    /// Opens the shared application database and initializes its schema.
     ///
     /// # Errors
     ///
@@ -45,7 +45,7 @@ impl SqliteProgramPermissionRepository {
     ///
     /// # Errors
     ///
-    /// Returns an error when `SQLite` cannot configure or migrate the database.
+    /// Returns an error when `SQLite` cannot configure or initialize the database.
     pub fn in_memory() -> Result<Self, SqlitePersistenceError> {
         Self::from_connection(Connection::open_in_memory()?)
     }
@@ -156,11 +156,11 @@ fn canonical_capabilities(
 }
 
 impl SqlitePetRepository {
-    /// Opens or creates an `Nimora` database and applies pending migrations.
+    /// Opens or creates an `Nimora` database and initializes its schema.
     ///
     /// # Errors
     ///
-    /// Returns an error when `SQLite` cannot open, configure, or migrate the
+    /// Returns an error when `SQLite` cannot open, configure, or initialize the
     /// database. A database from a newer application version is rejected.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SqlitePersistenceError> {
         Self::from_connection(Connection::open(path)?)
@@ -170,7 +170,7 @@ impl SqlitePetRepository {
     ///
     /// # Errors
     ///
-    /// Returns an error when `SQLite` cannot configure or migrate the database.
+    /// Returns an error when `SQLite` cannot configure or initialize the database.
     pub fn in_memory() -> Result<Self, SqlitePersistenceError> {
         Self::from_connection(Connection::open_in_memory()?)
     }
@@ -261,10 +261,10 @@ fn prepare_connection(connection: &mut Connection) -> Result<(), SqlitePersisten
     connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.pragma_update(None, "synchronous", "NORMAL")?;
     let version = connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
-    if version > DATABASE_VERSION {
+    if version != 0 && version != DATABASE_VERSION {
         return Err(SqlitePersistenceError::UnsupportedDatabaseVersion(version));
     }
-    if version < 1 {
+    if version == 0 {
         let transaction = connection.transaction()?;
         transaction.execute_batch(
             "CREATE TABLE pet_snapshot (
@@ -273,27 +273,13 @@ fn prepare_connection(connection: &mut Connection) -> Result<(), SqlitePersisten
                     payload TEXT NOT NULL,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
-                PRAGMA user_version = 1;",
-        )?;
-        transaction.commit()?;
-    }
-    if version < 2 {
-        let transaction = connection.transaction()?;
-        transaction.execute_batch(
-            "CREATE TABLE profile_snapshot (
+                CREATE TABLE profile_snapshot (
                     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                     schema_version INTEGER NOT NULL,
                     payload TEXT NOT NULL,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
-                PRAGMA user_version = 2;",
-        )?;
-        transaction.commit()?;
-    }
-    if version < 3 {
-        let transaction = connection.transaction()?;
-        transaction.execute_batch(
-            "CREATE TABLE event_outbox (
+                CREATE TABLE event_outbox (
                     event_id TEXT PRIMARY KEY,
                     event_type TEXT NOT NULL,
                     trace_id TEXT NOT NULL,
@@ -302,21 +288,14 @@ fn prepare_connection(connection: &mut Connection) -> Result<(), SqlitePersisten
                 );
                 CREATE INDEX event_outbox_created_at_idx
                     ON event_outbox(created_at, event_id);
-                PRAGMA user_version = 3;",
-        )?;
-        transaction.commit()?;
-    }
-    if version < 4 {
-        let transaction = connection.transaction()?;
-        transaction.execute_batch(
-            "CREATE TABLE user_program_permission_grant (
+                CREATE TABLE user_program_permission_grant (
                     program_id TEXT NOT NULL,
                     program_version TEXT NOT NULL,
                     capabilities TEXT NOT NULL,
                     granted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (program_id, program_version)
                 );
-                PRAGMA user_version = 4;",
+                PRAGMA user_version = 1;",
         )?;
         transaction.commit()?;
     }
@@ -390,7 +369,7 @@ impl SqliteProfileRepository {
     ///
     /// # Errors
     ///
-    /// Returns an error when `SQLite` configuration or migration fails.
+    /// Returns an error when `SQLite` configuration or initialization fails.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SqlitePersistenceError> {
         let mut connection = Connection::open(path)?;
         prepare_connection(&mut connection)?;
@@ -539,7 +518,7 @@ pub enum SqlitePersistenceError {
 mod tests {
     use super::*;
     use nimora_runtime_app::{ProfileService, RuntimeEventBus, RuntimeService};
-    use nimora_runtime_core::{Event, EventSource, PetAction, PetState, Profile, ProfilePolicy};
+    use nimora_runtime_core::{Event, EventSource, PetAction, PetState};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -842,211 +821,14 @@ mod tests {
     }
 
     #[test]
-    fn migrates_v1_without_losing_pet_state() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "nimora-migration-{}-{unique}.sqlite3",
-            std::process::id()
+    fn rejects_unpublished_database_versions() {
+        let connection = Connection::open_in_memory().expect("database");
+        connection
+            .pragma_update(None, "user_version", 2)
+            .expect("fixture version");
+        assert!(matches!(
+            SqlitePetRepository::from_connection(connection),
+            Err(SqlitePersistenceError::UnsupportedDatabaseVersion(2))
         ));
-        let mut pet = Pet::new("Aster").expect("pet");
-        pet.apply_action(PetAction::Sleep);
-        let payload = serde_json::to_string(&StoredPetSnapshot {
-            schema_version: PET_SNAPSHOT_VERSION,
-            pet: pet.clone(),
-        })
-        .expect("payload");
-        {
-            let connection = Connection::open(&path).expect("database");
-            connection
-                .execute_batch(
-                    "CREATE TABLE pet_snapshot (
-                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-                        schema_version INTEGER NOT NULL,
-                        payload TEXT NOT NULL,
-                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    );
-                    PRAGMA user_version = 1;",
-                )
-                .expect("v1 schema");
-            connection
-                .execute(
-                    "INSERT INTO pet_snapshot (singleton, schema_version, payload)
-                     VALUES (1, ?1, ?2)",
-                    params![PET_SNAPSHOT_VERSION, payload],
-                )
-                .expect("v1 state");
-        }
-        let repository = SqlitePetRepository::open(&path).expect("migration");
-        assert_eq!(
-            repository
-                .load_snapshot()
-                .expect("load")
-                .expect("snapshot")
-                .state,
-            PetState::Sleeping
-        );
-        let version = repository
-            .connection
-            .lock()
-            .expect("lock")
-            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-            .expect("version");
-        assert_eq!(version, DATABASE_VERSION);
-        drop(repository);
-        std::fs::remove_file(path).expect("remove fixture");
-    }
-
-    #[test]
-    fn migrates_v2_without_losing_pet_or_profile_state() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "nimora-v2-migration-{}-{unique}.sqlite3",
-            std::process::id()
-        ));
-        let mut pet = Pet::new("Aster").expect("pet");
-        pet.apply_action(PetAction::Sleep);
-        let pet_payload = serde_json::to_string(&StoredPetSnapshot {
-            schema_version: PET_SNAPSHOT_VERSION,
-            pet: pet.clone(),
-        })
-        .expect("pet payload");
-        let profile = Profile::new("Focus", ProfilePolicy::standard()).expect("profile");
-        let profile_snapshot = ProfileSnapshot {
-            schema_version: ProfileSnapshot::SCHEMA_VERSION,
-            active_profile_id: profile.id,
-            profiles: vec![profile],
-        };
-        let profile_payload = serde_json::to_string(&profile_snapshot).expect("profile payload");
-        {
-            let connection = Connection::open(&path).expect("database");
-            connection
-                .execute_batch(
-                    "CREATE TABLE pet_snapshot (
-                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-                        schema_version INTEGER NOT NULL,
-                        payload TEXT NOT NULL,
-                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    );
-                    CREATE TABLE profile_snapshot (
-                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-                        schema_version INTEGER NOT NULL,
-                        payload TEXT NOT NULL,
-                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    );
-                    PRAGMA user_version = 2;",
-                )
-                .expect("v2 schema");
-            connection
-                .execute(
-                    "INSERT INTO pet_snapshot (singleton, schema_version, payload)
-                     VALUES (1, ?1, ?2)",
-                    params![PET_SNAPSHOT_VERSION, pet_payload],
-                )
-                .expect("pet state");
-            connection
-                .execute(
-                    "INSERT INTO profile_snapshot (singleton, schema_version, payload)
-                     VALUES (1, ?1, ?2)",
-                    params![PROFILE_SNAPSHOT_VERSION, profile_payload],
-                )
-                .expect("profile state");
-        }
-
-        let pet_repository = SqlitePetRepository::open(&path).expect("pet migration");
-        assert_eq!(
-            pet_repository
-                .load_snapshot()
-                .expect("load pet")
-                .expect("pet snapshot")
-                .state,
-            PetState::Sleeping
-        );
-        drop(pet_repository);
-        let profile_repository = SqliteProfileRepository::open(&path).expect("profile migration");
-        assert_eq!(
-            profile_repository
-                .load_snapshot()
-                .expect("load profile")
-                .expect("profile snapshot"),
-            profile_snapshot
-        );
-        let connection = profile_repository.connection.lock().expect("lock");
-        let version = connection
-            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-            .expect("version");
-        let outbox_exists = connection
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'event_outbox'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .expect("outbox table");
-        assert_eq!(version, DATABASE_VERSION);
-        assert_eq!(outbox_exists, 1);
-        drop(connection);
-        drop(profile_repository);
-        std::fs::remove_file(path).expect("remove fixture");
-    }
-
-    #[test]
-    fn migrates_v3_and_creates_program_permission_storage() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "nimora-v3-migration-{}-{unique}.sqlite3",
-            std::process::id()
-        ));
-        {
-            let connection = Connection::open(&path).expect("database");
-            connection
-                .execute_batch(
-                    "CREATE TABLE pet_snapshot (
-                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-                        schema_version INTEGER NOT NULL,
-                        payload TEXT NOT NULL,
-                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    );
-                    CREATE TABLE profile_snapshot (
-                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-                        schema_version INTEGER NOT NULL,
-                        payload TEXT NOT NULL,
-                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    );
-                    CREATE TABLE event_outbox (
-                        event_id TEXT PRIMARY KEY,
-                        event_type TEXT NOT NULL,
-                        trace_id TEXT NOT NULL,
-                        payload TEXT NOT NULL,
-                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    );
-                    PRAGMA user_version = 3;",
-                )
-                .expect("v3 schema");
-        }
-        let repository = SqliteProgramPermissionRepository::open(&path).expect("migration");
-        let grant = ProgramPermissionGrant {
-            program_id: "studio.example.focus".to_owned(),
-            version: "1.0.0".to_owned(),
-            capabilities: vec!["read-pet-state".to_owned()],
-        };
-        repository.grant(&grant).expect("grant");
-        assert!(repository.is_granted(&grant).expect("check"));
-        let version = repository
-            .connection
-            .lock()
-            .expect("lock")
-            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-            .expect("version");
-        assert_eq!(version, DATABASE_VERSION);
-        drop(repository);
-        std::fs::remove_file(path).expect("remove fixture");
     }
 }
