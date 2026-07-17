@@ -2191,8 +2191,10 @@ dependencies = [
  "nimora-agent-provider-worker",
  "nimora-agent-runtime",
  "nimora-agent-tools",
+ "nimora-persistence-sqlite",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

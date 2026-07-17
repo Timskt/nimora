@@ -5,6 +5,7 @@ use nimora_agent_runtime::{
     ProviderMessageRole, ProviderRegistry, ProviderStepInput, ProviderStepOutcome,
 };
 use nimora_agent_tools::production_tool_registry;
+use nimora_persistence_sqlite::{AgentHistoryRecord, SqliteAgentHistoryRepository};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -95,6 +96,8 @@ pub fn run(arguments: &[String]) -> Result<String, CliError> {
         ["ai", "provider", "probe"] => provider_probe()?,
         ["ai", "tool", "list"] => tool_list()?,
         ["ai", "tool", "describe", tool_id] => tool_describe(tool_id)?,
+        ["ai", "history", "export", rest @ ..] => history_export(rest)?,
+        ["ai", "history", "delete", rest @ ..] => history_delete(rest)?,
         ["ai", "run", rest @ ..] => run_task(rest)?,
         _ => return Err(CliError::new("usage", "unsupported command; use --help", 2)),
     };
@@ -110,9 +113,144 @@ fn help() -> Value {
             "nimora ai provider probe",
             "nimora ai tool list",
             "nimora ai tool describe <tool-id>",
-            "nimora ai run --input <path|-> --output json [--offline] [--sidecar-root <path> --sidecar-manifest-sha256 <digest>]"
+            "nimora ai run --input <path|-> --output json [--offline] [--history-database <path>] [--sidecar-root <path> --sidecar-manifest-sha256 <digest>]",
+            "nimora ai history export --database <path> [--limit <1..200>] [--before-created-at-ms <timestamp> --before-task-id <uuid>]",
+            "nimora ai history delete --database <path> (--task-id <uuid>|--all)"
         ]
     })
+}
+
+fn history_repository(path: &str) -> Result<SqliteAgentHistoryRepository, CliError> {
+    if path.is_empty() {
+        return Err(CliError::new("usage", "database path cannot be empty", 2));
+    }
+    SqliteAgentHistoryRepository::open(Path::new(path)).map_err(|_| {
+        CliError::new(
+            "history-storage",
+            "cannot open or validate Agent history database",
+            4,
+        )
+    })
+}
+
+fn history_export(arguments: &[&str]) -> Result<Value, CliError> {
+    let mut database = None;
+    let mut limit = 50_usize;
+    let mut before_created_at_ms = None;
+    let mut before_task_id = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "--database" if index + 1 < arguments.len() => {
+                database = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--limit" if index + 1 < arguments.len() => {
+                limit = arguments[index + 1]
+                    .parse()
+                    .map_err(|_| CliError::new("usage", "history limit must be 1..200", 2))?;
+                index += 2;
+            }
+            "--before-created-at-ms" if index + 1 < arguments.len() => {
+                before_created_at_ms = Some(arguments[index + 1].parse().map_err(|_| {
+                    CliError::new("usage", "history cursor timestamp is invalid", 2)
+                })?);
+                index += 2;
+            }
+            "--before-task-id" if index + 1 < arguments.len() => {
+                before_task_id =
+                    Some(uuid::Uuid::parse_str(arguments[index + 1]).map_err(|_| {
+                        CliError::new("usage", "history cursor task ID is invalid", 2)
+                    })?);
+                index += 2;
+            }
+            _ => {
+                return Err(CliError::new(
+                    "usage",
+                    "history export requires --database and an optional paired cursor",
+                    2,
+                ));
+            }
+        }
+    }
+    let database = database.ok_or_else(|| CliError::new("usage", "missing --database", 2))?;
+    if !(1..=200).contains(&limit) {
+        return Err(CliError::new("usage", "history limit must be 1..200", 2));
+    }
+    let before = match (before_created_at_ms, before_task_id) {
+        (Some(created_at_ms), Some(task_id)) => Some((created_at_ms, task_id)),
+        (None, None) => None,
+        _ => {
+            return Err(CliError::new(
+                "usage",
+                "history cursor fields must be provided together",
+                2,
+            ));
+        }
+    };
+    let records = history_repository(database)?
+        .list(before, limit)
+        .map_err(history_storage_error)?;
+    Ok(json!({
+        "spec": "nimora.ai-history-export/1",
+        "records": records
+    }))
+}
+
+fn history_delete(arguments: &[&str]) -> Result<Value, CliError> {
+    let mut database = None;
+    let mut task_id = None;
+    let mut delete_all = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "--database" if index + 1 < arguments.len() => {
+                database = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--task-id" if index + 1 < arguments.len() => {
+                task_id = Some(
+                    uuid::Uuid::parse_str(arguments[index + 1])
+                        .map_err(|_| CliError::new("usage", "history task ID is invalid", 2))?,
+                );
+                index += 2;
+            }
+            "--all" => {
+                delete_all = true;
+                index += 1;
+            }
+            _ => {
+                return Err(CliError::new(
+                    "usage",
+                    "history delete requires --database and exactly one deletion target",
+                    2,
+                ));
+            }
+        }
+    }
+    let database = database.ok_or_else(|| CliError::new("usage", "missing --database", 2))?;
+    let repository = history_repository(database)?;
+    let deleted = match (task_id, delete_all) {
+        (Some(task_id), false) => {
+            u64::from(repository.delete(task_id).map_err(history_storage_error)?)
+        }
+        (None, true) => repository.delete_all().map_err(history_storage_error)?,
+        _ => {
+            return Err(CliError::new(
+                "usage",
+                "provide exactly one of --task-id or --all",
+                2,
+            ));
+        }
+    };
+    Ok(json!({
+        "spec": "nimora.ai-history-delete/1",
+        "deleted": deleted
+    }))
+}
+
+fn history_storage_error(_: impl std::fmt::Display) -> CliError {
+    CliError::new("history-storage", "Agent history operation failed", 10)
 }
 
 fn registry(
@@ -199,6 +337,7 @@ fn run_task(arguments: &[&str]) -> Result<Value, CliError> {
     let mut json_output = false;
     let mut sidecar_root = None;
     let mut sidecar_manifest_sha256 = None;
+    let mut history_database = None;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index] {
@@ -220,6 +359,10 @@ fn run_task(arguments: &[&str]) -> Result<Value, CliError> {
             }
             "--sidecar-manifest-sha256" if index + 1 < arguments.len() => {
                 sidecar_manifest_sha256 = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--history-database" if index + 1 < arguments.len() => {
+                history_database = Some(arguments[index + 1]);
                 index += 2;
             }
             _ => {
@@ -265,17 +408,18 @@ fn run_task(arguments: &[&str]) -> Result<Value, CliError> {
     }
     let input: RunInput = serde_json::from_slice(&bytes)
         .map_err(|_| CliError::new("input", "input must match the bounded task schema", 3))?;
-    execute_with_sidecar(input, offline, sidecar)
+    execute_with_sidecar(input, offline, sidecar, history_database)
 }
 
 fn execute(input: RunInput, offline: bool) -> Result<Value, CliError> {
-    execute_with_sidecar(input, offline, None)
+    execute_with_sidecar(input, offline, None, None)
 }
 
 fn execute_with_sidecar(
     input: RunInput,
     offline: bool,
     sidecar: Option<SidecarConfig<'_>>,
+    history_database: Option<&str>,
 ) -> Result<Value, CliError> {
     if input.prompt.is_empty()
         || input.prompt.len() > 256 * 1024
@@ -312,6 +456,8 @@ fn execute_with_sidecar(
     )
     .map_err(runtime_error)?;
     let coordinator = AgentCoordinator::new(&providers, &tools);
+    let history_model = input.model.clone();
+    let history_prompt = input.prompt.clone();
     let outcome = coordinator
         .provider_step(
             &mut task,
@@ -335,13 +481,38 @@ fn execute_with_sidecar(
         )
         .map_err(|error| CliError::new("agent-runtime", error.to_string(), 10))?;
     match outcome {
-        ProviderStepOutcome::Completed { response } => Ok(json!({
-            "spec": "nimora.ai-run-result/1",
-            "task": task,
-            "content": response.content,
-            "finishReason": response.finish_reason,
-            "usage": response.usage
-        })),
+        ProviderStepOutcome::Completed { response } => {
+            let history_requested = history_database.is_some();
+            let history_persisted = history_database.is_some_and(|path| {
+                let Ok(repository) = SqliteAgentHistoryRepository::open(Path::new(path)) else {
+                    return false;
+                };
+                let Ok(record) = AgentHistoryRecord::new(
+                    task.clone(),
+                    history_model,
+                    history_prompt,
+                    response.content.clone(),
+                    response.finish_reason,
+                    response.usage,
+                    now_ms,
+                ) else {
+                    return false;
+                };
+                repository.insert(&record).is_ok()
+            });
+            Ok(json!({
+                "spec": "nimora.ai-run-result/1",
+                "task": task,
+                "content": response.content,
+                "finishReason": response.finish_reason,
+                "usage": response.usage,
+                "history": {
+                    "requested": history_requested,
+                    "persisted": history_persisted,
+                    "degraded": history_requested && !history_persisted
+                }
+            }))
+        }
         ProviderStepOutcome::ToolCalls { .. } => Err(CliError::new(
             "confirmation-required",
             "non-interactive run cannot execute requested tools",

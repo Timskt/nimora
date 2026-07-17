@@ -118,12 +118,13 @@ nimora ai run --input task.json --output json
 nimora ai task list|show|cancel|resume
 nimora ai provider list|probe
 nimora ai tool list|describe
-nimora ai history export|delete
+nimora ai history export --database <path> [--limit <1..200>] [--before-created-at-ms <timestamp> --before-task-id <uuid>]
+nimora ai history delete --database <path> (--task-id <uuid>|--all)
 ```
 
-共享 SQLite 层已提供 `nimora.agent-history/1` 完成记录仓储：Task ID 唯一、强类型 Provider/Usage/Finish Reason、单条内容 256 KiB 上限、最多 200 条的稳定时间游标分页，以及按任务或全部删除。当前仍需把桌面任务生命周期、历史 UI 与 CLI `export|delete` 接入该仓储；历史写入失败必须作为独立降级状态呈现，不能在工具副作用已经完成后把整个 Agent 任务伪报为失败。
+共享 SQLite 层已提供 `nimora.agent-history/1` 完成记录仓储：Task ID 唯一、强类型 Provider/Usage/Finish Reason、单条内容 256 KiB 上限、最多 200 条的稳定时间游标分页，以及按任务或全部删除。桌面任务生命周期、历史 UI 和 CLI `run|export|delete` 均已接入该仓储；CLI 通过显式 `--history-database` 写入，通过显式 `--database` 查询或删除，不猜测、不回显系统数据路径。历史写入失败作为 `history.degraded` 旁路状态呈现，不能在工具副作用已经完成后把整个 Agent 任务伪报为失败。
 
-当前首个可运行 CLI 基线位于 `apps/cli`，已实现 `provider list|probe`、`tool list|describe` 与非交互 `run`。`tool list|describe` 返回生产 Tool Registry，Provider 请求获得同一目录。内置 `provider:deterministic-local` 是无网络、无凭据、零费用的确定性诊断 Provider，用于证明 CLI、任务状态、预算、Provider Registry 和离线策略的真实端到端路径；它不是通用语言模型。Ollama 已通过受验证 Worker 接入非交互运行，OpenAI-compatible 尚未实现。CLI 当前没有持有桌面模块 Backend，因此 Tool Call 只进入待确认/不可执行结果，不会在桌面进程外伪造模块副作用。
+当前首个可运行 CLI 基线位于 `apps/cli`，已实现 `provider list|probe`、`tool list|describe`、历史 `export|delete` 与非交互 `run`。`tool list|describe` 返回生产 Tool Registry，Provider 请求获得同一目录。内置 `provider:deterministic-local` 是无网络、无凭据、零费用的确定性诊断 Provider，用于证明 CLI、任务状态、预算、Provider Registry 和离线策略的真实端到端路径；它不是通用语言模型。Ollama 已通过受验证 Worker 接入非交互运行，OpenAI-compatible 尚未实现。CLI 当前没有持有桌面模块 Backend，因此 Tool Call 只进入待确认/不可执行结果，不会在桌面进程外伪造模块副作用。
 
 - 交互终端显示计划、实际 Tool 参数、风险、Provider 数据预览和实时预算。
 - 非交互模式遇到需确认操作必须退出并返回结构化 `confirmation-required`，禁止默认同意。

@@ -240,6 +240,7 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-050 | Agent 历史仓储 | 完成任务以 Task ID 只写一次；版本化载荷、内容上限、稳定时间游标分页、单条删除与全部删除均可验证，删除不影响运行状态 | P0 |
 | AGT-051 | 桌面历史生命周期 | 无工具任务与完整工具 Turn 只在最终成功后写入；等待、拒绝和取消不写入；历史写失败只展示降级，不改变任务结果或重复工具副作用 | P0 |
 | AGT-052 | 桌面历史 IPC 与 UI | 成对游标校验、有界分页、单条/全部删除、Recovery 内存隔离、空状态、最近五条和清除反馈正确；Prompt/Response 不进入诊断包或 Agent Tool Catalog | P0 |
+| AGT-053 | CLI 历史生命周期 | `run --history-database` 仅持久化最终完成任务，失败返回独立 degraded 状态但任务仍成功；`history export|delete` 使用显式数据库、稳定 JSON、成对游标、1..200 上限及单条/全部删除 | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |
