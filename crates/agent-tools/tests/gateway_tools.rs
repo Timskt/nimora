@@ -51,6 +51,21 @@ impl CapabilityBackend for Backend {
         Ok(json!({"startup": {"mode": "normal"}, "safety": {"mode": "normal"}}))
     }
 
+    fn validate_automation(
+        &self,
+        definition: &Value,
+        event_type: &str,
+        event_data: &Value,
+    ) -> Result<Value, String> {
+        Ok(json!({
+            "mode": "dry_run",
+            "status": "planned",
+            "automationId": definition["id"],
+            "eventType": event_type,
+            "eventData": event_data
+        }))
+    }
+
     fn read_local_data(&self, _program_id: &str, _key: &str) -> Result<Option<Value>, String> {
         Err("Agent tools cannot access program storage".to_owned())
     }
@@ -151,6 +166,40 @@ fn module_catalog_and_health_reads_use_explicit_gateway_capabilities() {
             ToolStepOutcome::Completed { output, .. } if output.get(expected_key).is_some()
         ));
     }
+}
+
+#[test]
+fn automation_validation_is_a_side_effect_free_gateway_query() {
+    let tools = production_tool_registry().expect("registry");
+    let providers = ProviderRegistry::default();
+    let coordinator = AgentCoordinator::new(&providers, &tools);
+    let mut task = task();
+    let capability_backend = Backend::default();
+    let command_log = Arc::clone(&capability_backend.commands);
+    let backend = GatewayToolBackend::new(
+        capability_backend,
+        GatewayToolBackend::<Backend>::standard_policy(task.id, task.trace_id),
+    );
+    let invocation = ToolInvocation::new(
+        task.id,
+        task.trace_id,
+        "automation.definition.validate",
+        json!({
+            "definition": {"id": "local.focus.on-build"},
+            "eventType": "dev.build.finished",
+            "eventData": {"succeeded": true}
+        }),
+    )
+    .expect("invocation");
+    let outcome = coordinator
+        .tool_step(&mut task, &backend, invocation, None, 1_001)
+        .expect("tool step");
+    assert!(matches!(
+        outcome,
+        ToolStepOutcome::Completed { output, .. }
+            if output["status"] == "planned" && output["mode"] == "dry_run"
+    ));
+    assert!(command_log.lock().expect("command log").is_empty());
 }
 
 #[test]

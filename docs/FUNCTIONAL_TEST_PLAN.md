@@ -138,7 +138,7 @@ ID / 标题 / 优先级 / 前置条件
 | AUT-008 | 虚拟时间 | 快进时间可稳定复现定时规则 | P1 |
 | AUT-009 | Agent 转规则 | 保存后生成可编辑、可验证的规则 | P2 |
 
-当前自动化证据：`nimora-automation-runtime` 单元测试覆盖条件短路、dry-run 零 Backend 调用、幂等重试门禁、瞬时错误三次尝试、失败后的逆序补偿、取消与超时前零执行；桌面 Rust 测试验证 IPC 只返回 `planned` 步骤且尝试次数为零，前端测试验证匹配与不匹配事件的离线预览。Interval、分支/并行、持久调度、真实 Action Gateway、运行历史和事件回放仍不得标记通过。
+当前自动化证据：`nimora-automation-runtime` 单元测试覆盖条件短路、dry-run 零 Backend 调用、幂等重试门禁、瞬时错误三次尝试、失败后的逆序补偿、取消与超时前零执行；桌面 Rust 测试验证 IPC 与 Agent `automation.definition.validate` 工具都只返回 `planned` 步骤且尝试次数为零，Agent 测试同时证明无需确认、无待处理项、无 Runtime 状态变化且普通用户程序不能继承专用 Query；前端测试验证匹配与不匹配事件的离线预览。Interval、分支/并行、持久调度、真实 Action Gateway、运行历史和事件回放仍不得标记通过。
 
 ## 10. Skill 与扩展宿主
 
@@ -249,6 +249,7 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-057 | Agent 角色切换 | `character.active.switch` 必须绑定实际 Asset ID 批准，只映射到 `safe.character.switch`；仅激活内置或复验通过的 Character，刷新失败回滚原选择，无原生上下文时零状态写入 | P0 |
 | AGT-058 | Agent 程序目录 | `program.catalog.read` 只返回完整性复验通过的已安装程序身份、声明、预算和精确版本授权摘要；损坏项只计数，不暴露源码、安装路径、Worker 路径或系统句柄；普通用户程序不继承该 Agent Capability | P0 |
 | AGT-059 | Agent 已安装程序执行 | `program.installed.execute` 必须绑定 `programId + version` 批准，只映射到 `safe.program.execute`；执行前重验 active 安装、完整性、精确版本和持久授权，仅经隔离 Worker 与 Capability Gateway 执行，无原生上下文时零副作用 | P0 |
+| AGT-060 | Agent 自动化定义验证 | `automation.definition.validate` 仅接受对象定义、事件类型和对象事件数据；经专用 Agent Gateway Query 调用自动化 Dry-run，返回计划或不匹配状态且尝试次数为零，不创建确认项、不调用 Command Backend；普通用户程序不继承该能力 | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |

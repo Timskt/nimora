@@ -17,7 +17,7 @@ describe("desktop platform adapter", () => {
     });
     expect((await api.previewDiagnosticReport()).sources).toEqual({ eventCount: 2, eventRetentionDays: 14 });
     expect((await api.profiles()).profiles[0]?.name).toBe("Default");
-    expect((await api.agentCatalog()).tools).toHaveLength(12);
+    expect((await api.agentCatalog()).tools).toHaveLength(13);
     expect((await api.agentCatalog()).providers).toHaveLength(2);
     const result = await api.runLocalAgent("离线检查");
     expect(result.usage?.costMicrounits).toBe(0);

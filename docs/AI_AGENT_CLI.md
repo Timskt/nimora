@@ -61,7 +61,7 @@ flowchart LR
 - `ProviderToolTurn` 以 Provider 原始调用顺序聚合一个 Turn 的结果；未完成、错配和重复结果不能生成续跑消息。宿主因此可以并行执行只读调用、逐项等待写操作确认，但只能在全部调用成功后把完整结果交回 Provider。
 - 工具执行单步必须校验 Task/Trace 归属，在真正调用模块 Capability Gateway Backend 前扣减工具预算，并重新验证批准指纹。
 
-首个生产工具目录位于 `crates/agent-tools`，当前公开十二项工具：`asset.catalog.read`、`character.state.read`、`pet.action.catalog.read`、`pet.state.read`、`profile.state.read`、`program.catalog.read`、`runtime.health.read`、`pet.animation.play`、`pet.position.move`、`profile.active.switch`、`character.active.switch` 与 `program.installed.execute`。目录只包含 Tool Descriptor 和固定模块 Adapter，不暴露 `DesktopState`、Repository、Tauri Command、任意命令字符串或文件路径。只读授权使用可扩展能力集合；资源目录只返回已验证资产摘要，角色状态只返回当前 Asset ID、渲染后端、画布/锚点和能力布尔值，主动剔除模型路径与资源 URL；动作目录直接从 Runtime 的 `PetAction` 当前词汇生成，并指明对应写工具与参数，避免 Provider 猜测动作；程序目录只返回完整性复验通过的已安装程序身份、Manifest 声明、预算与精确版本授权摘要，损坏项只计数，不返回源码、安装路径、Worker 路径或宿主句柄；运行健康只返回启动、安全、Outbox 与备份摘要，不包含日志、用户正文、路径或密钥。
+首个生产工具目录位于 `crates/agent-tools`，当前公开十三项工具：`asset.catalog.read`、`automation.definition.validate`、`character.state.read`、`pet.action.catalog.read`、`pet.state.read`、`profile.state.read`、`program.catalog.read`、`runtime.health.read`、`pet.animation.play`、`pet.position.move`、`profile.active.switch`、`character.active.switch` 与 `program.installed.execute`。目录只包含 Tool Descriptor 和固定模块 Adapter，不暴露 `DesktopState`、Repository、Tauri Command、任意命令字符串或文件路径。只读授权使用可扩展能力集合；自动化验证接收有界定义与测试事件，只调用 `AutomationEngine` 的 Dry-run 模式并返回 `planned`、不匹配或校验失败结果，Backend 若收到任何真实 Command 会失败；资源目录只返回已验证资产摘要，角色状态只返回当前 Asset ID、渲染后端、画布/锚点和能力布尔值，主动剔除模型路径与资源 URL；动作目录直接从 Runtime 的 `PetAction` 当前词汇生成，并指明对应写工具与参数，避免 Provider 猜测动作；程序目录只返回完整性复验通过的已安装程序身份、Manifest 声明、预算与精确版本授权摘要，损坏项只计数，不返回源码、安装路径、Worker 路径或宿主句柄；运行健康只返回启动、安全、Outbox 与备份摘要，不包含日志、用户正文、路径或密钥。
 
 ### 3.1 模块互动覆盖矩阵
 
@@ -72,7 +72,7 @@ flowchart LR
 | Character / Asset | 当前角色、渲染能力、已安装资产 | 切换已验证角色 | 已贯通 Gateway，路径脱敏 |
 | User Program | 已安装程序与精确版本授权摘要 | 执行指定程序版本 | 已贯通隔离 Worker，外部副作用确认 |
 | Runtime Health | Safe/Recovery、事件和备份健康摘要 | 无写入口 | 已贯通只读 Gateway |
-| Automation | 规则、Dry-run、运行记录 | 创建、测试、启停和运行规则 | 尚未注册生产 Tool；不得由 AI 绕过自动化仓储和 Action Gateway |
+| Automation | 有界定义与测试事件 | 零副作用验证和 Dry-run | `automation.definition.validate` 已贯通；规则持久化、启停和真实运行尚未开放，AI 不得绕过自动化仓储和 Action Gateway |
 | Diagnostics / Backup | 脱敏诊断、备份健康 | 导出诊断、创建或恢复备份 | 仅健康摘要已提供；导出与恢复应采用高风险专用 Tool |
 | Extension / Skill | Contribution Catalog、Skill 状态 | 安装、启停、执行 Skill | Extension Host 未实现，禁止预留任意命令工具 |
 | Connector | 已配对连接与 Scope 摘要 | 发送、订阅、断开连接 | Gateway 尚未实现；网络目标、数据分类和用户确认必须叠加 |

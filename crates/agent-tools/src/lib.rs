@@ -19,6 +19,7 @@ const ASSET_CATALOG_READ: &str = "asset.catalog.read";
 const PROGRAM_CATALOG_READ: &str = "program.catalog.read";
 const PROGRAM_EXECUTE: &str = "program.installed.execute";
 const RUNTIME_HEALTH_READ: &str = "runtime.health.read";
+const AUTOMATION_DEFINITION_VALIDATE: &str = "automation.definition.validate";
 const PET_ANIMATION_PLAY: &str = "pet.animation.play";
 const PET_POSITION_MOVE: &str = "pet.position.move";
 const SAFE_PET_ANIMATE: &str = "safe.pet.animate";
@@ -113,6 +114,7 @@ pub fn production_tool_descriptors() -> Result<Vec<ToolDescriptor>, AgentRuntime
             CommandRisk::Safe,
             ToolEffect::ReadOnly,
         )?,
+        automation_validation_descriptor()?,
         descriptor(
             PET_ANIMATION_PLAY,
             "Play pet animation",
@@ -160,6 +162,26 @@ fn character_switch_descriptor() -> Result<ToolDescriptor, AgentRuntimeError> {
         }),
         CommandRisk::Low,
         ToolEffect::ReversibleWrite,
+    )
+}
+
+fn automation_validation_descriptor() -> Result<ToolDescriptor, AgentRuntimeError> {
+    descriptor(
+        AUTOMATION_DEFINITION_VALIDATE,
+        "Validate automation definition",
+        "Validates and dry-runs one bounded automation definition through the Capability Gateway without executing module actions.",
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["definition", "eventType", "eventData"],
+            "properties": {
+                "definition": {"type": "object"},
+                "eventType": {"type": "string"},
+                "eventData": {"type": "object"}
+            }
+        }),
+        CommandRisk::Safe,
+        ToolEffect::ReadOnly,
     )
 }
 
@@ -215,6 +237,7 @@ impl<B: CapabilityBackend> GatewayToolBackend<B> {
             trace_id,
             read_capabilities: BTreeSet::from([
                 "asset.catalog".to_owned(),
+                "automation.definition.validate".to_owned(),
                 "character.state".to_owned(),
                 "pet.action.catalog".to_owned(),
                 "pet.state".to_owned(),
@@ -282,6 +305,14 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
                 require_empty_arguments(&invocation.arguments)?;
                 CapabilityRequest::ReadRuntimeHealth
             }
+            AUTOMATION_DEFINITION_VALIDATE => CapabilityRequest::ValidateAutomation {
+                definition: required_argument(&invocation.arguments, "definition")?.clone(),
+                event_type: required_argument(&invocation.arguments, "eventType")?
+                    .as_str()
+                    .ok_or_else(|| "eventType must be a string".to_owned())?
+                    .to_owned(),
+                event_data: required_argument(&invocation.arguments, "eventData")?.clone(),
+            },
             PET_ANIMATION_PLAY => CapabilityRequest::InvokeCommand {
                 command: SAFE_PET_ANIMATE.to_owned(),
                 arguments: invocation.arguments.clone(),
@@ -312,6 +343,7 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
             | CapabilityResponse::AssetCatalog { value }
             | CapabilityResponse::ProgramCatalog { value }
             | CapabilityResponse::RuntimeHealth { value }
+            | CapabilityResponse::AutomationValidation { value }
             | CapabilityResponse::CommandAccepted { value } => Ok(value),
             _ => Err("Capability Gateway returned an incompatible response".to_owned()),
         }
@@ -347,4 +379,11 @@ fn require_empty_arguments(arguments: &Value) -> Result<(), String> {
     } else {
         Err("read tool arguments must be an empty object".to_owned())
     }
+}
+
+fn required_argument<'a>(arguments: &'a Value, key: &str) -> Result<&'a Value, String> {
+    arguments
+        .as_object()
+        .and_then(|object| object.get(key))
+        .ok_or_else(|| format!("missing required argument: {key}"))
 }

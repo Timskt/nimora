@@ -780,14 +780,22 @@ impl AutomationBackend for DryRunAutomationBackend {
 
 #[tauri::command]
 fn test_automation(request: AutomationTestRequest) -> Result<AutomationRun, DesktopError> {
+    dry_run_automation(&request.definition, request.event_type, request.event_data)
+}
+
+fn dry_run_automation(
+    definition: &AutomationDefinition,
+    event_type: String,
+    event_data: serde_json::Value,
+) -> Result<AutomationRun, DesktopError> {
     let event = Event::new(
-        request.event_type,
+        event_type,
         EventSource::System("automation-test".to_owned()),
-        request.event_data,
+        event_data,
     )
     .map_err(RuntimeError::from)?;
     Ok(AutomationEngine::run(
-        &request.definition,
+        definition,
         &event,
         RunMode::DryRun,
         &DryRunAutomationBackend,
@@ -3973,6 +3981,19 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
         }))
     }
 
+    fn validate_automation(
+        &self,
+        definition: &serde_json::Value,
+        event_type: &str,
+        event_data: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let definition = serde_json::from_value::<AutomationDefinition>(definition.clone())
+            .map_err(|error| error.to_string())?;
+        let run = dry_run_automation(&definition, event_type.to_owned(), event_data.clone())
+            .map_err(|error| error.to_string())?;
+        serde_json::to_value(run).map_err(|error| error.to_string())
+    }
+
     fn read_local_data(
         &self,
         program_id: &str,
@@ -4787,6 +4808,7 @@ mod tests {
             tool_ids,
             [
                 "asset.catalog.read".to_owned(),
+                "automation.definition.validate".to_owned(),
                 "character.active.switch".to_owned(),
                 "character.state.read".to_owned(),
                 "pet.action.catalog.read".to_owned(),
@@ -4836,6 +4858,57 @@ mod tests {
         assert_eq!(run.steps.len(), 1);
         assert_eq!(run.steps[0].command, "pet.animation.play");
         assert_eq!(run.steps[0].attempts, 0);
+    }
+
+    #[test]
+    fn desktop_agent_validates_automation_without_confirmation_or_side_effects() {
+        let (root, state) = normal_desktop_state();
+        let prepared = prepare_agent_tool_inner(
+            PrepareAgentToolRequest {
+                tool_id: "automation.definition.validate".to_owned(),
+                arguments: json!({
+                    "definition": {
+                        "spec": "nimora.automation/1",
+                        "id": "local.focus.on-build",
+                        "name": "Build companion",
+                        "enabled": true,
+                        "trigger": { "eventType": "dev.build.finished" },
+                        "conditions": [{ "pointer": "/succeeded", "equals": true }],
+                        "actions": [{
+                            "id": "celebrate",
+                            "command": "pet.animation.play",
+                            "arguments": { "action": "celebrate" },
+                            "risk": "low",
+                            "retrySafe": true,
+                            "idempotencyKey": "agent-build-celebrate",
+                            "compensation": null
+                        }],
+                        "policy": { "timeoutMs": 5000, "failure": "stop" }
+                    },
+                    "eventType": "dev.build.finished",
+                    "eventData": { "succeeded": true }
+                }),
+            },
+            &state,
+        )
+        .expect("automation validation");
+        assert!(!prepared.requires_confirmation);
+        assert_eq!(
+            prepared.output.as_ref().expect("output")["status"],
+            "planned"
+        );
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").state,
+            nimora_runtime_core::PetState::Idle
+        );
+        assert!(
+            state
+                .pending_agent_tools
+                .lock()
+                .expect("pending tools")
+                .is_empty()
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]

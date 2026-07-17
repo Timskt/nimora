@@ -32,10 +32,25 @@ pub enum CapabilityRequest {
     ReadAssetCatalog,
     ReadProgramCatalog,
     ReadRuntimeHealth,
-    ReadLocalData { key: String },
-    WriteLocalData { key: String, value: Value },
-    DeleteLocalData { key: String },
-    InvokeCommand { command: String, arguments: Value },
+    ValidateAutomation {
+        definition: Value,
+        event_type: String,
+        event_data: Value,
+    },
+    ReadLocalData {
+        key: String,
+    },
+    WriteLocalData {
+        key: String,
+        value: Value,
+    },
+    DeleteLocalData {
+        key: String,
+    },
+    InvokeCommand {
+        command: String,
+        arguments: Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,6 +63,7 @@ pub enum CapabilityResponse {
     AssetCatalog { value: Value },
     ProgramCatalog { value: Value },
     RuntimeHealth { value: Value },
+    AutomationValidation { value: Value },
     LocalData { value: Option<Value> },
     LocalDataWritten,
     LocalDataDeleted { deleted: bool },
@@ -112,6 +128,20 @@ pub trait CapabilityBackend: std::fmt::Debug + Send + Sync {
     /// Returns a backend-specific error when health cannot be read.
     fn read_runtime_health(&self) -> Result<Value, String> {
         Err("runtime health capability is unavailable".to_owned())
+    }
+
+    /// Validates and dry-runs one bounded automation definition without side effects.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend-specific error when the definition or test event is invalid.
+    fn validate_automation(
+        &self,
+        _definition: &Value,
+        _event_type: &str,
+        _event_data: &Value,
+    ) -> Result<Value, String> {
+        Err("automation validation capability is unavailable".to_owned())
     }
 
     /// Reads a value from the program's isolated local-data namespace.
@@ -220,7 +250,8 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
             | CapabilityRequest::ReadCharacterState
             | CapabilityRequest::ReadAssetCatalog
             | CapabilityRequest::ReadProgramCatalog
-            | CapabilityRequest::ReadRuntimeHealth => Err(GatewayError::CapabilityDenied),
+            | CapabilityRequest::ReadRuntimeHealth
+            | CapabilityRequest::ValidateAutomation { .. } => Err(GatewayError::CapabilityDenied),
             CapabilityRequest::ReadLocalData { key } => {
                 if !policy.can_store_local_data {
                     return Err(GatewayError::CapabilityDenied);
@@ -348,6 +379,11 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
                     .map(|value| CapabilityResponse::RuntimeHealth { value })
                     .map_err(GatewayError::Backend)
             }
+            CapabilityRequest::ValidateAutomation {
+                definition,
+                event_type,
+                event_data,
+            } => self.dispatch_agent_automation(policy, &definition, &event_type, &event_data),
             CapabilityRequest::InvokeCommand { command, arguments } => {
                 if !policy.commands.contains(&command) {
                     return Err(GatewayError::CommandNotDeclared(command));
@@ -366,6 +402,25 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
             | CapabilityRequest::WriteLocalData { .. }
             | CapabilityRequest::DeleteLocalData { .. } => Err(GatewayError::CapabilityDenied),
         }
+    }
+
+    fn dispatch_agent_automation(
+        &self,
+        policy: &AgentGatewayPolicy,
+        definition: &Value,
+        event_type: &str,
+        event_data: &Value,
+    ) -> Result<CapabilityResponse, GatewayError> {
+        if !policy
+            .read_capabilities
+            .contains("automation.definition.validate")
+        {
+            return Err(GatewayError::CapabilityDenied);
+        }
+        self.backend
+            .validate_automation(definition, event_type, event_data)
+            .map(|value| CapabilityResponse::AutomationValidation { value })
+            .map_err(GatewayError::Backend)
     }
 }
 
@@ -621,6 +676,25 @@ mod tests {
             &policy,
             &execution,
             envelope(&execution, CapabilityRequest::ReadProgramCatalog),
+        );
+        assert_eq!(result, Err(GatewayError::CapabilityDenied));
+    }
+
+    #[test]
+    fn user_programs_do_not_inherit_agent_automation_validation() {
+        let policy = policy();
+        let execution = ExecutionController::default().admit(&policy).unwrap();
+        let result = CapabilityGateway::new(Backend).dispatch(
+            &policy,
+            &execution,
+            envelope(
+                &execution,
+                CapabilityRequest::ValidateAutomation {
+                    definition: json!({}),
+                    event_type: "dev.build.finished".to_owned(),
+                    event_data: json!({}),
+                },
+            ),
         );
         assert_eq!(result, Err(GatewayError::CapabilityDenied));
     }

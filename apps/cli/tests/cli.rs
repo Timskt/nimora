@@ -118,6 +118,7 @@ fn tool_catalog_exposes_gateway_backed_module_capabilities() {
         tool_ids,
         vec![
             "asset.catalog.read",
+            "automation.definition.validate",
             "character.active.switch",
             "character.state.read",
             "pet.action.catalog.read",
