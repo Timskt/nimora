@@ -622,6 +622,7 @@ fn start_user_program(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn execute_user_program(
+    app: AppHandle,
     state: State<'_, DesktopState>,
     manifest: ProgramManifest,
     source: String,
@@ -636,7 +637,7 @@ fn execute_user_program(
         source,
         input,
     };
-    let mut worker = WorkerProcess::spawn(worker_config(&execution), &request)
+    let mut worker = WorkerProcess::spawn(worker_config(&app, &execution), &request)
         .map_err(|error| DesktopError::UserCodeHost(error.to_string()))?;
     let response = worker
         .wait()
@@ -692,15 +693,38 @@ fn parse_user_program_plan(value: serde_json::Value) -> Result<UserProgramPlan, 
     Ok(plan)
 }
 
-fn worker_config(execution: &ExecutionHandle) -> WorkerConfig {
+fn worker_config(app: &AppHandle, execution: &ExecutionHandle) -> WorkerConfig {
     let executable = option_env!("NIMORA_USER_CODE_WORKER_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            std::env::current_exe()
+            let executable_candidates = app
+                .path()
+                .executable_dir()
                 .ok()
-                .and_then(|path| path.parent().map(Path::to_path_buf))
-                .unwrap_or_default()
-                .join("nimora-user-code-worker")
+                .into_iter()
+                .map(|directory| directory.join("nimora-user-code-worker"));
+            let resource_candidates =
+                app.path()
+                    .resource_dir()
+                    .ok()
+                    .into_iter()
+                    .flat_map(|directory| {
+                        [
+                            directory.join("binaries/nimora-user-code-worker"),
+                            directory.join("nimora-user-code-worker"),
+                        ]
+                    });
+            executable_candidates
+                .chain(resource_candidates)
+                .into_iter()
+                .find(|path| path.is_file())
+                .or_else(|| {
+                    std::env::current_exe()
+                        .ok()
+                        .and_then(|path| path.parent().map(Path::to_path_buf))
+                        .map(|directory| directory.join("nimora-user-code-worker"))
+                })
+                .unwrap_or_else(|| PathBuf::from("nimora-user-code-worker"))
         });
     WorkerConfig {
         executable: executable.to_string_lossy().into_owned(),

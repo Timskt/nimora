@@ -13,3 +13,5 @@ coverage/
 *.p12
 .idea/
 .vscode/
+/apps/desktop/src-tauri/binaries/*
+!/apps/desktop/src-tauri/binaries/.gitkeep
