@@ -8,11 +8,10 @@ rust-version.workspace = true
 [dependencies]
 nimora-asset-installer = { path = "../asset-installer" }
 nimora-user-code-policy = { path = "../user-code-policy" }
+serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
-
-[dev-dependencies]
 sha2.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

@@ -14,6 +14,12 @@ pub struct InstallFile {
     pub sha256: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedInstallFile {
+    pub relative_path: PathBuf,
+    pub contents: Vec<u8>,
+}
+
 const MAX_FILES: usize = 10_000;
 const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -64,10 +70,26 @@ pub fn install_atomically(
     active_path: &Path,
     files: &[InstallFile],
 ) -> Result<InstallResult, InstallError> {
+    install_atomically_with_generated(source_root, active_path, files, &[])
+}
+
+/// Copies a validated inventory plus trusted generated files and activates it atomically.
+///
+/// # Errors
+///
+/// Returns an error when either inventory is unsafe, budgets are exceeded, a
+/// generated path overlaps a source path, or a filesystem operation fails.
+pub fn install_atomically_with_generated(
+    source_root: &Path,
+    active_path: &Path,
+    files: &[InstallFile],
+    generated_files: &[GeneratedInstallFile],
+) -> Result<InstallResult, InstallError> {
     if !source_root.is_dir() {
         return Err(InstallError::SourceNotDirectory);
     }
     validate_budget(files)?;
+    validate_generated_files(files, generated_files)?;
     let canonical_source_root = source_root.canonicalize()?;
     let parent = active_path
         .parent()
@@ -93,6 +115,14 @@ pub fn install_atomically(
             }
             fs::copy(source, destination)?;
         }
+        for file in generated_files {
+            let relative = safe_relative_path(&file.relative_path)?;
+            let destination = staging.join(relative);
+            if let Some(destination_parent) = destination.parent() {
+                fs::create_dir_all(destination_parent)?;
+            }
+            fs::write(destination, &file.contents)?;
+        }
         validate_inventory(&staging, files)?;
         let backup = if active_path.exists() {
             let backup = unique_sibling(active_path, "backup");
@@ -116,6 +146,36 @@ pub fn install_atomically(
         fs::remove_dir_all(&staging)?;
     }
     result
+}
+
+fn validate_generated_files(
+    files: &[InstallFile],
+    generated_files: &[GeneratedInstallFile],
+) -> Result<(), InstallError> {
+    let mut paths = std::collections::HashSet::with_capacity(files.len() + generated_files.len());
+    for file in files {
+        paths.insert(safe_relative_path(&file.relative_path)?.to_path_buf());
+    }
+    let mut total_bytes = files.iter().try_fold(0_u64, |total, file| {
+        total
+            .checked_add(file.bytes)
+            .ok_or(InstallError::BudgetExceeded)
+    })?;
+    for file in generated_files {
+        let relative = safe_relative_path(&file.relative_path)?.to_path_buf();
+        if !paths.insert(relative.clone()) {
+            return Err(InstallError::UnsafePath(relative));
+        }
+        total_bytes = total_bytes
+            .checked_add(
+                u64::try_from(file.contents.len()).map_err(|_| InstallError::BudgetExceeded)?,
+            )
+            .ok_or(InstallError::BudgetExceeded)?;
+    }
+    if paths.len() > MAX_FILES || total_bytes > MAX_TOTAL_BYTES {
+        return Err(InstallError::BudgetExceeded);
+    }
+    Ok(())
 }
 
 /// Restores the newest backup next to an active asset directory.
@@ -339,6 +399,61 @@ mod tests {
         .unwrap_err();
         assert!(matches!(error, InstallError::HashMismatch(_)));
         assert_eq!(fs::read(active.join("old.txt")).unwrap(), b"old");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn installs_trusted_generated_files_in_the_atomic_activation() {
+        let root = std::env::temp_dir().join("nimora-installer-generated");
+        let source = root.join("source");
+        let active = root.join("active");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("manifest.json"), b"new").unwrap();
+        install_atomically_with_generated(
+            &source,
+            &active,
+            &[InstallFile {
+                relative_path: "manifest.json".into(),
+                bytes: 3,
+                sha256: "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437".into(),
+            }],
+            &[GeneratedInstallFile {
+                relative_path: ".integrity.json".into(),
+                contents: b"trusted".to_vec(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(active.join(".integrity.json")).unwrap(),
+            b"trusted"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_generated_files_that_overlap_source_inventory() {
+        let root = std::env::temp_dir().join("nimora-installer-generated-overlap");
+        let source = root.join("source");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&source).unwrap();
+        let error = install_atomically_with_generated(
+            &source,
+            &root.join("active"),
+            &[InstallFile {
+                relative_path: "manifest.json".into(),
+                bytes: 0,
+                sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
+            }],
+            &[GeneratedInstallFile {
+                relative_path: "manifest.json".into(),
+                contents: Vec::new(),
+            }],
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, InstallError::UnsafePath(path) if path == Path::new("manifest.json"))
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

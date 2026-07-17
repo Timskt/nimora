@@ -2223,6 +2223,7 @@ version = "0.1.0"
 dependencies = [
  "nimora-asset-installer",
  "nimora-user-code-policy",
+ "serde",
  "serde_json",
  "sha2",
  "thiserror 2.0.18",

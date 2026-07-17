@@ -1,9 +1,12 @@
 use nimora_asset_installer::{
-    InstallError, InstallFile, InstallResult, RollbackResult, install_atomically, rollback_latest,
+    GeneratedInstallFile, InstallError, InstallFile, InstallResult, RollbackResult,
+    install_atomically_with_generated, rollback_latest,
 };
 use nimora_user_code_policy::{PolicyError, ProgramManifest, evaluate};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs, io,
     path::{Path, PathBuf},
 };
@@ -11,6 +14,8 @@ use thiserror::Error;
 
 const MANIFEST_FILE: &str = "manifest.json";
 const ENTRY_FILE: &str = "main.js";
+const INTEGRITY_FILE: &str = ".nimora-integrity.json";
+const INTEGRITY_SCHEMA_VERSION: u32 = 1;
 const MAX_PACKAGE_FILES: usize = 64;
 const MAX_PACKAGE_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -32,6 +37,8 @@ pub enum ProgramPackageError {
     InstalledProgramUnavailable,
     #[error("installed user program entry resolves outside its active directory")]
     InstalledProgramEscaped,
+    #[error("installed user program failed its integrity check")]
+    InstalledProgramIntegrity,
     #[error(transparent)]
     Policy(#[from] PolicyError),
     #[error(transparent)]
@@ -55,6 +62,23 @@ pub struct InstalledProgram {
     pub manifest: ProgramManifest,
     pub source: String,
     pub active_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProgramIntegrityLock {
+    schema_version: u32,
+    program_id: String,
+    version: String,
+    files: Vec<LockedProgramFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LockedProgramFile {
+    path: String,
+    bytes: u64,
+    sha256: String,
 }
 
 /// Validates and atomically activates one user program package.
@@ -83,11 +107,20 @@ pub fn install_program_atomically(
     if packaged_manifest != expected_manifest {
         return Err(ProgramPackageError::ManifestMismatch);
     }
+    let integrity_lock = create_integrity_lock(&expected_manifest, files)?;
     let active_path = program_store.join(&expected_manifest.id).join("active");
     let InstallResult {
         active_path,
         backup_path,
-    } = install_atomically(source_root, &active_path, files)?;
+    } = install_atomically_with_generated(
+        source_root,
+        &active_path,
+        files,
+        &[GeneratedInstallFile {
+            relative_path: INTEGRITY_FILE.into(),
+            contents: serde_json::to_vec_pretty(&integrity_lock)?,
+        }],
+    )?;
     Ok(ProgramInstallResult {
         program_id: expected_manifest.id,
         version: expected_manifest.version,
@@ -138,6 +171,7 @@ pub fn load_installed_program(
         return Err(ProgramPackageError::InstalledProgramUnavailable);
     }
     let canonical_active = active_path.canonicalize()?;
+    verify_installed_integrity(&canonical_active, program_id)?;
     let manifest_path = canonical_installed_file(&canonical_active, MANIFEST_FILE)?;
     let entry_path = canonical_installed_file(&canonical_active, ENTRY_FILE)?;
     let manifest = serde_json::from_slice::<ProgramManifest>(&fs::read(manifest_path)?)?;
@@ -151,6 +185,99 @@ pub fn load_installed_program(
         source,
         active_path,
     })
+}
+
+fn create_integrity_lock(
+    manifest: &ProgramManifest,
+    files: &[InstallFile],
+) -> Result<ProgramIntegrityLock, ProgramPackageError> {
+    let mut locked_files = files
+        .iter()
+        .map(|file| {
+            if file.relative_path == Path::new(INTEGRITY_FILE) {
+                return Err(ProgramPackageError::DuplicatePath(
+                    file.relative_path.clone(),
+                ));
+            }
+            Ok(LockedProgramFile {
+                path: file.relative_path.to_string_lossy().into_owned(),
+                bytes: file.bytes,
+                sha256: file.sha256.to_ascii_lowercase(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    locked_files.sort_unstable_by(|left, right| left.path.cmp(&right.path));
+    Ok(ProgramIntegrityLock {
+        schema_version: INTEGRITY_SCHEMA_VERSION,
+        program_id: manifest.id.clone(),
+        version: manifest.version.clone(),
+        files: locked_files,
+    })
+}
+
+fn verify_installed_integrity(
+    canonical_active: &Path,
+    expected_program_id: &str,
+) -> Result<(), ProgramPackageError> {
+    let lock_path = canonical_installed_file(canonical_active, INTEGRITY_FILE)?;
+    let lock = serde_json::from_slice::<ProgramIntegrityLock>(&fs::read(lock_path)?)
+        .map_err(|_| ProgramPackageError::InstalledProgramIntegrity)?;
+    if lock.schema_version != INTEGRITY_SCHEMA_VERSION || lock.program_id != expected_program_id {
+        return Err(ProgramPackageError::InstalledProgramIntegrity);
+    }
+    let manifest_path = canonical_installed_file(canonical_active, MANIFEST_FILE)?;
+    let manifest = serde_json::from_slice::<ProgramManifest>(&fs::read(manifest_path)?)
+        .map_err(|_| ProgramPackageError::InstalledProgramIntegrity)?;
+    if manifest.id != lock.program_id || manifest.version != lock.version {
+        return Err(ProgramPackageError::InstalledProgramIntegrity);
+    }
+
+    let mut expected = lock
+        .files
+        .iter()
+        .map(|file| (PathBuf::from(&file.path), file))
+        .collect::<HashMap<_, _>>();
+    if expected.len() != lock.files.len() || expected.contains_key(Path::new(INTEGRITY_FILE)) {
+        return Err(ProgramPackageError::InstalledProgramIntegrity);
+    }
+    verify_directory(canonical_active, canonical_active, &mut expected)?;
+    if !expected.is_empty() {
+        return Err(ProgramPackageError::InstalledProgramIntegrity);
+    }
+    Ok(())
+}
+
+fn verify_directory(
+    canonical_active: &Path,
+    directory: &Path,
+    expected: &mut HashMap<PathBuf, &LockedProgramFile>,
+) -> Result<(), ProgramPackageError> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(canonical_active)
+            .map_err(|_| ProgramPackageError::InstalledProgramIntegrity)?;
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(ProgramPackageError::InstalledProgramIntegrity);
+        }
+        if metadata.is_dir() {
+            verify_directory(canonical_active, &path, expected)?;
+        } else if relative != Path::new(INTEGRITY_FILE) {
+            let locked = expected
+                .remove(relative)
+                .ok_or(ProgramPackageError::InstalledProgramIntegrity)?;
+            if !metadata.is_file() || metadata.len() != locked.bytes {
+                return Err(ProgramPackageError::InstalledProgramIntegrity);
+            }
+            let digest = format!("{:x}", Sha256::digest(fs::read(&path)?));
+            if digest != locked.sha256 {
+                return Err(ProgramPackageError::InstalledProgramIntegrity);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_program_id(program_id: &str) -> Result<(), ProgramPackageError> {
@@ -184,6 +311,11 @@ fn canonical_installed_file(
 fn validate_inventory_contract(files: &[InstallFile]) -> Result<(), ProgramPackageError> {
     let mut paths = HashSet::with_capacity(files.len());
     for file in files {
+        if file.relative_path == Path::new(INTEGRITY_FILE) {
+            return Err(ProgramPackageError::DuplicatePath(
+                file.relative_path.clone(),
+            ));
+        }
         if !paths.insert(file.relative_path.clone()) {
             return Err(ProgramPackageError::DuplicatePath(
                 file.relative_path.clone(),
@@ -266,8 +398,9 @@ mod tests {
         let result = install_program_atomically(&source, &store, v2, &files).unwrap();
         assert!(result.backup_path.is_some());
         rollback_program(&store, "studio.example.focus").unwrap();
-        let restored = fs::read_to_string(result.active_path.join(ENTRY_FILE)).unwrap();
-        assert_eq!(restored, "({ commands: [] })");
+        let restored = load_installed_program(&store, "studio.example.focus").unwrap();
+        assert_eq!(restored.manifest.version, "1.0.0");
+        assert_eq!(restored.source, "({ commands: [] })");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -314,6 +447,66 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn rejects_source_tampering_after_installation() {
+        let root = std::env::temp_dir().join(format!(
+            "nimora-program-source-tamper-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let store = root.join("store");
+        let expected = manifest("1.0.0");
+        let files = write_package(&source, &expected, "({ commands: [] })");
+        let result = install_program_atomically(&source, &store, expected.clone(), &files).unwrap();
+        fs::write(
+            result.active_path.join(ENTRY_FILE),
+            "({ commands: ['changed'] })",
+        )
+        .unwrap();
+        assert!(matches!(
+            load_installed_program(&store, &expected.id),
+            Err(ProgramPackageError::InstalledProgramIntegrity)
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_untracked_files_after_installation() {
+        let root =
+            std::env::temp_dir().join(format!("nimora-program-extra-file-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let store = root.join("store");
+        let expected = manifest("1.0.0");
+        let files = write_package(&source, &expected, "({ commands: [] })");
+        let result = install_program_atomically(&source, &store, expected.clone(), &files).unwrap();
+        fs::write(result.active_path.join("injected.js"), "malicious").unwrap();
+        assert!(matches!(
+            load_installed_program(&store, &expected.id),
+            Err(ProgramPackageError::InstalledProgramIntegrity)
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_integrity_lock_tampering() {
+        let root =
+            std::env::temp_dir().join(format!("nimora-program-lock-tamper-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let store = root.join("store");
+        let expected = manifest("1.0.0");
+        let files = write_package(&source, &expected, "({ commands: [] })");
+        let result = install_program_atomically(&source, &store, expected.clone(), &files).unwrap();
+        fs::write(result.active_path.join(INTEGRITY_FILE), b"{}").unwrap();
+        assert!(matches!(
+            load_installed_program(&store, &expected.id),
+            Err(ProgramPackageError::InstalledProgramIntegrity)
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn rejects_an_installed_entry_symlink_escape() {
@@ -324,19 +517,18 @@ mod tests {
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);
-        let active = root.join("store/studio.example.focus/active");
-        fs::create_dir_all(&active).unwrap();
-        fs::write(
-            active.join(MANIFEST_FILE),
-            serde_json::to_vec(&manifest("1.0.0")).unwrap(),
-        )
-        .unwrap();
+        let source = root.join("source");
+        let store = root.join("store");
+        let expected = manifest("1.0.0");
+        let files = write_package(&source, &expected, "({ commands: [] })");
+        let result = install_program_atomically(&source, &store, expected.clone(), &files).unwrap();
+        fs::remove_file(result.active_path.join(ENTRY_FILE)).unwrap();
         let outside = root.join("outside.js");
         fs::write(&outside, "({ commands: [] })").unwrap();
-        symlink(outside, active.join(ENTRY_FILE)).unwrap();
+        symlink(outside, result.active_path.join(ENTRY_FILE)).unwrap();
         assert!(matches!(
-            load_installed_program(&root.join("store"), "studio.example.focus"),
-            Err(ProgramPackageError::InstalledProgramEscaped)
+            load_installed_program(&store, "studio.example.focus"),
+            Err(ProgramPackageError::InstalledProgramIntegrity)
         ));
         fs::remove_dir_all(root).unwrap();
     }

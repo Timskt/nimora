@@ -54,11 +54,11 @@
 
 ## 安装与版本生命周期
 
-`nimora-user-code-package` 定义用户程序包的本地安装边界。每个包必须包含与安装请求完全一致的 `manifest.json` 和固定入口 `main.js`，最多 64 个文件、总计不超过 2 MiB；重复路径、Manifest 符号链接逃逸、哈希或大小不一致都会在激活前失败。策略层会在复制前再次校验程序 ID、版本、Capabilities、订阅、命令和预算。
+`nimora-user-code-package` 定义用户程序包的本地安装边界。每个包必须包含与安装请求完全一致的 `manifest.json` 和固定入口 `main.js`，最多 64 个文件、总计不超过 2 MiB；重复路径、Manifest 符号链接逃逸、哈希或大小不一致都会在激活前失败。策略层会在复制前再次校验程序 ID、版本、Capabilities、订阅、命令和预算。安装器还会在 staging 中生成保留文件 `.nimora-integrity.json`，锁定程序 ID、版本、完整文件 inventory、大小和 SHA-256，并与程序文件一起原子激活；包作者不能提供或覆盖该文件。
 
 桌面端通过 `install_user_program` 把验证后的程序原子安装到应用数据目录的 `programs/<program-id>/active`。升级时旧版本先移动为不可变备份，新版本只有在完整复制和二次校验后才会激活；激活失败会恢复旧版本。`rollback_user_program` 会隔离当前失败版本并恢复最近备份。安装和回滚在安全模式中均被拒绝，防止故障处置期间改变可执行内容。
 
-`execute_installed_user_program` 只接受 namespaced 程序 ID，从当前 `active` 目录重新加载并校验 Manifest 与固定入口，不允许 Renderer 再次提交或替换源码。Manifest ID 必须与目录身份一致，入口和 Manifest 的 canonical path 必须仍位于 active 目录内；安装后被替换成外部符号链接会在 Worker 启动前被拒绝。该路径不依赖 Registry 或网络，已安装且不请求远程能力的程序可以完全离线运行。
+`execute_installed_user_program` 只接受 namespaced 程序 ID，从当前 `active` 目录重新加载并校验 Manifest 与固定入口，不允许 Renderer 再次提交或替换源码。每次执行前必须复验锁文件身份与版本，并递归验证所有已锁定文件的大小和 SHA-256；缺失文件、额外文件、重复锁项、损坏锁文件和任意符号链接都会在 Worker 启动前被拒绝。该路径不依赖 Registry 或网络，已安装且不请求远程能力的程序可以完全离线运行。此机制用于发现安装后的损坏、不同步修改和低权限注入；若攻击者已经控制运行 Nimora 的同一 OS 账户并能同时重写程序和锁文件，则必须结合后续的发行者签名、系统密钥存储与平台代码签名建立更强信任根，不能把本地 SHA-256 锁文件描述为抗主机接管边界。
 
 ## 模块调用模型
 
