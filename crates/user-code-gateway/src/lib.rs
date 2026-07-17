@@ -18,8 +18,7 @@ pub struct GatewayEnvelope {
 pub struct AgentGatewayPolicy {
     pub task_id: Uuid,
     pub trace_id: Uuid,
-    pub can_read_pet_state: bool,
-    pub can_read_profile_state: bool,
+    pub read_capabilities: BTreeSet<String>,
     pub commands: BTreeSet<String>,
 }
 
@@ -28,6 +27,8 @@ pub struct AgentGatewayPolicy {
 pub enum CapabilityRequest {
     ReadPetState,
     ReadProfileState,
+    ReadAssetCatalog,
+    ReadRuntimeHealth,
     ReadLocalData { key: String },
     WriteLocalData { key: String, value: Value },
     DeleteLocalData { key: String },
@@ -39,6 +40,8 @@ pub enum CapabilityRequest {
 pub enum CapabilityResponse {
     PetState { value: Value },
     ProfileState { value: Value },
+    AssetCatalog { value: Value },
+    RuntimeHealth { value: Value },
     LocalData { value: Option<Value> },
     LocalDataWritten,
     LocalDataDeleted { deleted: bool },
@@ -59,6 +62,24 @@ pub trait CapabilityBackend: std::fmt::Debug + Send + Sync {
     ///
     /// Returns a backend-specific error when Profile state cannot be read.
     fn read_profile_state(&self) -> Result<Value, String>;
+
+    /// Returns a serialized asset catalog without exposing its store.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend-specific error when the catalog cannot be read.
+    fn read_asset_catalog(&self) -> Result<Value, String> {
+        Err("asset catalog capability is unavailable".to_owned())
+    }
+
+    /// Returns a bounded runtime health summary without logs or user content.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend-specific error when health cannot be read.
+    fn read_runtime_health(&self) -> Result<Value, String> {
+        Err("runtime health capability is unavailable".to_owned())
+    }
 
     /// Reads a value from the program's isolated local-data namespace.
     ///
@@ -162,6 +183,9 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
                     .map(|value| CapabilityResponse::ProfileState { value })
                     .map_err(GatewayError::Backend)
             }
+            CapabilityRequest::ReadAssetCatalog | CapabilityRequest::ReadRuntimeHealth => {
+                Err(GatewayError::CapabilityDenied)
+            }
             CapabilityRequest::ReadLocalData { key } => {
                 if !policy.can_store_local_data {
                     return Err(GatewayError::CapabilityDenied);
@@ -227,7 +251,7 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
         }
         match envelope.request {
             CapabilityRequest::ReadPetState => {
-                if !policy.can_read_pet_state {
+                if !policy.read_capabilities.contains("pet.state") {
                     return Err(GatewayError::CapabilityDenied);
                 }
                 self.backend
@@ -236,12 +260,30 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
                     .map_err(GatewayError::Backend)
             }
             CapabilityRequest::ReadProfileState => {
-                if !policy.can_read_profile_state {
+                if !policy.read_capabilities.contains("profile.state") {
                     return Err(GatewayError::CapabilityDenied);
                 }
                 self.backend
                     .read_profile_state()
                     .map(|value| CapabilityResponse::ProfileState { value })
+                    .map_err(GatewayError::Backend)
+            }
+            CapabilityRequest::ReadAssetCatalog => {
+                if !policy.read_capabilities.contains("asset.catalog") {
+                    return Err(GatewayError::CapabilityDenied);
+                }
+                self.backend
+                    .read_asset_catalog()
+                    .map(|value| CapabilityResponse::AssetCatalog { value })
+                    .map_err(GatewayError::Backend)
+            }
+            CapabilityRequest::ReadRuntimeHealth => {
+                if !policy.read_capabilities.contains("runtime.health") {
+                    return Err(GatewayError::CapabilityDenied);
+                }
+                self.backend
+                    .read_runtime_health()
+                    .map(|value| CapabilityResponse::RuntimeHealth { value })
                     .map_err(GatewayError::Backend)
             }
             CapabilityRequest::InvokeCommand { command, arguments } => {
@@ -484,8 +526,7 @@ mod tests {
         let policy = AgentGatewayPolicy {
             task_id,
             trace_id,
-            can_read_pet_state: true,
-            can_read_profile_state: false,
+            read_capabilities: BTreeSet::from(["pet.state".to_owned()]),
             commands: BTreeSet::from(["safe.pet.animate".to_owned()]),
         };
         let gateway = CapabilityGateway::new(Backend);

@@ -3654,6 +3654,42 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
         .map_err(|error| error.to_string())
     }
 
+    fn read_asset_catalog(&self) -> Result<serde_json::Value, String> {
+        serde_json::to_value(
+            inspect_asset_catalog(&self.state.asset_store).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn read_runtime_health(&self) -> Result<serde_json::Value, String> {
+        let outbox = self
+            .state
+            .outbox
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        let backup = self
+            .state
+            .backups
+            .health()
+            .map_err(|error| error.to_string())?;
+        let safety = self
+            .state
+            .safety
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        Ok(serde_json::json!({
+            "startup": self.state.startup,
+            "safety": safety,
+            "outbox": outbox,
+            "backup": {
+                "due": backup.due,
+                "latest": backup.latest,
+                "pendingRestore": backup.pending_restore,
+                "lastError": backup.last_error.is_some()
+            }
+        }))
+    }
+
     fn read_local_data(
         &self,
         program_id: &str,
@@ -4389,10 +4425,12 @@ mod tests {
         assert_eq!(
             tool_ids,
             [
+                "asset.catalog.read".to_owned(),
                 "pet.animation.play".to_owned(),
                 "pet.position.move".to_owned(),
                 "pet.state.read".to_owned(),
                 "profile.state.read".to_owned(),
+                "runtime.health.read".to_owned(),
             ]
         );
         std::fs::remove_dir_all(root).expect("fixture cleanup");

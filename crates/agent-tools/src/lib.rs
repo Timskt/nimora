@@ -11,6 +11,8 @@ use std::{collections::BTreeSet, time::Duration};
 
 const PET_STATE_READ: &str = "pet.state.read";
 const PROFILE_STATE_READ: &str = "profile.state.read";
+const ASSET_CATALOG_READ: &str = "asset.catalog.read";
+const RUNTIME_HEALTH_READ: &str = "runtime.health.read";
 const PET_ANIMATION_PLAY: &str = "pet.animation.play";
 const PET_POSITION_MOVE: &str = "pet.position.move";
 const SAFE_PET_ANIMATE: &str = "safe.pet.animate";
@@ -48,6 +50,22 @@ pub fn production_tool_descriptors() -> Result<Vec<ToolDescriptor>, AgentRuntime
             PROFILE_STATE_READ,
             "Read profile state",
             "Reads the active profile collection through the Capability Gateway.",
+            empty_object_schema(),
+            CommandRisk::Safe,
+            ToolEffect::ReadOnly,
+        )?,
+        descriptor(
+            ASSET_CATALOG_READ,
+            "Read asset catalog",
+            "Reads installed character assets and active selection through the Capability Gateway.",
+            empty_object_schema(),
+            CommandRisk::Safe,
+            ToolEffect::ReadOnly,
+        )?,
+        descriptor(
+            RUNTIME_HEALTH_READ,
+            "Read runtime health",
+            "Reads safety, startup, event delivery, and backup health through the Capability Gateway.",
             empty_object_schema(),
             CommandRisk::Safe,
             ToolEffect::ReadOnly,
@@ -104,8 +122,12 @@ impl<B: CapabilityBackend> GatewayToolBackend<B> {
         AgentGatewayPolicy {
             task_id,
             trace_id,
-            can_read_pet_state: true,
-            can_read_profile_state: true,
+            read_capabilities: BTreeSet::from([
+                "asset.catalog".to_owned(),
+                "pet.state".to_owned(),
+                "profile.state".to_owned(),
+                "runtime.health".to_owned(),
+            ]),
             commands: BTreeSet::from([SAFE_PET_ANIMATE.to_owned(), SAFE_PET_MOVE.to_owned()]),
         }
     }
@@ -127,6 +149,14 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
             PROFILE_STATE_READ => {
                 require_empty_arguments(&invocation.arguments)?;
                 CapabilityRequest::ReadProfileState
+            }
+            ASSET_CATALOG_READ => {
+                require_empty_arguments(&invocation.arguments)?;
+                CapabilityRequest::ReadAssetCatalog
+            }
+            RUNTIME_HEALTH_READ => {
+                require_empty_arguments(&invocation.arguments)?;
+                CapabilityRequest::ReadRuntimeHealth
             }
             PET_ANIMATION_PLAY => CapabilityRequest::InvokeCommand {
                 command: SAFE_PET_ANIMATE.to_owned(),
@@ -153,6 +183,8 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
         match response {
             CapabilityResponse::PetState { value }
             | CapabilityResponse::ProfileState { value }
+            | CapabilityResponse::AssetCatalog { value }
+            | CapabilityResponse::RuntimeHealth { value }
             | CapabilityResponse::CommandAccepted { value } => Ok(value),
             _ => Err("Capability Gateway returned an incompatible response".to_owned()),
         }

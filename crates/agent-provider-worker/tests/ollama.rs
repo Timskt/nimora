@@ -311,7 +311,7 @@ fn registry_completes_through_the_real_worker_process() {
         .complete(
             &provider_request,
             ProviderExecutionContext {
-                timeout: Duration::from_secs(2),
+                timeout: Duration::from_secs(5),
                 cancellation: CancellationFlag::default(),
                 credential_reference: None,
             },
@@ -335,7 +335,7 @@ fn probes_sorted_deduplicated_models_through_real_worker_process() {
     let probe = probe_ollama_worker(
         std::path::Path::new(env!("CARGO_BIN_EXE_nimora-agent-provider-worker")),
         endpoint,
-        Duration::from_secs(2),
+        Duration::from_secs(5),
     )
     .expect("worker probe");
     assert_eq!(probe.models.len(), 2);

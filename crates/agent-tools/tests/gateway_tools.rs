@@ -31,6 +31,14 @@ impl CapabilityBackend for Backend {
         Ok(json!({"activeProfileId": "profile:default"}))
     }
 
+    fn read_asset_catalog(&self) -> Result<Value, String> {
+        Ok(json!({"activeAssetId": "character:builtin.aster", "assets": []}))
+    }
+
+    fn read_runtime_health(&self) -> Result<Value, String> {
+        Ok(json!({"startup": {"mode": "normal"}, "safety": {"mode": "normal"}}))
+    }
+
     fn read_local_data(&self, _program_id: &str, _key: &str) -> Result<Option<Value>, String> {
         Err("Agent tools cannot access program storage".to_owned())
     }
@@ -102,6 +110,32 @@ fn read_tool_executes_through_the_shared_gateway_without_confirmation() {
         ToolStepOutcome::Completed { output, .. } if output == json!({"state": "idle"})
     ));
     assert_eq!(task.usage.tool_calls, 1);
+}
+
+#[test]
+fn module_catalog_and_health_reads_use_explicit_gateway_capabilities() {
+    let tools = production_tool_registry().expect("registry");
+    let providers = ProviderRegistry::default();
+    let coordinator = AgentCoordinator::new(&providers, &tools);
+    for (tool_id, expected_key) in [
+        ("asset.catalog.read", "activeAssetId"),
+        ("runtime.health.read", "startup"),
+    ] {
+        let mut task = task();
+        let backend = GatewayToolBackend::new(
+            Backend::default(),
+            GatewayToolBackend::<Backend>::standard_policy(task.id, task.trace_id),
+        );
+        let invocation =
+            ToolInvocation::new(task.id, task.trace_id, tool_id, json!({})).expect("invocation");
+        let outcome = coordinator
+            .tool_step(&mut task, &backend, invocation, None, 1_001)
+            .expect("tool step");
+        assert!(matches!(
+            outcome,
+            ToolStepOutcome::Completed { output, .. } if output.get(expected_key).is_some()
+        ));
+    }
 }
 
 #[test]
