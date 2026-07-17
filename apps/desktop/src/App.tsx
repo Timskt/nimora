@@ -15,6 +15,7 @@ export function App() {
   const [active, setActive] = useState<(typeof navigation)[number]>("概览");
   const [quiet, setQuiet] = useState(false);
   const [safeMode, setSafeMode] = useState(false);
+  const [recoveryMode, setRecoveryMode] = useState(false);
   const [safetyBusy, setSafetyBusy] = useState(false);
   const [outbox, setOutbox] = useState<OutboxSnapshot | null>(null);
   const [notice, setNotice] = useState(desktopApi.native ? "原生运行时已连接" : "浏览器预览模式");
@@ -23,6 +24,12 @@ export function App() {
   useEffect(() => {
     void Promise.all([desktopApi.snapshot(), desktopApi.outboxSnapshot()]).then(([snapshot, nextOutbox]) => {
       setSafeMode(snapshot.safety.mode === "safe");
+      const recovering = snapshot.startup.mode === "recovery";
+      setRecoveryMode(recovering);
+      if (recovering) {
+        setActive("设置");
+        setNotice("主数据库不可用，已进入隔离恢复模式");
+      }
       setOutbox(nextOutbox);
     }).catch(() => {
       setNotice("运行时状态暂时不可用");
@@ -30,6 +37,10 @@ export function App() {
   }, []);
 
   async function runAction(action: "celebrate" | "work") {
+    if (recoveryMode) {
+      setNotice("恢复模式下互动与自动化保持暂停");
+      return;
+    }
     await desktopApi.playAction(action);
     setNotice(action === "celebrate" ? "Aster 正在回应你" : "专注场景已启动");
   }
@@ -73,11 +84,11 @@ export function App() {
             </button>
           ))}
         </nav>
-        <section className={safeMode ? "runtime-card safe" : "runtime-card"} aria-label="运行状态">
-          <span className={safeMode ? "status-dot safe" : "status-dot"} aria-hidden="true" />
+        <section className={recoveryMode || safeMode ? "runtime-card safe" : "runtime-card"} aria-label="运行状态">
+          <span className={recoveryMode || safeMode ? "status-dot safe" : "status-dot"} aria-hidden="true" />
           <div>
-            <strong>{safeMode ? "安全模式" : "本地运行"}</strong>
-            <p>{safeMode ? "受限操作已被运行时阻止" : "网络不是启动依赖"}</p>
+            <strong>{recoveryMode ? "数据恢复模式" : safeMode ? "安全模式" : "本地运行"}</strong>
+            <p>{recoveryMode ? "主数据库未被修改" : safeMode ? "受限操作已被运行时阻止" : "网络不是启动依赖"}</p>
           </div>
         </section>
       </aside>
@@ -108,15 +119,24 @@ export function App() {
           </div>
         </header>
 
-        {active === "角色" || active === "扩展" ? <CreatorStudio /> : active === "设置" ? <DataProtection onNotice={updateNotice} /> : <div className="dashboard-grid">
+        {recoveryMode && <section className="recovery-banner" role="status" aria-labelledby="recovery-heading">
+          <span className="recovery-symbol" aria-hidden="true">◇</span>
+          <div>
+            <p className="card-label">受保护的故障启动</p>
+            <h2 id="recovery-heading">数据恢复模式</h2>
+            <p>主数据库保持原样，Nimora 正使用隔离的临时状态。请选择一份已验证备份，安排在完全退出并重启后恢复。</p>
+          </div>
+        </section>}
+
+        {active === "角色" || active === "扩展" ? <CreatorStudio /> : active === "设置" ? <DataProtection recoveryMode={recoveryMode} onNotice={updateNotice} /> : <div className="dashboard-grid">
           <section className="pet-stage" aria-labelledby="pet-heading">
             <div className="stage-copy">
               <span className="pill">{notice}</span>
               <h2 id="pet-heading">晚上好，我一直在这里。</h2>
               <p>所有核心能力都在本机运行。你可以先和 Aster 打个招呼，或者开启一个安静的专注场景。</p>
               <div className="stage-actions">
-                <button className="primary-button" type="button" onClick={() => void runAction("celebrate")}>开始互动</button>
-                <button className="secondary-button" type="button" onClick={() => void runAction("work")}>进入专注</button>
+                <button className="primary-button" type="button" disabled={recoveryMode} onClick={() => void runAction("celebrate")}>开始互动</button>
+                <button className="secondary-button" type="button" disabled={recoveryMode} onClick={() => void runAction("work")}>进入专注</button>
               </div>
             </div>
             <div className="pet-visual" aria-label="默认角色 Aster，当前状态平静">

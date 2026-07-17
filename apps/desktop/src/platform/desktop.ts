@@ -21,6 +21,10 @@ export interface DesktopSnapshot {
     clickThrough: boolean;
   };
   safety: SafetySnapshot;
+  startup: {
+    mode: "normal" | "recovery";
+    reason: string | null;
+  };
 }
 
 export interface OutboxSnapshot {
@@ -318,6 +322,9 @@ export interface DesktopApi {
 
 type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 
+const previewRecoveryMode = typeof window !== "undefined"
+  && new URLSearchParams(window.location.search).get("preview") === "recovery";
+
 const previewSnapshot: DesktopSnapshot = {
   pet: {
     id: "00000000-0000-4000-8000-000000000001",
@@ -331,6 +338,9 @@ const previewSnapshot: DesktopSnapshot = {
   },
   windowPolicy: { alwaysOnTop: true, clickThrough: false },
   safety: { mode: "normal", reason: null },
+  startup: previewRecoveryMode
+    ? { mode: "recovery", reason: "database-unavailable" }
+    : { mode: "normal", reason: null },
 };
 
 const previewProfiles: ProfileSnapshot = {
@@ -365,7 +375,12 @@ export function createDesktopApi(
       async snapshot() { return structuredClone(previewSnapshot); },
       async drainEvents() { return []; },
       async outboxSnapshot() { return { pending: 0, leased: 0, delivered: 0, deadLetter: 0 }; },
-      async backupHealth() { return { due: true, latest: null, available: [], pendingRestore: null, lastError: null }; },
+      async backupHealth() {
+        const previewBackup = { id: "runtime-1784294125392.sqlite3", createdAtMs: 1_784_294_125_392, bytes: 2_621_440 };
+        return previewRecoveryMode
+          ? { due: false, latest: previewBackup, available: [previewBackup], pendingRestore: null, lastError: null }
+          : { due: true, latest: null, available: [], pendingRestore: null, lastError: null };
+      },
       async createBackup() { return null; },
       async requestDatabaseRestore() {},
       async profiles() { return structuredClone(previewProfiles); },

@@ -685,6 +685,19 @@ impl SqliteProfileRepository {
         })
     }
 
+    /// Creates an isolated profile store for recovery mode and tests.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `SQLite` cannot configure the in-memory database.
+    pub fn in_memory() -> Result<Self, SqlitePersistenceError> {
+        let mut connection = Connection::open_in_memory()?;
+        prepare_connection(&mut connection)?;
+        Ok(Self {
+            connection: Mutex::new(connection),
+        })
+    }
+
     /// Creates a consistent online backup, including WAL-backed pages.
     ///
     /// # Errors
@@ -831,7 +844,12 @@ pub enum SqlitePersistenceError {
     SystemClock(#[from] std::time::SystemTimeError),
 }
 
-fn verify_database_file(path: &Path) -> Result<(), SqlitePersistenceError> {
+/// Verifies an existing database against the current schema and `SQLite` integrity checks.
+///
+/// # Errors
+///
+/// Returns an error when the database cannot be opened, is unsupported, or is corrupt.
+pub fn verify_database_file(path: &Path) -> Result<(), SqlitePersistenceError> {
     let mut connection = Connection::open(path)?;
     prepare_connection(&mut connection)?;
     let integrity: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
@@ -882,6 +900,26 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("version");
         assert_eq!(version, DATABASE_VERSION);
+    }
+
+    #[test]
+    fn rejects_a_corrupt_database_without_rewriting_it() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("nimora-corrupt-database-{nonce}"));
+        let database = root.join("runtime.sqlite3");
+        std::fs::create_dir_all(&root).expect("fixture directory");
+        let corrupt_bytes = b"not a sqlite database";
+        std::fs::write(&database, corrupt_bytes).expect("corrupt fixture");
+
+        assert!(verify_database_file(&database).is_err());
+        assert_eq!(
+            std::fs::read(&database).expect("preserved fixture"),
+            corrupt_bytes
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

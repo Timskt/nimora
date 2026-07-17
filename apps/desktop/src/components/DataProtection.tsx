@@ -7,7 +7,16 @@ export function formatBackupBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function DataProtection({ onNotice }: { onNotice(message: string): void }) {
+export interface DataProtectionProps {
+  recoveryMode: boolean;
+  onNotice(message: string): void;
+}
+
+export function backupActionDisabled(recoveryMode: boolean, busy: boolean): boolean {
+  return recoveryMode || busy;
+}
+
+export function DataProtection({ recoveryMode, onNotice }: DataProtectionProps) {
   const [health, setHealth] = useState<BackupHealth | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -52,16 +61,18 @@ export function DataProtection({ onNotice }: { onNotice(message: string): void }
         <p className="card-label">本地数据保护</p>
         <h2 id="data-protection-heading">自动备份与安全恢复</h2>
       </div>
-      <button className="primary-button" type="button" disabled={busy} onClick={() => void createBackup()}>
-        {busy ? "处理中…" : "立即备份"}
+      <button className="primary-button" type="button" disabled={backupActionDisabled(recoveryMode, busy)} onClick={() => void createBackup()}>
+        {recoveryMode ? "恢复模式下暂停备份" : busy ? "处理中…" : "立即备份"}
       </button>
     </div>
-    <p className="supporting">每 15 分钟检查调度，距上次备份满 6 小时后执行；最多保留 12 份已验证备份。</p>
+    <p className="supporting">{recoveryMode
+      ? "自动备份已暂停，避免读取或覆盖不可用的主数据库；现有已验证备份仍可用于恢复。"
+      : "每 15 分钟检查调度，距上次备份满 6 小时后执行；最多保留 12 份已验证备份。"}</p>
     {health?.pendingRestore && <p className="backup-pending" role="status">已安排恢复：{health.pendingRestore}</p>}
     {health?.lastError && <p className="backup-error" role="alert">自动备份失败：{health.lastError}</p>}
     <div className="backup-list">
       {!health && <p className="supporting">正在读取本地备份…</p>}
-      {health?.available.length === 0 && <p className="supporting">尚无可恢复备份。</p>}
+      {health?.available.length === 0 && <p className="supporting">尚无可恢复备份。主数据库仍被保留，请勿手动覆盖；可交由后续诊断或人工提取流程处理。</p>}
       {health?.available.map((record, index) => <article className="backup-row" key={record.id}>
         <div>
           <strong>{index === 0 ? "最新备份" : "历史备份"}</strong>

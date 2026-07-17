@@ -12,6 +12,7 @@ use nimora_persistence_sqlite::{
     BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, OutboxSnapshot,
     ProgramPermissionGrant, SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository,
     SqliteProfileRepository, SqliteProgramPermissionRepository, apply_pending_restore,
+    verify_database_file,
 };
 use nimora_runtime_app::{
     ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBatch,
@@ -91,6 +92,21 @@ struct DesktopState {
     active_user_program_workers: Mutex<HashMap<Uuid, ActiveUserProgramWorker>>,
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
     execution_controller: ExecutionController,
+    startup: StartupStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum StartupMode {
+    Normal,
+    Recovery,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupStatus {
+    mode: StartupMode,
+    reason: Option<&'static str>,
 }
 
 #[derive(Debug)]
@@ -197,6 +213,55 @@ impl DesktopState {
             active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
+            startup: StartupStatus {
+                mode: StartupMode::Normal,
+                reason: None,
+            },
+        })
+    }
+
+    fn open_recovery(
+        asset_store: PathBuf,
+        program_store: PathBuf,
+        backups: BackupCoordinator,
+        reason: &'static str,
+    ) -> Result<Self, DesktopError> {
+        let events = RuntimeEventBus::default();
+        let runtime = RuntimeService::initialize_with_event_bus(
+            SqlitePetRepository::in_memory()?,
+            "Aster",
+            events.clone(),
+        )?;
+        let profiles =
+            ProfileService::initialize(SqliteProfileRepository::in_memory()?, events.clone())?;
+        let window_policy = active_window_policy(&profiles.snapshot()?)?;
+        let program_data_store =
+            ProgramDataStore::new(program_store.with_file_name("program-data-recovery"));
+        Ok(Self {
+            runtime,
+            profiles,
+            safety: SafetyService::new(events.clone()),
+            events,
+            window_policy: Mutex::new(window_policy),
+            policy_before_safe_mode: Mutex::new(None),
+            position_revision: AtomicU64::new(0),
+            dragging: AtomicBool::new(false),
+            asset_store,
+            active_character_write: Mutex::new(()),
+            program_store,
+            program_data_store,
+            program_permissions: SqliteProgramPermissionRepository::in_memory()?,
+            outbox: SqliteOutboxRepository::in_memory()?,
+            backups,
+            backup_last_error: Mutex::new(None),
+            user_program_event_sessions: Mutex::new(HashMap::new()),
+            active_user_program_workers: Mutex::new(HashMap::new()),
+            user_programs: Mutex::new(HashMap::new()),
+            execution_controller: ExecutionController::default(),
+            startup: StartupStatus {
+                mode: StartupMode::Recovery,
+                reason: Some(reason),
+            },
         })
     }
 }
@@ -207,6 +272,7 @@ struct DesktopSnapshot {
     pet: Pet,
     window_policy: WindowPolicy,
     safety: SafetySnapshot,
+    startup: StartupStatus,
 }
 
 #[derive(Debug, Deserialize)]
@@ -493,6 +559,8 @@ enum DesktopError {
     StatePoisoned,
     #[error("operation is unavailable while safe mode is active")]
     SafeModeActive,
+    #[error("operation is unavailable while database recovery mode is active")]
+    RecoveryModeActive,
     #[error("desktop window is unavailable: {0}")]
     WindowUnavailable(String),
     #[error("operation is unavailable from this window")]
@@ -573,6 +641,7 @@ fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, D
         pet,
         window_policy,
         safety,
+        startup: state.startup.clone(),
     })
 }
 
@@ -649,7 +718,7 @@ fn request_database_restore(
     if window.label() != CONTROL_CENTER_LABEL {
         return Err(DesktopError::WindowForbidden);
     }
-    ensure_normal_mode(&state)?;
+    ensure_safe_mode_inactive(&state)?;
     state.backups.request_restore(&backup_id)?;
     Ok(())
 }
@@ -667,6 +736,7 @@ fn create_profile(
     name: String,
     policy: ProfilePolicy,
 ) -> Result<Command, DesktopError> {
+    ensure_normal_mode(&state)?;
     Ok(state.profiles.create_profile(name, policy)?)
 }
 
@@ -769,6 +839,7 @@ fn move_pet(
     state: State<'_, DesktopState>,
     request: MovePetRequest,
 ) -> Result<Command, DesktopError> {
+    ensure_normal_mode(&state)?;
     let screen_x = screen_coordinate(request.x)?;
     let screen_y = screen_coordinate(request.y)?;
     let position = Position {
@@ -811,6 +882,7 @@ fn play_pet_action(
     state: State<'_, DesktopState>,
     action: PetAction,
 ) -> Result<Command, DesktopError> {
+    ensure_normal_mode(&state)?;
     Ok(state.runtime.play_action(action)?)
 }
 
@@ -821,6 +893,7 @@ fn click_pet(
     state: State<'_, DesktopState>,
     request: ClickPetRequest,
 ) -> Result<Command, DesktopError> {
+    ensure_normal_mode(&state)?;
     let command = state.runtime.click_pet(
         Position {
             x: request.x,
@@ -838,6 +911,7 @@ fn click_pet(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn begin_pet_drag(state: State<'_, DesktopState>) -> Result<Command, DesktopError> {
+    ensure_normal_mode(&state)?;
     let command = state.runtime.begin_drag()?;
     state.dragging.store(true, Ordering::Release);
     Ok(command)
@@ -849,6 +923,7 @@ fn finish_pet_drag(
     app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<Command, DesktopError> {
+    ensure_normal_mode(&state)?;
     let window = app
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
@@ -2507,6 +2582,13 @@ fn valid_asset_identifier(value: &str) -> bool {
 }
 
 fn ensure_normal_mode(state: &DesktopState) -> Result<(), DesktopError> {
+    if state.startup.mode == StartupMode::Recovery {
+        return Err(DesktopError::RecoveryModeActive);
+    }
+    ensure_safe_mode_inactive(state)
+}
+
+fn ensure_safe_mode_inactive(state: &DesktopState) -> Result<(), DesktopError> {
     if state.safety.snapshot()?.mode == RuntimeMode::Safe {
         return Err(DesktopError::SafeModeActive);
     }
@@ -2844,34 +2926,48 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
     std::fs::create_dir_all(&data_directory)?;
     let database_path = data_directory.join("runtime.sqlite3");
     let backup_directory = data_directory.join("backups");
-    apply_pending_restore(&database_path, &backup_directory)?;
     let backups =
         BackupCoordinator::new(&database_path, &backup_directory, BackupPolicy::default());
-    app.manage(DesktopState::open(
-        &database_path,
-        data_directory.join("assets"),
-        data_directory.join("programs"),
-        backups,
-    )?);
-    let backup_app = app.handle().clone();
-    std::thread::spawn(move || {
-        loop {
-            let state = backup_app.state::<DesktopState>();
-            match state.backups.create_if_due() {
-                Ok(_) => {
-                    if let Ok(mut last_error) = state.backup_last_error.lock() {
-                        *last_error = None;
-                    }
-                }
-                Err(error) => {
-                    if let Ok(mut last_error) = state.backup_last_error.lock() {
-                        *last_error = Some(error.to_string());
-                    }
-                }
-            }
-            std::thread::sleep(Duration::from_mins(15));
+    let asset_store = data_directory.join("assets");
+    let program_store = data_directory.join("programs");
+    let startup_result = apply_pending_restore(&database_path, &backup_directory).and_then(|_| {
+        if database_path.exists() {
+            verify_database_file(&database_path)?;
         }
+        Ok(())
     });
+    let state = match startup_result {
+        Ok(()) => DesktopState::open(&database_path, asset_store, program_store, backups)?,
+        Err(_) => DesktopState::open_recovery(
+            asset_store,
+            program_store,
+            backups,
+            "database-unavailable",
+        )?,
+    };
+    let schedule_backups = state.startup.mode == StartupMode::Normal;
+    app.manage(state);
+    if schedule_backups {
+        let backup_app = app.handle().clone();
+        std::thread::spawn(move || {
+            loop {
+                let state = backup_app.state::<DesktopState>();
+                match state.backups.create_if_due() {
+                    Ok(_) => {
+                        if let Ok(mut last_error) = state.backup_last_error.lock() {
+                            *last_error = None;
+                        }
+                    }
+                    Err(error) => {
+                        if let Ok(mut last_error) = state.backup_last_error.lock() {
+                            *last_error = Some(error.to_string());
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_mins(15));
+            }
+        });
+    }
     create_pet_window(app.handle())?;
     create_tray(app.handle())?;
     Ok(())
@@ -2880,20 +2976,52 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVE_CHARACTER_FILE, AssetInstallReceipt, BUILTIN_CHARACTER_ID, DesktopError, PetAction,
-        ProfilePolicy, TrayAction, UserProgramRollbackReceipt, WindowPolicy,
-        ensure_program_permissions, inspect_asset_catalog, install_gltf_character,
-        parse_asset_protocol_path, parse_user_program_plan, permission_grant,
-        persist_active_character, resolve_active_character, resolve_character_renderer,
-        screen_coordinate, serve_asset_protocol, user_program_input, valid_asset_identifier,
-        validate_model_source, validate_package_source, validate_requested_animation_map,
+        ACTIVE_CHARACTER_FILE, AssetInstallReceipt, BUILTIN_CHARACTER_ID, DesktopError,
+        DesktopState, PetAction, ProfilePolicy, StartupMode, TrayAction,
+        UserProgramRollbackReceipt, WindowPolicy, ensure_normal_mode, ensure_program_permissions,
+        inspect_asset_catalog, install_gltf_character, parse_asset_protocol_path,
+        parse_user_program_plan, permission_grant, persist_active_character,
+        resolve_active_character, resolve_character_renderer, screen_coordinate,
+        serve_asset_protocol, user_program_input, valid_asset_identifier, validate_model_source,
+        validate_package_source, validate_requested_animation_map,
     };
     use nimora_asset_installer::{GltfCharacterMetadata, ModelAnimationBinding};
-    use nimora_persistence_sqlite::SqliteProgramPermissionRepository;
+    use nimora_persistence_sqlite::{
+        BackupCoordinator, BackupPolicy, SqliteProgramPermissionRepository,
+    };
     use nimora_runtime_core::{Event, EventSource, RuntimeMode};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
     use std::path::Path;
+
+    #[test]
+    fn recovery_state_is_isolated_and_rejects_normal_writes() {
+        let root =
+            std::env::temp_dir().join(format!("nimora-recovery-state-{}", uuid::Uuid::now_v7()));
+        let database = root.join("runtime.sqlite3");
+        let corrupt_bytes = b"preserve this unavailable database";
+        std::fs::create_dir_all(&root).expect("fixture directory");
+        std::fs::write(&database, corrupt_bytes).expect("corrupt fixture");
+        let state = DesktopState::open_recovery(
+            root.join("assets"),
+            root.join("programs"),
+            BackupCoordinator::new(&database, root.join("backups"), BackupPolicy::default()),
+            "database-unavailable",
+        )
+        .expect("recovery state");
+
+        assert_eq!(state.startup.mode, StartupMode::Recovery);
+        assert_eq!(state.startup.reason, Some("database-unavailable"));
+        assert!(matches!(
+            ensure_normal_mode(&state),
+            Err(DesktopError::RecoveryModeActive)
+        ));
+        assert_eq!(
+            std::fs::read(&database).expect("preserved database"),
+            corrupt_bytes
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
 
     #[test]
     fn accepts_finite_screen_coordinates() {

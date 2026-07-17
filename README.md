@@ -83,7 +83,7 @@ tests/                     contract、integration、e2e、fixtures
 
 ## 开发基线
 
-项目当前处于 M1 Creator Foundation 开发阶段。M0 已落地 Rust 领域核心、应用用例层、唯一当前 SQLite Schema、可创建与激活的离线 Profile、Command/Event Trace 关联、事务 Outbox 的租约/ACK/重试/死信/清理协议、自动 SQLite 一致性备份调度、启动前安全恢复、控制中心健康状态，以及 Tauri 双窗口、系统托盘和类型化 IPC。M1 已提供 `nimora.asset/1` 严格契约、限额归档导入、确定性导出、静态海报预览、Sprite Sequence/Atlas 真实渲染与回退、GLB 独立 Worker 探测、带 SHA-256 inventory 的本地 Character 包原子安装、`nimora.animation-map/1` 标准动作映射，以及 Pet Overlay 内由 Three.js 驱动的受控 GLB 2.0 WebGL 渲染和动作 cross-fade。具体 Outbox 消费者、VRM/Live2D Adapter、包签名、独立 Renderer 进程、只读故障启动与跨重启崩溃循环恢复仍需继续闭环；全量范围和证据以 [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) 为准。
+项目当前处于 M1 Creator Foundation 开发阶段。M0 已落地 Rust 领域核心、应用用例层、唯一当前 SQLite Schema、可创建与激活的离线 Profile、Command/Event Trace 关联、事务 Outbox 的租约/ACK/重试/死信/清理协议、自动 SQLite 一致性备份调度、启动前安全恢复、数据库损坏时的隔离恢复模式、控制中心健康状态，以及 Tauri 双窗口、系统托盘和类型化 IPC。M1 已提供 `nimora.asset/1` 严格契约、限额归档导入、确定性导出、静态海报预览、Sprite Sequence/Atlas 真实渲染与回退、GLB 独立 Worker 探测、带 SHA-256 inventory 的本地 Character 包原子安装、`nimora.animation-map/1` 标准动作映射，以及 Pet Overlay 内由 Three.js 驱动的受控 GLB 2.0 WebGL 渲染和动作 cross-fade。具体 Outbox 消费者、VRM/Live2D Adapter、包签名、独立 Renderer 进程、诊断导出与跨重启崩溃循环恢复仍需继续闭环；全量范围和证据以 [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) 为准。
 
 本地开发使用 `pnpm` 与 Rust stable：
 
