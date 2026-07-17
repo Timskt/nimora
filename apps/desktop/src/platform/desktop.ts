@@ -524,6 +524,8 @@ export function createDesktopApi(
             { id: "pet.state.read", title: "Read pet state", description: "Reads current pet state.", baseRisk: "safe", effect: "read_only" },
             { id: "profile.active.switch", title: "Switch active profile", description: "Switches Profile and applies its native window policy.", baseRisk: "low", effect: "reversible_write" },
             { id: "profile.state.read", title: "Read profile state", description: "Reads active profile state.", baseRisk: "safe", effect: "read_only" },
+            { id: "program.catalog.read", title: "Read program catalog", description: "Reads verified installed program identities and permission summaries without source or host paths.", baseRisk: "safe", effect: "read_only" },
+            { id: "program.installed.execute", title: "Execute installed program", description: "Executes one exact installed program version through its isolated Worker and the Capability Gateway.", baseRisk: "medium", effect: "external_side_effect" },
             { id: "runtime.health.read", title: "Read runtime health", description: "Reads safety, startup, event delivery, and backup health.", baseRisk: "safe", effect: "read_only" },
           ],
         } as AgentCatalog;

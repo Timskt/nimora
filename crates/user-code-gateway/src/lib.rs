@@ -30,6 +30,7 @@ pub enum CapabilityRequest {
     ReadProfileState,
     ReadCharacterState,
     ReadAssetCatalog,
+    ReadProgramCatalog,
     ReadRuntimeHealth,
     ReadLocalData { key: String },
     WriteLocalData { key: String, value: Value },
@@ -45,6 +46,7 @@ pub enum CapabilityResponse {
     ProfileState { value: Value },
     CharacterState { value: Value },
     AssetCatalog { value: Value },
+    ProgramCatalog { value: Value },
     RuntimeHealth { value: Value },
     LocalData { value: Option<Value> },
     LocalDataWritten,
@@ -92,6 +94,15 @@ pub trait CapabilityBackend: std::fmt::Debug + Send + Sync {
     /// Returns a backend-specific error when the catalog cannot be read.
     fn read_asset_catalog(&self) -> Result<Value, String> {
         Err("asset catalog capability is unavailable".to_owned())
+    }
+
+    /// Returns verified installed program identities without source or host paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend-specific error when the catalog cannot be read.
+    fn read_program_catalog(&self) -> Result<Value, String> {
+        Err("program catalog capability is unavailable".to_owned())
     }
 
     /// Returns a bounded runtime health summary without logs or user content.
@@ -208,6 +219,7 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
             CapabilityRequest::ReadPetActionCatalog
             | CapabilityRequest::ReadCharacterState
             | CapabilityRequest::ReadAssetCatalog
+            | CapabilityRequest::ReadProgramCatalog
             | CapabilityRequest::ReadRuntimeHealth => Err(GatewayError::CapabilityDenied),
             CapabilityRequest::ReadLocalData { key } => {
                 if !policy.can_store_local_data {
@@ -316,6 +328,15 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
                 self.backend
                     .read_asset_catalog()
                     .map(|value| CapabilityResponse::AssetCatalog { value })
+                    .map_err(GatewayError::Backend)
+            }
+            CapabilityRequest::ReadProgramCatalog => {
+                if !policy.read_capabilities.contains("program.catalog") {
+                    return Err(GatewayError::CapabilityDenied);
+                }
+                self.backend
+                    .read_program_catalog()
+                    .map(|value| CapabilityResponse::ProgramCatalog { value })
                     .map_err(GatewayError::Backend)
             }
             CapabilityRequest::ReadRuntimeHealth => {
@@ -588,6 +609,18 @@ mod tests {
             &policy,
             &execution,
             envelope(&execution, CapabilityRequest::ReadPetActionCatalog),
+        );
+        assert_eq!(result, Err(GatewayError::CapabilityDenied));
+    }
+
+    #[test]
+    fn user_programs_do_not_inherit_agent_program_catalog() {
+        let policy = policy();
+        let execution = ExecutionController::default().admit(&policy).unwrap();
+        let result = CapabilityGateway::new(Backend).dispatch(
+            &policy,
+            &execution,
+            envelope(&execution, CapabilityRequest::ReadProgramCatalog),
         );
         assert_eq!(result, Err(GatewayError::CapabilityDenied));
     }

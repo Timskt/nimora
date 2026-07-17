@@ -726,6 +726,8 @@ enum DesktopError {
     UserProgramNotFound,
     #[error("user program permissions must be granted for this exact installed version")]
     UserProgramPermissionRequired,
+    #[error("installed user program version changed before execution")]
+    UserProgramVersionChanged,
     #[error("user program does not declare event subscriptions")]
     UserProgramSubscriptionsMissing,
     #[error("maximum user program event subscriptions reached")]
@@ -3436,10 +3438,22 @@ fn execute_installed_user_program(
     state: State<'_, DesktopState>,
     program_id: String,
 ) -> Result<UserProgramExecutionReceipt, DesktopError> {
-    ensure_normal_mode(&state)?;
-    let installed = load_installed_program(&state.program_store, &program_id)?;
+    execute_installed_user_program_inner(&app, &state, &program_id, None)
+}
+
+fn execute_installed_user_program_inner(
+    app: &AppHandle,
+    state: &DesktopState,
+    program_id: &str,
+    expected_version: Option<&str>,
+) -> Result<UserProgramExecutionReceipt, DesktopError> {
+    ensure_normal_mode(state)?;
+    let installed = load_installed_program(&state.program_store, program_id)?;
+    if expected_version.is_some_and(|version| version != installed.manifest.version) {
+        return Err(DesktopError::UserProgramVersionChanged);
+    }
     ensure_program_permissions(&state.program_permissions, &installed.manifest)?;
-    execute_user_program_source(&app, &state, installed.manifest, installed.source, None)
+    execute_user_program_source(app, state, installed.manifest, installed.source, None)
 }
 
 fn execute_user_program_source(
@@ -3845,6 +3859,48 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
         .map_err(|error| error.to_string())
     }
 
+    fn read_program_catalog(&self) -> Result<serde_json::Value, String> {
+        let entries = fs::read_dir(&self.state.program_store).map_err(|error| error.to_string())?;
+        let mut programs = Vec::new();
+        let mut rejected = 0_u64;
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let Some(program_id) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+                rejected = rejected.saturating_add(1);
+                continue;
+            };
+            let Ok(installed) = load_installed_program(&self.state.program_store, &program_id)
+            else {
+                rejected = rejected.saturating_add(1);
+                continue;
+            };
+            let permission_granted = self
+                .state
+                .program_permissions
+                .is_granted(&permission_grant(&installed.manifest))
+                .map_err(|error| error.to_string())?;
+            programs.push(serde_json::json!({
+                "programId": installed.manifest.id,
+                "version": installed.manifest.version,
+                "capabilities": installed.manifest.capabilities,
+                "commands": installed.manifest.commands,
+                "subscriptions": installed.manifest.subscriptions,
+                "timeoutMs": installed.manifest.timeout_ms,
+                "memoryBytes": installed.manifest.memory_bytes,
+                "permissionGranted": permission_granted
+            }));
+        }
+        programs
+            .sort_by(|left, right| left["programId"].as_str().cmp(&right["programId"].as_str()));
+        Ok(serde_json::json!({
+            "spec": "nimora.program-catalog/1",
+            "programs": programs,
+            "rejected": rejected,
+            "commandTool": "program.installed.execute",
+            "arguments": ["programId", "version"]
+        }))
+    }
+
     fn read_runtime_health(&self) -> Result<serde_json::Value, String> {
         let outbox = self
             .state
@@ -3964,6 +4020,36 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
                     "safe.character.switch",
                     serde_json::to_value(snapshot).map_err(|error| error.to_string())?,
                     CommandRisk::Low,
+                )
+                .map_err(|error| error.to_string())?;
+                command.status = CommandStatus::Succeeded;
+                Ok(command)
+            }
+            "safe.program.execute" => {
+                let program_id = arguments
+                    .get("programId")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| "programId must be a string".to_owned())?;
+                let version = arguments
+                    .get("version")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| "version must be a string".to_owned())?;
+                let app = self
+                    .state
+                    .native_app
+                    .as_ref()
+                    .ok_or_else(|| "native desktop context is unavailable".to_owned())?;
+                let receipt = execute_installed_user_program_inner(
+                    app,
+                    self.state,
+                    program_id,
+                    Some(version),
+                )
+                .map_err(|error| error.to_string())?;
+                let mut command = Command::new(
+                    "safe.program.execute",
+                    serde_json::to_value(receipt).map_err(|error| error.to_string())?,
+                    CommandRisk::Medium,
                 )
                 .map_err(|error| error.to_string())?;
                 command.status = CommandStatus::Succeeded;
@@ -4665,6 +4751,8 @@ mod tests {
                 "pet.state.read".to_owned(),
                 "profile.active.switch".to_owned(),
                 "profile.state.read".to_owned(),
+                "program.catalog.read".to_owned(),
+                "program.installed.execute".to_owned(),
                 "runtime.health.read".to_owned(),
             ]
         );
@@ -4699,6 +4787,49 @@ mod tests {
             json!(["idle", "walk", "sleep", "work", "celebrate"])
         );
         assert_eq!(value["commandTool"], "pet.animation.play");
+    }
+
+    #[test]
+    fn program_catalog_rejects_corrupt_entries_without_exposing_paths() {
+        let (root, state) = normal_desktop_state();
+        std::fs::create_dir_all(state.program_store.join("corrupt-entry"))
+            .expect("corrupt program fixture");
+        let value = DesktopCapabilityBackend { state: &state }
+            .read_program_catalog()
+            .expect("program catalog");
+        assert_eq!(value["spec"], "nimora.program-catalog/1");
+        assert_eq!(value["programs"], json!([]));
+        assert_eq!(value["rejected"], 1);
+        assert_eq!(value["commandTool"], "program.installed.execute");
+        assert_eq!(value["arguments"], json!(["programId", "version"]));
+        let serialized = value.to_string();
+        assert!(!serialized.contains(root.to_string_lossy().as_ref()));
+        assert!(!serialized.contains("main.js"));
+        assert!(!serialized.contains("activePath"));
+        assert!(!serialized.contains("source"));
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn program_execute_backend_fails_closed_without_native_context() {
+        let (root, state) = normal_desktop_state();
+        let error = DesktopCapabilityBackend { state: &state }
+            .invoke_command(
+                "safe.program.execute",
+                json!({"programId": "studio.example.focus", "version": "1.0.0"}),
+                &Uuid::now_v7().to_string(),
+                Some("program-execute-1"),
+            )
+            .expect_err("native context must be required");
+        assert_eq!(error, "native desktop context is unavailable");
+        assert!(
+            !state.program_store.exists()
+                || std::fs::read_dir(&state.program_store)
+                    .expect("program store")
+                    .next()
+                    .is_none()
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]

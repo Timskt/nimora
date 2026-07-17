@@ -16,6 +16,8 @@ const PROFILE_ACTIVE_SWITCH: &str = "profile.active.switch";
 const CHARACTER_STATE_READ: &str = "character.state.read";
 const CHARACTER_ACTIVE_SWITCH: &str = "character.active.switch";
 const ASSET_CATALOG_READ: &str = "asset.catalog.read";
+const PROGRAM_CATALOG_READ: &str = "program.catalog.read";
+const PROGRAM_EXECUTE: &str = "program.installed.execute";
 const RUNTIME_HEALTH_READ: &str = "runtime.health.read";
 const PET_ANIMATION_PLAY: &str = "pet.animation.play";
 const PET_POSITION_MOVE: &str = "pet.position.move";
@@ -23,6 +25,7 @@ const SAFE_PET_ANIMATE: &str = "safe.pet.animate";
 const SAFE_PET_MOVE: &str = "safe.pet.move";
 const SAFE_PROFILE_SWITCH: &str = "safe.profile.switch";
 const SAFE_CHARACTER_SWITCH: &str = "safe.character.switch";
+const SAFE_PROGRAM_EXECUTE: &str = "safe.program.execute";
 
 /// Builds the bounded production Tool Registry exposed to Agent providers.
 ///
@@ -100,6 +103,8 @@ pub fn production_tool_descriptors() -> Result<Vec<ToolDescriptor>, AgentRuntime
             CommandRisk::Safe,
             ToolEffect::ReadOnly,
         )?,
+        program_catalog_descriptor()?,
+        program_execute_descriptor()?,
         descriptor(
             RUNTIME_HEALTH_READ,
             "Read runtime health",
@@ -158,6 +163,36 @@ fn character_switch_descriptor() -> Result<ToolDescriptor, AgentRuntimeError> {
     )
 }
 
+fn program_catalog_descriptor() -> Result<ToolDescriptor, AgentRuntimeError> {
+    descriptor(
+        PROGRAM_CATALOG_READ,
+        "Read program catalog",
+        "Reads verified installed user programs, exact versions, declared capabilities, and permission state without source or host paths.",
+        empty_object_schema(),
+        CommandRisk::Safe,
+        ToolEffect::ReadOnly,
+    )
+}
+
+fn program_execute_descriptor() -> Result<ToolDescriptor, AgentRuntimeError> {
+    descriptor(
+        PROGRAM_EXECUTE,
+        "Execute installed program",
+        "Executes one integrity-verified and permission-granted user program at an exact installed version.",
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["programId", "version"],
+            "properties": {
+                "programId": {"type": "string", "minLength": 1, "maxLength": 128},
+                "version": {"type": "string", "minLength": 5, "maxLength": 64}
+            }
+        }),
+        CommandRisk::Medium,
+        ToolEffect::ExternalSideEffect,
+    )
+}
+
 #[derive(Debug)]
 pub struct GatewayToolBackend<B> {
     gateway: CapabilityGateway<B>,
@@ -184,6 +219,7 @@ impl<B: CapabilityBackend> GatewayToolBackend<B> {
                 "pet.action.catalog".to_owned(),
                 "pet.state".to_owned(),
                 "profile.state".to_owned(),
+                "program.catalog".to_owned(),
                 "runtime.health".to_owned(),
             ]),
             commands: BTreeSet::from([
@@ -191,6 +227,7 @@ impl<B: CapabilityBackend> GatewayToolBackend<B> {
                 SAFE_PET_MOVE.to_owned(),
                 SAFE_PROFILE_SWITCH.to_owned(),
                 SAFE_CHARACTER_SWITCH.to_owned(),
+                SAFE_PROGRAM_EXECUTE.to_owned(),
             ]),
         }
     }
@@ -233,6 +270,14 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
                 require_empty_arguments(&invocation.arguments)?;
                 CapabilityRequest::ReadAssetCatalog
             }
+            PROGRAM_CATALOG_READ => {
+                require_empty_arguments(&invocation.arguments)?;
+                CapabilityRequest::ReadProgramCatalog
+            }
+            PROGRAM_EXECUTE => CapabilityRequest::InvokeCommand {
+                command: SAFE_PROGRAM_EXECUTE.to_owned(),
+                arguments: invocation.arguments.clone(),
+            },
             RUNTIME_HEALTH_READ => {
                 require_empty_arguments(&invocation.arguments)?;
                 CapabilityRequest::ReadRuntimeHealth
@@ -265,6 +310,7 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
             | CapabilityResponse::ProfileState { value }
             | CapabilityResponse::CharacterState { value }
             | CapabilityResponse::AssetCatalog { value }
+            | CapabilityResponse::ProgramCatalog { value }
             | CapabilityResponse::RuntimeHealth { value }
             | CapabilityResponse::CommandAccepted { value } => Ok(value),
             _ => Err("Capability Gateway returned an incompatible response".to_owned()),

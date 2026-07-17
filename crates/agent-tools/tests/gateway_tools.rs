@@ -43,6 +43,10 @@ impl CapabilityBackend for Backend {
         Ok(json!({"activeAssetId": "character:builtin.aster", "assets": []}))
     }
 
+    fn read_program_catalog(&self) -> Result<Value, String> {
+        Ok(json!({"programs": [], "rejected": 0}))
+    }
+
     fn read_runtime_health(&self) -> Result<Value, String> {
         Ok(json!({"startup": {"mode": "normal"}, "safety": {"mode": "normal"}}))
     }
@@ -129,6 +133,7 @@ fn module_catalog_and_health_reads_use_explicit_gateway_capabilities() {
         ("asset.catalog.read", "activeAssetId"),
         ("character.state.read", "renderer"),
         ("pet.action.catalog.read", "actions"),
+        ("program.catalog.read", "programs"),
         ("runtime.health.read", "startup"),
     ] {
         let mut task = task();
@@ -294,6 +299,54 @@ fn character_switch_requires_bound_approval_and_fixed_gateway_command() {
     assert_eq!(
         commands[0].arguments,
         json!({"assetId": "character.local.aurora"})
+    );
+}
+
+#[test]
+fn program_execute_requires_exact_version_approval_and_fixed_gateway_command() {
+    let tools = production_tool_registry().expect("registry");
+    let providers = ProviderRegistry::default();
+    let coordinator = AgentCoordinator::new(&providers, &tools);
+    let mut task = task();
+    let capability_backend = Backend::default();
+    let command_log = Arc::clone(&capability_backend.commands);
+    let backend = GatewayToolBackend::new(
+        capability_backend,
+        GatewayToolBackend::<Backend>::standard_policy(task.id, task.trace_id),
+    );
+    let invocation = ToolInvocation::new(
+        task.id,
+        task.trace_id,
+        "program.installed.execute",
+        json!({"programId": "studio.example.focus", "version": "1.0.0"}),
+    )
+    .expect("invocation");
+    let waiting = coordinator
+        .tool_step(&mut task, &backend, invocation.clone(), None, 1_001)
+        .expect("admission");
+    assert!(matches!(
+        waiting,
+        ToolStepOutcome::ConfirmationRequired { .. }
+    ));
+    assert!(command_log.lock().expect("command log").is_empty());
+
+    let ToolAdmission::ConfirmationRequired { effective_risk, .. } =
+        tools.admit(&invocation).expect("admit")
+    else {
+        panic!("program execution must require confirmation");
+    };
+    assert_eq!(effective_risk, CommandRisk::Medium);
+    let approval = ToolApproval::bind(&invocation, effective_risk);
+    let completed = coordinator
+        .tool_step(&mut task, &backend, invocation, Some(&approval), 1_002)
+        .expect("approved tool step");
+    assert!(matches!(completed, ToolStepOutcome::Completed { .. }));
+    let commands = command_log.lock().expect("command log");
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].command, "safe.program.execute");
+    assert_eq!(
+        commands[0].arguments,
+        json!({"programId": "studio.example.focus", "version": "1.0.0"})
     );
 }
 

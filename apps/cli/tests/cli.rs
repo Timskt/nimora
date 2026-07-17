@@ -126,6 +126,8 @@ fn tool_catalog_exposes_gateway_backed_module_capabilities() {
             "pet.state.read",
             "profile.active.switch",
             "profile.state.read",
+            "program.catalog.read",
+            "program.installed.execute",
             "runtime.health.read"
         ]
     );

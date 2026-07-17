@@ -245,6 +245,8 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-055 | Agent 动作能力发现 | `pet.action.catalog.read` 从 Runtime 当前 `PetAction` 词汇返回精确动作列表及对应写工具；普通用户程序不继承该 Agent Capability | P0 |
 | AGT-056 | Agent Profile 切换 | `profile.active.switch` 必须绑定实际 Profile ID 批准，只映射到 `safe.profile.switch`；桌面预应用原生窗口策略，持久化失败回滚原生策略，无原生上下文时零状态写入 | P0 |
 | AGT-057 | Agent 角色切换 | `character.active.switch` 必须绑定实际 Asset ID 批准，只映射到 `safe.character.switch`；仅激活内置或复验通过的 Character，刷新失败回滚原选择，无原生上下文时零状态写入 | P0 |
+| AGT-058 | Agent 程序目录 | `program.catalog.read` 只返回完整性复验通过的已安装程序身份、声明、预算和精确版本授权摘要；损坏项只计数，不暴露源码、安装路径、Worker 路径或系统句柄；普通用户程序不继承该 Agent Capability | P0 |
+| AGT-059 | Agent 已安装程序执行 | `program.installed.execute` 必须绑定 `programId + version` 批准，只映射到 `safe.program.execute`；执行前重验 active 安装、完整性、精确版本和持久授权，仅经隔离 Worker 与 Capability Gateway 执行，无原生上下文时零副作用 | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |
