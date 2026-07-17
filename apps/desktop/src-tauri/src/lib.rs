@@ -631,7 +631,12 @@ fn execute_user_program(
     let policy = evaluate(manifest.clone())?;
     let execution = state.execution_controller.admit(&policy)?;
     let execution_id = execution.execution_id();
-    let input = serde_json::to_value(state.runtime.snapshot()?)?;
+    let pet = if policy.can_read_pet_state {
+        Some(serde_json::to_value(state.runtime.snapshot()?)?)
+    } else {
+        None
+    };
+    let input = user_program_input(&policy, pet);
     let request = WorkerMessage::Run {
         manifest: serde_json::to_value(manifest)?,
         source,
@@ -691,6 +696,20 @@ fn parse_user_program_plan(value: serde_json::Value) -> Result<UserProgramPlan, 
         )));
     }
     Ok(plan)
+}
+
+fn user_program_input(
+    policy: &ExecutionPolicy,
+    pet: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut input =
+        serde_json::Map::from_iter([("schemaVersion".to_owned(), serde_json::Value::from(1))]);
+    if policy.can_read_pet_state
+        && let Some(pet) = pet
+    {
+        input.insert("pet".to_owned(), pet);
+    }
+    serde_json::Value::Object(input)
 }
 
 fn worker_config(app: &AppHandle, execution: &ExecutionHandle) -> WorkerConfig {
@@ -1152,8 +1171,9 @@ pub fn run() {
 mod tests {
     use super::{
         DesktopError, PetAction, ProfilePolicy, TrayAction, WindowPolicy, parse_user_program_plan,
-        screen_coordinate, valid_asset_identifier,
+        screen_coordinate, user_program_input, valid_asset_identifier,
     };
+    use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
 
     #[test]
@@ -1189,6 +1209,42 @@ mod tests {
             parse_user_program_plan(json!({"commands": commands})),
             Err(DesktopError::UserCodeHost(message)) if message.contains("32-command")
         ));
+    }
+
+    #[test]
+    fn omits_pet_state_without_explicit_read_capability() {
+        let policy = evaluate(ProgramManifest {
+            id: "studio.example.no-read".to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities: vec![],
+            subscriptions: vec![],
+            commands: vec![],
+            timeout_ms: 1_000,
+            memory_bytes: 1024 * 1024,
+        })
+        .expect("valid policy");
+        assert_eq!(
+            user_program_input(&policy, Some(json!({"name": "private"}))),
+            json!({"schemaVersion": 1})
+        );
+    }
+
+    #[test]
+    fn includes_pet_state_after_explicit_read_capability() {
+        let policy = evaluate(ProgramManifest {
+            id: "studio.example.read".to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities: vec![Capability::ReadPetState],
+            subscriptions: vec![],
+            commands: vec![],
+            timeout_ms: 1_000,
+            memory_bytes: 1024 * 1024,
+        })
+        .expect("valid policy");
+        assert_eq!(
+            user_program_input(&policy, Some(json!({"name": "Aster"}))),
+            json!({"schemaVersion": 1, "pet": {"name": "Aster"}})
+        );
     }
 
     #[test]

@@ -40,6 +40,18 @@
 
 `nimora-user-code-worker` 使用嵌入式 Boa ECMAScript 引擎在独立二进制中执行 JavaScript。每次运行创建全新 Context，默认不存在 Node.js `process`、`require`、文件系统、网络或 Tauri 全局；源代码上限为 256 KiB，结果必须可转换为 JSON。桌面通过 `execute_user_program` 提供当前的一次性执行模型：读取宠物状态形成深度冻结的 `nimora.input` 快照，Worker 返回最多 32 条结构化命令计划，桌面再逐条经过 Gateway 授权并调用 Runtime Backend；任意一步失败都会停止后续命令。该模型不会把 Core 或 Tauri 回调注入脚本，因而更容易审计、回放与测试。构建脚本会按目标 triple 编译 Worker，Tauri `externalBin` 将其打包为 sidecar，运行时优先从应用可执行目录解析。当前 Worker 尚未注入事件型 SDK，发布版仍不能宣称支持任意脚本能力。
 
+`nimora.input` 是版本化、按授权裁剪的输入契约，而不是完整宿主状态。所有程序都会获得 `schemaVersion: 1`；只有 Manifest 明确声明 `read-pet-state` 时才会读取并加入 `pet` 字段。未授权程序即使尝试访问 `nimora.input.pet` 也只能得到 `undefined`，桌面端不会预先读取再隐藏该数据。后续增加剪贴板、文件选择或连接器上下文时也必须遵守同一原则：先完成授权，再按最小披露构造对应字段。
+
+```json
+{
+  "schemaVersion": 1,
+  "pet": {
+    "name": "Aster",
+    "state": "idle"
+  }
+}
+```
+
 ## 模块调用模型
 
 ```text
