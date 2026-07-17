@@ -733,12 +733,21 @@ struct AgentCatalog {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LocalAgentResult {
+struct DesktopAgentRunResult {
     spec: &'static str,
+    status: DesktopAgentRunStatus,
     task: AgentTask,
-    content: String,
-    finish_reason: nimora_agent_runtime::ProviderFinishReason,
-    usage: nimora_agent_runtime::ProviderUsage,
+    content: Option<String>,
+    finish_reason: Option<nimora_agent_runtime::ProviderFinishReason>,
+    usage: Option<nimora_agent_runtime::ProviderUsage>,
+    pending_tools: Vec<AgentToolResult>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum DesktopAgentRunStatus {
+    Completed,
+    WaitingForConfirmation,
 }
 
 #[derive(Debug, Deserialize)]
@@ -815,14 +824,14 @@ fn agent_catalog() -> Result<AgentCatalog, DesktopError> {
 fn run_local_agent(
     request: LocalAgentRequest,
     state: State<'_, DesktopState>,
-) -> Result<LocalAgentResult, DesktopError> {
+) -> Result<DesktopAgentRunResult, DesktopError> {
     run_local_agent_inner(request, &state)
 }
 
 fn run_local_agent_inner(
     request: LocalAgentRequest,
     state: &DesktopState,
-) -> Result<LocalAgentResult, DesktopError> {
+) -> Result<DesktopAgentRunResult, DesktopError> {
     if request.prompt.trim().is_empty() || request.prompt.len() > 32 * 1024 {
         return Err(DesktopError::Agent(
             "prompt must contain 1 to 32768 bytes".to_owned(),
@@ -856,18 +865,29 @@ fn run_local_agent_inner(
         512,
         true,
     )?;
+    Ok(desktop_agent_run_result(outcome))
+}
+
+fn desktop_agent_run_result(outcome: ProviderAgentOutcome) -> DesktopAgentRunResult {
     match outcome {
-        ProviderAgentOutcome::Completed { task, response } => Ok(LocalAgentResult {
+        ProviderAgentOutcome::Completed { task, response } => DesktopAgentRunResult {
             spec: "nimora.desktop-agent-result/1",
+            status: DesktopAgentRunStatus::Completed,
             task,
-            content: response.content,
-            finish_reason: response.finish_reason,
-            usage: response.usage,
-        }),
-        ProviderAgentOutcome::Waiting { pending, .. } => Err(DesktopError::Agent(format!(
-            "local diagnostic provider unexpectedly requested {} confirmations",
-            pending.len()
-        ))),
+            content: Some(response.content),
+            finish_reason: Some(response.finish_reason),
+            usage: Some(response.usage),
+            pending_tools: Vec::new(),
+        },
+        ProviderAgentOutcome::Waiting { task, pending } => DesktopAgentRunResult {
+            spec: "nimora.desktop-agent-result/1",
+            status: DesktopAgentRunStatus::WaitingForConfirmation,
+            task,
+            content: None,
+            finish_reason: None,
+            usage: None,
+            pending_tools: pending,
+        },
     }
 }
 
@@ -1156,6 +1176,76 @@ fn confirm_agent_tool(
 ) -> Result<AgentToolResult, DesktopError> {
     let providers = desktop_provider_registry()?;
     confirm_agent_tool_with_registry(&request, &state, &providers).map(|(result, _)| result)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn confirm_agent_run_tool(
+    request: ResolveAgentToolRequest,
+    state: State<'_, DesktopState>,
+) -> Result<DesktopAgentRunResult, DesktopError> {
+    let providers = desktop_provider_registry()?;
+    let (resolved, continuation) = confirm_agent_tool_with_registry(&request, &state, &providers)?;
+    desktop_agent_confirmation_result(&state, resolved, continuation)
+}
+
+fn desktop_agent_confirmation_result(
+    state: &DesktopState,
+    resolved: AgentToolResult,
+    continuation: Option<ProviderAgentOutcome>,
+) -> Result<DesktopAgentRunResult, DesktopError> {
+    if let Some(outcome) = continuation {
+        return Ok(desktop_agent_run_result(outcome));
+    }
+    let pending_tools = pending_agent_tools_for_task(state, &resolved.task)?;
+    let status = if pending_tools.is_empty() {
+        DesktopAgentRunStatus::Completed
+    } else {
+        DesktopAgentRunStatus::WaitingForConfirmation
+    };
+    Ok(DesktopAgentRunResult {
+        spec: "nimora.desktop-agent-result/1",
+        status,
+        task: resolved.task,
+        content: None,
+        finish_reason: None,
+        usage: None,
+        pending_tools,
+    })
+}
+
+fn pending_agent_tools_for_task(
+    state: &DesktopState,
+    task: &AgentTask,
+) -> Result<Vec<AgentToolResult>, DesktopError> {
+    let pending = state
+        .pending_agent_tools
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    let mut tools = pending
+        .values()
+        .filter(|item| item.invocation.task_id == task.id)
+        .map(|item| {
+            let order = match item.context {
+                PendingAgentToolContext::Standalone { .. } => usize::MAX,
+                PendingAgentToolContext::ProviderTurn { approval_index, .. } => approval_index,
+            };
+            (
+                order,
+                AgentToolResult {
+                    spec: "nimora.desktop-agent-tool-result/1",
+                    task: task.clone(),
+                    invocation: item.invocation.clone(),
+                    effective_risk: item.effective_risk,
+                    requires_confirmation: true,
+                    expires_at_ms: Some(item.expires_at_ms),
+                    output: None,
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    tools.sort_by_key(|(order, _)| *order);
+    Ok(tools.into_iter().map(|(_, result)| result).collect())
 }
 
 #[cfg(test)]
@@ -3807,6 +3897,7 @@ pub fn run() {
             run_local_agent,
             prepare_agent_tool,
             confirm_agent_tool,
+            confirm_agent_run_tool,
             reject_agent_tool,
             drain_runtime_events,
             outbox_snapshot,
@@ -4156,10 +4247,12 @@ mod tests {
             &state,
         )
         .expect("local agent result");
-        assert_eq!(result.content, "检查本地能力");
+        assert_eq!(result.status, super::DesktopAgentRunStatus::Completed);
+        assert_eq!(result.content.as_deref(), Some("检查本地能力"));
         assert_eq!(result.task.origin, AgentTaskOrigin::Desktop);
         assert_eq!(result.task.status, AgentTaskStatus::Succeeded);
-        assert_eq!(result.usage.cost_microunits, 0);
+        assert_eq!(result.usage.expect("completed usage").cost_microunits, 0);
+        assert!(result.pending_tools.is_empty());
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
@@ -4274,9 +4367,12 @@ mod tests {
             true,
         )
         .expect("first provider step");
-        let super::ProviderAgentOutcome::Waiting { pending, .. } = outcome else {
-            panic!("expected confirmations");
-        };
+        let run_result = super::desktop_agent_run_result(outcome);
+        assert_eq!(
+            run_result.status,
+            super::DesktopAgentRunStatus::WaitingForConfirmation
+        );
+        let pending = run_result.pending_tools;
         assert_eq!(pending.len(), 2);
         let first = ResolveAgentToolRequest {
             invocation_id: pending[0].invocation.invocation_id,
@@ -4288,6 +4384,17 @@ mod tests {
             confirm_agent_tool_with_registry(&first, &state, &providers).expect("approve first");
         assert!(approved.output.is_none());
         assert!(continuation.is_none());
+        let waiting = super::desktop_agent_confirmation_result(&state, approved, continuation)
+            .expect("waiting result");
+        assert_eq!(
+            waiting.status,
+            super::DesktopAgentRunStatus::WaitingForConfirmation
+        );
+        assert_eq!(waiting.pending_tools.len(), 1);
+        assert_eq!(
+            waiting.pending_tools[0].invocation.invocation_id,
+            second.invocation_id
+        );
         assert_eq!(
             state.runtime.snapshot().expect("snapshot").position,
             Position { x: 0.0, y: 0.0 }

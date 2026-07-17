@@ -50,10 +50,12 @@ export interface AgentCatalog {
 
 export interface LocalAgentResult {
   spec: "nimora.desktop-agent-result/1";
+  status: "completed" | "waitingForConfirmation";
   task: { id: string; status: string; providerId: string };
-  content: string;
-  finishReason: string;
-  usage: { inputTokens: number; outputTokens: number; costMicrounits: number };
+  content: string | null;
+  finishReason: string | null;
+  usage: { inputTokens: number; outputTokens: number; costMicrounits: number } | null;
+  pendingTools: AgentToolResult[];
 }
 
 export interface AgentToolResult {
@@ -349,6 +351,7 @@ export interface DesktopApi {
   runLocalAgent(prompt: string): Promise<LocalAgentResult>;
   prepareAgentTool(toolId: string, argumentsValue: Record<string, unknown>): Promise<AgentToolResult>;
   confirmAgentTool(invocationId: string): Promise<AgentToolResult>;
+  confirmAgentRunTool(invocationId: string): Promise<LocalAgentResult>;
   rejectAgentTool(invocationId: string): Promise<void>;
   backupHealth(): Promise<BackupHealth>;
   createBackup(): Promise<BackupRecord | null>;
@@ -444,6 +447,8 @@ export function createDesktopApi(
   startDragging: () => Promise<void> = async () => await getCurrentWindow().startDragging(),
 ): DesktopApi {
   if (!native) {
+    let previewAgentPendingTools: AgentToolResult[] = [];
+    let previewAgentTask = { id: crypto.randomUUID(), status: "succeeded", providerId: "provider:deterministic-local" };
     return {
       native: false,
       async snapshot() { return structuredClone(previewSnapshot); },
@@ -452,7 +457,10 @@ export function createDesktopApi(
       async agentCatalog() {
         return {
           spec: "nimora.desktop-agent-catalog/1",
-          providers: [{ id: "provider:deterministic-local", name: "Deterministic local diagnostic", locality: "local" }],
+          providers: [
+            { id: "provider:deterministic-local", name: "Deterministic local diagnostic", locality: "local" },
+            { id: "provider:preview-scripted", name: "Preview scripted tool provider", locality: "local" },
+          ],
           tools: [
             { id: "pet.animation.play", title: "Play pet animation", description: "Plays one validated pet action through the Capability Gateway.", baseRisk: "low", effect: "reversible_write" },
             { id: "pet.position.move", title: "Move pet", description: "Moves the pet through the Capability Gateway.", baseRisk: "low", effect: "reversible_write" },
@@ -462,7 +470,17 @@ export function createDesktopApi(
         } as AgentCatalog;
       },
       async runLocalAgent(prompt) {
-        return { spec: "nimora.desktop-agent-result/1", task: { id: crypto.randomUUID(), status: "succeeded", providerId: "provider:deterministic-local" }, content: prompt, finishReason: "stop", usage: { inputTokens: Math.max(1, Math.ceil(prompt.length / 4)), outputTokens: Math.max(1, Math.ceil(prompt.length / 4)), costMicrounits: 0 } };
+        if (prompt.includes("移动") || prompt.includes("工具确认")) {
+          previewAgentTask = { id: crypto.randomUUID(), status: "waiting_for_confirmation", providerId: "provider:preview-scripted" };
+          const expiresAtMs = Date.now() + 300_000;
+          previewAgentPendingTools = [
+            { spec: "nimora.desktop-agent-tool-result/1", task: previewAgentTask, invocation: { invocationId: crypto.randomUUID(), taskId: previewAgentTask.id, traceId: crypto.randomUUID(), toolId: "pet.animation.play", arguments: { action: "celebrate" } }, effectiveRisk: "low", requiresConfirmation: true, expiresAtMs, output: null },
+            { spec: "nimora.desktop-agent-tool-result/1", task: previewAgentTask, invocation: { invocationId: crypto.randomUUID(), taskId: previewAgentTask.id, traceId: crypto.randomUUID(), toolId: "pet.position.move", arguments: { x: 240, y: 160 } }, effectiveRisk: "low", requiresConfirmation: true, expiresAtMs, output: null },
+          ];
+          return { spec: "nimora.desktop-agent-result/1", status: "waitingForConfirmation", task: previewAgentTask, content: null, finishReason: null, usage: null, pendingTools: structuredClone(previewAgentPendingTools) };
+        }
+        previewAgentPendingTools = [];
+        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: { id: crypto.randomUUID(), status: "succeeded", providerId: "provider:deterministic-local" }, content: prompt, finishReason: "stop", usage: { inputTokens: Math.max(1, Math.ceil(prompt.length / 4)), outputTokens: Math.max(1, Math.ceil(prompt.length / 4)), costMicrounits: 0 }, pendingTools: [] };
       },
       async prepareAgentTool(toolId, argumentsValue) {
         const invocationId = crypto.randomUUID();
@@ -472,7 +490,15 @@ export function createDesktopApi(
       async confirmAgentTool(invocationId) {
         return { spec: "nimora.desktop-agent-tool-result/1", task: { id: crypto.randomUUID(), status: "succeeded", providerId: "provider:deterministic-local" }, invocation: { invocationId, taskId: crypto.randomUUID(), traceId: crypto.randomUUID(), toolId: "pet.animation.play", arguments: { action: "celebrate" } }, effectiveRisk: "low", requiresConfirmation: false, expiresAtMs: null, output: { preview: true } };
       },
-      async rejectAgentTool() {},
+      async confirmAgentRunTool(invocationId) {
+        previewAgentPendingTools = previewAgentPendingTools.filter((tool) => tool.invocation.invocationId !== invocationId);
+        if (previewAgentPendingTools.length > 0) {
+          return { spec: "nimora.desktop-agent-result/1", status: "waitingForConfirmation", task: previewAgentTask, content: null, finishReason: null, usage: null, pendingTools: structuredClone(previewAgentPendingTools) };
+        }
+        previewAgentTask = { ...previewAgentTask, status: "succeeded" };
+        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: structuredClone(previewAgentTask), content: "模块操作已经安全完成。", finishReason: "completed", usage: { inputTokens: 12, outputTokens: 8, costMicrounits: 0 }, pendingTools: [] };
+      },
+      async rejectAgentTool() { previewAgentPendingTools = []; },
       async backupHealth() {
         const previewBackup = { id: "runtime-1784294125392.sqlite3", createdAtMs: 1_784_294_125_392, bytes: 2_621_440 };
         return previewRecoveryMode
@@ -559,6 +585,7 @@ export function createDesktopApi(
     runLocalAgent: async (prompt) => await invokeCommand("run_local_agent", { request: { prompt } }) as LocalAgentResult,
     prepareAgentTool: async (toolId, argumentsValue) => await invokeCommand("prepare_agent_tool", { request: { toolId, arguments: argumentsValue } }) as AgentToolResult,
     confirmAgentTool: async (invocationId) => await invokeCommand("confirm_agent_tool", { request: { invocationId } }) as AgentToolResult,
+    confirmAgentRunTool: async (invocationId) => await invokeCommand("confirm_agent_run_tool", { request: { invocationId } }) as LocalAgentResult,
     rejectAgentTool: async (invocationId) => { await invokeCommand("reject_agent_tool", { request: { invocationId } }); },
     backupHealth: async () => await invokeCommand("backup_health") as BackupHealth,
     createBackup: async () => await invokeCommand("create_backup") as BackupRecord,

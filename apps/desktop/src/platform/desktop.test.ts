@@ -18,8 +18,48 @@ describe("desktop platform adapter", () => {
     expect((await api.previewDiagnosticReport()).sources).toEqual({ eventCount: 2, eventRetentionDays: 14 });
     expect((await api.profiles()).profiles[0]?.name).toBe("Default");
     expect((await api.agentCatalog()).tools).toHaveLength(4);
-    expect((await api.runLocalAgent("离线检查")).usage.costMicrounits).toBe(0);
+    expect((await api.agentCatalog()).providers).toHaveLength(2);
+    expect((await api.runLocalAgent("离线检查")).usage?.costMicrounits).toBe(0);
     await expect(api.playAction("celebrate")).resolves.toBeNull();
+  });
+
+  it("previews an atomic provider tool turn through confirmation", async () => {
+    const api = createDesktopApi(false);
+    const waiting = await api.runLocalAgent("请移动桌宠并展示工具确认");
+
+    expect(waiting.status).toBe("waitingForConfirmation");
+    expect(waiting.task.providerId).toBe("provider:preview-scripted");
+    expect(waiting.pendingTools.map((tool) => tool.invocation.toolId)).toEqual([
+      "pet.animation.play",
+      "pet.position.move",
+    ]);
+    const firstTool = waiting.pendingTools.at(0);
+    if (!firstTool) throw new Error("expected the first preview tool");
+
+    const afterFirstApproval = await api.confirmAgentRunTool(firstTool.invocation.invocationId);
+    expect(afterFirstApproval.status).toBe("waitingForConfirmation");
+    expect(afterFirstApproval.pendingTools).toHaveLength(1);
+    const remainingTool = afterFirstApproval.pendingTools.at(0);
+    if (!remainingTool) throw new Error("expected the remaining preview tool");
+    expect(remainingTool.invocation.toolId).toBe("pet.position.move");
+
+    const completed = await api.confirmAgentRunTool(remainingTool.invocation.invocationId);
+    expect(completed.status).toBe("completed");
+    expect(completed.task.providerId).toBe("provider:preview-scripted");
+    expect(completed.pendingTools).toEqual([]);
+    expect(completed.content).toBe("模块操作已经安全完成。");
+  });
+
+  it("cancels the whole preview provider turn when one tool is rejected", async () => {
+    const api = createDesktopApi(false);
+    const waiting = await api.runLocalAgent("展示工具确认");
+    const rejectedTool = waiting.pendingTools.at(0);
+    if (!rejectedTool) throw new Error("expected a preview tool to reject");
+
+    await api.rejectAgentTool(rejectedTool.invocation.invocationId);
+
+    const restarted = await api.runLocalAgent("展示工具确认");
+    expect(restarted.pendingTools).toHaveLength(2);
   });
 
   it("maps typed calls to the Tauri command contract", async () => {
@@ -30,6 +70,7 @@ describe("desktop platform adapter", () => {
     await api.runLocalAgent("检查本地能力");
     await api.prepareAgentTool("pet.animation.play", { action: "celebrate" });
     await api.confirmAgentTool("018f0000-0000-7000-8000-000000000004");
+    await api.confirmAgentRunTool("018f0000-0000-7000-8000-000000000006");
     await api.rejectAgentTool("018f0000-0000-7000-8000-000000000005");
     await api.drainEvents();
     await api.outboxSnapshot();
@@ -128,6 +169,7 @@ describe("desktop platform adapter", () => {
       ["run_local_agent", { request: { prompt: "检查本地能力" } }],
       ["prepare_agent_tool", { request: { toolId: "pet.animation.play", arguments: { action: "celebrate" } } }],
       ["confirm_agent_tool", { request: { invocationId: "018f0000-0000-7000-8000-000000000004" } }],
+      ["confirm_agent_run_tool", { request: { invocationId: "018f0000-0000-7000-8000-000000000006" } }],
       ["reject_agent_tool", { request: { invocationId: "018f0000-0000-7000-8000-000000000005" } }],
       ["drain_runtime_events"],
       ["outbox_snapshot"],

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentToolAccessLabel, agentUsageTotal } from "./AgentWorkspace";
+import { agentRiskLabel, agentToolAccessLabel, agentUsageTotal } from "./AgentWorkspace";
 
 describe("AgentWorkspace", () => {
   it("labels module access by effect instead of provider risk wording", () => {
@@ -9,5 +9,11 @@ describe("AgentWorkspace", () => {
 
   it("summarizes provider usage for the completed task", () => {
     expect(agentUsageTotal({ usage: { inputTokens: 12, outputTokens: 7 } } as never)).toBe(19);
+    expect(agentUsageTotal({ usage: null } as never)).toBe(0);
+  });
+
+  it("uses user-facing risk labels for provider module requests", () => {
+    expect(agentRiskLabel("safe")).toBe("安全");
+    expect(agentRiskLabel("critical")).toBe("严重风险");
   });
 });

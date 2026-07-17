@@ -243,3 +243,5 @@ Primitive Token → Semantic Token → Component Token → Theme Override
 - 只读使用薄荷语义，需确认写操作使用暖琥珀语义，同时保留 `R/W` 与文字标签，禁止只靠颜色表达。
 - 完成结果同时展示内容、Task 状态、Token 和费用；失败不得保留虚假的成功状态，写操作不得出现“自动执行”暗示。
 - 写工具确认卡必须展示 Tool ID、格式化实际参数、风险、单次有效与过期时间，并提供同等清晰的拒绝入口；Approval 指纹等内部授权材料不得进入 DOM。
+- 多工具确认组必须维持 Provider 原始顺序；部分批准后布局稳定收敛，最终态恢复简洁对话结构，拒绝态明确说明整组零副作用。
+- 浏览器预览 Scripted Provider 只用于视觉验证；截图必须能识别当前 Provider，禁止用预览结果冒充生产 Ollama 验收。
