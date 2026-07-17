@@ -151,7 +151,7 @@ describe("assetPackageSchema", () => {
     const result = assetPackageSchema.safeParse({
       manifest: validAssetManifest,
       files: [
-        { path: "integrity.json", sha256: "a".repeat(64), bytes: 10, mediaType: "application/json" },
+        { path: "manifest.json", sha256: "a".repeat(64), bytes: 10, mediaType: "application/json" },
         { path: "preview/poster.webp", sha256: "b".repeat(64), bytes: 20, mediaType: "image/webp" },
       ],
       dependencies: [],
@@ -164,8 +164,8 @@ describe("assetPackageSchema", () => {
     const result = assetPackageSchema.safeParse({
       manifest: validAssetManifest,
       files: [
-        { path: "integrity.json", sha256: "a".repeat(64), bytes: 10, mediaType: "application/json" },
-        { path: "integrity.json", sha256: "b".repeat(64), bytes: 20, mediaType: "application/json" },
+        { path: "manifest.json", sha256: "a".repeat(64), bytes: 10, mediaType: "application/json" },
+        { path: "manifest.json", sha256: "b".repeat(64), bytes: 20, mediaType: "application/json" },
       ],
       totalBytes: 10,
     });

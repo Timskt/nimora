@@ -34,12 +34,7 @@ describe("desktop platform adapter", () => {
     await api.dragPet();
     await api.setClickThrough(true);
     await api.installAsset({
-      assetId: "character.example.mochi",
       sourcePath: "/tmp/nimora-import",
-      files: [
-        { relativePath: "manifest.json", bytes: 12, sha256: "a".repeat(64) },
-        { relativePath: "sprites/idle.webp", bytes: 42, sha256: "b".repeat(64) },
-      ],
     });
     await api.rollbackAsset("character.example.mochi");
     const manifest = {
@@ -101,12 +96,7 @@ describe("desktop platform adapter", () => {
       ["finish_pet_drag"],
       ["set_click_through", { enabled: true }],
       ["install_asset", { request: {
-        assetId: "character.example.mochi",
         sourcePath: "/tmp/nimora-import",
-        files: [
-          { relativePath: "manifest.json", bytes: 12, sha256: "a".repeat(64) },
-          { relativePath: "sprites/idle.webp", bytes: 42, sha256: "b".repeat(64) },
-        ],
       } }],
       ["rollback_asset", { assetId: "character.example.mochi" }],
       ["validate_user_program", { manifest }],

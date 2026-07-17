@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -22,6 +23,8 @@ pub struct GeneratedInstallFile {
 
 const MAX_FILES: usize = 10_000;
 const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_METADATA_BYTES: u64 = 1024 * 1024;
+const MANIFEST_FILE: &str = "manifest.json";
 
 #[derive(Debug, Error)]
 pub enum InstallError {
@@ -35,6 +38,8 @@ pub enum InstallError {
     EscapedSource(PathBuf),
     #[error("asset inventory exceeds installation budget")]
     BudgetExceeded,
+    #[error("asset metadata is invalid: {0}")]
+    InvalidMetadata(String),
     #[error("asset SHA-256 is malformed: {0}")]
     InvalidHash(PathBuf),
     #[error("asset size does not match inventory: {0}")]
@@ -57,6 +62,256 @@ pub struct InstallResult {
 pub struct RollbackResult {
     pub active_path: PathBuf,
     pub quarantined_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetPackageInstallResult {
+    pub asset_id: String,
+    pub version: String,
+    pub install: InstallResult,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AssetManifestHeader {
+    spec: String,
+    id: String,
+    #[serde(rename = "type")]
+    asset_type: String,
+    version: String,
+    name: serde_json::Value,
+    publisher: String,
+    license: String,
+    engines: serde_json::Value,
+    #[serde(default)]
+    render: Option<serde_json::Value>,
+    #[serde(default)]
+    entrypoints: Option<serde_json::Value>,
+    #[serde(default)]
+    capabilities: Vec<String>,
+    #[serde(default = "empty_json_object")]
+    fallbacks: serde_json::Value,
+    #[serde(default)]
+    locales: Vec<String>,
+    integrity: AssetIntegrityReference,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssetIntegrityReference {
+    algorithm: String,
+    files: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AssetIntegrityDocument {
+    files: Vec<AssetIntegrityFile>,
+    total_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AssetIntegrityFile {
+    path: PathBuf,
+    sha256: String,
+    bytes: u64,
+    media_type: String,
+}
+
+/// Loads package-owned metadata, verifies the declared inventory, and atomically
+/// activates the package under the manifest's own asset identifier.
+///
+/// # Errors
+///
+/// Returns an error when metadata is missing, malformed, unsafe, inconsistent,
+/// or when an inventory file fails validation.
+pub fn install_asset_package(
+    source_root: &Path,
+    asset_store: &Path,
+) -> Result<AssetPackageInstallResult, InstallError> {
+    let manifest_bytes = read_metadata(source_root, Path::new(MANIFEST_FILE))?;
+    let manifest: AssetManifestHeader = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    validate_manifest_header(&manifest)?;
+    let integrity_path = safe_relative_path(&manifest.integrity.files)?;
+    if integrity_path == Path::new(MANIFEST_FILE) {
+        return Err(InstallError::InvalidMetadata(
+            "integrity inventory cannot replace manifest.json".to_owned(),
+        ));
+    }
+    let integrity_bytes = read_metadata(source_root, integrity_path)?;
+    let integrity: AssetIntegrityDocument = serde_json::from_slice(&integrity_bytes)
+        .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    let files = integrity
+        .files
+        .into_iter()
+        .map(|file| {
+            if file.media_type.trim().is_empty() {
+                return Err(InstallError::InvalidMetadata(
+                    "inventory mediaType cannot be empty".to_owned(),
+                ));
+            }
+            Ok(InstallFile {
+                relative_path: file.path,
+                bytes: file.bytes,
+                sha256: file.sha256,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    validate_integrity_document(&files, integrity.total_bytes, integrity_path)?;
+    let active_path = asset_store.join(&manifest.id);
+    let install = install_atomically_with_generated(
+        source_root,
+        &active_path,
+        &files,
+        &[GeneratedInstallFile {
+            relative_path: integrity_path.to_path_buf(),
+            contents: integrity_bytes,
+        }],
+    )?;
+    Ok(AssetPackageInstallResult {
+        asset_id: manifest.id,
+        version: manifest.version,
+        install,
+    })
+}
+
+fn read_metadata(source_root: &Path, relative_path: &Path) -> Result<Vec<u8>, InstallError> {
+    if !source_root.is_dir() {
+        return Err(InstallError::SourceNotDirectory);
+    }
+    let relative_path = safe_relative_path(relative_path)?;
+    let source_root = source_root.canonicalize()?;
+    let path = source_root.join(relative_path);
+    let metadata = fs::symlink_metadata(&path)?;
+    if !metadata.file_type().is_file() || metadata.len() > MAX_METADATA_BYTES {
+        return Err(InstallError::InvalidMetadata(
+            relative_path.display().to_string(),
+        ));
+    }
+    let canonical_path = path.canonicalize()?;
+    if !canonical_path.starts_with(&source_root) {
+        return Err(InstallError::EscapedSource(relative_path.to_path_buf()));
+    }
+    fs::read(canonical_path).map_err(InstallError::from)
+}
+
+fn validate_manifest_header(manifest: &AssetManifestHeader) -> Result<(), InstallError> {
+    let supported_types = [
+        "character",
+        "skin",
+        "theme",
+        "behavior",
+        "voice",
+        "interaction",
+        "bundle",
+    ];
+    if manifest.spec != "nimora.asset/1"
+        || !valid_asset_identifier(&manifest.id)
+        || !valid_asset_identifier(&manifest.publisher)
+        || !supported_types.contains(&manifest.asset_type.as_str())
+        || !valid_semver(&manifest.version)
+        || manifest.license.trim().is_empty()
+        || !valid_localized_text(&manifest.name)
+        || manifest
+            .engines
+            .get("nimora")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(str::is_empty)
+        || manifest.integrity.algorithm != "sha256"
+        || manifest.capabilities.len() > 64
+        || !manifest
+            .capabilities
+            .iter()
+            .all(|capability| valid_asset_identifier(capability))
+        || manifest.locales.len() > 32
+        || !manifest.locales.iter().all(|locale| valid_locale(locale))
+        || !manifest.fallbacks.is_object()
+    {
+        return Err(InstallError::InvalidMetadata(
+            "manifest header violates nimora.asset/1".to_owned(),
+        ));
+    }
+    let _ = (&manifest.render, &manifest.entrypoints);
+    Ok(())
+}
+
+fn empty_json_object() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
+}
+
+fn valid_localized_text(value: &serde_json::Value) -> bool {
+    value.as_object().is_some_and(|entries| {
+        !entries.is_empty()
+            && entries.iter().all(|(locale, text)| {
+                valid_locale(locale) && text.as_str().is_some_and(|text| !text.trim().is_empty())
+            })
+    })
+}
+
+fn valid_locale(value: &str) -> bool {
+    let mut parts = value.split('-');
+    let language = parts.next().unwrap_or_default();
+    let region = parts.next();
+    parts.next().is_none()
+        && language.len() == 2
+        && language.bytes().all(|byte| byte.is_ascii_lowercase())
+        && region.is_none_or(|region| {
+            region.len() == 2 && region.bytes().all(|byte| byte.is_ascii_uppercase())
+        })
+}
+
+fn validate_integrity_document(
+    files: &[InstallFile],
+    declared_total: u64,
+    integrity_path: &Path,
+) -> Result<(), InstallError> {
+    validate_budget(files)?;
+    let mut paths = std::collections::HashSet::with_capacity(files.len());
+    let mut total = 0_u64;
+    for file in files {
+        let path = safe_relative_path(&file.relative_path)?;
+        if !paths.insert(path.to_path_buf()) {
+            return Err(InstallError::InvalidMetadata(format!(
+                "duplicate inventory path: {}",
+                path.display()
+            )));
+        }
+        if path == integrity_path {
+            return Err(InstallError::InvalidMetadata(
+                "integrity inventory cannot hash itself".to_owned(),
+            ));
+        }
+        total = total
+            .checked_add(file.bytes)
+            .ok_or(InstallError::BudgetExceeded)?;
+    }
+    if !paths.contains(Path::new(MANIFEST_FILE)) || total != declared_total {
+        return Err(InstallError::InvalidMetadata(
+            "inventory must include manifest.json and match totalBytes".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn valid_asset_identifier(value: &str) -> bool {
+    value.len() <= 128
+        && value.split('.').count() >= 2
+        && value.split('.').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+}
+
+fn valid_semver(value: &str) -> bool {
+    let core = value.split_once('-').map_or(value, |(core, _)| core);
+    let mut segments = core.split('.');
+    segments.clone().count() == 3
+        && segments
+            .all(|segment| !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Copies a validated inventory into a staging directory and activates it atomically.
@@ -305,6 +560,92 @@ fn unique_sibling(active_path: &Path, suffix: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sha256(contents: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(contents))
+    }
+
+    fn write_asset_package(root: &Path, asset_id: &str) {
+        fs::create_dir_all(root).unwrap();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "spec": "nimora.asset/1",
+            "id": asset_id,
+            "type": "character",
+            "version": "1.0.0",
+            "name": { "en": "Mochi" },
+            "publisher": "publisher.example",
+            "license": "MIT",
+            "engines": { "nimora": ">=0.1.0" },
+            "capabilities": [],
+            "fallbacks": {},
+            "locales": ["en"],
+            "integrity": { "algorithm": "sha256", "files": "integrity.json" }
+        }))
+        .unwrap();
+        fs::write(root.join(MANIFEST_FILE), &manifest).unwrap();
+        let integrity = serde_json::to_vec(&serde_json::json!({
+            "files": [{
+                "path": MANIFEST_FILE,
+                "sha256": sha256(&manifest),
+                "bytes": manifest.len(),
+                "mediaType": "application/json"
+            }],
+            "totalBytes": manifest.len()
+        }))
+        .unwrap();
+        fs::write(root.join("integrity.json"), integrity).unwrap();
+    }
+
+    #[test]
+    fn installs_package_using_manifest_owned_identity_and_inventory() {
+        let root = std::env::temp_dir().join("nimora-package-authority");
+        let source = root.join("source");
+        let store = root.join("store");
+        let _ = fs::remove_dir_all(&root);
+        write_asset_package(&source, "character.example.mochi");
+        let result = install_asset_package(&source, &store).unwrap();
+        assert_eq!(result.asset_id, "character.example.mochi");
+        assert_eq!(result.version, "1.0.0");
+        assert!(
+            store
+                .join("character.example.mochi/manifest.json")
+                .is_file()
+        );
+        assert!(
+            store
+                .join("character.example.mochi/integrity.json")
+                .is_file()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_self_referential_integrity_inventory() {
+        let root = std::env::temp_dir().join("nimora-package-self-integrity");
+        let source = root.join("source");
+        let store = root.join("store");
+        let _ = fs::remove_dir_all(&root);
+        write_asset_package(&source, "character.example.mochi");
+        let integrity = fs::read(source.join("integrity.json")).unwrap();
+        fs::write(
+            source.join("integrity.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "files": [{
+                    "path": "integrity.json",
+                    "sha256": sha256(&integrity),
+                    "bytes": integrity.len(),
+                    "mediaType": "application/json"
+                }],
+                "totalBytes": integrity.len()
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let error = install_asset_package(&source, &store).unwrap_err();
+        assert!(matches!(error, InstallError::InvalidMetadata(_)));
+        assert!(!store.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn installs_files_and_preserves_previous_directory() {

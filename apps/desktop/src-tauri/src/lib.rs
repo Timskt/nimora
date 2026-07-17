@@ -1,4 +1,4 @@
-use nimora_asset_installer::{InstallError, InstallFile, install_atomically, rollback_latest};
+use nimora_asset_installer::{InstallError, InstallFile, install_asset_package, rollback_latest};
 use nimora_persistence_sqlite::{
     ProgramPermissionGrant, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
     SqliteProgramPermissionRepository,
@@ -193,9 +193,7 @@ struct ClickPetRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct InstallAssetRequest {
-    asset_id: String,
     source_path: PathBuf,
-    files: Vec<InstallAssetFile>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -683,24 +681,11 @@ fn install_asset(
     request: InstallAssetRequest,
 ) -> Result<AssetInstallReceipt, DesktopError> {
     ensure_normal_mode(&state)?;
-    if !valid_asset_identifier(&request.asset_id) {
-        return Err(DesktopError::InvalidAssetIdentifier);
-    }
-    let active_path = state.asset_store.join(&request.asset_id);
-    let files = request
-        .files
-        .into_iter()
-        .map(|file| InstallFile {
-            relative_path: file.relative_path,
-            bytes: file.bytes,
-            sha256: file.sha256,
-        })
-        .collect::<Vec<_>>();
-    let result = install_atomically(&request.source_path, &active_path, &files)?;
+    let result = install_asset_package(&request.source_path, &state.asset_store)?;
     Ok(AssetInstallReceipt {
-        asset_id: request.asset_id,
-        active_path: result.active_path,
-        replaced_previous: result.backup_path.is_some(),
+        asset_id: result.asset_id,
+        active_path: result.install.active_path,
+        replaced_previous: result.install.backup_path.is_some(),
     })
 }
 

@@ -80,7 +80,7 @@ tests/                     contract、integration、e2e、fixtures
 
 ## 开发基线
 
-项目当前处于 M1 Creator Foundation 开发阶段。M0 已落地 Rust 领域核心、应用用例层、版本化 SQLite 状态适配器、事务 Outbox 基础、可创建与激活的离线 Profile、Command/Event Trace 关联、共享 TypeScript Schema、控制中心 UI，以及 Tauri 双窗口、系统托盘和类型化 IPC。M1 已开始冻结 `nimora.asset/1` 角色、皮肤、主题资源 Manifest 契约；SQLite Online Backup API 已提供一致性备份入口，Creator Studio、隔离导入器、渲染适配器、Outbox 消费确认与崩溃循环恢复仍是后续门禁。其余实现继续以 [`docs/DELIVERY_TESTING.md`](docs/DELIVERY_TESTING.md) 的分阶段验收标准为准。
+项目当前处于 M1 Creator Foundation 开发阶段。M0 已落地 Rust 领域核心、应用用例层、版本化 SQLite 状态适配器、事务 Outbox 基础、可创建与激活的离线 Profile、Command/Event Trace 关联、共享 TypeScript Schema、控制中心 UI，以及 Tauri 双窗口、系统托盘和类型化 IPC。M1 已冻结首版 `nimora.asset/1` 角色、皮肤、主题资源 Manifest 契约，并提供宿主权威目录包导入、哈希复验、原子激活与回滚；SQLite Online Backup API 已提供一致性备份入口。Creator Studio、压缩包隔离解包、渲染适配器、Outbox 消费确认与崩溃循环恢复仍是后续门禁。其余实现继续以 [`docs/DELIVERY_TESTING.md`](docs/DELIVERY_TESTING.md) 的分阶段验收标准为准。
 
 本地开发使用 `pnpm` 与 Rust stable：
 

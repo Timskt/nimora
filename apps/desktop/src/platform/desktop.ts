@@ -23,9 +23,13 @@ export interface DesktopSnapshot {
 }
 
 export interface InstallAssetRequest {
-  assetId: string;
   sourcePath: string;
-  files: Array<{ relativePath: string; bytes: number; sha256: string }>;
+}
+
+export interface InstallPackageFile {
+  relativePath: string;
+  bytes: number;
+  sha256: string;
 }
 
 export interface AssetInstallReceipt {
@@ -42,6 +46,7 @@ export interface AssetRollbackReceipt {
 
 export type UserCodeCapability =
   | "read-pet-state"
+  | "read-profile-state"
   | "subscribe-events"
   | "invoke-safe-commands"
   | "store-local-data";
@@ -80,7 +85,7 @@ export interface UserProgramExecutionReceipt {
 export interface InstallUserProgramRequest {
   sourcePath: string;
   manifest: UserProgramManifest;
-  files: InstallAssetRequest["files"];
+  files: InstallPackageFile[];
 }
 
 export interface UserProgramInstallReceipt {

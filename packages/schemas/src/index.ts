@@ -202,8 +202,11 @@ export const assetPackageSchema = z.object({
   if (computedTotal !== assetPackage.totalBytes) {
     context.addIssue({ code: "custom", message: "totalBytes must equal the file list total", path: ["totalBytes"] });
   }
-  if (!paths.has(assetPackage.manifest.integrity.files)) {
-    context.addIssue({ code: "custom", message: "integrity file is missing from the package", path: ["manifest", "integrity", "files"] });
+  if (!paths.has("manifest.json")) {
+    context.addIssue({ code: "custom", message: "manifest.json is missing from the package", path: ["files"] });
+  }
+  if (paths.has(assetPackage.manifest.integrity.files)) {
+    context.addIssue({ code: "custom", message: "integrity inventory cannot hash itself", path: ["manifest", "integrity", "files"] });
   }
 });
 

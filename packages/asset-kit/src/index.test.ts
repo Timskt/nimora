@@ -17,7 +17,7 @@ const manifest = {
 };
 
 const entry = {
-  path: "integrity.json",
+  path: "manifest.json",
   sha256: "a".repeat(64),
   bytes: 12,
   mediaType: "application/json",
@@ -29,7 +29,7 @@ describe("createImportPlan", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.plan.package.totalBytes).toBe(12);
-      expect(result.plan.files[0]?.path).toBe("integrity.json");
+      expect(result.plan.files[0]?.path).toBe("manifest.json");
     }
   });
 
