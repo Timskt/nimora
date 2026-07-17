@@ -39,6 +39,7 @@
 - **Importer**：在隔离边界内探测、校验、转换和规范化第三方模型的组件。
 - **Local Script**：用户编写、运行于受限 Host、仅通过平台 SDK 调用能力的代码扩展。
 - **Live3D**：产品语境中的实时 3D 角色能力，优先采用 VRM/glTF，不代表新的私有格式。
+- **Agent Tool**：模块通过 Manifest 注册、由参数风险与 Capability Gateway 共同约束的 AI 可调用能力。
 
 ## 3. 契约版本规则
 
