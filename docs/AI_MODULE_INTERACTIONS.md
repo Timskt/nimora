@@ -126,9 +126,11 @@ flowchart LR
 
 用户程序是首个投入生产的 `Module` Origin 入口。Manifest 必须显式声明并由用户按精确版本授予 `invoke-agent-tasks`；Worker 输出的 `agentTasks[]` 只能包含 `providerId`、`model`、静态 `instruction` 与独立 `context[]`。宿主固定 requester 为 `program:<id>`、Origin 为 `Module`、主动性为 `draft`、Tool Allowlist 为空，并收紧 Provider allowlist、步骤、Token、时间与费用预算，程序不能覆盖这些边界。
 
+`crates/module-agent-adapter` 是 Skill、Connector 与 User Program 的统一 Module 任务准入核心。宿主注入可信 requester、Provider allowlist、预算和时钟；Adapter 内部固定 `Module + Personal + draft + no-tools`，先通过 `AgentTaskGateway` 生成唯一 Task/Trace，再执行共享 Context Admission 并构造可信 instruction 与不可信数据消息。Adapter 不持有 Provider Registry、数据库、Journal、Capability Backend 或 UI；调用宿主负责执行、取消、结果持久化与脱敏拒绝审计。
+
 `instruction` 只允许表达已安装程序自身的可信任务目标；Event、Connector、Clipboard、文件或网络正文不得拼入 `instruction`，必须作为带 `source` 的 `context[]` 段进入共享 Context Admission。非法来源、预算超限、Unicode 混淆和 Prompt Injection 在 Provider 前拒绝；审计只记录来源类别、段数、字节数、Trace、Module ID 与 Module Execution ID，正文与完整来源不落盘，审计不可用时 fail-closed。
 
-任务结果通过执行回执的 `agentResults[]` 返回并进入既有 Agent History。该入口不允许工具调用或模块副作用；若结果需要改变系统状态，程序必须通过自身另行声明的 Capability 请求，不能把模型输出当成授权。程序权限与 Agent 权限不合并，双方不能借对方提升权限。Skill 与 Connector 的生产 Module Adapter 尚未实现，后续必须复用相同 Gateway、Context Admission、审计和结果契约，而不是直连 Provider。
+任务结果通过执行回执的 `agentResults[]` 返回并进入既有 Agent History。该入口不允许工具调用或模块副作用；若结果需要改变系统状态，程序必须通过自身另行声明的 Capability 请求，不能把模型输出当成授权。程序权限与 Agent 权限不合并，双方不能借对方提升权限。Skill 与 Connector Runtime 尚未实现，后续入口必须直接复用统一 Adapter 以及相同审计和结果契约，而不是复制桌面逻辑或直连 Provider。
 
 ### 6.4 Connector 与 AI
 

@@ -105,4 +105,6 @@ User Code
 
 宿主不可覆盖地绑定 `Module` Origin、`program:<program-id>` requester、`draft` 主动性、空 Tool Allowlist、Personal 数据分类以及收紧的 Provider、步骤、Token、墙钟和零费用预算。该入口只产出结果，不赋予模型调用模块或产生副作用的能力；程序仍需通过自己声明并获授的普通 Capability 执行后续动作。
 
+上述边界由宿主无关的 `module-agent-adapter` 执行，而不是由 Worker 或桌面调用点临时拼装。Adapter 先经 Gateway 生成 Task 与 Trace，再准入 Context；桌面只负责 Provider 执行、取消、History 和 Journal，因此未来 Skill、Connector 接入时不能降低或复制出另一套安全策略。
+
 外部 Event、Connector、Clipboard、文件和网络正文禁止拼入 `instruction`，必须作为带来源的 `context[]` 进入共享 Context Admission。拒绝审计只保存原因、来源类别、计数、Trace、Module ID 与 Module Execution ID，不保存正文、完整来源、路径或密钥；审计不可写时任务保持 fail-closed。

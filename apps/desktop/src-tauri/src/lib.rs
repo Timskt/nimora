@@ -1,4 +1,3 @@
-use nimora_agent_context_admission::{ContextSegment, admit_untrusted_context};
 use nimora_agent_provider_worker::{
     OllamaEndpoint, OllamaModel, WorkerOllamaProvider, probe_ollama_worker, verify_provider_sidecar,
 };
@@ -36,6 +35,10 @@ use nimora_diagnostics_bundle::{
 };
 use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
+};
+use nimora_module_agent_adapter::{
+    ContextAdmissionAudit, ContextSegment, ModuleAgentAdapter, ModuleAgentAdmissionError,
+    ModuleAgentRequest,
 };
 use nimora_persistence_sqlite::{
     AgentHistoryRecord, AutomationAgentJournalEntry, AutomationAgentJournalStatus,
@@ -4405,39 +4408,6 @@ fn run_user_program_agent_task(
     execution_id: Uuid,
     request: UserProgramAgentTask,
 ) -> Result<DesktopAgentRunResult, DesktopError> {
-    if request.instruction.trim().is_empty() || request.instruction.len() > 32 * 1024 {
-        return Err(DesktopError::Agent(
-            "module Agent instruction must contain 1 to 32768 bytes".to_owned(),
-        ));
-    }
-    if request.model.trim().is_empty() || request.model.len() > 128 {
-        return Err(DesktopError::Agent(
-            "module Agent model must contain 1 to 128 bytes".to_owned(),
-        ));
-    }
-    let trace_id = Uuid::now_v7();
-    let context = if request.context.is_empty() {
-        Vec::new()
-    } else {
-        admit_untrusted_context(
-            request
-                .context
-                .into_iter()
-                .map(|segment| ContextSegment {
-                    source: segment.source,
-                    content: segment.content,
-                })
-                .collect(),
-        )
-        .map_err(|error| {
-            record_module_context_rejection(state, program_id, execution_id, trace_id, &error.audit)
-                .map_or_else(
-                    |_| DesktopError::Agent("context rejection audit unavailable".to_owned()),
-                    |()| DesktopError::Agent(error.reason().message().to_owned()),
-                )
-        })?
-    };
-    let requester = format!("program:{program_id}");
     let budget = AgentBudget {
         max_steps: 2,
         max_tool_calls: 0,
@@ -4446,43 +4416,52 @@ fn run_user_program_agent_task(
         max_output_tokens: 1_000,
         max_cost_microunits: 0,
     };
-    let policy = AgentTaskGatewayPolicy::new(
-        requester.clone(),
-        [AgentTaskOrigin::Module],
+    let adapter = ModuleAgentAdapter::new(
+        format!("program:{program_id}"),
         [
             DETERMINISTIC_PROVIDER_ID.to_owned(),
             "provider:ollama-loopback".to_owned(),
         ],
-        Vec::<String>::new(),
-        DataClassification::Personal,
-        AgentAutonomy::Draft,
         budget,
-        1,
     )
-    .map_err(agent_error)?;
-    let mut task = AgentTaskGateway::new(policy)
+    .map_err(|error| DesktopError::Agent(error.to_string()))?;
+    let admitted = adapter
         .admit(
-            AgentTaskRequest::new(
-                AgentTaskOrigin::Module,
-                requester,
-                request.provider_id,
-                Vec::<String>::new(),
-                DataClassification::Personal,
-                AgentAutonomy::Draft,
-                budget,
-            ),
+            ModuleAgentRequest {
+                provider_id: request.provider_id,
+                model: request.model,
+                instruction: request.instruction,
+                context: request
+                    .context
+                    .into_iter()
+                    .map(|segment| ContextSegment {
+                        source: segment.source,
+                        content: segment.content,
+                    })
+                    .collect(),
+            },
             current_time_ms()?,
         )
-        .map_err(agent_error)?
-        .task;
-    task.trace_id = trace_id;
+        .map_err(|error| match error {
+            ModuleAgentAdmissionError::ContextRejected {
+                message,
+                trace_id,
+                audit,
+            } => record_module_context_rejection(state, program_id, execution_id, trace_id, &audit)
+                .map_or_else(
+                    |_| DesktopError::Agent("context rejection audit unavailable".to_owned()),
+                    |()| DesktopError::Agent(message),
+                ),
+            other => DesktopError::Agent(other.to_string()),
+        })?;
+    let task = admitted.admission.task;
     let cancellation = provider_agent_cancellation(state, task.id)?;
     let outcome = advance_provider_agent(
         &desktop_provider_registry(state)?,
         state,
         task,
-        request.model,
-        automation_agent_messages(request.instruction, context, DataClassification::Personal),
+        admitted.model,
+        admitted.messages,
         512,
         true,
         BTreeSet::new(),
@@ -4496,7 +4475,7 @@ fn record_module_context_rejection(
     program_id: &str,
     execution_id: Uuid,
     trace_id: Uuid,
-    audit: &nimora_agent_context_admission::ContextAdmissionAudit,
+    audit: &ContextAdmissionAudit,
 ) -> Result<(), DesktopError> {
     let event = DiagnosticEvent {
         occurred_at_ms: current_time_ms()?,
