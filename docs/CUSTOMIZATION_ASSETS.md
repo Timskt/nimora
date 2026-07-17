@@ -1,6 +1,6 @@
 # Nimora 自定义资源与皮肤规范
 
-> 契约：`deskpet.asset/1`  
+> 契约：`nimora.asset/1`
 > 版本：0.1.0-draft  
 > 更新日期：2026-07-17
 
@@ -58,7 +58,7 @@ character.example.mochi/
 
 ```json
 {
-  "spec": "deskpet.asset/1",
+  "spec": "nimora.asset/1",
   "id": "character.example.mochi",
   "type": "character",
   "version": "1.0.0",
@@ -189,11 +189,11 @@ Creator Studio 应提供：
 CLI 对应提供：
 
 ```bash
-deskpet asset create
-deskpet asset validate ./character.example.mochi
-deskpet asset preview ./character.example.mochi
-deskpet asset pack ./character.example.mochi
-deskpet asset sign character.example.mochi.deskpet
+nimora asset create
+nimora asset validate ./character.example.mochi
+nimora asset preview ./character.example.mochi
+nimora asset pack ./character.example.mochi
+nimora asset sign character.example.mochi.nimora
 ```
 
 ## 13. 生态与版权

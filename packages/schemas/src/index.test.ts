@@ -1,11 +1,35 @@
 import { describe, expect, it } from "vitest";
 import {
+  assetManifestSchema,
   eventSchema,
   petSchema,
   pointerButtonSchema,
   profileSnapshotSchema,
   safetySnapshotSchema,
 } from "./index";
+
+const validAssetManifest = {
+  spec: "nimora.asset/1",
+  id: "character.example.mochi",
+  type: "character",
+  version: "1.0.0",
+  name: { "zh-CN": "糯米", en: "Mochi" },
+  publisher: "publisher.example",
+  license: "LicenseRef-Commercial",
+  engines: { nimora: ">=0.1.0 <1.0.0" },
+  render: {
+    backend: "sprite-atlas",
+    canvas: { width: 512, height: 512 },
+    anchor: { x: 0.5, y: 1 },
+    defaultScale: 0.5,
+    pixelArt: false,
+  },
+  entrypoints: { animationGraph: "animations/graph.json" },
+  capabilities: ["pet.walk", "pet.drag"],
+  fallbacks: { "pet.happy": "pet.idle" },
+  locales: ["zh-CN", "en"],
+  integrity: { algorithm: "sha256", files: "integrity.json" },
+};
 
 describe("eventSchema", () => {
   it("accepts the versioned event wire format", () => {
@@ -102,5 +126,19 @@ describe("pointerButtonSchema", () => {
   it("accepts portable pointer buttons only", () => {
     expect(pointerButtonSchema.safeParse("left").success).toBe(true);
     expect(pointerButtonSchema.safeParse("touch").success).toBe(false);
+  });
+});
+
+describe("assetManifestSchema", () => {
+  it("accepts a versioned character manifest", () => {
+    expect(assetManifestSchema.safeParse(validAssetManifest).success).toBe(true);
+  });
+
+  it("rejects package escape paths and unsupported renderers", () => {
+    expect(assetManifestSchema.safeParse({
+      ...validAssetManifest,
+      render: { ...validAssetManifest.render, backend: "obj" },
+      entrypoints: { animationGraph: "../outside.json" },
+    }).success).toBe(false);
   });
 });

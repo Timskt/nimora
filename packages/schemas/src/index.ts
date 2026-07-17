@@ -112,6 +112,57 @@ export const safetySnapshotSchema = z.object({
   }
 });
 
+const localizedTextSchema = z.record(z.string().regex(/^[a-z]{2}(?:-[A-Z]{2})?$/), z.string().trim().min(1));
+const assetIdentifierSchema = z.string().regex(/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/);
+const safeAssetPathSchema = z.string().min(1).refine(
+  (path) => !path.startsWith("/") && !path.includes("\\") && !path.split("/").includes(".."),
+  "asset paths must stay relative to the package root",
+);
+const semverRangeSchema = z.string().regex(/^[<>=~^0-9.*xX|\s-]+$/, "invalid engine range");
+
+export const assetTypeSchema = z.enum([
+  "character",
+  "skin",
+  "theme",
+  "behavior",
+  "voice",
+  "interaction",
+  "bundle",
+]);
+export const rendererBackendSchema = z.enum([
+  "sprite-sequence",
+  "sprite-atlas",
+  "live2d",
+  "vrm",
+  "gltf",
+]);
+export const assetManifestSchema = z.object({
+  spec: z.literal("nimora.asset/1"),
+  id: namespacedId,
+  type: assetTypeSchema,
+  version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, "invalid semantic version"),
+  name: localizedTextSchema,
+  publisher: assetIdentifierSchema,
+  license: z.string().trim().min(1),
+  engines: z.object({ nimora: semverRangeSchema }),
+  render: z.object({
+    backend: rendererBackendSchema,
+    canvas: z.object({ width: z.number().int().positive().max(4096), height: z.number().int().positive().max(4096) }),
+    anchor: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }),
+    defaultScale: z.number().positive().max(8),
+    pixelArt: z.boolean(),
+  }).optional(),
+  entrypoints: z.object({
+    animationGraph: safeAssetPathSchema.optional(),
+    clips: safeAssetPathSchema.optional(),
+    hitboxes: safeAssetPathSchema.optional(),
+  }).optional(),
+  capabilities: z.array(assetIdentifierSchema).max(64).default([]),
+  fallbacks: z.record(assetIdentifierSchema, assetIdentifierSchema).default({}),
+  locales: z.array(z.string().regex(/^[a-z]{2}(?:-[A-Z]{2})?$/)).max(32).default([]),
+  integrity: z.object({ algorithm: z.literal("sha256"), files: safeAssetPathSchema }),
+});
+
 export type NimoraEvent = z.infer<typeof eventSchema>;
 export type NimoraCommand = z.infer<typeof commandSchema>;
 export type Pet = z.infer<typeof petSchema>;
@@ -122,3 +173,6 @@ export type ProfileSnapshot = z.infer<typeof profileSnapshotSchema>;
 export type RuntimeMode = z.infer<typeof runtimeModeSchema>;
 export type SafeModeReason = z.infer<typeof safeModeReasonSchema>;
 export type SafetySnapshot = z.infer<typeof safetySnapshotSchema>;
+export type AssetType = z.infer<typeof assetTypeSchema>;
+export type RendererBackend = z.infer<typeof rendererBackendSchema>;
+export type AssetManifest = z.infer<typeof assetManifestSchema>;
