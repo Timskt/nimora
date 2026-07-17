@@ -47,7 +47,6 @@ const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
 const MAX_USER_PROGRAM_COMMANDS: usize = 32;
 const MAX_USER_PROGRAM_EVENT_SESSIONS: usize = 32;
-const USER_PROGRAM_EVENT_QUEUE_CAPACITY: usize = 64;
 
 #[derive(Debug)]
 struct DesktopState {
@@ -77,6 +76,10 @@ struct UserProgramSession {
 struct UserProgramEventSession {
     program_id: String,
     subscription: RuntimeEventSubscription,
+    automatic: bool,
+    executed: u64,
+    dropped: u64,
+    last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -268,6 +271,17 @@ struct UserProgramEventExecutionReceipt {
     dropped: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProgramEventSessionStatus {
+    subscription_id: Uuid,
+    program_id: String,
+    automatic: bool,
+    executed: u64,
+    dropped: u64,
+    last_error: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UserProgramPlan {
@@ -351,6 +365,8 @@ enum DesktopError {
     UserProgramEventSessionLimit,
     #[error("user program event subscription was not found")]
     UserProgramEventSessionNotFound,
+    #[error("automatic event loop currently requires serial event concurrency")]
+    UserProgramAutomaticConcurrencyUnsupported,
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -765,16 +781,20 @@ fn open_user_program_event_session(
     if sessions.len() >= MAX_USER_PROGRAM_EVENT_SESSIONS {
         return Err(DesktopError::UserProgramEventSessionLimit);
     }
-    let subscription = state.events.subscribe(
-        policy.manifest.subscriptions.clone(),
-        USER_PROGRAM_EVENT_QUEUE_CAPACITY,
-    )?;
+    let queue_capacity = policy.manifest.event_queue_capacity;
+    let subscription = state
+        .events
+        .subscribe(policy.manifest.subscriptions.clone(), queue_capacity)?;
     let subscription_id = Uuid::now_v7();
     sessions.insert(
         subscription_id,
         UserProgramEventSession {
             program_id: policy.manifest.id.clone(),
             subscription,
+            automatic: false,
+            executed: 0,
+            dropped: 0,
+            last_error: None,
         },
     );
     Ok(UserProgramEventSessionReceipt {
@@ -782,7 +802,7 @@ fn open_user_program_event_session(
         program_id: policy.manifest.id,
         version: policy.manifest.version,
         event_types: policy.manifest.subscriptions,
-        queue_capacity: USER_PROGRAM_EVENT_QUEUE_CAPACITY,
+        queue_capacity,
     })
 }
 
@@ -811,6 +831,14 @@ fn execute_next_user_program_event(
     subscription_id: Uuid,
 ) -> Result<UserProgramEventExecutionReceipt, DesktopError> {
     ensure_normal_mode(&state)?;
+    execute_next_user_program_event_inner(&app, &state, subscription_id)
+}
+
+fn execute_next_user_program_event_inner(
+    app: &AppHandle,
+    state: &DesktopState,
+    subscription_id: Uuid,
+) -> Result<UserProgramEventExecutionReceipt, DesktopError> {
     let (program_id, batch) = {
         let sessions = state
             .user_program_event_sessions
@@ -830,8 +858,8 @@ fn execute_next_user_program_event(
     let installed = load_installed_program(&state.program_store, &program_id)?;
     ensure_program_permissions(&state.program_permissions, &installed.manifest)?;
     let execution = execute_user_program_source(
-        &app,
-        &state,
+        app,
+        state,
         installed.manifest,
         installed.source,
         Some(event),
@@ -839,6 +867,120 @@ fn execute_next_user_program_event(
     Ok(UserProgramEventExecutionReceipt {
         execution: Some(execution),
         dropped: batch.dropped,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn start_user_program_event_loop(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    subscription_id: Uuid,
+) -> Result<(), DesktopError> {
+    ensure_normal_mode(&state)?;
+    let program_id = {
+        let sessions = state
+            .user_program_event_sessions
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?;
+        sessions
+            .get(&subscription_id)
+            .ok_or(DesktopError::UserProgramEventSessionNotFound)?
+            .program_id
+            .clone()
+    };
+    let installed = load_installed_program(&state.program_store, &program_id)?;
+    ensure_program_permissions(&state.program_permissions, &installed.manifest)?;
+    if installed.manifest.event_concurrency
+        != nimora_user_code_policy::EventConcurrencyPolicy::Serial
+    {
+        return Err(DesktopError::UserProgramAutomaticConcurrencyUnsupported);
+    }
+    {
+        let mut sessions = state
+            .user_program_event_sessions
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?;
+        let session = sessions
+            .get_mut(&subscription_id)
+            .ok_or(DesktopError::UserProgramEventSessionNotFound)?;
+        if session.automatic {
+            return Ok(());
+        }
+        session.automatic = true;
+        session.last_error = None;
+    }
+    std::thread::Builder::new()
+        .name(format!("nimora-event-{subscription_id}"))
+        .spawn(move || run_user_program_event_loop(&app, subscription_id))?;
+    Ok(())
+}
+
+fn run_user_program_event_loop(app: &AppHandle, subscription_id: Uuid) {
+    loop {
+        let state = app.state::<DesktopState>();
+        let active = state
+            .user_program_event_sessions
+            .lock()
+            .ok()
+            .and_then(|sessions| {
+                sessions
+                    .get(&subscription_id)
+                    .map(|session| session.automatic)
+            })
+            .unwrap_or(false);
+        if !active || ensure_normal_mode(&state).is_err() {
+            break;
+        }
+        match execute_next_user_program_event_inner(app, &state, subscription_id) {
+            Ok(receipt) => {
+                let had_execution = receipt.execution.is_some();
+                if let Ok(mut sessions) = state.user_program_event_sessions.lock()
+                    && let Some(session) = sessions.get_mut(&subscription_id)
+                {
+                    session.dropped = session.dropped.saturating_add(receipt.dropped);
+                    if had_execution {
+                        session.executed = session.executed.saturating_add(1);
+                        session.last_error = None;
+                    }
+                }
+                if !had_execution {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+            Err(error) => {
+                if let Ok(mut sessions) = state.user_program_event_sessions.lock()
+                    && let Some(session) = sessions.get_mut(&subscription_id)
+                {
+                    session.last_error = Some(error.to_string());
+                    session.automatic = false;
+                }
+                break;
+            }
+        }
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn user_program_event_session_status(
+    state: State<'_, DesktopState>,
+    subscription_id: Uuid,
+) -> Result<UserProgramEventSessionStatus, DesktopError> {
+    let sessions = state
+        .user_program_event_sessions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    let session = sessions
+        .get(&subscription_id)
+        .ok_or(DesktopError::UserProgramEventSessionNotFound)?;
+    Ok(UserProgramEventSessionStatus {
+        subscription_id,
+        program_id: session.program_id.clone(),
+        automatic: session.automatic,
+        executed: session.executed,
+        dropped: session.dropped,
+        last_error: session.last_error.clone(),
     })
 }
 
@@ -1541,6 +1683,8 @@ pub fn run() {
             open_user_program_event_session,
             drain_user_program_events,
             execute_next_user_program_event,
+            start_user_program_event_loop,
+            user_program_event_session_status,
             close_user_program_event_session,
             validate_user_program,
             start_user_program,

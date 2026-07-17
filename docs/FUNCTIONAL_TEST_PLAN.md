@@ -136,6 +136,8 @@ ID / 标题 / 优先级 / 前置条件
 | SCRIPT-010 | Renderer 伪造事件 | IPC 不接受事件正文，过滤器只能来自已安装 Manifest | P0 |
 | SCRIPT-011 | 可信事件执行 | 每次只消费 Rust 队列最旧一条，保留余下事件；执行前复验 active 版本完整性与精确权限，并只读注入 `nimora.input.trigger` | P0 |
 | SCRIPT-012 | 事件并发策略 | `serial` 有界保留最新事件，`drop` 统计丢弃，`cancel-previous` 忽略旧执行完成，安全取消清空队列并推进代际 | P0 |
+| SCRIPT-013 | 后台事件循环 | 同一会话重复启动不创建重复线程；关闭、撤权、升级、回滚及安全模式后循环退出，状态接口保留执行数、丢弃数和最后错误 | P0 |
+| SCRIPT-014 | Manifest 队列容量 | Rust 订阅实际采用 `eventQueueCapacity`；非法容量安装失败，Renderer 无法覆盖容量 | P0 |
 | SCRIPT-005 | 离线、休眠、时钟回拨 | 按 missed-run policy 执行，无任务风暴 | P1 |
 
 ## 11. Gateway 与鉴权

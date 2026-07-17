@@ -68,6 +68,8 @@ describe("desktop platform adapter", () => {
     await api.openUserProgramEventSession(manifest.id);
     await api.drainUserProgramEvents(subscriptionId);
     await api.executeNextUserProgramEvent(subscriptionId);
+    await api.startUserProgramEventLoop(subscriptionId);
+    await api.userProgramEventSessionStatus(subscriptionId);
     await api.closeUserProgramEventSession(subscriptionId);
     await api.startUserProgram(manifest);
     await api.executeUserProgram(manifest, "({ commands: [] })");
@@ -111,6 +113,8 @@ describe("desktop platform adapter", () => {
       ["open_user_program_event_session", { programId: manifest.id }],
       ["drain_user_program_events", { subscriptionId }],
       ["execute_next_user_program_event", { subscriptionId }],
+      ["start_user_program_event_loop", { subscriptionId }],
+      ["user_program_event_session_status", { subscriptionId }],
       ["close_user_program_event_session", { subscriptionId }],
       ["start_user_program", { manifest }],
       ["execute_user_program", { manifest, source: "({ commands: [] })" }],
