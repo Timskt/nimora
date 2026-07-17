@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 nimora-agent-runtime = { path = "../agent-runtime" }
+nimora-automation-runtime = { path = "../automation-runtime" }
 nimora-runtime-app = { path = "../runtime-app" }
 nimora-runtime-core = { path = "../runtime-core" }
 rusqlite.workspace = true

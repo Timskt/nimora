@@ -209,6 +209,8 @@ ID / 标题 / 优先级 / 前置条件
 - Automation AI Action 必须要求 Medium 以上风险和稳定幂等键；普通 Command 必须继续进入原 Automation Backend。
 - Automation 规则不能声明或扩大宿主准入时间与根剩余预算；伪造 `nowMs`、`rootRemainingBudget` 或其它未知字段必须在 Submitter 前拒绝。
 - Automation 动作、重试和补偿必须获得同一 `runId/traceId`，并带有精确 `automationId/actionId/eventId`；AI 子任务根 ID 必须绑定 Automation Run 而非随机 Action Command。
+- Live Automation 必须在任何副作用前持久化 `running`；完整结果只能从同身份 `running` 原子转为 `completed`，重复完成或身份错配拒绝。
+- 桌面重启必须把遗留 `running` 标记为 `interrupted` 且保留 Run/Automation/Event/Trace 身份；已完成记录不得被恢复流程改写。
 
 | ID | 场景 | 预期结果 | P |
 |---|---|---|---:|

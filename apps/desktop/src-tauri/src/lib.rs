@@ -32,9 +32,10 @@ use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
 };
 use nimora_persistence_sqlite::{
-    AgentHistoryRecord, BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord,
-    DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant, SqliteAgentHistoryRepository,
-    SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
+    AgentHistoryRecord, AutomationJournalEntry, BackupCoordinator, BackupHealth, BackupPolicy,
+    BackupRecord, DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant,
+    SqliteAgentHistoryRepository, SqliteAutomationJournal, SqliteOutboxRepository,
+    SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
     SqliteProgramPermissionRepository, apply_pending_restore, verify_database_file,
 };
 use nimora_runtime_app::{
@@ -115,6 +116,7 @@ struct DesktopState {
     program_permissions: SqliteProgramPermissionRepository,
     outbox: SqliteOutboxRepository,
     agent_history: SqliteAgentHistoryRepository,
+    automation_journal: SqliteAutomationJournal,
     agent_history_last_error: Mutex<bool>,
     backups: BackupCoordinator,
     backup_last_error: Mutex<Option<String>>,
@@ -285,6 +287,8 @@ impl DesktopState {
             DiagnosticComponent::Application,
             DiagnosticEventCode::ApplicationStarted,
         )?);
+        let automation_journal = SqliteAutomationJournal::open(database_path)?;
+        automation_journal.recover_running(current_time_ms()?, "desktop process restarted")?;
         Ok(Self {
             native_app,
             runtime,
@@ -302,6 +306,7 @@ impl DesktopState {
             program_permissions: SqliteProgramPermissionRepository::open(database_path)?,
             outbox: SqliteOutboxRepository::open(database_path)?,
             agent_history: SqliteAgentHistoryRepository::open(database_path)?,
+            automation_journal,
             agent_history_last_error: Mutex::new(false),
             backups,
             backup_last_error: Mutex::new(None),
@@ -361,6 +366,7 @@ impl DesktopState {
             program_permissions: SqliteProgramPermissionRepository::in_memory()?,
             outbox: SqliteOutboxRepository::in_memory()?,
             agent_history: SqliteAgentHistoryRepository::in_memory()?,
+            automation_journal: SqliteAutomationJournal::in_memory()?,
             agent_history_last_error: Mutex::new(false),
             backups,
             backup_last_error: Mutex::new(None),
@@ -786,6 +792,20 @@ impl AutomationBackend for DryRunAutomationBackend {
 #[tauri::command]
 fn test_automation(request: AutomationTestRequest) -> Result<AutomationRun, DesktopError> {
     dry_run_automation(&request.definition, request.event_type, request.event_data)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri managed state command arguments are owned extractors"
+)]
+fn automation_run_status(
+    run_id: &str,
+    state: State<'_, DesktopState>,
+) -> Result<Option<AutomationJournalEntry>, DesktopError> {
+    let run_id =
+        Uuid::parse_str(run_id).map_err(|_| SqlitePersistenceError::InvalidAutomationJournal)?;
+    state.automation_journal.get(run_id).map_err(Into::into)
 }
 
 fn dry_run_automation(
@@ -4463,6 +4483,7 @@ pub fn run() {
             desktop_snapshot,
             agent_catalog,
             test_automation,
+            automation_run_status,
             agent_provider_status,
             agent_history_list,
             delete_agent_history,
@@ -4663,7 +4684,8 @@ mod tests {
         DiagnosticComponent, DiagnosticEventCode, DiagnosticSeverity, PersistentDiagnosticJournal,
     };
     use nimora_persistence_sqlite::{
-        BackupCoordinator, BackupPolicy, SqliteProgramPermissionRepository,
+        AutomationJournalStatus, AutomationRunStart, BackupCoordinator, BackupPolicy,
+        SqliteAutomationJournal, SqliteProgramPermissionRepository,
     };
     use nimora_runtime_core::{Event, EventSource, Position, RuntimeMode};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
@@ -4686,6 +4708,45 @@ mod tests {
         )
         .expect("normal desktop state");
         (root, state)
+    }
+
+    #[test]
+    fn desktop_startup_interrupts_crash_left_automation_runs() {
+        let root = std::env::temp_dir().join(format!("nimora-automation-state-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).expect("fixture directory");
+        let database = root.join("runtime.sqlite3");
+        let journal = SqliteAutomationJournal::open(&database).expect("journal");
+        let run = AutomationRunStart {
+            run_id: Uuid::now_v7(),
+            automation_id: "local.focus.summary".to_owned(),
+            trace_id: Uuid::now_v7(),
+            event_id: "event:before-restart".to_owned(),
+            started_at_ms: 1,
+        };
+        journal.start(&run).expect("running entry");
+        drop(journal);
+
+        let state = DesktopState::open(
+            None,
+            &database,
+            root.join("assets"),
+            root.join("programs"),
+            BackupCoordinator::new(&database, root.join("backups"), BackupPolicy::default()),
+            PersistentDiagnosticJournal::in_memory(),
+            None,
+        )
+        .expect("desktop state");
+        let recovered = state
+            .automation_journal
+            .get(run.run_id)
+            .expect("query")
+            .expect("entry");
+        assert_eq!(recovered.status, AutomationJournalStatus::Interrupted);
+        assert_eq!(
+            recovered.interruption_reason.as_deref(),
+            Some("desktop process restarted")
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[derive(Debug)]

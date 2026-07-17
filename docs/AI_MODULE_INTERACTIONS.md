@@ -107,6 +107,8 @@ flowchart LR
 
 当前 `crates/automation-agent-bridge` 已实现独立 Adapter：只拦截固定 `agent.task.run` Command，其余动作继续进入原 Automation Backend；Automation Engine 为每次 Backend 调用提供不可由规则覆盖的 `run_id/automation_id/action_id/event_id/trace_id` 执行上下文，重试与补偿保持同一 Run 因果链。AI 动作要求 Medium 以上风险、幂等键、受信静态 instruction、显式 Provider/Tool/Data/Autonomy/预算，并通过 `AgentTaskGateway` 创建以 Automation Run 为根、继承 Trace 和根剩余预算的子任务。准入时钟与根剩余预算由宿主 `AutomationAgentContext` 提供，不接受规则作者声明；规则尝试注入 `nowMs` 或 `rootRemainingBudget` 会被严格参数反序列化拒绝。标记为 `untrusted` 的动态上下文在专用 Context Admission 落地前 fail-closed。宿主仍需实现 `AgentTaskSubmitter`，因此该桥接已完成引擎到任务准入纵切，但桌面生产执行与结果回填尚未贯通。
 
+桌面共享数据库现已提供版本化 Automation Run Journal：宿主可在副作用前写入 `running`，终态原子绑定完整 `AutomationRun`，重复完成和身份错配均拒绝；桌面启动会把上次进程遗留的 `running` 标记为 `interrupted`，原生 IPC 与 TypeScript 平台契约可按稳定 `runId` 查询。该 Journal 是 Live 执行、异步 Agent 结果回填、取消与重启恢复的持久基础，不等同于生产 Live Backend 已完成。
+
 ### 6.3 用户代码与 AI
 
 用户程序只能通过 SDK 创建 AI 任务或调用 Manifest 明确声明的 Agent 工具。程序权限与 Agent 权限不合并：程序发起任务时取“程序声明、用户授权、Agent Policy”三者交集；Agent 执行程序时绑定程序 ID、版本、入口、参数和批准指纹。双方不能借对方完成权限提升。

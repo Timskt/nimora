@@ -1,7 +1,11 @@
 //! `SQLite` persistence adapters for the `Nimora` runtime.
 
+mod automation_journal;
 mod backup;
 
+pub use automation_journal::{
+    AutomationJournalEntry, AutomationJournalStatus, AutomationRunStart, SqliteAutomationJournal,
+};
 pub use backup::{
     BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, PendingRestore,
     apply_pending_restore,
@@ -831,6 +835,20 @@ fn prepare_connection(connection: &mut Connection) -> Result<(), SqlitePersisten
                 );
                 CREATE INDEX agent_history_created_idx
                     ON agent_history(created_at_ms DESC, task_id DESC);
+                CREATE TABLE automation_run_journal (
+                    run_id TEXT PRIMARY KEY,
+                    automation_id TEXT NOT NULL,
+                    trace_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'interrupted')),
+                    started_at_ms INTEGER NOT NULL CHECK (started_at_ms >= 0),
+                    updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= started_at_ms),
+                    schema_version INTEGER NOT NULL,
+                    payload TEXT,
+                    interruption_reason TEXT
+                );
+                CREATE INDEX automation_run_journal_updated_idx
+                    ON automation_run_journal(updated_at_ms DESC, run_id DESC);
                 PRAGMA user_version = 1;",
         )?;
         transaction.commit()?;
@@ -1055,6 +1073,10 @@ pub enum SqlitePersistenceError {
     InvalidOutboxRequest,
     #[error("Agent history record or request is invalid")]
     InvalidAgentHistory,
+    #[error("Automation journal record or state transition is invalid")]
+    InvalidAutomationJournal,
+    #[error("Automation journal version {0} is unsupported")]
+    UnsupportedAutomationJournalVersion(u32),
     #[error("Agent history version {0} is unsupported")]
     UnsupportedAgentHistoryVersion(u32),
     #[error("outbox lease is not owned by this consumer")]

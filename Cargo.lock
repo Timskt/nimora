@@ -2274,6 +2274,7 @@ name = "nimora-persistence-sqlite"
 version = "0.1.0"
 dependencies = [
  "nimora-agent-runtime",
+ "nimora-automation-runtime",
  "nimora-runtime-app",
  "nimora-runtime-core",
  "rusqlite",

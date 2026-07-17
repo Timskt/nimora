@@ -411,12 +411,26 @@ export interface AutomationRun {
   reason: string | null;
 }
 
+export interface AutomationJournalEntry {
+  spec: "nimora.automation-journal-entry/1";
+  runId: string;
+  automationId: string;
+  traceId: string;
+  eventId: string;
+  status: "running" | "completed" | "interrupted";
+  startedAtMs: number;
+  updatedAtMs: number;
+  result: AutomationRun | null;
+  interruptionReason: string | null;
+}
+
 export interface DesktopApi {
   readonly native: boolean;
   snapshot(): Promise<DesktopSnapshot>;
   drainEvents(): Promise<NimoraEvent[]>;
   outboxSnapshot(): Promise<OutboxSnapshot>;
   testAutomation(definition: AutomationDefinition, eventType: string, eventData: unknown): Promise<AutomationRun>;
+  automationRunStatus(runId: string): Promise<AutomationJournalEntry | null>;
   agentCatalog(): Promise<AgentCatalog>;
   agentProviderStatus(providerId: string): Promise<AgentProviderStatus>;
   agentHistory(limit?: number, before?: { createdAtMs: number; taskId: string }): Promise<AgentHistoryPage>;
@@ -575,6 +589,7 @@ export function createDesktopApi(
           reason: status === "planned" ? null : "测试事件未通过触发器或条件",
         };
       },
+      async automationRunStatus() { return null; },
       async agentCatalog() {
         return {
           spec: "nimora.desktop-agent-catalog/1",
@@ -747,6 +762,7 @@ export function createDesktopApi(
     drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],
     outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,
     testAutomation: async (definition, eventType, eventData) => await invokeCommand("test_automation", { request: { definition, eventType, eventData } }) as AutomationRun,
+    automationRunStatus: async (runId) => await invokeCommand("automation_run_status", { runId }) as AutomationJournalEntry | null,
     agentCatalog: async () => await invokeCommand("agent_catalog") as AgentCatalog,
     agentProviderStatus: async (providerId) => await invokeCommand("agent_provider_status", { request: { providerId } }) as AgentProviderStatus,
     agentHistory: async (limit = 50, before) => await invokeCommand("agent_history_list", { request: { beforeCreatedAtMs: before?.createdAtMs ?? null, beforeTaskId: before?.taskId ?? null, limit } }) as AgentHistoryPage,

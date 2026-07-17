@@ -233,10 +233,26 @@ impl AutomationEngine {
         backend: &dyn AutomationBackend,
         control: &dyn RunControl,
     ) -> Result<AutomationRun, AutomationError> {
+        Self::run_with_id(Uuid::now_v7(), definition, event, mode, backend, control)
+    }
+
+    /// Evaluates one automation using a host-assigned stable run identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns only admission errors. Runtime failures are represented in the run result.
+    pub fn run_with_id(
+        run_id: Uuid,
+        definition: &AutomationDefinition,
+        event: &Event,
+        mode: RunMode,
+        backend: &dyn AutomationBackend,
+        control: &dyn RunControl,
+    ) -> Result<AutomationRun, AutomationError> {
         Self::validate(definition)?;
         let mut run = AutomationRun {
             spec: "nimora.automation-run/1".to_owned(),
-            run_id: Uuid::now_v7(),
+            run_id,
             automation_id: definition.id.clone(),
             trace_id: event.trace_id,
             event_id: event.id.to_string(),
