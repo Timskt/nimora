@@ -1,0 +1,160 @@
+import { useEffect, useRef } from "react";
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import type { CharacterRendererSnapshot } from "../platform/desktop";
+
+export function modelAssetUrl(baseUrl: string, relativePath: string): string {
+  const encoded = relativePath.split("/").map(encodeURIComponent).join("/");
+  return `${baseUrl}${encoded}`;
+}
+
+export function cameraDistanceForRadius(radius: number, verticalFovDegrees: number): number {
+  const safeRadius = Math.max(radius, 0.001);
+  const halfFov = THREE.MathUtils.degToRad(verticalFovDegrees / 2);
+  return safeRadius / Math.sin(halfFov);
+}
+
+export function disposeObjectTree(root: THREE.Object3D): void {
+  root.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    object.geometry?.dispose();
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      for (const value of Object.values(material)) {
+        if (value instanceof THREE.Texture) value.dispose();
+      }
+      material.dispose();
+    }
+  });
+}
+
+interface GltfRendererProps {
+  descriptor: CharacterRendererSnapshot;
+  onFailure(): void;
+}
+
+export function GltfRenderer({ descriptor, onFailure }: GltfRendererProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const baseUrl = descriptor.assetBaseUrl;
+    const model = descriptor.model;
+    if (!canvas || !baseUrl || !model || descriptor.backend !== "gltf") return;
+
+    let disposed = false;
+    let animationFrame = 0;
+    let loadedRoot: THREE.Object3D | null = null;
+    let mixer: THREE.AnimationMixer | null = null;
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    } catch {
+      onFailure();
+      return;
+    }
+    renderer.setClearColor(0x000000, 0);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
+    scene.add(new THREE.HemisphereLight(0xfff5e8, 0x586270, 2.2));
+    const keyLight = new THREE.DirectionalLight(0xffffff, 2.8);
+    keyLight.position.set(3, 5, 4);
+    scene.add(keyLight);
+
+    const resize = () => {
+      const width = Math.max(canvas.clientWidth, 1);
+      const height = Math.max(canvas.clientHeight, 1);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    };
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(canvas);
+    resize();
+
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const clock = new THREE.Clock();
+    const renderFrame = () => {
+      if (disposed) return;
+      animationFrame = window.requestAnimationFrame(renderFrame);
+      const delta = clock.getDelta();
+      if (!reducedMotion.matches) mixer?.update(delta);
+      renderer.render(scene, camera);
+    };
+    animationFrame = window.requestAnimationFrame(renderFrame);
+
+    const fail = () => {
+      if (!disposed) onFailure();
+    };
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      fail();
+    };
+    canvas.addEventListener("webglcontextlost", handleContextLost);
+
+    const loader = new GLTFLoader();
+    loader.load(
+      modelAssetUrl(baseUrl, model),
+      (gltf) => {
+        if (disposed) {
+          disposeObjectTree(gltf.scene);
+          return;
+        }
+        loadedRoot = gltf.scene;
+        const bounds = new THREE.Box3().setFromObject(loadedRoot);
+        if (bounds.isEmpty()) {
+          fail();
+          return;
+        }
+        const center = bounds.getCenter(new THREE.Vector3());
+        const sphere = bounds.getBoundingSphere(new THREE.Sphere());
+        loadedRoot.position.sub(center);
+        loadedRoot.scale.multiplyScalar(descriptor.defaultScale);
+        scene.add(loadedRoot);
+        const radius = sphere.radius * descriptor.defaultScale;
+        const distance = cameraDistanceForRadius(radius, camera.fov) * 1.18;
+        camera.near = Math.max(distance / 100, 0.01);
+        camera.far = Math.max(distance * 100, 100);
+        camera.position.set(0, radius * 0.12, distance);
+        camera.lookAt(0, 0, 0);
+        camera.updateProjectionMatrix();
+        const firstAnimation = gltf.animations[0];
+        if (firstAnimation) {
+          mixer = new THREE.AnimationMixer(loadedRoot);
+          mixer.clipAction(firstAnimation).play();
+        }
+      },
+      undefined,
+      fail,
+    );
+
+    return () => {
+      disposed = true;
+      window.cancelAnimationFrame(animationFrame);
+      resizeObserver.disconnect();
+      canvas.removeEventListener("webglcontextlost", handleContextLost);
+      mixer?.stopAllAction();
+      if (loadedRoot) {
+        scene.remove(loadedRoot);
+        disposeObjectTree(loadedRoot);
+      }
+      renderer.dispose();
+      renderer.forceContextLoss();
+    };
+  }, [descriptor, onFailure]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="gltf-renderer"
+      aria-hidden="true"
+      style={{
+        aspectRatio: `${descriptor.canvas.width} / ${descriptor.canvas.height}`,
+        transformOrigin: `${descriptor.anchor.x * 100}% ${descriptor.anchor.y * 100}%`,
+      }}
+    />
+  );
+}

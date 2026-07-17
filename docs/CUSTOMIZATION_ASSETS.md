@@ -231,7 +231,7 @@ Character 基础
 - 激活第三方角色前，宿主重新验证 Manifest、完整性清单、精确目录树、身份和 `type=character`；Renderer 不能直接修改选择记录。
 - 选择记录采用临时文件与原子替换写入，同一进程内的激活请求串行执行；验证或持久化失败时保持原选择。
 - 每次读取活动角色都重新检查已安装包。包缺失、损坏、身份不一致、记录损坏或进入安全模式时，立即使用内置 `builtin.aster`，并返回可展示的回退原因。
-- 当前激活会为通过完整性复验的 Sprite Sequence/Atlas 创建 Renderer Descriptor，并由 Pet Overlay 真实绘制；选择记录本身仍不等于渲染成功，任何协议、图片或 Canvas 失败都会显式回退内置角色。其它后端必须等对应 Adapter 完成后才能标记为“已渲染”。
+- 当前激活会为通过完整性复验的 Sprite Sequence/Atlas 或 GLB 2.0 创建 Renderer Descriptor，并由 Pet Overlay 真实绘制。GLB 只能经 Pet 专用资源协议读取唯一 `entrypoints.model`，不暴露文件系统路径；Three.js Adapter 自动 framing、播放首动画回退并在卸载时释放 GPU 资源。选择记录本身仍不等于渲染成功，任何协议、图片、Canvas、模型加载或 WebGL context 失败都会显式回退内置角色。VRM、Live2D 与标准动作映射必须等对应 Adapter 完成后才能标记为“已渲染”。
 
 ## 13. 创作者工具
 

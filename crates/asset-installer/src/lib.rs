@@ -214,7 +214,8 @@ pub struct AssetRendererDescriptor {
     pub default_scale: f64,
     pub pixel_art: bool,
     pub fallbacks: BTreeMap<String, String>,
-    pub clips: SpriteClips,
+    pub clips: Option<SpriteClips>,
+    pub model: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -699,9 +700,9 @@ fn is_nested_archive(path: &Path) -> bool {
 ///
 /// Returns an error for unsupported renderers or any invalid package metadata.
 pub fn inspect_asset_renderer(source_root: &Path) -> Result<AssetRendererDescriptor, InstallError> {
-    load_asset_package(source_root)?.renderer.ok_or_else(|| {
-        InstallError::InvalidMetadata("asset has no supported sprite renderer".to_owned())
-    })
+    load_asset_package(source_root)?
+        .renderer
+        .ok_or_else(|| InstallError::InvalidMetadata("asset has no supported renderer".to_owned()))
 }
 
 /// Revalidates an installed package and reads one inventory-owned image.
@@ -735,6 +736,51 @@ pub fn read_verified_asset_image(
         return Err(InstallError::EscapedSource(relative_path.to_path_buf()));
     }
     Ok((fs::read(canonical)?, media_type.clone()))
+}
+
+/// Revalidates an installed GLB character and reads only its declared model entrypoint.
+///
+/// # Errors
+///
+/// Returns an error when the package changed, the requested path is not the
+/// authoritative model entrypoint, or the inventory media type is not GLB.
+pub fn read_verified_asset_model(
+    source_root: &Path,
+    relative_path: &Path,
+) -> Result<Vec<u8>, InstallError> {
+    let package = load_asset_package(source_root)?;
+    let relative_path = safe_relative_path(relative_path)?;
+    let declared = package
+        .renderer
+        .as_ref()
+        .and_then(|renderer| renderer.model.as_deref())
+        .ok_or_else(|| InstallError::InvalidMetadata("asset has no GLB entrypoint".to_owned()))?;
+    if declared != relative_path {
+        return Err(InstallError::InvalidMetadata(
+            "requested model is not the renderer entrypoint".to_owned(),
+        ));
+    }
+    let media_type = package.media_types.get(relative_path).ok_or_else(|| {
+        InstallError::InvalidMetadata("model is outside the verified inventory".to_owned())
+    })?;
+    if media_type != "model/gltf-binary"
+        || relative_path.extension().and_then(|value| value.to_str()) != Some("glb")
+    {
+        return Err(InstallError::InvalidMetadata(
+            "model entrypoint must be GLB".to_owned(),
+        ));
+    }
+    let root = source_root.canonicalize()?;
+    let path = root.join(relative_path);
+    let metadata = fs::symlink_metadata(&path)?;
+    if !metadata.file_type().is_file() {
+        return Err(InstallError::MissingFile(relative_path.to_path_buf()));
+    }
+    let canonical = path.canonicalize()?;
+    if !canonical.starts_with(&root) {
+        return Err(InstallError::EscapedSource(relative_path.to_path_buf()));
+    }
+    Ok(fs::read(canonical)?)
 }
 
 fn read_preview_image(
@@ -826,7 +872,7 @@ fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, Insta
     let integrity_bytes = read_metadata(source_root, integrity_path)?;
     let integrity: AssetIntegrityDocument = serde_json::from_slice(&integrity_bytes)
         .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
-    let renderer = load_sprite_renderer(source_root, &manifest, &integrity.files)?;
+    let renderer = load_asset_renderer(source_root, &manifest, &integrity.files)?;
     let preview_poster = manifest
         .entrypoints
         .as_ref()
@@ -948,7 +994,7 @@ fn read_metadata(source_root: &Path, relative_path: &Path) -> Result<Vec<u8>, In
     fs::read(canonical_path).map_err(InstallError::from)
 }
 
-fn load_sprite_renderer(
+fn load_asset_renderer(
     source_root: &Path,
     manifest: &AssetManifestHeader,
     inventory: &[AssetIntegrityFile],
@@ -956,6 +1002,32 @@ fn load_sprite_renderer(
     let Some(render) = manifest.render.as_ref() else {
         return Ok(None);
     };
+    if render.backend == "gltf" {
+        let model = manifest
+            .entrypoints
+            .as_ref()
+            .and_then(|entrypoints| entrypoints.model.as_ref())
+            .ok_or_else(|| {
+                InstallError::InvalidMetadata("gltf renderer requires entrypoints.model".to_owned())
+            })?;
+        let model = safe_relative_path(model)?;
+        require_inventory_media(inventory, model, &["model/gltf-binary"])?;
+        if model.extension().and_then(|value| value.to_str()) != Some("glb") {
+            return Err(InstallError::InvalidMetadata(
+                "gltf renderer model must be a GLB file".to_owned(),
+            ));
+        }
+        return Ok(Some(AssetRendererDescriptor {
+            backend: render.backend.clone(),
+            canvas: render.canvas.clone(),
+            anchor: render.anchor.clone(),
+            default_scale: render.default_scale,
+            pixel_art: render.pixel_art,
+            fallbacks: manifest.fallbacks.clone(),
+            clips: None,
+            model: Some(model.to_path_buf()),
+        }));
+    }
     if !["sprite-sequence", "sprite-atlas"].contains(&render.backend.as_str()) {
         if manifest
             .entrypoints
@@ -990,7 +1062,8 @@ fn load_sprite_renderer(
         default_scale: render.default_scale,
         pixel_art: render.pixel_art,
         fallbacks: manifest.fallbacks.clone(),
-        clips,
+        clips: Some(clips),
+        model: None,
     }))
 }
 
@@ -1099,6 +1172,7 @@ fn require_image_extension(path: &Path, media_type: &str) -> Result<(), InstallE
         "image/webp" => &["webp"][..],
         "image/jpeg" => &["jpg", "jpeg"][..],
         "image/gif" => &["gif"][..],
+        "model/gltf-binary" => &["glb"][..],
         _ => &[][..],
     };
     let extension = path.extension().and_then(std::ffi::OsStr::to_str);
@@ -1759,7 +1833,8 @@ mod tests {
             renderer.fallbacks.get("pet.sleep").map(String::as_str),
             Some("pet.idle")
         );
-        match renderer.clips {
+        assert!(renderer.model.is_none());
+        match renderer.clips.expect("sprite renderer clips") {
             SpriteClips::SpriteAtlas { image, clips, .. } => {
                 assert_eq!(image, Path::new("sprites/atlas.webp"));
                 assert!(clips.contains_key("pet.idle"));
@@ -2173,6 +2248,24 @@ mod tests {
         let summary = inspect_asset_package(&active).unwrap();
         assert_eq!(summary.renderer_backend.as_deref(), Some("gltf"));
         assert_eq!(summary.file_count, 2);
+        let renderer = inspect_asset_renderer(&active).unwrap();
+        assert_eq!(renderer.backend, "gltf");
+        assert!(renderer.clips.is_none());
+        assert_eq!(
+            renderer.model.as_deref(),
+            Some(Path::new("models/character.glb"))
+        );
+        assert_eq!(
+            read_verified_asset_model(&active, Path::new("models/character.glb")).unwrap(),
+            b"glTF-probed-model"
+        );
+        for forbidden in [
+            Path::new("manifest.json"),
+            Path::new(".integrity.json"),
+            Path::new("models/other.glb"),
+        ] {
+            assert!(read_verified_asset_model(&active, forbidden).is_err());
+        }
         let manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(active.join(MANIFEST_FILE)).unwrap()).unwrap();
         assert_eq!(
@@ -2181,6 +2274,8 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("models/character.glb")
         );
+        fs::write(active.join("models/character.glb"), b"tampered").unwrap();
+        assert!(read_verified_asset_model(&active, Path::new("models/character.glb")).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

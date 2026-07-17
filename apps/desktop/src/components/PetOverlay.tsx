@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
 
 const CHARACTER_RENDERER_CHANGED_EVENT = "nimora://character-renderer-changed";
+const GltfRenderer = lazy(async () => {
+  const module = await import("./GltfRenderer");
+  return { default: module.GltfRenderer };
+});
 
 export function PetOverlay() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
@@ -54,7 +58,7 @@ export function PetOverlay() {
 
   const handleRendererFailure = useCallback(() => {
     setRendererFailed(true);
-    setMessage("角色图片加载失败，已使用内置角色");
+    setMessage("角色渲染失败，已使用内置角色");
   }, []);
 
   async function play(action: PetAction) {
@@ -99,11 +103,17 @@ export function PetOverlay() {
       >
         <span className="overlay-status">{message}</span>
         {renderer && renderer.backend !== "built-in" && !rendererFailed ? (
-          <SpriteRenderer
-            descriptor={renderer}
-            action={petStateAction(snapshot?.pet.state ?? "idle")}
-            onFailure={handleRendererFailure}
-          />
+          renderer.backend === "gltf" ? (
+            <Suspense fallback={null}>
+              <GltfRenderer descriptor={renderer} onFailure={handleRendererFailure} />
+            </Suspense>
+          ) : (
+            <SpriteRenderer
+              descriptor={renderer}
+              action={petStateAction(snapshot?.pet.state ?? "idle")}
+              onFailure={handleRendererFailure}
+            />
+          )
         ) : (
           <span className={`overlay-pet ${snapshot?.pet.state ?? "idle"}`} aria-hidden="true">
             <i className="overlay-ear left" /><i className="overlay-ear right" />

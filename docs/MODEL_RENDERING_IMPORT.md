@@ -140,4 +140,6 @@ pnpm deskpet pack build ./character-pack
 - 检查完全本地离线运行，不上传原文件；WebView 只收到格式、分区大小和资源计数，不收到源路径或暂存路径。桌面发布构建通过 `pnpm build:sidecars` 同时打包用户代码 Worker 与模型 Importer Worker。
 - Creator Studio 可在结构检查后填写本地包 ID、显示名和许可证。确认安装时宿主重新复制源文件并对同一暂存 GLB 再次运行 Worker，随后生成 `nimora.asset/1` Character 包：模型固定为 `models/character.glb`，Manifest 使用 `entrypoints.model` 和 `gltf` 后端，Integrity 清单覆盖 Manifest 与模型字节，最后复用正式 Asset Installer 的精确目录树、哈希复验、备份和原子激活。生成 ID 仅允许 `character.local.*`，避免覆盖第三方发布者命名空间。
 
-当前规范化只封装已经通过探测的原始 GLB，不进行网格重写、纹理转码、动作语义映射或许可证扫描；用户填写的许可证只是包元数据，不代表平台完成权利认证。OS 级文件系统/网络/内存沙箱、真实模型预览与 3D Renderer 仍未实现。进程边界只能隔离崩溃、超时和协议输出，不能证明 Worker 无法访问其它 OS 资源。GLTF JSON、VRM、Live2D 和其它格式也尚未实现，不能根据本节宣称格式矩阵已经可用。
+当前规范化只封装已经通过探测的原始 GLB，不进行网格重写、纹理转码、动作语义映射或许可证扫描；用户填写的许可证只是包元数据，不代表平台完成权利认证。Pet Overlay 已实现 GLB 2.0 的真实 Three.js WebGL 渲染：模型只能由 `nimora.renderer/1` 的 `assetBaseUrl` 与 `model` 组合加载，宿主协议只允许 Pet WebView、GET、受控 Host、当前活动 Asset 和唯一已验证 GLB entrypoint；不返回文件系统路径。加载后自动计算包围盒、居中缩放、相机 framing 和柔和灯光；存在动画时暂时只播放第一段，减少动画偏好下保持静态画面。切换或卸载时停止 Mixer、取消帧循环、断开 ResizeObserver 并释放几何体、材质、纹理和 WebGL context，context 丢失则显式回退内置角色。
+
+上述能力是 GLB 2.0 Renderer，不是 VRM/Live2D 支持，也不是标准动作语义映射完成。inventory 与容器验证不等于发布者签名认证，许可证字段不等于权利扫描，Three.js WebGLRenderer 也不等于独立 Renderer 进程或 OS/GPU 沙箱。Importer Worker 的进程边界只能隔离崩溃、超时和协议输出，不能证明其无法访问其它 OS 资源。GLTF JSON、VRM、Live2D 和其它格式仍未实现，不能据此宣称格式矩阵全部可用。

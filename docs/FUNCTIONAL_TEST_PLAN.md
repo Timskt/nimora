@@ -107,6 +107,10 @@ ID / 标题 / 优先级 / 前置条件
 | MODEL-007 | 桌面 GLB 隔离检查 | 仅 Control Center 和非安全模式可选择绝对普通 `.glb`；宿主拒绝链接与 80 MiB 超限文件，复制为固定暂存名后调用 sidecar，成功、拒绝、崩溃和超时均清理暂存目录，报告不含宿主路径 | P0 |
 | MODEL-008 | GLB 规范化安装 | 对同一暂存文件重新执行 Worker 探测后，宿主生成 `nimora.asset/1` Character Manifest、`entrypoints.model` 与 SHA-256 inventory，并通过正式安装器原子激活 | P0 |
 | MODEL-009 | 本地模型命名空间 | Creator Studio 生成的模型只能使用 `character.local.*`，不能覆盖第三方发布者命名空间；无效 ID、名称或许可证不改变资源目录 | P0 |
+| MODEL-010 | 受控 GLB 资源协议 | 仅 Pet WebView 可用 GET 从受控 Host 读取当前活动 Asset 的唯一 `entrypoints.model`；拒绝 query、错误 Host、非活动 Asset、Manifest、Integrity 和其它 inventory 路径 | P0 |
+| MODEL-011 | GLB 实际渲染与自动 framing | Three.js 加载验证后的 GLB，按包围盒居中缩放、设置相机和灯光，透明画布适配尺寸与高 DPI；加载失败回退内置角色 | P0 |
+| MODEL-012 | GLB context 丢失和完整资源释放 | context 丢失时阻止默认行为并回退；切换或卸载后取消帧循环、停止 Mixer、断开观察器并释放几何体、材质、纹理和 WebGL context | P0 |
+| MODEL-013 | GLB 动画与减少动画 | 有动画时播放首段回退；系统启用减少动画后暂停 Mixer 但保留静态模型；标准动作语义未映射时不得宣称动作兼容 | P1 |
 
 ## 8. Command 与命令面板
 

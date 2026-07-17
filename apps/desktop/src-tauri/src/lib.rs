@@ -2,7 +2,8 @@ use nimora_asset_installer::{
     AssetPackageSummary, AssetPreviewReport, AssetRendererDescriptor, GltfCharacterMetadata,
     InstallError, InstallFile, RenderAnchor, RenderCanvas, SpriteClips, export_asset_package,
     inspect_asset_package, inspect_asset_renderer, inspect_asset_source_preview,
-    install_asset_source, install_gltf_character, read_verified_asset_image, rollback_latest,
+    install_asset_source, install_gltf_character, read_verified_asset_image,
+    read_verified_asset_model, rollback_latest,
 };
 use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
@@ -299,6 +300,7 @@ struct CharacterRendererSnapshot {
     pixel_art: bool,
     fallbacks: std::collections::BTreeMap<String, String>,
     clips: Option<SpriteClips>,
+    model: Option<PathBuf>,
     fallback_reason: Option<String>,
 }
 
@@ -1137,7 +1139,8 @@ fn installed_renderer(
         default_scale: renderer.default_scale,
         pixel_art: renderer.pixel_art,
         fallbacks: renderer.fallbacks,
-        clips: Some(renderer.clips),
+        clips: renderer.clips,
+        model: renderer.model,
         fallback_reason: None,
     }
 }
@@ -1157,6 +1160,7 @@ fn builtin_renderer(fallback_reason: Option<String>) -> CharacterRendererSnapsho
         pixel_art: false,
         fallbacks: std::collections::BTreeMap::new(),
         clips: None,
+        model: None,
         fallback_reason,
     }
 }
@@ -1258,7 +1262,14 @@ fn serve_asset_protocol(
             },
             body,
         },
-        Err(_) => asset_protocol_error(tauri::http::StatusCode::NOT_FOUND),
+        Err(_) => match read_verified_asset_model(&asset_store.join(&asset_id), &relative_path) {
+            Ok(body) => AssetProtocolResponse {
+                status: tauri::http::StatusCode::OK,
+                media_type: "model/gltf-binary",
+                body,
+            },
+            Err(_) => asset_protocol_error(tauri::http::StatusCode::NOT_FOUND),
+        },
     }
 }
 
@@ -2533,12 +2544,13 @@ mod tests {
     use super::{
         ACTIVE_CHARACTER_FILE, AssetInstallReceipt, BUILTIN_CHARACTER_ID, DesktopError, PetAction,
         ProfilePolicy, TrayAction, UserProgramRollbackReceipt, WindowPolicy,
-        ensure_program_permissions, inspect_asset_catalog, parse_asset_protocol_path,
-        parse_user_program_plan, permission_grant, persist_active_character,
-        resolve_active_character, resolve_character_renderer, screen_coordinate,
-        serve_asset_protocol, user_program_input, valid_asset_identifier, validate_model_source,
-        validate_package_source,
+        ensure_program_permissions, inspect_asset_catalog, install_gltf_character,
+        parse_asset_protocol_path, parse_user_program_plan, permission_grant,
+        persist_active_character, resolve_active_character, resolve_character_renderer,
+        screen_coordinate, serve_asset_protocol, user_program_input, valid_asset_identifier,
+        validate_model_source, validate_package_source,
     };
+    use nimora_asset_installer::GltfCharacterMetadata;
     use nimora_persistence_sqlite::SqliteProgramPermissionRepository;
     use nimora_runtime_core::{Event, EventSource, RuntimeMode};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
@@ -2621,6 +2633,89 @@ mod tests {
                 &uri
             ),
             tauri::http::StatusCode::BAD_REQUEST
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn asset_protocol_serves_only_the_active_verified_glb_entrypoint() {
+        let root = std::env::temp_dir().join("nimora-asset-protocol-gltf");
+        let staged = root.join("staged/character.glb");
+        let store = root.join("assets");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        std::fs::write(&staged, b"verified-glb").unwrap();
+        install_gltf_character(
+            &staged,
+            &store,
+            &GltfCharacterMetadata {
+                id: "character.local.aurora".to_owned(),
+                version: "1.0.0".to_owned(),
+                name: "Aurora".to_owned(),
+                publisher: "publisher.local".to_owned(),
+                license: "LicenseRef-Proprietary".to_owned(),
+            },
+        )
+        .unwrap();
+        persist_active_character(&store, "character.local.aurora").unwrap();
+
+        let model: tauri::http::Uri =
+            "nimora-asset://localhost/character.local.aurora/models/character.glb"
+                .parse()
+                .unwrap();
+        let response = serve_asset_protocol(
+            &store,
+            RuntimeMode::Normal,
+            super::PET_WINDOW_LABEL,
+            &tauri::http::Method::GET,
+            &model,
+        );
+        assert_eq!(response.status, tauri::http::StatusCode::OK);
+        assert_eq!(response.media_type, "model/gltf-binary");
+        assert_eq!(response.body, b"verified-glb");
+
+        for forbidden in [
+            "nimora-asset://localhost/character.local.aurora/manifest.json",
+            "nimora-asset://localhost/character.local.aurora/.integrity.json",
+            "nimora-asset://localhost/character.local.aurora/models/other.glb",
+            "nimora-asset://localhost/character.local.aurora/models/character.glb?raw=1",
+            "nimora-asset://localhost/character.local.other/models/character.glb",
+        ] {
+            let uri = forbidden.parse().unwrap();
+            assert_ne!(
+                serve_asset_protocol(
+                    &store,
+                    RuntimeMode::Normal,
+                    super::PET_WINDOW_LABEL,
+                    &tauri::http::Method::GET,
+                    &uri,
+                )
+                .status,
+                tauri::http::StatusCode::OK,
+                "served {forbidden}"
+            );
+        }
+        assert_ne!(
+            serve_asset_protocol(
+                &store,
+                RuntimeMode::Normal,
+                "control-center",
+                &tauri::http::Method::GET,
+                &model,
+            )
+            .status,
+            tauri::http::StatusCode::OK
+        );
+        assert_ne!(
+            serve_asset_protocol(
+                &store,
+                RuntimeMode::Normal,
+                super::PET_WINDOW_LABEL,
+                &tauri::http::Method::POST,
+                &model,
+            )
+            .status,
+            tauri::http::StatusCode::OK
         );
         let _ = std::fs::remove_dir_all(root);
     }

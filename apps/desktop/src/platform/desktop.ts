@@ -119,13 +119,14 @@ export interface CharacterRendererSnapshot {
   spec: "nimora.renderer/1";
   assetId: string;
   assetBaseUrl: string | null;
-  backend: "built-in" | "sprite-sequence" | "sprite-atlas";
+  backend: "built-in" | "sprite-sequence" | "sprite-atlas" | "gltf";
   canvas: { width: number; height: number };
   anchor: { x: number; y: number };
   defaultScale: number;
   pixelArt: boolean;
   fallbacks: Record<string, string>;
   clips: SpriteClips | null;
+  model: string | null;
   fallbackReason: string | null;
 }
 
@@ -358,6 +359,7 @@ export function createDesktopApi(
           pixelArt: false,
           fallbacks: {},
           clips: null,
+          model: null,
           fallbackReason: null,
         };
       },
