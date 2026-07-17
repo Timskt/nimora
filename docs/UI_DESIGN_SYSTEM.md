@@ -242,3 +242,4 @@ Primitive Token → Semantic Token → Component Token → Theme Override
 - Provider 的本地性、联网需求、凭据与费用必须在首屏可见；Tool ID 长文本允许换行，不造成横向滚动。
 - 只读使用薄荷语义，需确认写操作使用暖琥珀语义，同时保留 `R/W` 与文字标签，禁止只靠颜色表达。
 - 完成结果同时展示内容、Task 状态、Token 和费用；失败不得保留虚假的成功状态，写操作不得出现“自动执行”暗示。
+- 写工具确认卡必须展示 Tool ID、格式化实际参数、风险、单次有效与过期时间，并提供同等清晰的拒绝入口；Approval 指纹等内部授权材料不得进入 DOM。

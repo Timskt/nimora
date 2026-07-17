@@ -56,6 +56,16 @@ export interface LocalAgentResult {
   usage: { inputTokens: number; outputTokens: number; costMicrounits: number };
 }
 
+export interface AgentToolResult {
+  spec: "nimora.desktop-agent-tool-result/1";
+  task: { id: string; status: string; providerId: string };
+  invocation: { invocationId: string; taskId: string; traceId: string; toolId: string; arguments: Record<string, unknown> };
+  effectiveRisk: "safe" | "low" | "medium" | "high" | "critical";
+  requiresConfirmation: boolean;
+  expiresAtMs: number | null;
+  output: unknown | null;
+}
+
 export interface BackupRecord {
   id: string;
   createdAtMs: number;
@@ -337,6 +347,9 @@ export interface DesktopApi {
   outboxSnapshot(): Promise<OutboxSnapshot>;
   agentCatalog(): Promise<AgentCatalog>;
   runLocalAgent(prompt: string): Promise<LocalAgentResult>;
+  prepareAgentTool(toolId: string, argumentsValue: Record<string, unknown>): Promise<AgentToolResult>;
+  confirmAgentTool(invocationId: string): Promise<AgentToolResult>;
+  rejectAgentTool(invocationId: string): Promise<void>;
   backupHealth(): Promise<BackupHealth>;
   createBackup(): Promise<BackupRecord | null>;
   requestDatabaseRestore(backupId: string): Promise<void>;
@@ -451,6 +464,15 @@ export function createDesktopApi(
       async runLocalAgent(prompt) {
         return { spec: "nimora.desktop-agent-result/1", task: { id: crypto.randomUUID(), status: "succeeded", providerId: "provider:deterministic-local" }, content: prompt, finishReason: "stop", usage: { inputTokens: Math.max(1, Math.ceil(prompt.length / 4)), outputTokens: Math.max(1, Math.ceil(prompt.length / 4)), costMicrounits: 0 } };
       },
+      async prepareAgentTool(toolId, argumentsValue) {
+        const invocationId = crypto.randomUUID();
+        const requiresConfirmation = toolId === "pet.animation.play" || toolId === "pet.position.move";
+        return { spec: "nimora.desktop-agent-tool-result/1", task: { id: crypto.randomUUID(), status: requiresConfirmation ? "waiting_for_confirmation" : "succeeded", providerId: "provider:deterministic-local" }, invocation: { invocationId, taskId: crypto.randomUUID(), traceId: crypto.randomUUID(), toolId, arguments: argumentsValue }, effectiveRisk: requiresConfirmation ? "low" : "safe", requiresConfirmation, expiresAtMs: requiresConfirmation ? Date.now() + 300_000 : null, output: requiresConfirmation ? null : { preview: true } };
+      },
+      async confirmAgentTool(invocationId) {
+        return { spec: "nimora.desktop-agent-tool-result/1", task: { id: crypto.randomUUID(), status: "succeeded", providerId: "provider:deterministic-local" }, invocation: { invocationId, taskId: crypto.randomUUID(), traceId: crypto.randomUUID(), toolId: "pet.animation.play", arguments: { action: "celebrate" } }, effectiveRisk: "low", requiresConfirmation: false, expiresAtMs: null, output: { preview: true } };
+      },
+      async rejectAgentTool() {},
       async backupHealth() {
         const previewBackup = { id: "runtime-1784294125392.sqlite3", createdAtMs: 1_784_294_125_392, bytes: 2_621_440 };
         return previewRecoveryMode
@@ -535,6 +557,9 @@ export function createDesktopApi(
     outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,
     agentCatalog: async () => await invokeCommand("agent_catalog") as AgentCatalog,
     runLocalAgent: async (prompt) => await invokeCommand("run_local_agent", { request: { prompt } }) as LocalAgentResult,
+    prepareAgentTool: async (toolId, argumentsValue) => await invokeCommand("prepare_agent_tool", { request: { toolId, arguments: argumentsValue } }) as AgentToolResult,
+    confirmAgentTool: async (invocationId) => await invokeCommand("confirm_agent_tool", { request: { invocationId } }) as AgentToolResult,
+    rejectAgentTool: async (invocationId) => { await invokeCommand("reject_agent_tool", { request: { invocationId } }); },
     backupHealth: async () => await invokeCommand("backup_health") as BackupHealth,
     createBackup: async () => await invokeCommand("create_backup") as BackupRecord,
     requestDatabaseRestore: async (backupId) => { await invokeCommand("request_database_restore", { backupId }); },

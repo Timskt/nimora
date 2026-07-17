@@ -237,6 +237,8 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |
 | AGT-033 | 桌面 Agent 输入边界 | 空 Prompt 与超过 32768 bytes 的 Prompt 在 Provider 前拒绝，且不触发模块 Backend | P0 |
+| AGT-034 | 桌面参数绑定确认 | 写工具在确认前无副作用；宿主不向前端暴露 Approval；确认后只经固定 Gateway 映射执行一次，再次确认失败 | P0 |
+| AGT-035 | 桌面拒绝与强停 | 拒绝、过期、Safe Mode 和 Recovery Mode 均撤销或拒绝待确认 Invocation；退出 Safe Mode 后旧确认不可恢复 | P0 |
 
 ## 14. 信任中心与安全模式
 

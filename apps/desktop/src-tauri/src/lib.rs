@@ -1,9 +1,10 @@
 use nimora_agent_runtime::{
-    AgentBudget, AgentCoordinator, AgentTask, AgentTaskOrigin, CancellationFlag,
+    AgentBudget, AgentCoordinator, AgentTask, AgentTaskOrigin, AgentTaskStatus, CancellationFlag,
     DataClassification, DeterministicLocalProvider, ProviderExecutionContext, ProviderMessage,
-    ProviderMessageRole, ProviderRegistry, ProviderStepInput, ProviderStepOutcome,
+    ProviderMessageRole, ProviderRegistry, ProviderStepInput, ProviderStepOutcome, ToolAdmission,
+    ToolApproval, ToolInvocation, ToolStepOutcome,
 };
-use nimora_agent_tools::production_tool_registry;
+use nimora_agent_tools::{GatewayToolBackend, production_tool_registry};
 use nimora_asset_installer::{
     AssetPackageSummary, AssetPreviewReport, AssetRendererDescriptor, GltfCharacterMetadata,
     InstallError, InstallFile, ModelAnimationBinding, RenderAnchor, RenderCanvas, SpriteClips,
@@ -82,6 +83,8 @@ const MAX_USER_PROGRAM_OPERATIONS: usize = 32;
 const MAX_USER_PROGRAM_EVENT_SESSIONS: usize = 32;
 const MAX_MODEL_BYTES: u64 = 80 * 1024 * 1024;
 const MODEL_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_PENDING_AGENT_TOOLS: usize = 32;
+const AGENT_TOOL_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
 
 #[derive(Debug)]
 struct DesktopState {
@@ -105,8 +108,17 @@ struct DesktopState {
     user_program_event_sessions: Mutex<HashMap<Uuid, UserProgramEventSession>>,
     active_user_program_workers: Mutex<HashMap<Uuid, ActiveUserProgramWorker>>,
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
+    pending_agent_tools: Mutex<HashMap<Uuid, PendingAgentTool>>,
     execution_controller: ExecutionController,
     startup: StartupStatus,
+}
+
+#[derive(Debug)]
+struct PendingAgentTool {
+    task: AgentTask,
+    invocation: ToolInvocation,
+    approval: ToolApproval,
+    expires_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -233,6 +245,7 @@ impl DesktopState {
             user_program_event_sessions: Mutex::new(HashMap::new()),
             active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
+            pending_agent_tools: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
             startup: StartupStatus {
                 mode: StartupMode::Normal,
@@ -285,6 +298,7 @@ impl DesktopState {
             user_program_event_sessions: Mutex::new(HashMap::new()),
             active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
+            pending_agent_tools: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
             startup: StartupStatus {
                 mode: StartupMode::Recovery,
@@ -682,6 +696,31 @@ struct LocalAgentResult {
     usage: nimora_agent_runtime::ProviderUsage,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PrepareAgentToolRequest {
+    tool_id: String,
+    arguments: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResolveAgentToolRequest {
+    invocation_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentToolResult {
+    spec: &'static str,
+    task: AgentTask,
+    invocation: ToolInvocation,
+    effective_risk: CommandRisk,
+    requires_confirmation: bool,
+    expires_at_ms: Option<u64>,
+    output: Option<serde_json::Value>,
+}
+
 impl Serialize for DesktopError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -786,6 +825,202 @@ fn run_local_agent(request: LocalAgentRequest) -> Result<LocalAgentResult, Deskt
             "local diagnostic provider returned an unexpected tool call".to_owned(),
         )),
     }
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn prepare_agent_tool(
+    request: PrepareAgentToolRequest,
+    state: State<'_, DesktopState>,
+) -> Result<AgentToolResult, DesktopError> {
+    prepare_agent_tool_inner(request, &state)
+}
+
+fn prepare_agent_tool_inner(
+    request: PrepareAgentToolRequest,
+    state: &DesktopState,
+) -> Result<AgentToolResult, DesktopError> {
+    ensure_normal_mode(state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    let tools = production_tool_registry().map_err(agent_error)?;
+    let providers = ProviderRegistry::default();
+    let coordinator = AgentCoordinator::new(&providers, &tools);
+    let now_ms = current_time_ms()?;
+    let mut task = AgentTask::new(
+        AgentTaskOrigin::Desktop,
+        "desktop:local-user",
+        "provider:deterministic-local",
+        AgentBudget::default(),
+        now_ms,
+    )
+    .map_err(agent_error)?;
+    task.transition(AgentTaskStatus::Planning, now_ms)
+        .map_err(agent_error)?;
+    let invocation =
+        ToolInvocation::new(task.id, task.trace_id, request.tool_id, request.arguments)
+            .map_err(agent_error)?;
+    let admission = tools.admit(&invocation).map_err(agent_error)?;
+    let effective_risk = match admission {
+        ToolAdmission::Ready { effective_risk }
+        | ToolAdmission::ConfirmationRequired { effective_risk, .. } => effective_risk,
+    };
+    if matches!(admission, ToolAdmission::Ready { .. }) {
+        let backend = GatewayToolBackend::new(
+            DesktopCapabilityBackend { state },
+            GatewayToolBackend::<DesktopCapabilityBackend<'_>>::standard_policy(
+                task.id,
+                task.trace_id,
+            ),
+        );
+        let ToolStepOutcome::Completed { output, .. } = coordinator
+            .tool_step(&mut task, &backend, invocation.clone(), None, now_ms)
+            .map_err(agent_error)?
+        else {
+            return Err(DesktopError::Agent(
+                "read-only tool unexpectedly requested confirmation".to_owned(),
+            ));
+        };
+        task.transition(AgentTaskStatus::Succeeded, now_ms)
+            .map_err(agent_error)?;
+        return Ok(AgentToolResult {
+            spec: "nimora.desktop-agent-tool-result/1",
+            task,
+            invocation,
+            effective_risk,
+            requires_confirmation: false,
+            expires_at_ms: None,
+            output: Some(output),
+        });
+    }
+    task.transition(AgentTaskStatus::WaitingForConfirmation, now_ms)
+        .map_err(agent_error)?;
+    let approval = ToolApproval::bind(&invocation, effective_risk);
+    let expires_at_ms = now_ms.saturating_add(AGENT_TOOL_APPROVAL_TTL_MS);
+    let mut pending = state
+        .pending_agent_tools
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    pending.retain(|_, item| item.expires_at_ms > now_ms);
+    if pending.len() >= MAX_PENDING_AGENT_TOOLS {
+        return Err(DesktopError::Agent(
+            "maximum pending Agent tool confirmations reached".to_owned(),
+        ));
+    }
+    pending.insert(
+        invocation.invocation_id,
+        PendingAgentTool {
+            task: task.clone(),
+            invocation: invocation.clone(),
+            approval,
+            expires_at_ms,
+        },
+    );
+    Ok(AgentToolResult {
+        spec: "nimora.desktop-agent-tool-result/1",
+        task,
+        invocation,
+        effective_risk,
+        requires_confirmation: true,
+        expires_at_ms: Some(expires_at_ms),
+        output: None,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn confirm_agent_tool(
+    request: ResolveAgentToolRequest,
+    state: State<'_, DesktopState>,
+) -> Result<AgentToolResult, DesktopError> {
+    confirm_agent_tool_inner(&request, &state)
+}
+
+fn confirm_agent_tool_inner(
+    request: &ResolveAgentToolRequest,
+    state: &DesktopState,
+) -> Result<AgentToolResult, DesktopError> {
+    ensure_normal_mode(state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    let mut pending = state
+        .pending_agent_tools
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .remove(&request.invocation_id)
+        .ok_or_else(|| DesktopError::Agent("pending Agent tool was not found".to_owned()))?;
+    let now_ms = current_time_ms()?;
+    if pending.expires_at_ms <= now_ms {
+        return Err(DesktopError::Agent(
+            "pending Agent tool confirmation expired".to_owned(),
+        ));
+    }
+    let tools = production_tool_registry().map_err(agent_error)?;
+    let providers = ProviderRegistry::default();
+    let coordinator = AgentCoordinator::new(&providers, &tools);
+    let backend = GatewayToolBackend::new(
+        DesktopCapabilityBackend { state },
+        GatewayToolBackend::<DesktopCapabilityBackend<'_>>::standard_policy(
+            pending.task.id,
+            pending.task.trace_id,
+        ),
+    );
+    let ToolStepOutcome::Completed { output, .. } = coordinator
+        .tool_step(
+            &mut pending.task,
+            &backend,
+            pending.invocation.clone(),
+            Some(&pending.approval),
+            now_ms,
+        )
+        .map_err(agent_error)?
+    else {
+        return Err(DesktopError::Agent(
+            "approved Agent tool remained pending".to_owned(),
+        ));
+    };
+    pending
+        .task
+        .transition(AgentTaskStatus::Succeeded, now_ms)
+        .map_err(agent_error)?;
+    Ok(AgentToolResult {
+        spec: "nimora.desktop-agent-tool-result/1",
+        task: pending.task,
+        invocation: pending.invocation,
+        effective_risk: CommandRisk::Low,
+        requires_confirmation: false,
+        expires_at_ms: None,
+        output: Some(output),
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn reject_agent_tool(
+    request: ResolveAgentToolRequest,
+    state: State<'_, DesktopState>,
+) -> Result<(), DesktopError> {
+    reject_agent_tool_inner(&request, &state)
+}
+
+fn reject_agent_tool_inner(
+    request: &ResolveAgentToolRequest,
+    state: &DesktopState,
+) -> Result<(), DesktopError> {
+    state
+        .pending_agent_tools
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .remove(&request.invocation_id)
+        .ok_or_else(|| DesktopError::Agent("pending Agent tool was not found".to_owned()))?;
+    Ok(())
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn agent_error(error: impl ToString) -> DesktopError {
+    DesktopError::Agent(error.to_string())
 }
 
 #[tauri::command]
@@ -1065,6 +1300,7 @@ fn enter_safe_mode(
         Ok(command) => {
             cancel_all_user_programs(&state)?;
             cancel_all_user_program_event_sessions(&state)?;
+            cancel_all_pending_agent_tools(&state)?;
             *state
                 .policy_before_safe_mode
                 .lock()
@@ -1081,6 +1317,15 @@ fn enter_safe_mode(
             }),
         },
     }
+}
+
+fn cancel_all_pending_agent_tools(state: &DesktopState) -> Result<(), DesktopError> {
+    state
+        .pending_agent_tools
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .clear();
+    Ok(())
 }
 
 #[tauri::command]
@@ -3156,6 +3401,9 @@ pub fn run() {
             desktop_snapshot,
             agent_catalog,
             run_local_agent,
+            prepare_agent_tool,
+            confirm_agent_tool,
+            reject_agent_tool,
             drain_runtime_events,
             outbox_snapshot,
             backup_health,
@@ -3292,14 +3540,16 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
 mod tests {
     use super::{
         ACTIVE_CHARACTER_FILE, AssetInstallReceipt, BUILTIN_CHARACTER_ID, DesktopError,
-        DesktopState, LocalAgentRequest, PetAction, ProfilePolicy, StartupMode, TrayAction,
-        UserProgramRollbackReceipt, WindowPolicy, agent_catalog, diagnostic_report,
+        DesktopState, LocalAgentRequest, PetAction, PrepareAgentToolRequest, ProfilePolicy,
+        ResolveAgentToolRequest, StartupMode, TrayAction, UserProgramRollbackReceipt, WindowPolicy,
+        agent_catalog, cancel_all_pending_agent_tools, confirm_agent_tool_inner, diagnostic_report,
         ensure_normal_mode, ensure_program_permissions, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
         parse_user_program_plan, permission_grant, persist_active_character,
-        resolve_active_character, resolve_character_renderer, run_local_agent, screen_coordinate,
-        serve_asset_protocol, user_program_input, valid_asset_identifier, validate_model_source,
-        validate_package_source, validate_requested_animation_map,
+        prepare_agent_tool_inner, reject_agent_tool_inner, resolve_active_character,
+        resolve_character_renderer, run_local_agent, screen_coordinate, serve_asset_protocol,
+        user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
+        validate_requested_animation_map,
     };
     use nimora_agent_runtime::{AgentTaskOrigin, AgentTaskStatus};
     use nimora_asset_installer::{GltfCharacterMetadata, ModelAnimationBinding};
@@ -3309,10 +3559,26 @@ mod tests {
     use nimora_persistence_sqlite::{
         BackupCoordinator, BackupPolicy, SqliteProgramPermissionRepository,
     };
-    use nimora_runtime_core::{Event, EventSource, RuntimeMode};
+    use nimora_runtime_core::{Event, EventSource, Position, RuntimeMode};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
     use std::path::Path;
+    use uuid::Uuid;
+
+    fn normal_desktop_state() -> (std::path::PathBuf, DesktopState) {
+        let root = std::env::temp_dir().join(format!("nimora-agent-state-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).expect("fixture directory");
+        let database = root.join("runtime.sqlite3");
+        let state = DesktopState::open(
+            &database,
+            root.join("assets"),
+            root.join("programs"),
+            BackupCoordinator::new(&database, root.join("backups"), BackupPolicy::default()),
+            PersistentDiagnosticJournal::in_memory(),
+        )
+        .expect("normal desktop state");
+        (root, state)
+    }
 
     #[test]
     fn desktop_agent_catalog_exposes_only_production_capabilities() {
@@ -3362,6 +3628,88 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn desktop_agent_write_requires_one_time_confirmation() {
+        let (root, state) = normal_desktop_state();
+        let prepared = prepare_agent_tool_inner(
+            PrepareAgentToolRequest {
+                tool_id: "pet.animation.play".to_owned(),
+                arguments: json!({"action": "celebrate"}),
+            },
+            &state,
+        )
+        .expect("pending tool");
+        assert!(prepared.requires_confirmation);
+        assert!(prepared.output.is_none());
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").state,
+            nimora_runtime_core::PetState::Idle
+        );
+
+        let invocation_id = prepared.invocation.invocation_id;
+        let request = ResolveAgentToolRequest { invocation_id };
+        let completed = confirm_agent_tool_inner(&request, &state).expect("confirmed tool");
+        assert!(!completed.requires_confirmation);
+        assert!(completed.output.is_some());
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").state,
+            nimora_runtime_core::PetState::Interacting
+        );
+        assert!(confirm_agent_tool_inner(&request, &state).is_err());
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn desktop_agent_rejection_removes_pending_side_effect() {
+        let (root, state) = normal_desktop_state();
+        let prepared = prepare_agent_tool_inner(
+            PrepareAgentToolRequest {
+                tool_id: "pet.position.move".to_owned(),
+                arguments: json!({"x": 18, "y": 27}),
+            },
+            &state,
+        )
+        .expect("pending tool");
+        let invocation_id = prepared.invocation.invocation_id;
+        let request = ResolveAgentToolRequest { invocation_id };
+        reject_agent_tool_inner(&request, &state).expect("reject tool");
+        assert!(confirm_agent_tool_inner(&request, &state).is_err());
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").position,
+            Position { x: 0.0, y: 0.0 }
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn safe_mode_revokes_pending_agent_confirmations() {
+        let (root, state) = normal_desktop_state();
+        let prepared = prepare_agent_tool_inner(
+            PrepareAgentToolRequest {
+                tool_id: "pet.animation.play".to_owned(),
+                arguments: json!({"action": "celebrate"}),
+            },
+            &state,
+        )
+        .expect("pending tool");
+        state
+            .safety
+            .enter(nimora_runtime_core::SafeModeReason::Manual)
+            .expect("safe mode");
+        cancel_all_pending_agent_tools(&state).expect("cancel pending tools");
+        state.safety.exit().expect("exit safe mode");
+        assert!(
+            confirm_agent_tool_inner(
+                &ResolveAgentToolRequest {
+                    invocation_id: prepared.invocation.invocation_id
+                },
+                &state
+            )
+            .is_err()
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]

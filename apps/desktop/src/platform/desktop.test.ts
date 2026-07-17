@@ -28,6 +28,9 @@ describe("desktop platform adapter", () => {
     const api = createDesktopApi(true, invoke, startDragging);
     await api.agentCatalog();
     await api.runLocalAgent("检查本地能力");
+    await api.prepareAgentTool("pet.animation.play", { action: "celebrate" });
+    await api.confirmAgentTool("018f0000-0000-7000-8000-000000000004");
+    await api.rejectAgentTool("018f0000-0000-7000-8000-000000000005");
     await api.drainEvents();
     await api.outboxSnapshot();
     await api.backupHealth();
@@ -123,6 +126,9 @@ describe("desktop platform adapter", () => {
     expect(invoke.mock.calls).toEqual([
       ["agent_catalog"],
       ["run_local_agent", { request: { prompt: "检查本地能力" } }],
+      ["prepare_agent_tool", { request: { toolId: "pet.animation.play", arguments: { action: "celebrate" } } }],
+      ["confirm_agent_tool", { request: { invocationId: "018f0000-0000-7000-8000-000000000004" } }],
+      ["reject_agent_tool", { request: { invocationId: "018f0000-0000-7000-8000-000000000005" } }],
       ["drain_runtime_events"],
       ["outbox_snapshot"],
       ["backup_health"],
