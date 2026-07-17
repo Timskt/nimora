@@ -130,7 +130,9 @@ flowchart LR
 
 `instruction` 只允许表达已安装程序自身的可信任务目标；Event、Connector、Clipboard、文件或网络正文不得拼入 `instruction`，必须作为带 `source` 的 `context[]` 段进入共享 Context Admission。非法来源、预算超限、Unicode 混淆和 Prompt Injection 在 Provider 前拒绝；审计只记录来源类别、段数、字节数、Trace、Module ID 与 Module Execution ID，正文与完整来源不落盘，审计不可用时 fail-closed。
 
-任务结果通过执行回执的 `agentResults[]` 返回并进入既有 Agent History。该入口不允许工具调用或模块副作用；若结果需要改变系统状态，程序必须通过自身另行声明的 Capability 请求，不能把模型输出当成授权。程序权限与 Agent 权限不合并，双方不能借对方提升权限。Skill 与 Connector Runtime 尚未实现，后续入口必须直接复用统一 Adapter 以及相同审计和结果契约，而不是复制桌面逻辑或直连 Provider。
+任务结果通过执行回执的 `agentResults[]` 返回并进入既有 Agent History。该入口不允许工具调用或模块副作用；若结果需要改变系统状态，程序必须通过自身另行声明的 Capability 请求，不能把模型输出当成授权。程序权限与 Agent 权限不合并，双方不能借对方提升权限。
+
+`crates/skill-runtime` 已补充 Skill 侧准入前置契约：只有 Manifest 同时声明 Agent Task Contribution 与 `invoke-agent-tasks`、用户对当前精确版本授予完全一致的 Capability 集合、并且 Skill 当前已激活时，Host 才返回可信 `skill:<id>` requester。暂停、崩溃、quarantine 和卸载均撤销 Contribution 快照与 requester。宿主随后必须用该 requester 构造 `ModuleAgentAdapter`；Skill Runtime 本身不依赖 Provider、Task Submitter、Tool Registry 或数据库。真实 Skill Worker、Desktop Submitter 接线与结果回执尚未实现；Connector Runtime 也尚未实现，二者不得复制桌面逻辑或直连 Provider。
 
 ### 6.4 Connector 与 AI
 
@@ -180,7 +182,7 @@ flowchart LR
 - `crates/user-code-gateway` 已让 Agent 与用户程序复用 Backend，但使用彼此独立的 Policy，避免权限继承。
 - `apps/desktop/src-tauri` 已接通 Desktop 与 CLI 的 Agent 入口、Ollama Worker、待批准续跑和历史持久化。
 - `crates/agent-runtime` 已实现宿主无关的 `AgentTaskGateway` 准入核心：精确调用方、来源、Provider、Tool allowlist、数据等级、主动性、最大深度与预算上限全部 fail-closed；子任务继承 Trace，并取请求、调用方策略和父任务剩余预算的交集，不能通过递归重置额度。
-- Desktop 对话、Desktop 独立 Tool 准备入口和 CLI 非交互任务均已迁移到 `AgentTaskGateway`；其 Provider 与 Tool 集合从当前生产目录生成，入口不能通过自定义请求扩大策略。Automation、Skill、Connector 和 User Program 尚无生产入口，因此模块反向调用仍未全部贯通。
+- Desktop 对话、Desktop 独立 Tool 准备入口和 CLI 非交互任务均已迁移到 `AgentTaskGateway`；其 Provider 与 Tool 集合从当前生产目录生成，入口不能通过自定义请求扩大策略。Automation 与 User Program 已有生产入口；Skill 已具备 Manifest、授权、生命周期和可信 requester 核心，但尚未接入独立 Worker 与 Desktop Submitter；Connector 尚无生产入口，因此模块反向调用仍未全部贯通。
 - Tool Registry 当前仍是内建目录，尚未接入 Extension Contribution Manifest；新增模块不得直接把工具硬编码进 Provider Adapter。
 
 ## 12. 实施顺序
@@ -188,8 +190,8 @@ flowchart LR
 1. 在 Gateway 外层接入调用方 Capability、结果 Schema、持久 Task Tree 和共享根预算账本。
 2. 为已接入桌面 Agent Service 的 Automation 子任务增加持久异步结果回填、跨进程运行中恢复、并发、冷却和费用门禁，并扩展不可取消副作用的补偿状态。
 3. 将已用于 Automation 的 Context Admission 抽成共享策略，扩展来源 Schema、字段 allowlist、Unicode 规范化、编码混淆检测和安全事件审计，再接入 Connector、Clipboard、Files 与 Vision。
-4. 将后续 Skill、Connector 和 User Program 任务创建接入同一 Gateway。
-4. 扩展 Automation 保存/启停/运行工具，形成“AI 生成并安全保存规则”闭环。
-5. 接入 Skill 与 Connector Contribution Manifest，动态汇入 Tool Registry。
-6. 增加 Files、Clipboard、Notification、Calendar、Memory 和 Vision 的窄能力 Adapter。
-7. 完成任务持久恢复、递归检测、全链路审计与跨平台故障测试。
+4. 将 Skill 的可信 requester 接入独立 Worker 与 Desktop Module Submitter，并为 Connector 实现相同 Gateway 入口。
+5. 扩展 Automation 保存/启停/运行工具，形成“AI 生成并安全保存规则”闭环。
+6. 将 Skill Command 与后续 Connector Contribution 动态汇入共享 Registry；Agent Tool Contribution 仍需独立风险与 Schema 审查。
+7. 增加 Files、Clipboard、Notification、Calendar、Memory 和 Vision 的窄能力 Adapter。
+8. 完成任务持久恢复、递归检测、全链路审计与跨平台故障测试。

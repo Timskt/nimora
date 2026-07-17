@@ -152,6 +152,10 @@ ID / 标题 / 优先级 / 前置条件
 | EXT-006 | CPU/内存超额 | 扩展被限流或终止，用户看到原因 | P0 |
 | EXT-007 | 扩展配置事务应用失败 | 不发布半写入配置，保持应用前状态并报告原因 | P0 |
 | EXT-008 | 卸载保留数据 | 用户选择正确执行，密钥引用被清理 | P1 |
+| EXT-009 | 精确 Skill 授权 | 版本或 Capability 集合不一致时 fail-closed，无 Contribution 生效 | P0 |
+| EXT-010 | Contribution 租约撤销 | 暂停、崩溃或 quarantine 后 Command 快照与 AI requester 同步消失 | P0 |
+| EXT-011 | Skill 请求 AI | 仅已激活且声明 Agent Task Contribution 的 Skill 获得 `skill:<id>`，随后进入统一 Module Adapter | P0 |
+| EXT-012 | Skill 绕过 AI 网关 | 未激活、未声明或尝试直连 Provider 时在 Provider 前拒绝且无副作用 | P0 |
 | SCRIPT-001 | 用户脚本调用已授权 Command | 正常执行并产生 Run、Trace 和审计记录 | P0 |
 | SCRIPT-002 | 脚本访问未授权文件、网络、进程 | Host 拒绝，不能绕过 Capability Broker | P0 |
 | SCRIPT-003 | 死循环、内存泄漏、事件递归 | 对应实例被限流或终止，Core 继续运行 | P0 |

@@ -4,6 +4,7 @@ members = [
   "crates/agent-runtime",
   "crates/agent-context-admission",
   "crates/module-agent-adapter",
+  "crates/skill-runtime",
   "crates/agent-provider-worker",
   "crates/agent-tools",
   "crates/automation-runtime",
