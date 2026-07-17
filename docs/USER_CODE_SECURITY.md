@@ -70,6 +70,8 @@
 
 `start_user_program_event_loop` 为一个订阅最多创建一个命名宿主线程，空队列采用 50 ms 有界轮询；会话被关闭、撤权、升级、回滚或安全模式清理后循环自动退出。`user_program_event_session_status` 只读公开自动运行状态、成功执行数、累计队列丢弃数和最后错误，便于 Creator Studio 呈现诊断而不暴露事件注入入口。
 
+每次 Worker 启动前，桌面宿主会注册 `executionId + programId + ExecutionCancellation`，并用 Drop 守卫覆盖启动失败、协议错误、Gateway 错误和正常返回等所有清理路径。Supervisor 每 10 ms 检查共享取消令牌，收到取消后直接终止并回收子进程。`stop_user_program` 可取消正在运行的正式 Worker；安全模式取消全部 Worker，撤权、升级和回滚按程序身份取消对应 Worker。取消令牌只提供单向终止能力，不暴露子进程、Core 或系统句柄。
+
 ## 模块调用模型
 
 ```text

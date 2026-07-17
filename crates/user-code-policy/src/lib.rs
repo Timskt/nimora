@@ -255,6 +255,30 @@ pub struct ExecutionHandle {
     pub limits: WorkerLimits,
 }
 
+#[derive(Debug, Clone)]
+pub struct ExecutionCancellation {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl Default for ExecutionCancellation {
+    fn default() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl ExecutionCancellation {
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
 impl ExecutionHandle {
     #[must_use]
     pub const fn execution_id(&self) -> Uuid {
@@ -263,6 +287,13 @@ impl ExecutionHandle {
 
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn cancellation(&self) -> ExecutionCancellation {
+        ExecutionCancellation {
+            cancelled: Arc::clone(&self.cancelled),
+        }
     }
 
     /// Checks whether the execution may continue.

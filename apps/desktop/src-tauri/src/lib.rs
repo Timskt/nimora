@@ -19,8 +19,8 @@ use nimora_user_code_package::{
     ProgramPackageError, install_program_atomically, load_installed_program, rollback_program,
 };
 use nimora_user_code_policy::{
-    Capability, ExecutionController, ExecutionHandle, ExecutionPolicy, PolicyError,
-    ProgramManifest, WorkerError, evaluate,
+    Capability, ExecutionCancellation, ExecutionController, ExecutionHandle, ExecutionPolicy,
+    PolicyError, ProgramManifest, WorkerError, evaluate,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -62,6 +62,7 @@ struct DesktopState {
     program_store: PathBuf,
     program_permissions: SqliteProgramPermissionRepository,
     user_program_event_sessions: Mutex<HashMap<Uuid, UserProgramEventSession>>,
+    active_user_program_workers: Mutex<HashMap<Uuid, ActiveUserProgramWorker>>,
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
     execution_controller: ExecutionController,
 }
@@ -80,6 +81,26 @@ struct UserProgramEventSession {
     executed: u64,
     dropped: u64,
     last_error: Option<String>,
+}
+
+#[derive(Debug)]
+struct ActiveUserProgramWorker {
+    program_id: String,
+    cancellation: ExecutionCancellation,
+}
+
+#[derive(Debug)]
+struct ActiveUserProgramWorkerGuard<'a> {
+    workers: &'a Mutex<HashMap<Uuid, ActiveUserProgramWorker>>,
+    execution_id: Uuid,
+}
+
+impl Drop for ActiveUserProgramWorkerGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut workers) = self.workers.lock() {
+            workers.remove(&self.execution_id);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -134,6 +155,7 @@ impl DesktopState {
             program_store,
             program_permissions: SqliteProgramPermissionRepository::open(database_path)?,
             user_program_event_sessions: Mutex::new(HashMap::new()),
+            active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
         })
@@ -700,6 +722,7 @@ fn install_user_program(
         request.manifest,
         &files,
     )?;
+    cancel_user_program_workers(&state, &result.program_id)?;
     cancel_user_program_event_sessions(&state, &result.program_id)?;
     Ok(UserProgramInstallReceipt {
         program_id: result.program_id,
@@ -716,6 +739,7 @@ fn rollback_user_program(
     program_id: String,
 ) -> Result<UserProgramRollbackReceipt, DesktopError> {
     ensure_normal_mode(&state)?;
+    cancel_user_program_workers(&state, &program_id)?;
     cancel_user_program_event_sessions(&state, &program_id)?;
     let result = rollback_program(&state.program_store, &program_id)?;
     Ok(UserProgramRollbackReceipt {
@@ -757,6 +781,7 @@ fn revoke_user_program_permissions(
 ) -> Result<(), DesktopError> {
     ensure_normal_mode(&state)?;
     state.program_permissions.revoke_program(&program_id)?;
+    cancel_user_program_workers(&state, &program_id)?;
     cancel_user_program_event_sessions(&state, &program_id)?;
     Ok(())
 }
@@ -1120,6 +1145,21 @@ fn execute_user_program_source(
     let policy = evaluate(manifest.clone())?;
     let execution = state.execution_controller.admit(&policy)?;
     let execution_id = execution.execution_id();
+    state
+        .active_user_program_workers
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .insert(
+            execution_id,
+            ActiveUserProgramWorker {
+                program_id: manifest.id.clone(),
+                cancellation: execution.cancellation(),
+            },
+        );
+    let _worker_guard = ActiveUserProgramWorkerGuard {
+        workers: &state.active_user_program_workers,
+        execution_id,
+    };
     let pet = if policy.can_read_pet_state {
         Some(serde_json::to_value(state.runtime.snapshot()?)?)
     } else {
@@ -1247,6 +1287,7 @@ fn worker_config(app: &AppHandle, execution: &ExecutionHandle) -> WorkerConfig {
         execution_id: execution.execution_id().to_string(),
         timeout: execution.limits.timeout,
         output_bytes: execution.limits.output_bytes,
+        cancellation: Some(execution.cancellation()),
     }
 }
 
@@ -1283,13 +1324,23 @@ fn stop_user_program(
     state: State<'_, DesktopState>,
     execution_id: Uuid,
 ) -> Result<(), DesktopError> {
-    let session = state
+    if let Some(session) = state
         .user_programs
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?
         .remove(&execution_id)
+    {
+        session.execution.cancel();
+        return Ok(());
+    }
+    let workers = state
+        .active_user_program_workers
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    let worker = workers
+        .get(&execution_id)
         .ok_or(DesktopError::UserProgramNotFound)?;
-    session.execution.cancel();
+    worker.cancellation.cancel();
     Ok(())
 }
 
@@ -1302,6 +1353,30 @@ fn cancel_all_user_programs(state: &DesktopState) -> Result<(), DesktopError> {
         session.execution.cancel();
     }
     sessions.clear();
+    let mut workers = state
+        .active_user_program_workers
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    for worker in workers.values() {
+        worker.cancellation.cancel();
+    }
+    workers.clear();
+    Ok(())
+}
+
+fn cancel_user_program_workers(state: &DesktopState, program_id: &str) -> Result<(), DesktopError> {
+    let mut workers = state
+        .active_user_program_workers
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    workers.retain(|_, worker| {
+        if worker.program_id == program_id {
+            worker.cancellation.cancel();
+            false
+        } else {
+            true
+        }
+    });
     Ok(())
 }
 

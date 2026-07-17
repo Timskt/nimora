@@ -138,6 +138,8 @@ ID / 标题 / 优先级 / 前置条件
 | SCRIPT-012 | 事件并发策略 | `serial` 有界保留最新事件，`drop` 统计丢弃，`cancel-previous` 忽略旧执行完成，安全取消清空队列并推进代际 | P0 |
 | SCRIPT-013 | 后台事件循环 | 同一会话重复启动不创建重复线程；关闭、撤权、升级、回滚及安全模式后循环退出，状态接口保留执行数、丢弃数和最后错误 | P0 |
 | SCRIPT-014 | Manifest 队列容量 | Rust 订阅实际采用 `eventQueueCapacity`；非法容量安装失败，Renderer 无法覆盖容量 | P0 |
+| SCRIPT-015 | 跨线程 Worker 取消 | 对无限循环 Worker 发送共享取消令牌，在 Manifest 超时前强杀并回收子进程，返回 `Cancelled` | P0 |
+| SCRIPT-016 | Worker 生命周期清理 | 正常、启动失败、协议失败、Gateway 失败、手动停止、安全模式、撤权、升级和回滚后均无遗留 active 注册 | P0 |
 | SCRIPT-005 | 离线、休眠、时钟回拨 | 按 missed-run policy 执行，无任务风暴 | P1 |
 
 ## 11. Gateway 与鉴权

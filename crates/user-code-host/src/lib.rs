@@ -1,3 +1,4 @@
+pub use nimora_user_code_policy::ExecutionCancellation;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
@@ -35,13 +36,14 @@ pub enum WorkerMessage {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct WorkerConfig {
     pub executable: String,
     pub args: Vec<String>,
     pub execution_id: String,
     pub timeout: Duration,
     pub output_bytes: u64,
+    pub cancellation: Option<ExecutionCancellation>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -154,6 +156,17 @@ impl WorkerProcess {
     /// violates the protocol or output budget.
     pub fn wait(&mut self) -> Result<WorkerMessage, HostError> {
         loop {
+            if self
+                .config
+                .cancellation
+                .as_ref()
+                .is_some_and(ExecutionCancellation::is_cancelled)
+            {
+                self.cancelled = true;
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                return Err(HostError::Cancelled);
+            }
             if self.started.elapsed() >= self.config.timeout {
                 let _ = self.child.kill();
                 let _ = self.child.wait();

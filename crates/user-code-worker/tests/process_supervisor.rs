@@ -1,4 +1,6 @@
-use nimora_user_code_host::{WorkerConfig, WorkerMessage, WorkerProcess};
+use nimora_user_code_host::{
+    ExecutionCancellation, HostError, WorkerConfig, WorkerMessage, WorkerProcess,
+};
 use serde_json::json;
 use std::time::Duration;
 
@@ -9,6 +11,7 @@ fn worker_config(timeout: Duration) -> WorkerConfig {
         execution_id: "integration-run".to_owned(),
         timeout,
         output_bytes: 1024 * 1024,
+        cancellation: None,
     }
 }
 
@@ -42,4 +45,22 @@ fn supervisor_terminates_an_infinite_worker() {
         process.wait(),
         Err(nimora_user_code_host::HostError::TimedOut)
     );
+}
+
+#[test]
+fn supervisor_honors_cross_thread_cancellation() {
+    let cancellation = ExecutionCancellation::default();
+    let mut config = worker_config(Duration::from_secs(5));
+    config.cancellation = Some(cancellation.clone());
+    let request = WorkerMessage::Run {
+        manifest: json!({}),
+        source: "while (true) {}".to_owned(),
+        input: json!(null),
+    };
+    let mut worker = WorkerProcess::spawn(config, &request).expect("spawn worker");
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        cancellation.cancel();
+    });
+    assert_eq!(worker.wait(), Err(HostError::Cancelled));
 }
