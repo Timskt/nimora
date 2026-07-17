@@ -140,4 +140,4 @@ nimora ai history export|delete
 
 工作台提供生产 Tool Catalog 的真实执行验证入口：只读工具经 Tool Registry 和共享 Capability Gateway 立即执行；写工具由 Rust 宿主生成参数绑定的 Invocation 与 Approval，并仅在 UI 展示实际 Tool ID、参数、风险和期限。Approval 不交给前端，宿主最多持有 32 个待确认项，5 分钟过期，确认或拒绝时一次性移除后再处理，因此不能换参、重放或在执行失败后隐式重试。进入 Safe Mode 会撤销全部待确认项；Recovery Mode 不允许创建或确认工具调用。
 
-运行时与 Ollama Worker 已能在后续 Provider Step 中完整传递 Assistant Tool Call 和关联 Tool Result，不再把工具结果降格为无关联文本。桌面侧后续 Provider 自动提出的 Tool Call、计划和模块动作仍必须复用当前 `AgentCoordinator`、Tool Registry、参数绑定批准与 Capability Gateway；同一 Provider Turn 的多个调用必须由宿主聚合，全部成功后才可续跑，任一拒绝则终止该 Turn，禁止部分结果被伪装成完整结果。禁止在 React、Tauri Command 或 Provider Adapter 中新增直连模块的捷径。桌面 Ollama 自动发现、Provider Tool Call 到现有确认卡的接线、历史持久化和任务恢复尚未实现。
+运行时与 Ollama Worker 已能在后续 Provider Step 中完整传递 Assistant Tool Call 和关联 Tool Result，不再把工具结果降格为无关联文本。桌面宿主现已实现 Provider Tool Turn 生命周期：只读调用立即经过共享 Capability Gateway；写调用生成同一 Turn 的参数绑定确认组，全部批准前不执行任何写副作用，全部批准后按 Provider 原始顺序执行并聚合结果，再进入下一 Provider Step；任一拒绝或过期会级联撤销兄弟确认，禁止部分结果被伪装成完整结果。该宿主闭环已有 Scripted Provider 集成测试，但生产工作台尚未显示 Provider 自动提出的确认组。禁止在 React、Tauri Command 或 Provider Adapter 中新增直连模块的捷径。桌面 Ollama 自动发现、统一 Agent IPC 响应、Provider Tool Call 到确认卡的接线、历史持久化和任务恢复尚未实现。

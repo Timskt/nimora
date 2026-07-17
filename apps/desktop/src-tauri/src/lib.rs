@@ -1,7 +1,8 @@
 use nimora_agent_runtime::{
-    AgentBudget, AgentCoordinator, AgentTask, AgentTaskOrigin, AgentTaskStatus, CancellationFlag,
-    DataClassification, DeterministicLocalProvider, ProviderExecutionContext, ProviderMessage,
-    ProviderMessageRole, ProviderRegistry, ProviderStepInput, ProviderStepOutcome, ToolAdmission,
+    AgentBudget, AgentCoordinator, AgentTask, AgentTaskOrigin, AgentTaskStatus, BaseRiskEvaluator,
+    CancellationFlag, DataClassification, DeterministicLocalProvider, PlannedToolCall,
+    ProviderExecutionContext, ProviderMessage, ProviderMessageRole, ProviderRegistry,
+    ProviderResponse, ProviderStepInput, ProviderStepOutcome, ProviderToolTurn, ToolAdmission,
     ToolApproval, ToolInvocation, ToolStepOutcome,
 };
 use nimora_agent_tools::{GatewayToolBackend, production_tool_registry};
@@ -55,7 +56,7 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
@@ -115,10 +116,54 @@ struct DesktopState {
 
 #[derive(Debug)]
 struct PendingAgentTool {
-    task: AgentTask,
     invocation: ToolInvocation,
     approval: ToolApproval,
+    effective_risk: CommandRisk,
     expires_at_ms: u64,
+    context: PendingAgentToolContext,
+}
+
+#[derive(Debug, Clone)]
+enum PendingAgentToolContext {
+    Standalone {
+        task: AgentTask,
+    },
+    ProviderTurn {
+        approval_index: usize,
+        provider_call_id: String,
+        session: Arc<Mutex<PendingProviderAgent>>,
+    },
+}
+
+#[derive(Debug)]
+struct PendingProviderAgent {
+    task: AgentTask,
+    model: String,
+    messages: Vec<ProviderMessage>,
+    max_output_tokens: u64,
+    offline: bool,
+    turn: ProviderToolTurn,
+    approvals: Vec<Option<ApprovedProviderTool>>,
+    remaining_confirmations: usize,
+}
+
+#[derive(Debug)]
+struct ApprovedProviderTool {
+    provider_call_id: String,
+    invocation: ToolInvocation,
+    approval: ToolApproval,
+}
+
+#[derive(Debug)]
+enum ProviderAgentOutcome {
+    Completed {
+        task: AgentTask,
+        response: ProviderResponse,
+    },
+    Waiting {
+        task: AgentTask,
+        pending: Vec<AgentToolResult>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -766,23 +811,30 @@ fn agent_catalog() -> Result<AgentCatalog, DesktopError> {
 }
 
 #[tauri::command]
-fn run_local_agent(request: LocalAgentRequest) -> Result<LocalAgentResult, DesktopError> {
+#[allow(clippy::needless_pass_by_value)]
+fn run_local_agent(
+    request: LocalAgentRequest,
+    state: State<'_, DesktopState>,
+) -> Result<LocalAgentResult, DesktopError> {
+    run_local_agent_inner(request, &state)
+}
+
+fn run_local_agent_inner(
+    request: LocalAgentRequest,
+    state: &DesktopState,
+) -> Result<LocalAgentResult, DesktopError> {
     if request.prompt.trim().is_empty() || request.prompt.len() > 32 * 1024 {
         return Err(DesktopError::Agent(
             "prompt must contain 1 to 32768 bytes".to_owned(),
         ));
     }
-    let mut providers = ProviderRegistry::default();
-    providers
-        .register(
-            DeterministicLocalProvider::new()
-                .map_err(|error| DesktopError::Agent(error.to_string()))?,
-        )
-        .map_err(|error| DesktopError::Agent(error.to_string()))?;
-    let tools =
-        production_tool_registry().map_err(|error| DesktopError::Agent(error.to_string()))?;
+    ensure_normal_mode(state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    let providers = desktop_provider_registry()?;
     let now_ms = current_time_ms()?;
-    let mut task = AgentTask::new(
+    let task = AgentTask::new(
         AgentTaskOrigin::Desktop,
         "desktop:local-user",
         "provider:deterministic-local",
@@ -790,41 +842,208 @@ fn run_local_agent(request: LocalAgentRequest) -> Result<LocalAgentResult, Deskt
         now_ms,
     )
     .map_err(|error| DesktopError::Agent(error.to_string()))?;
-    let coordinator = AgentCoordinator::new(&providers, &tools);
-    let outcome = coordinator
-        .provider_step(
-            &mut task,
-            ProviderStepInput {
-                model: "model:echo-v1".to_owned(),
-                messages: vec![ProviderMessage::text(
-                    ProviderMessageRole::User,
-                    request.prompt,
-                    DataClassification::Personal,
-                    true,
-                )],
-                max_output_tokens: 512,
-                context: ProviderExecutionContext {
-                    timeout: Duration::from_secs(30),
-                    cancellation: CancellationFlag::default(),
-                    credential_reference: None,
-                },
-                offline: true,
-                now_ms,
-            },
-        )
-        .map_err(|error| DesktopError::Agent(error.to_string()))?;
+    let outcome = advance_provider_agent(
+        &providers,
+        state,
+        task,
+        "model:echo-v1".to_owned(),
+        vec![ProviderMessage::text(
+            ProviderMessageRole::User,
+            request.prompt,
+            DataClassification::Personal,
+            true,
+        )],
+        512,
+        true,
+    )?;
     match outcome {
-        ProviderStepOutcome::Completed { response } => Ok(LocalAgentResult {
+        ProviderAgentOutcome::Completed { task, response } => Ok(LocalAgentResult {
             spec: "nimora.desktop-agent-result/1",
             task,
             content: response.content,
             finish_reason: response.finish_reason,
             usage: response.usage,
         }),
-        ProviderStepOutcome::ToolCalls { .. } => Err(DesktopError::Agent(
-            "local diagnostic provider returned an unexpected tool call".to_owned(),
-        )),
+        ProviderAgentOutcome::Waiting { pending, .. } => Err(DesktopError::Agent(format!(
+            "local diagnostic provider unexpectedly requested {} confirmations",
+            pending.len()
+        ))),
     }
+}
+
+fn advance_provider_agent(
+    providers: &ProviderRegistry,
+    state: &DesktopState,
+    mut task: AgentTask,
+    model: String,
+    mut messages: Vec<ProviderMessage>,
+    max_output_tokens: u64,
+    offline: bool,
+) -> Result<ProviderAgentOutcome, DesktopError> {
+    let tools = production_tool_registry().map_err(agent_error)?;
+    let coordinator = AgentCoordinator::new(providers, &tools);
+    let now_ms = current_time_ms()?;
+    let outcome = coordinator
+        .provider_step(
+            &mut task,
+            ProviderStepInput {
+                model: model.clone(),
+                messages: messages.clone(),
+                max_output_tokens,
+                context: ProviderExecutionContext {
+                    timeout: Duration::from_secs(30),
+                    cancellation: CancellationFlag::default(),
+                    credential_reference: None,
+                },
+                offline,
+                now_ms,
+            },
+        )
+        .map_err(agent_error)?;
+    let ProviderStepOutcome::ToolCalls { response, calls } = outcome else {
+        let ProviderStepOutcome::Completed { response } = outcome else {
+            unreachable!();
+        };
+        return Ok(ProviderAgentOutcome::Completed { task, response });
+    };
+    let mut turn = ProviderToolTurn::new(response).map_err(agent_error)?;
+    let confirmations =
+        execute_ready_provider_tools(providers, state, &mut task, &mut turn, calls, now_ms)?;
+    if confirmations.is_empty() {
+        messages.extend(turn.continuation_messages().map_err(agent_error)?);
+        return advance_provider_agent(
+            providers,
+            state,
+            task,
+            model,
+            messages,
+            max_output_tokens,
+            offline,
+        );
+    }
+    register_provider_confirmations(
+        state,
+        task,
+        model,
+        messages,
+        max_output_tokens,
+        offline,
+        turn,
+        confirmations,
+        now_ms,
+    )
+}
+
+fn execute_ready_provider_tools(
+    providers: &ProviderRegistry,
+    state: &DesktopState,
+    task: &mut AgentTask,
+    turn: &mut ProviderToolTurn,
+    calls: Vec<PlannedToolCall>,
+    now_ms: u64,
+) -> Result<Vec<(PlannedToolCall, CommandRisk)>, DesktopError> {
+    let tools = production_tool_registry().map_err(agent_error)?;
+    let coordinator = AgentCoordinator::new(providers, &tools);
+    let backend = GatewayToolBackend::new(
+        DesktopCapabilityBackend { state },
+        GatewayToolBackend::<DesktopCapabilityBackend<'_>>::standard_policy(task.id, task.trace_id),
+    );
+    let mut confirmations = Vec::new();
+    for call in calls {
+        let effective_risk = match call.admission {
+            ToolAdmission::Ready { effective_risk }
+            | ToolAdmission::ConfirmationRequired { effective_risk, .. } => effective_risk,
+        };
+        if matches!(call.admission, ToolAdmission::ConfirmationRequired { .. }) {
+            confirmations.push((call, effective_risk));
+            continue;
+        }
+        let ToolStepOutcome::Completed { output, .. } = coordinator
+            .tool_step(task, &backend, call.invocation.clone(), None, now_ms)
+            .map_err(agent_error)?
+        else {
+            return Err(DesktopError::Agent(
+                "read-only Provider tool unexpectedly requested confirmation".to_owned(),
+            ));
+        };
+        turn.record_result(
+            &call.provider_call_id,
+            call.invocation.tool_id.as_str(),
+            output,
+        )
+        .map_err(agent_error)?;
+    }
+    Ok(confirmations)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn register_provider_confirmations(
+    state: &DesktopState,
+    mut task: AgentTask,
+    model: String,
+    messages: Vec<ProviderMessage>,
+    max_output_tokens: u64,
+    offline: bool,
+    turn: ProviderToolTurn,
+    confirmations: Vec<(PlannedToolCall, CommandRisk)>,
+    now_ms: u64,
+) -> Result<ProviderAgentOutcome, DesktopError> {
+    if task.status != AgentTaskStatus::WaitingForConfirmation {
+        task.transition(AgentTaskStatus::WaitingForConfirmation, now_ms)
+            .map_err(agent_error)?;
+    }
+    let expires_at_ms = now_ms.saturating_add(AGENT_TOOL_APPROVAL_TTL_MS);
+    let session = Arc::new(Mutex::new(PendingProviderAgent {
+        task: task.clone(),
+        model,
+        messages,
+        max_output_tokens,
+        offline,
+        turn,
+        approvals: (0..confirmations.len()).map(|_| None).collect(),
+        remaining_confirmations: confirmations.len(),
+    }));
+    let mut pending_store = state
+        .pending_agent_tools
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    pending_store.retain(|_, item| item.expires_at_ms > now_ms);
+    if pending_store.len().saturating_add(confirmations.len()) > MAX_PENDING_AGENT_TOOLS {
+        return Err(DesktopError::Agent(
+            "maximum pending Agent tool confirmations reached".to_owned(),
+        ));
+    }
+    let mut pending_results = Vec::with_capacity(confirmations.len());
+    for (approval_index, (call, effective_risk)) in confirmations.into_iter().enumerate() {
+        let approval = ToolApproval::bind(&call.invocation, effective_risk);
+        pending_store.insert(
+            call.invocation.invocation_id,
+            PendingAgentTool {
+                invocation: call.invocation.clone(),
+                approval,
+                effective_risk,
+                expires_at_ms,
+                context: PendingAgentToolContext::ProviderTurn {
+                    approval_index,
+                    provider_call_id: call.provider_call_id,
+                    session: Arc::clone(&session),
+                },
+            },
+        );
+        pending_results.push(AgentToolResult {
+            spec: "nimora.desktop-agent-tool-result/1",
+            task: task.clone(),
+            invocation: call.invocation,
+            effective_risk,
+            requires_confirmation: true,
+            expires_at_ms: Some(expires_at_ms),
+            output: None,
+        });
+    }
+    Ok(ProviderAgentOutcome::Waiting {
+        task,
+        pending: pending_results,
+    })
 }
 
 #[tauri::command]
@@ -911,10 +1130,11 @@ fn prepare_agent_tool_inner(
     pending.insert(
         invocation.invocation_id,
         PendingAgentTool {
-            task: task.clone(),
             invocation: invocation.clone(),
             approval,
+            effective_risk,
             expires_at_ms,
+            context: PendingAgentToolContext::Standalone { task: task.clone() },
         },
     );
     Ok(AgentToolResult {
@@ -934,18 +1154,29 @@ fn confirm_agent_tool(
     request: ResolveAgentToolRequest,
     state: State<'_, DesktopState>,
 ) -> Result<AgentToolResult, DesktopError> {
-    confirm_agent_tool_inner(&request, &state)
+    let providers = desktop_provider_registry()?;
+    confirm_agent_tool_with_registry(&request, &state, &providers).map(|(result, _)| result)
 }
 
+#[cfg(test)]
 fn confirm_agent_tool_inner(
     request: &ResolveAgentToolRequest,
     state: &DesktopState,
 ) -> Result<AgentToolResult, DesktopError> {
+    let providers = desktop_provider_registry()?;
+    confirm_agent_tool_with_registry(request, state, &providers).map(|(result, _)| result)
+}
+
+fn confirm_agent_tool_with_registry(
+    request: &ResolveAgentToolRequest,
+    state: &DesktopState,
+    providers: &ProviderRegistry,
+) -> Result<(AgentToolResult, Option<ProviderAgentOutcome>), DesktopError> {
     ensure_normal_mode(state)?;
     if state.safety.snapshot()?.mode == RuntimeMode::Safe {
         return Err(DesktopError::SafeModeActive);
     }
-    let mut pending = state
+    let pending = state
         .pending_agent_tools
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?
@@ -953,23 +1184,48 @@ fn confirm_agent_tool_inner(
         .ok_or_else(|| DesktopError::Agent("pending Agent tool was not found".to_owned()))?;
     let now_ms = current_time_ms()?;
     if pending.expires_at_ms <= now_ms {
+        cancel_pending_provider_siblings(state, &pending.context)?;
         return Err(DesktopError::Agent(
             "pending Agent tool confirmation expired".to_owned(),
         ));
     }
     let tools = production_tool_registry().map_err(agent_error)?;
-    let providers = ProviderRegistry::default();
-    let coordinator = AgentCoordinator::new(&providers, &tools);
+    let coordinator = AgentCoordinator::new(providers, &tools);
+    match pending.context.clone() {
+        PendingAgentToolContext::Standalone { task } => {
+            confirm_standalone_agent_tool(state, &coordinator, pending, task, now_ms)
+        }
+        PendingAgentToolContext::ProviderTurn {
+            approval_index,
+            provider_call_id,
+            session,
+        } => confirm_provider_agent_tool(
+            providers,
+            state,
+            &coordinator,
+            pending,
+            approval_index,
+            provider_call_id,
+            &session,
+            now_ms,
+        ),
+    }
+}
+
+fn confirm_standalone_agent_tool(
+    state: &DesktopState,
+    coordinator: &AgentCoordinator<'_, BaseRiskEvaluator>,
+    pending: PendingAgentTool,
+    mut task: AgentTask,
+    now_ms: u64,
+) -> Result<(AgentToolResult, Option<ProviderAgentOutcome>), DesktopError> {
     let backend = GatewayToolBackend::new(
         DesktopCapabilityBackend { state },
-        GatewayToolBackend::<DesktopCapabilityBackend<'_>>::standard_policy(
-            pending.task.id,
-            pending.task.trace_id,
-        ),
+        GatewayToolBackend::<DesktopCapabilityBackend<'_>>::standard_policy(task.id, task.trace_id),
     );
     let ToolStepOutcome::Completed { output, .. } = coordinator
         .tool_step(
-            &mut pending.task,
+            &mut task,
             &backend,
             pending.invocation.clone(),
             Some(&pending.approval),
@@ -981,19 +1237,166 @@ fn confirm_agent_tool_inner(
             "approved Agent tool remained pending".to_owned(),
         ));
     };
-    pending
-        .task
-        .transition(AgentTaskStatus::Succeeded, now_ms)
+    task.transition(AgentTaskStatus::Succeeded, now_ms)
         .map_err(agent_error)?;
-    Ok(AgentToolResult {
+    Ok((completed_agent_tool_result(pending, task, output), None))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn confirm_provider_agent_tool(
+    providers: &ProviderRegistry,
+    state: &DesktopState,
+    coordinator: &AgentCoordinator<'_, BaseRiskEvaluator>,
+    pending: PendingAgentTool,
+    approval_index: usize,
+    provider_call_id: String,
+    session: &Arc<Mutex<PendingProviderAgent>>,
+    now_ms: u64,
+) -> Result<(AgentToolResult, Option<ProviderAgentOutcome>), DesktopError> {
+    let mut session_guard = session.lock().map_err(|_| DesktopError::StatePoisoned)?;
+    let approved = ApprovedProviderTool {
+        provider_call_id,
+        invocation: pending.invocation.clone(),
+        approval: pending.approval.clone(),
+    };
+    let approval_slot = session_guard
+        .approvals
+        .get_mut(approval_index)
+        .ok_or_else(|| DesktopError::Agent("Provider approval index was invalid".to_owned()))?;
+    if approval_slot.replace(approved).is_some() {
+        return Err(DesktopError::Agent(
+            "Provider tool was already approved".to_owned(),
+        ));
+    }
+    session_guard.remaining_confirmations = session_guard.remaining_confirmations.saturating_sub(1);
+    if session_guard.remaining_confirmations > 0 {
+        return Ok((
+            AgentToolResult {
+                spec: "nimora.desktop-agent-tool-result/1",
+                task: session_guard.task.clone(),
+                invocation: pending.invocation,
+                effective_risk: pending.effective_risk,
+                requires_confirmation: false,
+                expires_at_ms: None,
+                output: None,
+            },
+            None,
+        ));
+    }
+    let backend = GatewayToolBackend::new(
+        DesktopCapabilityBackend { state },
+        GatewayToolBackend::<DesktopCapabilityBackend<'_>>::standard_policy(
+            session_guard.task.id,
+            session_guard.task.trace_id,
+        ),
+    );
+    let approvals = std::mem::take(&mut session_guard.approvals);
+    let mut confirmed_output = None;
+    for approved in approvals.into_iter().flatten() {
+        let ToolStepOutcome::Completed { output, .. } = coordinator
+            .tool_step(
+                &mut session_guard.task,
+                &backend,
+                approved.invocation.clone(),
+                Some(&approved.approval),
+                now_ms,
+            )
+            .map_err(agent_error)?
+        else {
+            return Err(DesktopError::Agent(
+                "approved Provider tool remained pending".to_owned(),
+            ));
+        };
+        session_guard
+            .turn
+            .record_result(
+                &approved.provider_call_id,
+                approved.invocation.tool_id.as_str(),
+                output.clone(),
+            )
+            .map_err(agent_error)?;
+        if approved.invocation.invocation_id == pending.invocation.invocation_id {
+            confirmed_output = Some(output);
+        }
+    }
+    let continuation_messages = session_guard
+        .turn
+        .continuation_messages()
+        .map_err(agent_error)?;
+    session_guard.messages.extend(continuation_messages);
+    let task = session_guard.task.clone();
+    let model = session_guard.model.clone();
+    let messages = session_guard.messages.clone();
+    let max_output_tokens = session_guard.max_output_tokens;
+    let offline = session_guard.offline;
+    drop(session_guard);
+    let continuation = advance_provider_agent(
+        providers,
+        state,
+        task,
+        model,
+        messages,
+        max_output_tokens,
+        offline,
+    )?;
+    let final_task = match &continuation {
+        ProviderAgentOutcome::Completed { task, .. }
+        | ProviderAgentOutcome::Waiting { task, .. } => task.clone(),
+    };
+    Ok((
+        completed_agent_tool_result(
+            pending,
+            final_task,
+            confirmed_output.ok_or_else(|| {
+                DesktopError::Agent("confirmed Provider tool produced no output".to_owned())
+            })?,
+        ),
+        Some(continuation),
+    ))
+}
+
+fn completed_agent_tool_result(
+    pending: PendingAgentTool,
+    task: AgentTask,
+    output: serde_json::Value,
+) -> AgentToolResult {
+    AgentToolResult {
         spec: "nimora.desktop-agent-tool-result/1",
-        task: pending.task,
+        task,
         invocation: pending.invocation,
-        effective_risk: CommandRisk::Low,
+        effective_risk: pending.effective_risk,
         requires_confirmation: false,
         expires_at_ms: None,
         output: Some(output),
-    })
+    }
+}
+
+fn desktop_provider_registry() -> Result<ProviderRegistry, DesktopError> {
+    let mut providers = ProviderRegistry::default();
+    providers
+        .register(DeterministicLocalProvider::new().map_err(agent_error)?)
+        .map_err(agent_error)?;
+    Ok(providers)
+}
+
+fn cancel_pending_provider_siblings(
+    state: &DesktopState,
+    context: &PendingAgentToolContext,
+) -> Result<(), DesktopError> {
+    let PendingAgentToolContext::ProviderTurn { session, .. } = context else {
+        return Ok(());
+    };
+    state
+        .pending_agent_tools
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .retain(|_, pending| match &pending.context {
+            PendingAgentToolContext::Standalone { .. } => true,
+            PendingAgentToolContext::ProviderTurn {
+                session: candidate, ..
+            } => !Arc::ptr_eq(candidate, session),
+        });
+    Ok(())
 }
 
 #[tauri::command]
@@ -1009,12 +1412,13 @@ fn reject_agent_tool_inner(
     request: &ResolveAgentToolRequest,
     state: &DesktopState,
 ) -> Result<(), DesktopError> {
-    state
+    let pending = state
         .pending_agent_tools
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?
         .remove(&request.invocation_id)
         .ok_or_else(|| DesktopError::Agent("pending Agent tool was not found".to_owned()))?;
+    cancel_pending_provider_siblings(state, &pending.context)?;
     Ok(())
 }
 
@@ -3542,16 +3946,23 @@ mod tests {
         ACTIVE_CHARACTER_FILE, AssetInstallReceipt, BUILTIN_CHARACTER_ID, DesktopError,
         DesktopState, LocalAgentRequest, PetAction, PrepareAgentToolRequest, ProfilePolicy,
         ResolveAgentToolRequest, StartupMode, TrayAction, UserProgramRollbackReceipt, WindowPolicy,
-        agent_catalog, cancel_all_pending_agent_tools, confirm_agent_tool_inner, diagnostic_report,
-        ensure_normal_mode, ensure_program_permissions, inspect_asset_catalog,
-        install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
-        parse_user_program_plan, permission_grant, persist_active_character,
-        prepare_agent_tool_inner, reject_agent_tool_inner, resolve_active_character,
-        resolve_character_renderer, run_local_agent, screen_coordinate, serve_asset_protocol,
-        user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
+        agent_catalog, cancel_all_pending_agent_tools, confirm_agent_tool_inner,
+        confirm_agent_tool_with_registry, diagnostic_report, ensure_normal_mode,
+        ensure_program_permissions, inspect_asset_catalog, install_gltf_character,
+        open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
+        permission_grant, persist_active_character, prepare_agent_tool_inner,
+        reject_agent_tool_inner, resolve_active_character, resolve_character_renderer,
+        run_local_agent_inner, screen_coordinate, serve_asset_protocol, user_program_input,
+        valid_asset_identifier, validate_model_source, validate_package_source,
         validate_requested_animation_map,
     };
-    use nimora_agent_runtime::{AgentTaskOrigin, AgentTaskStatus};
+    use nimora_agent_runtime::{
+        AgentBudget, AgentTask, AgentTaskOrigin, AgentTaskStatus, DataClassification,
+        ProviderAdapter, ProviderCapabilities, ProviderCapability, ProviderDescriptor,
+        ProviderError, ProviderExecutionContext, ProviderFinishReason, ProviderLocality,
+        ProviderMessage, ProviderMessageRole, ProviderRegistry, ProviderRequest, ProviderResponse,
+        ProviderToolCall, ProviderUsage,
+    };
     use nimora_asset_installer::{GltfCharacterMetadata, ModelAnimationBinding};
     use nimora_diagnostics_bundle::{
         DiagnosticComponent, DiagnosticEventCode, DiagnosticSeverity, PersistentDiagnosticJournal,
@@ -3562,7 +3973,7 @@ mod tests {
     use nimora_runtime_core::{Event, EventSource, Position, RuntimeMode};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
-    use std::path::Path;
+    use std::{collections::BTreeSet, path::Path};
     use uuid::Uuid;
 
     fn normal_desktop_state() -> (std::path::PathBuf, DesktopState) {
@@ -3578,6 +3989,139 @@ mod tests {
         )
         .expect("normal desktop state");
         (root, state)
+    }
+
+    #[derive(Debug)]
+    struct TwoStepDesktopProvider {
+        descriptor: ProviderDescriptor,
+    }
+
+    #[derive(Debug)]
+    struct MultiWriteDesktopProvider {
+        descriptor: ProviderDescriptor,
+    }
+
+    impl TwoStepDesktopProvider {
+        fn new() -> Self {
+            Self {
+                descriptor: ProviderDescriptor::new(
+                    "provider:desktop-test",
+                    "Desktop Test Provider",
+                    ProviderLocality::Local,
+                    4_096,
+                    512,
+                    ProviderCapabilities {
+                        supported: BTreeSet::from([
+                            ProviderCapability::StructuredToolCalls,
+                            ProviderCapability::UsageReporting,
+                        ]),
+                    },
+                )
+                .expect("provider descriptor"),
+            }
+        }
+    }
+
+    impl MultiWriteDesktopProvider {
+        fn new() -> Self {
+            Self {
+                descriptor: ProviderDescriptor::new(
+                    "provider:desktop-multi-write-test",
+                    "Desktop Multi Write Test Provider",
+                    ProviderLocality::Local,
+                    4_096,
+                    512,
+                    ProviderCapabilities {
+                        supported: BTreeSet::from([
+                            ProviderCapability::StructuredToolCalls,
+                            ProviderCapability::UsageReporting,
+                        ]),
+                    },
+                )
+                .expect("provider descriptor"),
+            }
+        }
+    }
+
+    impl ProviderAdapter for TwoStepDesktopProvider {
+        fn descriptor(&self) -> &ProviderDescriptor {
+            &self.descriptor
+        }
+
+        fn complete(
+            &self,
+            request: &ProviderRequest,
+            _context: &ProviderExecutionContext,
+        ) -> Result<ProviderResponse, ProviderError> {
+            let continued = request
+                .messages
+                .iter()
+                .any(|message| message.role == ProviderMessageRole::Tool);
+            Ok(ProviderResponse {
+                spec: "nimora.agent-provider-response/1".to_owned(),
+                request_id: request.request_id,
+                content: if continued {
+                    "桌宠位置已经更新".to_owned()
+                } else {
+                    String::new()
+                },
+                tool_calls: if continued {
+                    Vec::new()
+                } else {
+                    vec![ProviderToolCall {
+                        id: "desktop-call:1".to_owned(),
+                        tool_id: "pet.position.move".parse().expect("tool id"),
+                        arguments: json!({"x": 44, "y": 66}),
+                    }]
+                },
+                finish_reason: if continued {
+                    ProviderFinishReason::Completed
+                } else {
+                    ProviderFinishReason::ToolCalls
+                },
+                usage: ProviderUsage {
+                    input_tokens: 8,
+                    output_tokens: 4,
+                    cost_microunits: 0,
+                },
+            })
+        }
+    }
+
+    impl ProviderAdapter for MultiWriteDesktopProvider {
+        fn descriptor(&self) -> &ProviderDescriptor {
+            &self.descriptor
+        }
+
+        fn complete(
+            &self,
+            request: &ProviderRequest,
+            _context: &ProviderExecutionContext,
+        ) -> Result<ProviderResponse, ProviderError> {
+            Ok(ProviderResponse {
+                spec: "nimora.agent-provider-response/1".to_owned(),
+                request_id: request.request_id,
+                content: String::new(),
+                tool_calls: vec![
+                    ProviderToolCall {
+                        id: "desktop-multi-call:1".to_owned(),
+                        tool_id: "pet.position.move".parse().expect("tool id"),
+                        arguments: json!({"x": 11, "y": 22}),
+                    },
+                    ProviderToolCall {
+                        id: "desktop-multi-call:2".to_owned(),
+                        tool_id: "pet.position.move".parse().expect("tool id"),
+                        arguments: json!({"x": 33, "y": 44}),
+                    },
+                ],
+                finish_reason: ProviderFinishReason::ToolCalls,
+                usage: ProviderUsage {
+                    input_tokens: 8,
+                    output_tokens: 4,
+                    cost_microunits: 0,
+                },
+            })
+        }
     }
 
     #[test]
@@ -3604,30 +4148,158 @@ mod tests {
 
     #[test]
     fn desktop_local_agent_runs_offline_without_cost_or_side_effects() {
-        let result = run_local_agent(LocalAgentRequest {
-            prompt: "检查本地能力".to_owned(),
-        })
+        let (root, state) = normal_desktop_state();
+        let result = run_local_agent_inner(
+            LocalAgentRequest {
+                prompt: "检查本地能力".to_owned(),
+            },
+            &state,
+        )
         .expect("local agent result");
         assert_eq!(result.content, "检查本地能力");
         assert_eq!(result.task.origin, AgentTaskOrigin::Desktop);
         assert_eq!(result.task.status, AgentTaskStatus::Succeeded);
         assert_eq!(result.usage.cost_microunits, 0);
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]
     fn desktop_local_agent_rejects_empty_and_oversized_prompts() {
+        let (root, state) = normal_desktop_state();
         assert!(
-            run_local_agent(LocalAgentRequest {
-                prompt: "  ".to_owned()
-            })
+            run_local_agent_inner(
+                LocalAgentRequest {
+                    prompt: "  ".to_owned()
+                },
+                &state
+            )
             .is_err()
         );
         assert!(
-            run_local_agent(LocalAgentRequest {
-                prompt: "a".repeat(32 * 1024 + 1),
-            })
+            run_local_agent_inner(
+                LocalAgentRequest {
+                    prompt: "a".repeat(32 * 1024 + 1),
+                },
+                &state
+            )
             .is_err()
         );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn desktop_provider_tool_confirmation_resumes_provider_with_gateway_result() {
+        let (root, state) = normal_desktop_state();
+        let mut providers = ProviderRegistry::default();
+        providers
+            .register(TwoStepDesktopProvider::new())
+            .expect("register provider");
+        let task = AgentTask::new(
+            AgentTaskOrigin::Desktop,
+            "desktop:test-user",
+            "provider:desktop-test",
+            AgentBudget::default(),
+            super::current_time_ms().expect("clock"),
+        )
+        .expect("task");
+        let outcome = super::advance_provider_agent(
+            &providers,
+            &state,
+            task,
+            "model:desktop-test".to_owned(),
+            vec![ProviderMessage::text(
+                ProviderMessageRole::User,
+                "把桌宠移动到右下角",
+                DataClassification::Personal,
+                true,
+            )],
+            128,
+            true,
+        )
+        .expect("first provider step");
+        let super::ProviderAgentOutcome::Waiting { pending, .. } = outcome else {
+            panic!("expected confirmation");
+        };
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").position,
+            Position { x: 0.0, y: 0.0 }
+        );
+        let request = ResolveAgentToolRequest {
+            invocation_id: pending[0].invocation.invocation_id,
+        };
+        let (_, continuation) =
+            confirm_agent_tool_with_registry(&request, &state, &providers).expect("confirm tool");
+        let Some(super::ProviderAgentOutcome::Completed { task, response }) = continuation else {
+            panic!("expected completed continuation");
+        };
+        assert_eq!(response.content, "桌宠位置已经更新");
+        assert_eq!(task.status, AgentTaskStatus::Succeeded);
+        assert_eq!(task.usage.steps, 2);
+        assert_eq!(task.usage.tool_calls, 1);
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").position,
+            Position { x: 44.0, y: 66.0 }
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn desktop_provider_rejection_cancels_approved_sibling_without_side_effects() {
+        let (root, state) = normal_desktop_state();
+        let mut providers = ProviderRegistry::default();
+        providers
+            .register(MultiWriteDesktopProvider::new())
+            .expect("register provider");
+        let task = AgentTask::new(
+            AgentTaskOrigin::Desktop,
+            "desktop:test-user",
+            "provider:desktop-multi-write-test",
+            AgentBudget::default(),
+            super::current_time_ms().expect("clock"),
+        )
+        .expect("task");
+        let outcome = super::advance_provider_agent(
+            &providers,
+            &state,
+            task,
+            "model:desktop-test".to_owned(),
+            vec![ProviderMessage::text(
+                ProviderMessageRole::User,
+                "连续移动桌宠",
+                DataClassification::Personal,
+                true,
+            )],
+            128,
+            true,
+        )
+        .expect("first provider step");
+        let super::ProviderAgentOutcome::Waiting { pending, .. } = outcome else {
+            panic!("expected confirmations");
+        };
+        assert_eq!(pending.len(), 2);
+        let first = ResolveAgentToolRequest {
+            invocation_id: pending[0].invocation.invocation_id,
+        };
+        let second = ResolveAgentToolRequest {
+            invocation_id: pending[1].invocation.invocation_id,
+        };
+        let (approved, continuation) =
+            confirm_agent_tool_with_registry(&first, &state, &providers).expect("approve first");
+        assert!(approved.output.is_none());
+        assert!(continuation.is_none());
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").position,
+            Position { x: 0.0, y: 0.0 }
+        );
+        reject_agent_tool_inner(&second, &state).expect("reject sibling");
+        assert!(confirm_agent_tool_with_registry(&second, &state, &providers).is_err());
+        assert!(confirm_agent_tool_with_registry(&first, &state, &providers).is_err());
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").position,
+            Position { x: 0.0, y: 0.0 }
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]
