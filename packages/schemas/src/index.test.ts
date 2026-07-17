@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assetPackageSchema,
   assetManifestSchema,
   eventSchema,
   petSchema,
@@ -140,5 +141,32 @@ describe("assetManifestSchema", () => {
       render: { ...validAssetManifest.render, backend: "obj" },
       entrypoints: { animationGraph: "../outside.json" },
     }).success).toBe(false);
+  });
+});
+
+describe("assetPackageSchema", () => {
+  it("requires a complete, deduplicated integrity inventory", () => {
+    const result = assetPackageSchema.safeParse({
+      manifest: validAssetManifest,
+      files: [
+        { path: "integrity.json", sha256: "a".repeat(64), bytes: 10, mediaType: "application/json" },
+        { path: "preview/poster.webp", sha256: "b".repeat(64), bytes: 20, mediaType: "image/webp" },
+      ],
+      dependencies: [],
+      totalBytes: 30,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects duplicate files and inconsistent totals", () => {
+    const result = assetPackageSchema.safeParse({
+      manifest: validAssetManifest,
+      files: [
+        { path: "integrity.json", sha256: "a".repeat(64), bytes: 10, mediaType: "application/json" },
+        { path: "integrity.json", sha256: "b".repeat(64), bytes: 20, mediaType: "application/json" },
+      ],
+      totalBytes: 10,
+    });
+    expect(result.success).toBe(false);
   });
 });

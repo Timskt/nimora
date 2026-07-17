@@ -162,6 +162,39 @@ export const assetManifestSchema = z.object({
   locales: z.array(z.string().regex(/^[a-z]{2}(?:-[A-Z]{2})?$/)).max(32).default([]),
   integrity: z.object({ algorithm: z.literal("sha256"), files: safeAssetPathSchema }),
 });
+export const assetFileSchema = z.object({
+  path: safeAssetPathSchema,
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  bytes: z.number().int().nonnegative().max(512 * 1024 * 1024),
+  mediaType: z.string().regex(/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/),
+});
+export const assetDependencySchema = z.object({
+  id: assetIdentifierSchema,
+  version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
+  optional: z.boolean().default(false),
+});
+export const assetPackageSchema = z.object({
+  manifest: assetManifestSchema,
+  files: z.array(assetFileSchema).min(1).max(10000),
+  dependencies: z.array(assetDependencySchema).max(256).default([]),
+  totalBytes: z.number().int().nonnegative().max(512 * 1024 * 1024),
+}).superRefine((assetPackage, context) => {
+  const paths = new Set<string>();
+  let computedTotal = 0;
+  for (const [index, file] of assetPackage.files.entries()) {
+    if (paths.has(file.path)) {
+      context.addIssue({ code: "custom", message: "duplicate asset path", path: ["files", index, "path"] });
+    }
+    paths.add(file.path);
+    computedTotal += file.bytes;
+  }
+  if (computedTotal !== assetPackage.totalBytes) {
+    context.addIssue({ code: "custom", message: "totalBytes must equal the file list total", path: ["totalBytes"] });
+  }
+  if (!paths.has(assetPackage.manifest.integrity.files)) {
+    context.addIssue({ code: "custom", message: "integrity file is missing from the package", path: ["manifest", "integrity", "files"] });
+  }
+});
 
 export type NimoraEvent = z.infer<typeof eventSchema>;
 export type NimoraCommand = z.infer<typeof commandSchema>;
@@ -176,3 +209,6 @@ export type SafetySnapshot = z.infer<typeof safetySnapshotSchema>;
 export type AssetType = z.infer<typeof assetTypeSchema>;
 export type RendererBackend = z.infer<typeof rendererBackendSchema>;
 export type AssetManifest = z.infer<typeof assetManifestSchema>;
+export type AssetFile = z.infer<typeof assetFileSchema>;
+export type AssetDependency = z.infer<typeof assetDependencySchema>;
+export type AssetPackage = z.infer<typeof assetPackageSchema>;

@@ -87,6 +87,8 @@ character.example.mochi/
 
 `name`、描述和商店标签必须可本地化。许可证、作者和第三方素材声明为发布必填项。
 
+安装器同时生成版本化文件清单：每个文件记录相对路径、SHA-256、字节数和媒体类型；路径不得重复，`totalBytes` 必须等于清单求和，Manifest 声明的完整性文件必须实际存在。依赖项必须声明包 ID、版本约束和是否可选，解析器在进入预览前拒绝重复文件、哈希格式错误、路径逃逸和总大小不一致。
+
 ## 5. 渲染后端
 
 第一阶段必须支持 `sprite-sequence` 和 `sprite-atlas`。版本化 Renderer Adapter 进一步支持 Lottie、Spine、Live2D Cubism、glTF/GLB 与 VRM；OBJ/FBX 仅作为隔离转换输入。任何格式不得改变 Pet Runtime 的动作语义，完整规则见 [`MODEL_RENDERING_IMPORT.md`](MODEL_RENDERING_IMPORT.md)。
