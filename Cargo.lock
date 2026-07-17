@@ -2245,6 +2245,7 @@ dependencies = [
 name = "nimora-desktop"
 version = "0.1.0"
 dependencies = [
+ "nimora-agent-context-admission",
  "nimora-agent-provider-worker",
  "nimora-agent-runtime",
  "nimora-agent-tools",

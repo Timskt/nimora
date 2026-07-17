@@ -98,3 +98,11 @@ User Code
 - 离线环境中仍可运行已安装代码，但不能绕过本地策略。
 
 当前仓库已完成 Manifest 策略评估、Tauri 会话入口、Worker 准入边界、独立进程 Supervisor、基础 JavaScript Worker、只读输入快照、一次性结构化调用计划、逐请求 Capability Gateway、首个桌面 Runtime 后端、取消/截止时间/输出预算、sidecar 构建配置、原子程序安装与回滚、执行前完整性复验、版本化权限持久化、可信有界事件订阅底座和契约测试；事件自动触发 Worker、跨平台 sidecar 发布验证、操作系统级强制内存限制、WASM 引擎及授权型文件/网络/自动化后端尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。
+
+## 用户程序调用 AI 的安全边界
+
+用户程序只有在 Manifest 声明 `invoke-agent-tasks` 且该精确版本获得用户授权后，才能从 Worker 计划的 `agentTasks[]` 创建 Agent 任务。每项任务仅接受 `providerId`、`model`、静态 `instruction` 和独立 `context[]`；存储、命令与 Agent 任务共同受单次 32 操作上限约束。
+
+宿主不可覆盖地绑定 `Module` Origin、`program:<program-id>` requester、`draft` 主动性、空 Tool Allowlist、Personal 数据分类以及收紧的 Provider、步骤、Token、墙钟和零费用预算。该入口只产出结果，不赋予模型调用模块或产生副作用的能力；程序仍需通过自己声明并获授的普通 Capability 执行后续动作。
+
+外部 Event、Connector、Clipboard、文件和网络正文禁止拼入 `instruction`，必须作为带来源的 `context[]` 进入共享 Context Admission。拒绝审计只保存原因、来源类别、计数、Trace、Module ID 与 Module Execution ID，不保存正文、完整来源、路径或密钥；审计不可写时任务保持 fail-closed。

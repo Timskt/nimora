@@ -124,7 +124,11 @@ flowchart LR
 
 ### 6.3 用户代码与 AI
 
-用户程序只能通过 SDK 创建 AI 任务或调用 Manifest 明确声明的 Agent 工具。程序权限与 Agent 权限不合并：程序发起任务时取“程序声明、用户授权、Agent Policy”三者交集；Agent 执行程序时绑定程序 ID、版本、入口、参数和批准指纹。双方不能借对方完成权限提升。
+用户程序是首个投入生产的 `Module` Origin 入口。Manifest 必须显式声明并由用户按精确版本授予 `invoke-agent-tasks`；Worker 输出的 `agentTasks[]` 只能包含 `providerId`、`model`、静态 `instruction` 与独立 `context[]`。宿主固定 requester 为 `program:<id>`、Origin 为 `Module`、主动性为 `draft`、Tool Allowlist 为空，并收紧 Provider allowlist、步骤、Token、时间与费用预算，程序不能覆盖这些边界。
+
+`instruction` 只允许表达已安装程序自身的可信任务目标；Event、Connector、Clipboard、文件或网络正文不得拼入 `instruction`，必须作为带 `source` 的 `context[]` 段进入共享 Context Admission。非法来源、预算超限、Unicode 混淆和 Prompt Injection 在 Provider 前拒绝；审计只记录来源类别、段数、字节数、Trace、Module ID 与 Module Execution ID，正文与完整来源不落盘，审计不可用时 fail-closed。
+
+任务结果通过执行回执的 `agentResults[]` 返回并进入既有 Agent History。该入口不允许工具调用或模块副作用；若结果需要改变系统状态，程序必须通过自身另行声明的 Capability 请求，不能把模型输出当成授权。程序权限与 Agent 权限不合并，双方不能借对方提升权限。Skill 与 Connector 的生产 Module Adapter 尚未实现，后续必须复用相同 Gateway、Context Admission、审计和结果契约，而不是直连 Provider。
 
 ### 6.4 Connector 与 AI
 

@@ -14,6 +14,7 @@ sha2.workspace = true
 tauri-build = { version = "2.5", features = [] }
 
 [dependencies]
+nimora-agent-context-admission = { path = "../../../crates/agent-context-admission" }
 nimora-agent-provider-worker = { path = "../../../crates/agent-provider-worker" }
 nimora-agent-runtime = { path = "../../../crates/agent-runtime" }
 nimora-agent-tools = { path = "../../../crates/agent-tools" }

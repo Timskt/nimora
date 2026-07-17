@@ -147,6 +147,7 @@ pub enum Capability {
     SubscribeEvents,
     InvokeSafeCommands,
     StoreLocalData,
+    InvokeAgentTasks,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +173,7 @@ pub struct ExecutionPolicy {
     pub can_subscribe_events: bool,
     pub can_invoke_commands: bool,
     pub can_store_local_data: bool,
+    pub can_invoke_agent_tasks: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -432,6 +434,9 @@ pub fn evaluate(manifest: ProgramManifest) -> Result<ExecutionPolicy, PolicyErro
         can_subscribe_events,
         can_invoke_commands,
         can_store_local_data: manifest.capabilities.contains(&Capability::StoreLocalData),
+        can_invoke_agent_tasks: manifest
+            .capabilities
+            .contains(&Capability::InvokeAgentTasks),
         manifest,
     })
 }
@@ -482,6 +487,15 @@ mod tests {
         assert!(!policy.can_read_profile_state);
         assert!(policy.can_subscribe_events);
         assert!(policy.can_invoke_commands);
+        assert!(!policy.can_invoke_agent_tasks);
+    }
+
+    #[test]
+    fn enables_agent_tasks_only_when_explicitly_declared() {
+        let mut value = manifest();
+        value.capabilities.push(Capability::InvokeAgentTasks);
+        let policy = evaluate(value).unwrap();
+        assert!(policy.can_invoke_agent_tasks);
     }
 
     #[test]

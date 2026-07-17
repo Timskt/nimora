@@ -115,10 +115,12 @@ pub struct DiagnosticContextAdmissionAudit {
     pub segment_count: u64,
     pub total_bytes: u64,
     pub trace_id: String,
-    pub run_id: String,
-    pub automation_id: String,
-    pub action_id: String,
-    pub command_execution_id: String,
+    pub run_id: Option<String>,
+    pub automation_id: Option<String>,
+    pub action_id: Option<String>,
+    pub command_execution_id: Option<String>,
+    pub module_id: Option<String>,
+    pub module_execution_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

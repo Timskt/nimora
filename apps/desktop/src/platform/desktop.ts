@@ -262,6 +262,7 @@ export type UserCodeCapability =
   | "read-profile-state"
   | "subscribe-events"
   | "invoke-safe-commands"
+  | "invoke-agent-tasks"
   | "store-local-data";
 
 export interface UserProgramManifest {
@@ -293,6 +294,7 @@ export interface UserProgramSessionReceipt {
 export interface UserProgramExecutionReceipt {
   executionId: string;
   responses: UserProgramCapabilityResponse[];
+  agentResults: LocalAgentResult[];
 }
 
 export interface InstallUserProgramRequest {

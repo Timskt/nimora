@@ -258,6 +258,9 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-058 | Agent 程序目录 | `program.catalog.read` 只返回完整性复验通过的已安装程序身份、声明、预算和精确版本授权摘要；损坏项只计数，不暴露源码、安装路径、Worker 路径或系统句柄；普通用户程序不继承该 Agent Capability | P0 |
 | AGT-059 | Agent 已安装程序执行 | `program.installed.execute` 必须绑定 `programId + version` 批准，只映射到 `safe.program.execute`；执行前重验 active 安装、完整性、精确版本和持久授权，仅经隔离 Worker 与 Capability Gateway 执行，无原生上下文时零副作用 | P0 |
 | AGT-060 | Agent 自动化定义验证 | `automation.definition.validate` 仅接受对象定义、事件类型和对象事件数据；经专用 Agent Gateway Query 调用自动化 Dry-run，返回计划或不匹配状态且尝试次数为零，不创建确认项、不调用 Command Backend；普通用户程序不继承该能力 | P0 |
+| AGT-061 | 用户程序创建模块 Agent 任务 | 未声明 `invoke-agent-tasks` 时在 Provider 前拒绝；精确版本授权后固定使用 `Module` Origin、`program:<id>` requester、`draft`、空 Tool Allowlist 与宿主预算，结果进入回执和 Agent History | P0 |
+| AGT-062 | 用户程序不可信 Context Admission | `context[]` 计入统一 32 操作预算并通过共享来源、段数、字节和注入检测；Prompt Injection 不进入 Provider/History，诊断只含来源类别及 Trace/Module/Execution 关联 ID | P0 |
+| AGT-063 | 用户程序 Agent 审计故障 fail-closed | Context 被拒绝但安全 Journal 不可写时返回审计不可用，Provider、History 与模块 Backend 零调用，攻击正文和密钥不出现在序列化诊断中 | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDesktopApi } from "./desktop";
+import { createDesktopApi, type UserProgramExecutionReceipt } from "./desktop";
 
 describe("desktop platform adapter", () => {
   it("keeps browser preview fully offline", async () => {
@@ -27,6 +27,23 @@ describe("desktop platform adapter", () => {
       response: "[model:echo-v1] 离线检查",
     });
     await expect(api.playAction("celebrate")).resolves.toBeNull();
+  });
+
+  it("keeps module Agent results in the user program receipt contract", () => {
+    const receipt: UserProgramExecutionReceipt = {
+      executionId: "018f0000-0000-7000-8000-000000000001",
+      responses: [],
+      agentResults: [{
+        spec: "nimora.desktop-agent-result/1",
+        status: "completed",
+        task: { id: "018f0000-0000-7000-8000-000000000002", status: "completed", providerId: "provider:deterministic-local" },
+        content: "summary",
+        finishReason: "stop",
+        usage: { inputTokens: 8, outputTokens: 2, costMicrounits: 0 },
+        pendingTools: [],
+      }],
+    };
+    expect(receipt.agentResults[0]?.pendingTools).toEqual([]);
   });
 
   it("previews automation plans without executing commands", async () => {
@@ -188,7 +205,7 @@ describe("desktop platform adapter", () => {
     const manifest = {
       id: "studio.example.focus",
       version: "1.0.0",
-      capabilities: ["read-pet-state", "subscribe-events", "invoke-safe-commands"] as const,
+      capabilities: ["read-pet-state", "subscribe-events", "invoke-safe-commands", "invoke-agent-tasks"] as const,
       subscriptions: ["pet.example.clicked"],
       eventConcurrency: "serial" as const,
       eventQueueCapacity: 16,
@@ -218,7 +235,7 @@ describe("desktop platform adapter", () => {
     await api.userProgramEventSessionStatus(subscriptionId);
     await api.closeUserProgramEventSession(subscriptionId);
     await api.startUserProgram(manifest);
-    await api.executeUserProgram(manifest, "({ commands: [] })");
+    await api.executeUserProgram(manifest, "({ agentTasks: [] })");
     await api.executeInstalledUserProgram(manifest.id);
     const envelope = {
       executionId: "018f0000-0000-7000-8000-000000000001",
@@ -297,7 +314,7 @@ describe("desktop platform adapter", () => {
       ["user_program_event_session_status", { subscriptionId }],
       ["close_user_program_event_session", { subscriptionId }],
       ["start_user_program", { manifest }],
-      ["execute_user_program", { manifest, source: "({ commands: [] })" }],
+      ["execute_user_program", { manifest, source: "({ agentTasks: [] })" }],
       ["execute_installed_user_program", { programId: manifest.id }],
       ["invoke_user_program_capability", { envelope }],
       ["invoke_user_program_capability", { envelope: {
