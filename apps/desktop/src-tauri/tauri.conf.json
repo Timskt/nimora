@@ -29,6 +29,10 @@
   },
   "bundle": {
     "active": true,
+    "resources": [
+      "binaries/ollama-provider.json",
+      "binaries/nimora-agent-provider-worker-*"
+    ],
     "targets": "all",
     "category": "Productivity",
     "shortDescription": "Local-first extensible desktop companion",

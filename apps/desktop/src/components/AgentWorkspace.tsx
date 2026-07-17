@@ -19,15 +19,21 @@ export function agentRiskLabel(risk: AgentToolResult["effectiveRisk"]): string {
   return ({ safe: "安全", low: "低风险", medium: "中风险", high: "高风险", critical: "严重风险" })[risk];
 }
 
+export function defaultModelForProvider(providerId: string): string {
+  return providerId === "provider:ollama-loopback" ? "qwen3:8b" : "model:echo-v1";
+}
+
 export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorkspaceProps) {
   const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
   const [prompt, setPrompt] = useState("总结一下当前可用的本地能力");
+  const [providerId, setProviderId] = useState("provider:deterministic-local");
+  const [model, setModel] = useState("model:echo-v1");
   const [result, setResult] = useState<LocalAgentResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [toolBusy, setToolBusy] = useState(false);
   const [toolResult, setToolResult] = useState<AgentToolResult | null>(null);
   const [turnCancelled, setTurnCancelled] = useState(false);
-  const activeProviderId = result?.task.providerId ?? catalog?.providers[0]?.id ?? "provider:unavailable";
+  const activeProviderId = result?.task.providerId ?? providerId;
   const activeProvider = catalog?.providers.find((provider) => provider.id === activeProviderId);
 
   useEffect(() => {
@@ -39,7 +45,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
     setBusy(true);
     setTurnCancelled(false);
     try {
-      const next = await desktopApi.runLocalAgent(prompt.trim());
+      const next = await desktopApi.runLocalAgent(prompt.trim(), providerId, model.trim());
       setResult(next);
       onNotice("离线 Agent 任务已完成");
     } catch {
@@ -135,8 +141,12 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
       </div>
 
       <form className="agent-composer" onSubmit={(event) => { event.preventDefault(); void run(); }}>
+        <div className="agent-runtime-controls">
+          <label><span>Provider</span><select aria-label="Agent Provider" disabled={busy} value={providerId} onChange={(event) => { const nextProviderId = event.target.value; setProviderId(nextProviderId); setModel(defaultModelForProvider(nextProviderId)); }}>{catalog?.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
+          <label><span>模型</span><input aria-label="Agent 模型" disabled={busy} maxLength={128} value={model} onChange={(event) => setModel(event.target.value)} /></label>
+        </div>
         <textarea value={prompt} maxLength={32768} onChange={(event) => setPrompt(event.target.value)} aria-label="Agent 任务内容" />
-        <div><span>不会自动执行写操作</span><button className="primary-button" disabled={busy || !prompt.trim()} type="submit">{busy ? "运行中…" : "运行任务"}</button></div>
+        <div><span>不会自动执行写操作</span><button className="primary-button" disabled={busy || !prompt.trim() || !model.trim()} type="submit">{busy ? "运行中…" : "运行任务"}</button></div>
       </form>
     </div>
 

@@ -245,3 +245,5 @@ Primitive Token → Semantic Token → Component Token → Theme Override
 - 写工具确认卡必须展示 Tool ID、格式化实际参数、风险、单次有效与过期时间，并提供同等清晰的拒绝入口；Approval 指纹等内部授权材料不得进入 DOM。
 - 多工具确认组必须维持 Provider 原始顺序；部分批准后布局稳定收敛，最终态恢复简洁对话结构，拒绝态明确说明整组零副作用。
 - 浏览器预览 Scripted Provider 只用于视觉验证；截图必须能识别当前 Provider，禁止用预览结果冒充生产 Ollama 验收。
+- Provider 与模型控件必须位于 Prompt 之前，当前选择同步到运行检查器；720px 以下纵向排列，长模型名不得撑出容器。
+- “Worker 已发现”“服务在线”“模型已安装”是三个不同状态，视觉与文案不得合并为笼统的“已连接”。

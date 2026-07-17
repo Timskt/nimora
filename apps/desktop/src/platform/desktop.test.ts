@@ -23,6 +23,14 @@ describe("desktop platform adapter", () => {
     await expect(api.playAction("celebrate")).resolves.toBeNull();
   });
 
+  it("preserves an explicitly selected preview provider and model", async () => {
+    const api = createDesktopApi(false);
+    const result = await api.runLocalAgent("检查模型选择", "provider:preview-scripted", "qwen3:8b");
+
+    expect(result.task.providerId).toBe("provider:preview-scripted");
+    expect(result.content).toBe("[qwen3:8b] 检查模型选择");
+  });
+
   it("previews an atomic provider tool turn through confirmation", async () => {
     const api = createDesktopApi(false);
     const waiting = await api.runLocalAgent("请移动桌宠并展示工具确认");
@@ -166,7 +174,7 @@ describe("desktop platform adapter", () => {
     await api.stopUserProgram(envelope.executionId);
     expect(invoke.mock.calls).toEqual([
       ["agent_catalog"],
-      ["run_local_agent", { request: { prompt: "检查本地能力" } }],
+      ["run_local_agent", { request: { prompt: "检查本地能力", providerId: "provider:deterministic-local", model: "model:echo-v1" } }],
       ["prepare_agent_tool", { request: { toolId: "pet.animation.play", arguments: { action: "celebrate" } } }],
       ["confirm_agent_tool", { request: { invocationId: "018f0000-0000-7000-8000-000000000004" } }],
       ["confirm_agent_run_tool", { request: { invocationId: "018f0000-0000-7000-8000-000000000006" } }],

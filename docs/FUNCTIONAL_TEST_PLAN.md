@@ -244,6 +244,8 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-038 | 多调用 Turn 原子续跑 | 同一 Provider Turn 按原始顺序聚合结果；缺失、未知、工具错配或重复结果均不能生成下一 Provider Step 的消息 | P0 |
 | AGT-039 | 桌面多写调用原子批准 | 同一 Provider Turn 的写调用全部批准前均无副作用；任一拒绝或过期级联撤销整组，全部批准后才按原始顺序经 Gateway 执行并续跑 | P0 |
 | AGT-040 | 桌面确认组续跑 UI | 等待态展示全部实际参数；部分批准仅保留剩余项；最后批准回填同一 Provider 的最终回答；拒绝不展示部分 Tool Result | P0 |
+| AGT-041 | 桌面 Ollama Worker 发现 | 构建嵌入可信 Manifest 摘要；运行时 Manifest 或 Worker 缺失、换包、篡改、符号链接或越界均不注册 Provider；验证通过才加入 Catalog | P0 |
+| AGT-042 | 桌面 Provider 与模型选择 | UI 只列 Registry Provider；任务携带显式 Provider ID 与模型；未知 Provider、空值和超过 128 bytes 的模型在 Adapter 前拒绝 | P0 |
 
 ## 14. 信任中心与安全模式
 

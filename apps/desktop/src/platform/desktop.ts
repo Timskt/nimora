@@ -348,7 +348,7 @@ export interface DesktopApi {
   drainEvents(): Promise<NimoraEvent[]>;
   outboxSnapshot(): Promise<OutboxSnapshot>;
   agentCatalog(): Promise<AgentCatalog>;
-  runLocalAgent(prompt: string): Promise<LocalAgentResult>;
+  runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
   prepareAgentTool(toolId: string, argumentsValue: Record<string, unknown>): Promise<AgentToolResult>;
   confirmAgentTool(invocationId: string): Promise<AgentToolResult>;
   confirmAgentRunTool(invocationId: string): Promise<LocalAgentResult>;
@@ -469,7 +469,7 @@ export function createDesktopApi(
           ],
         } as AgentCatalog;
       },
-      async runLocalAgent(prompt) {
+      async runLocalAgent(prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") {
         if (prompt.includes("移动") || prompt.includes("工具确认")) {
           previewAgentTask = { id: crypto.randomUUID(), status: "waiting_for_confirmation", providerId: "provider:preview-scripted" };
           const expiresAtMs = Date.now() + 300_000;
@@ -480,7 +480,7 @@ export function createDesktopApi(
           return { spec: "nimora.desktop-agent-result/1", status: "waitingForConfirmation", task: previewAgentTask, content: null, finishReason: null, usage: null, pendingTools: structuredClone(previewAgentPendingTools) };
         }
         previewAgentPendingTools = [];
-        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: { id: crypto.randomUUID(), status: "succeeded", providerId: "provider:deterministic-local" }, content: prompt, finishReason: "stop", usage: { inputTokens: Math.max(1, Math.ceil(prompt.length / 4)), outputTokens: Math.max(1, Math.ceil(prompt.length / 4)), costMicrounits: 0 }, pendingTools: [] };
+        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: { id: crypto.randomUUID(), status: "succeeded", providerId }, content: `[${model}] ${prompt}`, finishReason: "stop", usage: { inputTokens: Math.max(1, Math.ceil(prompt.length / 4)), outputTokens: Math.max(1, Math.ceil(prompt.length / 4)), costMicrounits: 0 }, pendingTools: [] };
       },
       async prepareAgentTool(toolId, argumentsValue) {
         const invocationId = crypto.randomUUID();
@@ -582,7 +582,7 @@ export function createDesktopApi(
     drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],
     outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,
     agentCatalog: async () => await invokeCommand("agent_catalog") as AgentCatalog,
-    runLocalAgent: async (prompt) => await invokeCommand("run_local_agent", { request: { prompt } }) as LocalAgentResult,
+    runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") => await invokeCommand("run_local_agent", { request: { prompt, providerId, model } }) as LocalAgentResult,
     prepareAgentTool: async (toolId, argumentsValue) => await invokeCommand("prepare_agent_tool", { request: { toolId, arguments: argumentsValue } }) as AgentToolResult,
     confirmAgentTool: async (invocationId) => await invokeCommand("confirm_agent_tool", { request: { invocationId } }) as AgentToolResult,
     confirmAgentRunTool: async (invocationId) => await invokeCommand("confirm_agent_run_tool", { request: { invocationId } }) as LocalAgentResult,

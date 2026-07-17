@@ -1,3 +1,4 @@
+use nimora_agent_provider_worker::{OllamaEndpoint, WorkerOllamaProvider, verify_provider_sidecar};
 use nimora_agent_runtime::{
     AgentBudget, AgentCoordinator, AgentTask, AgentTaskOrigin, AgentTaskStatus, BaseRiskEvaluator,
     CancellationFlag, DataClassification, DeterministicLocalProvider, PlannedToolCall,
@@ -78,6 +79,8 @@ const ACTIVE_CHARACTER_FILE: &str = ".active-character.json";
 const PET_WINDOW_LABEL: &str = "pet";
 const CHARACTER_RENDERER_CHANGED_EVENT: &str = "nimora://character-renderer-changed";
 const ASSET_PROTOCOL: &str = "nimora-asset";
+const DETERMINISTIC_PROVIDER_ID: &str = "provider:deterministic-local";
+const DEFAULT_AGENT_MODEL: &str = "model:echo-v1";
 const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
 const MAX_USER_PROGRAM_OPERATIONS: usize = 32;
@@ -111,6 +114,7 @@ struct DesktopState {
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
     pending_agent_tools: Mutex<HashMap<Uuid, PendingAgentTool>>,
     execution_controller: ExecutionController,
+    ollama_worker: Option<PathBuf>,
     startup: StartupStatus,
 }
 
@@ -250,6 +254,7 @@ impl DesktopState {
         program_store: PathBuf,
         backups: BackupCoordinator,
         mut diagnostic_journal: PersistentDiagnosticJournal,
+        ollama_worker: Option<PathBuf>,
     ) -> Result<Self, DesktopError> {
         let events = RuntimeEventBus::default();
         let runtime = RuntimeService::initialize_with_event_bus(
@@ -292,6 +297,7 @@ impl DesktopState {
             user_programs: Mutex::new(HashMap::new()),
             pending_agent_tools: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
+            ollama_worker,
             startup: StartupStatus {
                 mode: StartupMode::Normal,
                 reason: None,
@@ -305,6 +311,7 @@ impl DesktopState {
         backups: BackupCoordinator,
         mut diagnostic_journal: PersistentDiagnosticJournal,
         reason: &'static str,
+        ollama_worker: Option<PathBuf>,
     ) -> Result<Self, DesktopError> {
         let events = RuntimeEventBus::default();
         let runtime = RuntimeService::initialize_with_event_bus(
@@ -345,6 +352,7 @@ impl DesktopState {
             user_programs: Mutex::new(HashMap::new()),
             pending_agent_tools: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
+            ollama_worker,
             startup: StartupStatus {
                 mode: StartupMode::Recovery,
                 reason: Some(reason),
@@ -721,6 +729,18 @@ enum DesktopError {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LocalAgentRequest {
     prompt: String,
+    #[serde(default = "default_agent_provider_id")]
+    provider_id: String,
+    #[serde(default = "default_agent_model")]
+    model: String,
+}
+
+fn default_agent_provider_id() -> String {
+    DETERMINISTIC_PROVIDER_ID.to_owned()
+}
+
+fn default_agent_model() -> String {
+    DEFAULT_AGENT_MODEL.to_owned()
 }
 
 #[derive(Debug, Serialize)]
@@ -802,14 +822,13 @@ fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, D
 }
 
 #[tauri::command]
-fn agent_catalog() -> Result<AgentCatalog, DesktopError> {
-    let mut providers = ProviderRegistry::default();
-    providers
-        .register(
-            DeterministicLocalProvider::new()
-                .map_err(|error| DesktopError::Agent(error.to_string()))?,
-        )
-        .map_err(|error| DesktopError::Agent(error.to_string()))?;
+#[allow(clippy::needless_pass_by_value)]
+fn agent_catalog(state: State<'_, DesktopState>) -> Result<AgentCatalog, DesktopError> {
+    agent_catalog_inner(&state)
+}
+
+fn agent_catalog_inner(state: &DesktopState) -> Result<AgentCatalog, DesktopError> {
+    let providers = desktop_provider_registry(state)?;
     let tools =
         production_tool_registry().map_err(|error| DesktopError::Agent(error.to_string()))?;
     Ok(AgentCatalog {
@@ -837,16 +856,21 @@ fn run_local_agent_inner(
             "prompt must contain 1 to 32768 bytes".to_owned(),
         ));
     }
+    if request.model.trim().is_empty() || request.model.len() > 128 {
+        return Err(DesktopError::Agent(
+            "model must contain 1 to 128 bytes".to_owned(),
+        ));
+    }
     ensure_normal_mode(state)?;
     if state.safety.snapshot()?.mode == RuntimeMode::Safe {
         return Err(DesktopError::SafeModeActive);
     }
-    let providers = desktop_provider_registry()?;
+    let providers = desktop_provider_registry(state)?;
     let now_ms = current_time_ms()?;
     let task = AgentTask::new(
         AgentTaskOrigin::Desktop,
         "desktop:local-user",
-        "provider:deterministic-local",
+        request.provider_id,
         AgentBudget::default(),
         now_ms,
     )
@@ -855,7 +879,7 @@ fn run_local_agent_inner(
         &providers,
         state,
         task,
-        "model:echo-v1".to_owned(),
+        request.model,
         vec![ProviderMessage::text(
             ProviderMessageRole::User,
             request.prompt,
@@ -1174,7 +1198,7 @@ fn confirm_agent_tool(
     request: ResolveAgentToolRequest,
     state: State<'_, DesktopState>,
 ) -> Result<AgentToolResult, DesktopError> {
-    let providers = desktop_provider_registry()?;
+    let providers = desktop_provider_registry(&state)?;
     confirm_agent_tool_with_registry(&request, &state, &providers).map(|(result, _)| result)
 }
 
@@ -1184,7 +1208,7 @@ fn confirm_agent_run_tool(
     request: ResolveAgentToolRequest,
     state: State<'_, DesktopState>,
 ) -> Result<DesktopAgentRunResult, DesktopError> {
-    let providers = desktop_provider_registry()?;
+    let providers = desktop_provider_registry(&state)?;
     let (resolved, continuation) = confirm_agent_tool_with_registry(&request, &state, &providers)?;
     desktop_agent_confirmation_result(&state, resolved, continuation)
 }
@@ -1253,7 +1277,7 @@ fn confirm_agent_tool_inner(
     request: &ResolveAgentToolRequest,
     state: &DesktopState,
 ) -> Result<AgentToolResult, DesktopError> {
-    let providers = desktop_provider_registry()?;
+    let providers = desktop_provider_registry(state)?;
     confirm_agent_tool_with_registry(request, state, &providers).map(|(result, _)| result)
 }
 
@@ -1461,11 +1485,21 @@ fn completed_agent_tool_result(
     }
 }
 
-fn desktop_provider_registry() -> Result<ProviderRegistry, DesktopError> {
+fn desktop_provider_registry(state: &DesktopState) -> Result<ProviderRegistry, DesktopError> {
     let mut providers = ProviderRegistry::default();
     providers
         .register(DeterministicLocalProvider::new().map_err(agent_error)?)
         .map_err(agent_error)?;
+    if let Some(executable) = &state.ollama_worker {
+        let endpoint = OllamaEndpoint::new(
+            "127.0.0.1".parse().expect("constant loopback address"),
+            11_434,
+        )
+        .map_err(agent_error)?;
+        providers
+            .register(WorkerOllamaProvider::new(executable, endpoint).map_err(agent_error)?)
+            .map_err(agent_error)?;
+    }
     Ok(providers)
 }
 
@@ -3967,6 +4001,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
         &data_directory.join("diagnostics/events"),
         current_time_ms()?,
     );
+    let ollama_worker = discover_ollama_worker(app.handle());
     let startup_result = apply_pending_restore(&database_path, &backup_directory).and_then(|_| {
         if database_path.exists() {
             verify_database_file(&database_path)?;
@@ -3980,6 +4015,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
             program_store,
             backups,
             diagnostic_journal,
+            ollama_worker,
         )?,
         Err(_) => DesktopState::open_recovery(
             asset_store,
@@ -3987,6 +4023,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
             backups,
             diagnostic_journal,
             "database-unavailable",
+            ollama_worker,
         )?,
     };
     let schedule_backups = state.startup.mode == StartupMode::Normal;
@@ -4031,20 +4068,46 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+fn discover_ollama_worker(app: &AppHandle) -> Option<PathBuf> {
+    let trusted_digest = option_env!("NIMORA_OLLAMA_MANIFEST_SHA256")?;
+    let configured_roots = std::env::var_os("NIMORA_OLLAMA_SIDECAR_ROOT")
+        .map(PathBuf::from)
+        .into_iter();
+    let resource_roots = app
+        .path()
+        .resource_dir()
+        .ok()
+        .into_iter()
+        .flat_map(|root| [root.join("binaries"), root]);
+    let executable_roots = app.path().executable_dir().ok().into_iter();
+    let development_roots = cfg!(debug_assertions)
+        .then(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries"))
+        .into_iter();
+    configured_roots
+        .chain(resource_roots)
+        .chain(executable_roots)
+        .chain(development_roots)
+        .find_map(|root| {
+            verify_provider_sidecar(&root, "ollama-provider.json", trusted_digest)
+                .ok()
+                .map(|verified| verified.executable_path)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ACTIVE_CHARACTER_FILE, AssetInstallReceipt, BUILTIN_CHARACTER_ID, DesktopError,
         DesktopState, LocalAgentRequest, PetAction, PrepareAgentToolRequest, ProfilePolicy,
         ResolveAgentToolRequest, StartupMode, TrayAction, UserProgramRollbackReceipt, WindowPolicy,
-        agent_catalog, cancel_all_pending_agent_tools, confirm_agent_tool_inner,
-        confirm_agent_tool_with_registry, diagnostic_report, ensure_normal_mode,
-        ensure_program_permissions, inspect_asset_catalog, install_gltf_character,
-        open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
-        permission_grant, persist_active_character, prepare_agent_tool_inner,
-        reject_agent_tool_inner, resolve_active_character, resolve_character_renderer,
-        run_local_agent_inner, screen_coordinate, serve_asset_protocol, user_program_input,
-        valid_asset_identifier, validate_model_source, validate_package_source,
+        agent_catalog_inner, cancel_all_pending_agent_tools, confirm_agent_tool_inner,
+        confirm_agent_tool_with_registry, default_agent_model, default_agent_provider_id,
+        diagnostic_report, ensure_normal_mode, ensure_program_permissions, inspect_asset_catalog,
+        install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
+        parse_user_program_plan, permission_grant, persist_active_character,
+        prepare_agent_tool_inner, reject_agent_tool_inner, resolve_active_character,
+        resolve_character_renderer, run_local_agent_inner, screen_coordinate, serve_asset_protocol,
+        user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
         validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
@@ -4077,6 +4140,7 @@ mod tests {
             root.join("programs"),
             BackupCoordinator::new(&database, root.join("backups"), BackupPolicy::default()),
             PersistentDiagnosticJournal::in_memory(),
+            None,
         )
         .expect("normal desktop state");
         (root, state)
@@ -4217,7 +4281,8 @@ mod tests {
 
     #[test]
     fn desktop_agent_catalog_exposes_only_production_capabilities() {
-        let catalog = agent_catalog().expect("agent catalog");
+        let (root, state) = normal_desktop_state();
+        let catalog = agent_catalog_inner(&state).expect("agent catalog");
         assert_eq!(catalog.spec, "nimora.desktop-agent-catalog/1");
         assert_eq!(catalog.providers.len(), 1);
         assert_eq!(catalog.providers[0].id, "provider:deterministic-local");
@@ -4235,6 +4300,17 @@ mod tests {
                 "profile.state.read".to_owned(),
             ]
         );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn desktop_agent_catalog_adds_configured_ollama_worker() {
+        let (root, mut state) = normal_desktop_state();
+        state.ollama_worker = Some(std::env::current_exe().expect("test executable"));
+        let catalog = agent_catalog_inner(&state).expect("agent catalog");
+        assert_eq!(catalog.providers.len(), 2);
+        assert_eq!(catalog.providers[1].id, "provider:ollama-loopback");
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]
@@ -4243,6 +4319,8 @@ mod tests {
         let result = run_local_agent_inner(
             LocalAgentRequest {
                 prompt: "检查本地能力".to_owned(),
+                provider_id: default_agent_provider_id(),
+                model: default_agent_model(),
             },
             &state,
         )
@@ -4262,7 +4340,31 @@ mod tests {
         assert!(
             run_local_agent_inner(
                 LocalAgentRequest {
-                    prompt: "  ".to_owned()
+                    prompt: "  ".to_owned(),
+                    provider_id: default_agent_provider_id(),
+                    model: default_agent_model(),
+                },
+                &state
+            )
+            .is_err()
+        );
+        assert!(
+            run_local_agent_inner(
+                LocalAgentRequest {
+                    prompt: "有效任务".to_owned(),
+                    provider_id: "provider:not-registered".to_owned(),
+                    model: default_agent_model(),
+                },
+                &state
+            )
+            .is_err()
+        );
+        assert!(
+            run_local_agent_inner(
+                LocalAgentRequest {
+                    prompt: "有效任务".to_owned(),
+                    provider_id: default_agent_provider_id(),
+                    model: " ".to_owned(),
                 },
                 &state
             )
@@ -4272,6 +4374,8 @@ mod tests {
             run_local_agent_inner(
                 LocalAgentRequest {
                     prompt: "a".repeat(32 * 1024 + 1),
+                    provider_id: default_agent_provider_id(),
+                    model: default_agent_model(),
                 },
                 &state
             )
@@ -4505,6 +4609,7 @@ mod tests {
             BackupCoordinator::new(&database, root.join("backups"), BackupPolicy::default()),
             PersistentDiagnosticJournal::in_memory(),
             "database-unavailable",
+            None,
         )
         .expect("recovery state");
 

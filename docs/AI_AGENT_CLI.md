@@ -142,4 +142,6 @@ nimora ai history export|delete
 
 运行时与 Ollama Worker 已能在后续 Provider Step 中完整传递 Assistant Tool Call 和关联 Tool Result，不再把工具结果降格为无关联文本。桌面宿主现已实现 Provider Tool Turn 生命周期：只读调用立即经过共享 Capability Gateway；写调用生成同一 Turn 的参数绑定确认组，全部批准前不执行任何写副作用，全部批准后按 Provider 原始顺序执行并聚合结果，再进入下一 Provider Step；任一拒绝或过期会级联撤销兄弟确认，禁止部分结果被伪装成完整结果。
 
-桌面 IPC 统一返回 `completed` 或 `waitingForConfirmation`，等待态不是错误。工作台会展示同一 Turn 的全部 Tool ID、实际参数、风险和过期时间；部分批准只返回剩余项，最后一项批准后回填 Provider 最终回答，任一拒绝显示整组取消。Approval 仍只存在于 Rust 宿主。浏览器预览使用独立的确定性 Scripted Provider 验证双工具 UI，它不是生产 Provider，也不进入 Tauri 注册表。禁止在 React、Tauri Command 或 Provider Adapter 中新增直连模块的捷径。桌面 Ollama 自动发现、生产 Provider 选择器、生产 Ollama Tool Call 的桌面实测、历史持久化和任务恢复尚未实现。
+桌面 IPC 统一返回 `completed` 或 `waitingForConfirmation`，等待态不是错误。工作台会展示同一 Turn 的全部 Tool ID、实际参数、风险和过期时间；部分批准只返回剩余项，最后一项批准后回填 Provider 最终回答，任一拒绝显示整组取消。Approval 仍只存在于 Rust 宿主。浏览器预览使用独立的确定性 Scripted Provider 验证双工具 UI，它不是生产 Provider，也不进入 Tauri 注册表。
+
+生产桌面构建会嵌入 `ollama-provider.json` 的 SHA-256 信任摘要。启动时宿主仅从受控资源候选目录发现 sidecar，并复用 CLI 的 Manifest 路径、Manifest 摘要、普通文件、大小和 Worker 摘要校验；全部通过后才把 `provider:ollama-loopback` 注册到同一 `ProviderRegistry`。工作台只展示 Registry 中真实可用的 Provider，任务显式携带 Provider ID 与可编辑模型名，未知 Provider、空模型和越界模型名在调用前拒绝。Worker 可发现只证明发布物完整，不代表本机 Ollama 服务在线或对应模型已安装；健康探测和模型目录仍需独立实现。禁止在 React、Tauri Command 或 Provider Adapter 中新增直连模块的捷径。生产 Ollama Tool Call 的桌面实测、历史持久化和任务恢复尚未实现。

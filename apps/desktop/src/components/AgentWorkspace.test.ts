@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentRiskLabel, agentToolAccessLabel, agentUsageTotal } from "./AgentWorkspace";
+import { agentRiskLabel, agentToolAccessLabel, agentUsageTotal, defaultModelForProvider } from "./AgentWorkspace";
 
 describe("AgentWorkspace", () => {
   it("labels module access by effect instead of provider risk wording", () => {
@@ -15,5 +15,10 @@ describe("AgentWorkspace", () => {
   it("uses user-facing risk labels for provider module requests", () => {
     expect(agentRiskLabel("safe")).toBe("安全");
     expect(agentRiskLabel("critical")).toBe("严重风险");
+  });
+
+  it("suggests a provider-appropriate model without hiding the editable field", () => {
+    expect(defaultModelForProvider("provider:ollama-loopback")).toBe("qwen3:8b");
+    expect(defaultModelForProvider("provider:deterministic-local")).toBe("model:echo-v1");
   });
 });
