@@ -70,6 +70,11 @@ export interface UserProgramSessionReceipt {
   memoryBytes: number;
 }
 
+export interface UserProgramExecutionReceipt {
+  executionId: string;
+  responses: UserProgramCapabilityResponse[];
+}
+
 export type UserProgramCapabilityRequest =
   | { type: "readPetState" }
   | { type: "invokeCommand"; command: string; arguments: unknown };
@@ -103,6 +108,7 @@ export interface DesktopApi {
   rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
   validateUserProgram(manifest: UserProgramManifest): Promise<ProgramPolicyReport | null>;
   startUserProgram(manifest: UserProgramManifest): Promise<UserProgramSessionReceipt | null>;
+  executeUserProgram(manifest: UserProgramManifest, source: string): Promise<UserProgramExecutionReceipt | null>;
   invokeUserProgramCapability(envelope: UserProgramGatewayEnvelope): Promise<UserProgramCapabilityResponse | null>;
   stopUserProgram(executionId: string): Promise<void>;
 }
@@ -168,6 +174,7 @@ export function createDesktopApi(
       async rollbackAsset() { return null; },
       async validateUserProgram() { return null; },
       async startUserProgram() { return null; },
+      async executeUserProgram() { return null; },
       async invokeUserProgramCapability() { return null; },
       async stopUserProgram() {},
     };
@@ -202,6 +209,7 @@ export function createDesktopApi(
     rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,
     validateUserProgram: async (manifest) => await invokeCommand("validate_user_program", { manifest }) as ProgramPolicyReport,
     startUserProgram: async (manifest) => await invokeCommand("start_user_program", { manifest }) as UserProgramSessionReceipt,
+    executeUserProgram: async (manifest, source) => await invokeCommand("execute_user_program", { manifest, source }) as UserProgramExecutionReceipt,
     invokeUserProgramCapability: async (envelope) => await invokeCommand("invoke_user_program_capability", { envelope }) as UserProgramCapabilityResponse,
     stopUserProgram: async (executionId) => { await invokeCommand("stop_user_program", { executionId }); },
   };

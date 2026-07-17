@@ -52,6 +52,7 @@ describe("desktop platform adapter", () => {
     };
     await api.validateUserProgram(manifest);
     await api.startUserProgram(manifest);
+    await api.executeUserProgram(manifest, "({ commands: [] })");
     const envelope = {
       executionId: "018f0000-0000-7000-8000-000000000001",
       traceId: "018f0000-0000-7000-8000-000000000002",
@@ -84,6 +85,7 @@ describe("desktop platform adapter", () => {
       ["rollback_asset", { assetId: "character.example.mochi" }],
       ["validate_user_program", { manifest }],
       ["start_user_program", { manifest }],
+      ["execute_user_program", { manifest, source: "({ commands: [] })" }],
       ["invoke_user_program_capability", { envelope }],
       ["stop_user_program", { executionId: envelope.executionId }],
     ]);

@@ -13,6 +13,7 @@ use nimora_runtime_core::{
 use nimora_user_code_gateway::{
     CapabilityBackend, CapabilityGateway, CapabilityResponse, GatewayEnvelope, GatewayError,
 };
+use nimora_user_code_host::{WorkerConfig, WorkerMessage, WorkerProcess};
 use nimora_user_code_policy::{
     Capability, ExecutionController, ExecutionHandle, ExecutionPolicy, PolicyError,
     ProgramManifest, WorkerError, evaluate,
@@ -40,6 +41,7 @@ const CONTROL_CENTER_LABEL: &str = "control-center";
 const PET_WINDOW_LABEL: &str = "pet";
 const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
+const MAX_USER_PROGRAM_COMMANDS: usize = 32;
 
 #[derive(Debug)]
 struct DesktopState {
@@ -186,6 +188,29 @@ struct UserProgramSessionReceipt {
     memory_bytes: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProgramExecutionReceipt {
+    execution_id: Uuid,
+    responses: Vec<CapabilityResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UserProgramPlan {
+    #[serde(default)]
+    commands: Vec<UserProgramPlanCommand>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UserProgramPlanCommand {
+    command: String,
+    #[serde(default)]
+    arguments: serde_json::Value,
+    idempotency_key: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TrayAction {
     OpenControlCenter,
@@ -237,12 +262,16 @@ enum DesktopError {
     UserCodePolicy(#[from] PolicyError),
     #[error(transparent)]
     UserCodeWorker(#[from] WorkerError),
+    #[error("user code worker failed: {0}")]
+    UserCodeHost(String),
     #[error(transparent)]
     UserCodeGateway(#[from] GatewayError),
     #[error("user program execution was not found")]
     UserProgramNotFound,
     #[error(transparent)]
     Io(#[from] io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
     #[error(transparent)]
     Tauri(#[from] tauri::Error),
 }
@@ -588,6 +617,98 @@ fn start_user_program(
         .map_err(|_| DesktopError::StatePoisoned)?
         .insert(execution_id, UserProgramSession { policy, execution });
     Ok(receipt)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn execute_user_program(
+    state: State<'_, DesktopState>,
+    manifest: ProgramManifest,
+    source: String,
+) -> Result<UserProgramExecutionReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let policy = evaluate(manifest.clone())?;
+    let execution = state.execution_controller.admit(&policy)?;
+    let execution_id = execution.execution_id();
+    let input = serde_json::to_value(state.runtime.snapshot()?)?;
+    let request = WorkerMessage::Run {
+        manifest: serde_json::to_value(manifest)?,
+        source,
+        input,
+    };
+    let mut worker = WorkerProcess::spawn(worker_config(&execution), &request)
+        .map_err(|error| DesktopError::UserCodeHost(error.to_string()))?;
+    let response = worker
+        .wait()
+        .map_err(|error| DesktopError::UserCodeHost(error.to_string()))?;
+    let value = match response {
+        WorkerMessage::Result { value } => value,
+        WorkerMessage::Error { code, message } => {
+            return Err(DesktopError::UserCodeHost(format!("{code}: {message}")));
+        }
+        _ => {
+            return Err(DesktopError::UserCodeHost(
+                "worker returned a non-terminal response".to_owned(),
+            ));
+        }
+    };
+    let plan = parse_user_program_plan(value)?;
+    let gateway = CapabilityGateway::new(DesktopCapabilityBackend { state: &state });
+    let mut responses = Vec::with_capacity(plan.commands.len());
+    for (index, command) in plan.commands.into_iter().enumerate() {
+        execution.checkpoint()?;
+        responses.push(
+            gateway.dispatch(
+                &policy,
+                &execution,
+                GatewayEnvelope {
+                    execution_id: execution_id.to_string(),
+                    trace_id: Uuid::now_v7().to_string(),
+                    idempotency_key: command
+                        .idempotency_key
+                        .or_else(|| Some(format!("{execution_id}-{index}"))),
+                    request: nimora_user_code_gateway::CapabilityRequest::InvokeCommand {
+                        command: command.command,
+                        arguments: command.arguments,
+                    },
+                },
+            )?,
+        );
+    }
+    Ok(UserProgramExecutionReceipt {
+        execution_id,
+        responses,
+    })
+}
+
+fn parse_user_program_plan(value: serde_json::Value) -> Result<UserProgramPlan, DesktopError> {
+    let plan = serde_json::from_value::<UserProgramPlan>(value)
+        .map_err(|error| DesktopError::UserCodeHost(format!("invalid capability plan: {error}")))?;
+    if plan.commands.len() > MAX_USER_PROGRAM_COMMANDS {
+        return Err(DesktopError::UserCodeHost(format!(
+            "capability plan exceeds the {MAX_USER_PROGRAM_COMMANDS}-command limit"
+        )));
+    }
+    Ok(plan)
+}
+
+fn worker_config(execution: &ExecutionHandle) -> WorkerConfig {
+    let executable = option_env!("NIMORA_USER_CODE_WORKER_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(Path::to_path_buf))
+                .unwrap_or_default()
+                .join("nimora-user-code-worker")
+        });
+    WorkerConfig {
+        executable: executable.to_string_lossy().into_owned(),
+        args: Vec::new(),
+        execution_id: execution.execution_id().to_string(),
+        timeout: execution.limits.timeout,
+        output_bytes: execution.limits.output_bytes,
+    }
 }
 
 #[tauri::command]
@@ -995,6 +1116,7 @@ pub fn run() {
             rollback_asset,
             validate_user_program,
             start_user_program,
+            execute_user_program,
             invoke_user_program_capability,
             stop_user_program
         ])
@@ -1005,14 +1127,44 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        DesktopError, PetAction, ProfilePolicy, TrayAction, WindowPolicy, screen_coordinate,
-        valid_asset_identifier,
+        DesktopError, PetAction, ProfilePolicy, TrayAction, WindowPolicy, parse_user_program_plan,
+        screen_coordinate, valid_asset_identifier,
     };
+    use serde_json::json;
 
     #[test]
     fn accepts_finite_screen_coordinates() {
         assert_eq!(screen_coordinate(42.6).expect("valid coordinate"), 43);
         assert_eq!(screen_coordinate(-12.4).expect("valid coordinate"), -12);
+    }
+
+    #[test]
+    fn parses_a_bounded_user_program_capability_plan() {
+        let plan = parse_user_program_plan(json!({
+            "commands": [{
+                "command": "safe.pet.animate",
+                "arguments": {"action": "work"},
+                "idempotencyKey": "action-1"
+            }]
+        }))
+        .expect("valid plan");
+        assert_eq!(plan.commands.len(), 1);
+        assert_eq!(plan.commands[0].command, "safe.pet.animate");
+        assert_eq!(
+            plan.commands[0].idempotency_key.as_deref(),
+            Some("action-1")
+        );
+    }
+
+    #[test]
+    fn rejects_oversized_user_program_capability_plans() {
+        let commands = (0..33)
+            .map(|_| json!({"command": "safe.pet.animate"}))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            parse_user_program_plan(json!({"commands": commands})),
+            Err(DesktopError::UserCodeHost(message)) if message.contains("32-command")
+        ));
     }
 
     #[test]

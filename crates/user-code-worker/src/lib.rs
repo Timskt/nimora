@@ -36,6 +36,12 @@ pub fn evaluate(source: &str) -> Result<serde_json::Value, EngineError> {
     evaluate_with_input(source, &serde_json::Value::Null)
 }
 
+/// Evaluates one source unit with an immutable JSON input snapshot.
+///
+/// # Errors
+///
+/// Returns an error for oversized source, JavaScript failures, or values that
+/// cannot be converted to JSON.
 pub fn evaluate_with_input(
     source: &str,
     input: &serde_json::Value,
@@ -45,8 +51,9 @@ pub fn evaluate_with_input(
     }
     let input = serde_json::to_string(input)
         .map_err(|error| EngineError::ResultSerialization(error.to_string()))?;
-    let wrapped_source =
-        format!("const nimora = Object.freeze({{ input: Object.freeze({input}) }});\n{source}");
+    let wrapped_source = format!(
+        "const __nimoraDeepFreeze = (value) => {{\n  if (value && typeof value === 'object' && !Object.isFrozen(value)) {{\n    Object.freeze(value);\n    Object.values(value).forEach(__nimoraDeepFreeze);\n  }}\n  return value;\n}};\nconst nimora = Object.freeze({{ input: __nimoraDeepFreeze({input}) }});\n{source}"
+    );
     let mut context = Context::default();
     let result = context
         .eval(Source::from_bytes(wrapped_source.as_bytes()))
@@ -115,6 +122,18 @@ mod tests {
             )
             .unwrap(),
             json!({"name": "Aster", "process": "undefined"})
+        );
+    }
+
+    #[test]
+    fn deeply_freezes_the_input_snapshot() {
+        assert_eq!(
+            evaluate_with_input(
+                "({ root: Object.isFrozen(nimora.input), nested: Object.isFrozen(nimora.input.pet) })",
+                &json!({"pet": {"name": "Aster"}})
+            )
+            .unwrap(),
+            json!({"root": true, "nested": true})
         );
     }
 }
