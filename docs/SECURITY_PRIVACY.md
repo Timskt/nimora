@@ -73,6 +73,8 @@
 
 审计记录主体、动作、目标、结果、时间、Trace ID 和数据分类，但不记录密钥和默认受限正文。审计文件需轮转、完整性保护，并允许用户导出和清除。
 
+Context Admission 安全事件仅允许记录稳定拒绝原因、脱敏来源类别、段数、总字节数、时间及 Trace/Run/Automation/Action/Command Execution 关联 ID。禁止记录 Prompt、Context 正文、用户消息、完整来源值、文件路径和密钥。审计持久化失败采用 fail-closed：拒绝结果仍为永久失败，Provider、Agent Submitter 与模块 Backend 均不得被调用。
+
 ## 10. 安全模式
 
 安全模式必须：

@@ -368,6 +368,9 @@ ID / 标题 / 优先级 / 前置条件
 | AAG-012 | Bridge 错误分类 | 永久提交错误只尝试一次；明确瞬态宿主错误按 Action 策略重试，错误字符串不参与分类判断 | P0 |
 | AAG-013 | 用户取消根 Automation Run | 父 Run 取消令牌置位；submitted/waiting Agent 子任务转为 cancelled，运行中 Provider/Worker 收到同一任务取消且未知或终态 Run 返回 false | P0 |
 | AAG-014 | Automation 不可信 Context Admission | 合法来源数据作为独立 untrusted User Message；段数与字节预算、非法来源、高置信中英文注入、非 draft 或任何 Tool Allowlist 均在 Submitter 前永久拒绝 | P0 |
+| AAG-015 | Context Admission 脱敏安全审计 | 拒绝事件使用稳定原因枚举，只保存来源类别、计数和 Run/Trace/Automation/Action/Command 关联 ID；序列化与持久 Journal 均不含攻击正文、Prompt、路径或密钥 | P0 |
+| AAG-016 | Context 审计故障 fail-closed | Journal 锁、序列化或持久写入失败时 Automation 永久失败且只尝试一次，Agent Submitter、Provider 和模块 Backend 零调用 | P0 |
+| AAG-017 | Context 正常路径无误报 | 合法有界外部数据获准并保持 untrusted 标记，不产生 `context-admission-rejected` 诊断事件 | P0 |
 
 - 每次提交：Unit、Schema、核心 Contract。
 - 每次合并：核心 Integration、Pet/Asset/Permission P0。

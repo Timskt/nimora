@@ -11,6 +11,13 @@
 3. 停止受影响的扩展、连接器或 Agent 任务。
 4. 影响范围不明确时进入安全模式。
 5. 生成脱敏诊断包，不直接复制密钥或用户正文。
+
+### Context Admission 拒绝排查
+
+1. 在诊断事件中筛选 `security/context-admission-rejected`，按 Trace、Run、Automation 和 Action ID 关联 Automation 历史。
+2. 根据 `invalid_policy`、`segment_budget`、`byte_budget`、`invalid_source`、`invalid_segment`、`prompt_injection` 原因检查调用方策略；不要要求用户粘贴原始 Prompt 或外部正文。
+3. 来源只显示 `connector`、`event` 等类别属于预期脱敏行为；诊断中出现完整消息、路径、Token 或 Prompt 视为安全事故，停止分享并保留本地证据。
+4. 若返回 `context rejection audit unavailable`，先修复诊断目录权限或磁盘故障；系统会保持拒绝，不应通过关闭审计绕过准入。
 6. 优先恢复服务，再进行根因分析。
 
 ## 2. 应用无法启动

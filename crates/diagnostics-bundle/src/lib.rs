@@ -94,6 +94,7 @@ pub enum DiagnosticComponent {
     Application,
     Persistence,
     Backup,
+    Security,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +104,21 @@ pub enum DiagnosticEventCode {
     RecoveryModeStarted,
     ScheduledBackupCompleted,
     ScheduledBackupFailed,
+    ContextAdmissionRejected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DiagnosticContextAdmissionAudit {
+    pub reason: String,
+    pub source_categories: Vec<String>,
+    pub segment_count: u64,
+    pub total_bytes: u64,
+    pub trace_id: String,
+    pub run_id: String,
+    pub automation_id: String,
+    pub action_id: String,
+    pub command_execution_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +128,8 @@ pub struct DiagnosticEvent {
     pub severity: DiagnosticSeverity,
     pub component: DiagnosticComponent,
     pub code: DiagnosticEventCode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_admission: Option<DiagnosticContextAdmissionAudit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -685,6 +703,7 @@ mod tests {
                 severity: DiagnosticSeverity::Warning,
                 component: DiagnosticComponent::Persistence,
                 code: DiagnosticEventCode::RecoveryModeStarted,
+                context_admission: None,
             }],
         }
     }
@@ -695,6 +714,7 @@ mod tests {
             severity: DiagnosticSeverity::Info,
             component: DiagnosticComponent::Application,
             code: DiagnosticEventCode::ApplicationStarted,
+            context_admission: None,
         }
     }
 
