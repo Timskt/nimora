@@ -210,6 +210,7 @@ const previewProfiles: ProfileSnapshot = {
     id: "00000000-0000-4000-8000-000000000010",
     name: "Default",
     policy: {
+      mode: "companion",
       alwaysOnTop: true,
       clickThrough: false,
       soundEnabled: true,

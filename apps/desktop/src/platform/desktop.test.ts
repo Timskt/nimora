@@ -18,6 +18,7 @@ describe("desktop platform adapter", () => {
     await api.drainEvents();
     await api.profiles();
     const policy = {
+      mode: "focus" as const,
       alwaysOnTop: true,
       clickThrough: false,
       soundEnabled: true,

@@ -73,7 +73,18 @@ export const petSchema = z.object({
   affinity: z.number().int().min(0).max(100),
 });
 
+export const profileModeSchema = z.enum([
+  "companion",
+  "work",
+  "focus",
+  "creator",
+  "developer",
+  "presentation",
+  "offline",
+]);
+
 export const profilePolicySchema = z.object({
+  mode: profileModeSchema.nullable(),
   alwaysOnTop: z.boolean().nullable(),
   clickThrough: z.boolean().nullable(),
   soundEnabled: z.boolean().nullable(),
@@ -201,6 +212,7 @@ export type NimoraCommand = z.infer<typeof commandSchema>;
 export type Pet = z.infer<typeof petSchema>;
 export type PointerButton = z.infer<typeof pointerButtonSchema>;
 export type ProfilePolicy = z.infer<typeof profilePolicySchema>;
+export type ProfileMode = z.infer<typeof profileModeSchema>;
 export type Profile = z.infer<typeof profileSchema>;
 export type ProfileSnapshot = z.infer<typeof profileSnapshotSchema>;
 export type RuntimeMode = z.infer<typeof runtimeModeSchema>;

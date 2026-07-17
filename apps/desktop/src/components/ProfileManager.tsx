@@ -1,13 +1,28 @@
-import type { ProfilePolicy, ProfileSnapshot } from "@nimora/schemas";
+import type { ProfileMode, ProfilePolicy, ProfileSnapshot } from "@nimora/schemas";
 import { useEffect, useState } from "react";
 import { desktopApi } from "../platform/desktop";
 
 const initialPolicy: ProfilePolicy = {
+  mode: "companion",
   alwaysOnTop: true,
   clickThrough: false,
   soundEnabled: true,
   proactiveFrequency: 25,
 };
+
+const profileModes: ReadonlyArray<{ value: ProfileMode; label: string }> = [
+  { value: "companion", label: "日常陪伴" },
+  { value: "work", label: "工作" },
+  { value: "focus", label: "深度专注" },
+  { value: "creator", label: "创作" },
+  { value: "developer", label: "开发调试" },
+  { value: "presentation", label: "演示与直播" },
+  { value: "offline", label: "离线优先" },
+];
+
+function profileModeLabel(mode: ProfileMode | null): string {
+  return profileModes.find((item) => item.value === mode)?.label ?? "自定义";
+}
 
 export function normalizedProfileName(value: string): string | null {
   const name = value.trim();
@@ -88,7 +103,8 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
               <div>
                 <strong>{profile.name}</strong>
                 <p>
-                  {profile.policy.alwaysOnTop === false ? "普通窗口" : "保持置顶"}
+                  {profileModeLabel(profile.policy.mode)}
+                  {profile.policy.alwaysOnTop === false ? " · 普通窗口" : " · 保持置顶"}
                   {profile.policy.soundEnabled === false ? " · 静音" : " · 声音开启"}
                   {` · 主动频率 ${profile.policy.proactiveFrequency ?? 25}%`}
                 </p>
@@ -116,6 +132,17 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
               onChange={(event) => setName(event.target.value)}
               autoFocus
             />
+          </label>
+          <label className="profile-name">
+            <span>场景类型</span>
+            <select
+              value={policy.mode ?? "companion"}
+              onChange={(event) => setPolicy({ ...policy, mode: event.target.value as ProfileMode })}
+            >
+              {profileModes.map((mode) => (
+                <option key={mode.value} value={mode.value}>{mode.label}</option>
+              ))}
+            </select>
           </label>
           <label className="profile-check">
             <input

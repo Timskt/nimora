@@ -86,6 +86,7 @@ describe("profileSnapshotSchema", () => {
         id,
         name: "Focus",
         policy: {
+          mode: "focus",
           alwaysOnTop: true,
           clickThrough: false,
           soundEnabled: true,
@@ -104,6 +105,7 @@ describe("profileSnapshotSchema", () => {
         id,
         name: "Focus",
         policy: {
+          mode: null,
           alwaysOnTop: null,
           clickThrough: null,
           soundEnabled: null,
