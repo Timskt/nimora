@@ -66,11 +66,11 @@
 
 正式程序权限保存在 SQLite 的 `user_program_permission_grant` 中，授权键由程序 ID、精确版本和完整 Capability 集合共同组成。无 Capability 的纯计算程序不需要授权；有 Capability 的程序在首次运行前必须显式授予。版本变化、能力增加、能力删除或能力名称变化均不会匹配旧授权，`execute_installed_user_program` 会在创建 Worker 前拒绝执行。`user_program_permission_status`、`grant_user_program_permissions` 和 `revoke_user_program_permissions` 只针对完整性校验通过的已安装版本；撤销按程序身份删除所有版本授权。草稿预览不创建正式授权，也不能借用已安装版本的授权身份。
 
-运行时事件总线为 UI 主缓冲和每个程序订阅维护独立队列，任何消费者都不能通过 drain 抢走其他消费者的事件。程序订阅必须来自完整性校验通过、精确授权且声明 `subscribe-events` 的已安装 Manifest；Rust 根据 Manifest 创建过滤器，Renderer 不能提交事件正文或扩大事件类型。每个会话最多缓存 64 条、全局最多 32 个会话；慢消费者只丢弃自身最旧事件并获得累计 `dropped` 计数，不阻塞 Core。关闭、Drop、撤权、程序升级、回滚或进入安全模式都会注销会话并释放队列。`execute_next_user_program_event` 只从 Rust 订阅中弹出一条可信事件，随后重新加载 active 安装版本、复验完整性和精确权限，并构造深度只读的 `nimora.input.trigger = { type: "event", event }`；IPC 不接受事件正文。`start_user_program_event_loop` 可由宿主启动后台自动消费与执行，并通过状态接口公开执行数、丢弃数和最后错误；当前自动循环只接受 `serial`，`drop` 与 `cancel-previous` 仍需接入可取消的并发 Supervisor，不能按已完成能力宣传。
+运行时事件总线为 UI 主缓冲和每个程序订阅维护独立队列，任何消费者都不能通过 drain 抢走其他消费者的事件。程序订阅必须来自完整性校验通过、精确授权且声明 `subscribe-events` 的已安装 Manifest；Rust 根据 Manifest 创建过滤器，Renderer 不能提交事件正文或扩大事件类型。每个会话最多缓存 64 条、全局最多 32 个会话；慢消费者只丢弃自身最旧事件并获得累计 `dropped` 计数，不阻塞 Core。关闭、Drop、撤权、程序升级、回滚或进入安全模式都会注销会话并释放队列。`execute_next_user_program_event` 只从 Rust 订阅中弹出一条可信事件，随后重新加载 active 安装版本、复验完整性和精确权限，并构造深度只读的 `nimora.input.trigger = { type: "event", event }`；IPC 不接受事件正文。`start_user_program_event_loop` 由 Rust Supervisor 后台消费可信订阅并执行三种 Manifest 并发策略，通过状态接口公开成功执行数、订阅与调度丢弃总数及最后错误。
 
-事件触发并发策略属于已签名 Manifest 身份的一部分。Manifest 必须显式声明 `eventConcurrency` 与 `eventQueueCapacity`：`serial` 按顺序执行并使用有界队列，`drop` 在已有运行时丢弃新触发，`cancel-previous` 在新触发到达时取消旧执行；容量范围为 1–64，Rust 订阅按声明值实际分配。字段缺失、策略未知或容量越界都会拒绝安装。策略或容量变化会改变 Manifest 内容并要求重新安装与精确授权，Renderer 不得在运行时覆盖这些值。当前后台自动循环仅开放已完整接线的 `serial`，其他策略在执行层完成并发 Worker 取消接线前会被明确拒绝，而不会静默退化为串行。
+事件触发并发策略属于已签名 Manifest 身份的一部分。Manifest 必须显式声明 `eventConcurrency` 与 `eventQueueCapacity`：`serial` 串行执行并在容量满时丢弃最旧待执行事件，`drop` 在 Worker 活跃时丢弃新触发，`cancel-previous` 强制取消旧 Worker、立即启动新触发并忽略旧执行的迟到完成。容量范围为 1–64，Rust 订阅和调度器均按声明值建立有界背压。字段缺失、策略未知或容量越界都会拒绝安装；策略或容量变化要求重新安装与精确授权，Renderer 不得覆盖。取消由宿主进程 Supervisor 终止并回收 Worker，不依赖脚本自愿协作；它提供进程故障隔离，但不应被描述为 OS 级内存沙箱。
 
-`start_user_program_event_loop` 为一个订阅最多创建一个命名宿主线程，空队列采用 50 ms 有界轮询；会话被关闭、撤权、升级、回滚或安全模式清理后循环自动退出。`user_program_event_session_status` 只读公开自动运行状态、成功执行数、累计队列丢弃数和最后错误，便于 Creator Studio 呈现诊断而不暴露事件注入入口。
+`start_user_program_event_loop` 为一个订阅最多创建一个命名 Supervisor 线程，空队列采用 20 ms 有界轮询，单次 Worker 执行不持有会话锁。会话被关闭、撤权、升级、回滚或安全模式清理后，Supervisor 取消 active Worker 并退出；每个 Worker 启动前仍重新加载 active 版本、复验完整性和精确权限，因此旧会话不能绕过 Capability Gateway。`user_program_event_session_status` 只读公开自动运行状态、成功执行数、累计队列丢弃数和最后错误，且不暴露事件注入入口。
 
 每次 Worker 启动前，桌面宿主会注册 `executionId + programId + ExecutionCancellation`，并用 Drop 守卫覆盖启动失败、协议错误、Gateway 错误和正常返回等所有清理路径。Supervisor 每 10 ms 检查共享取消令牌，收到取消后直接终止并回收子进程。`stop_user_program` 可取消正在运行的正式 Worker；安全模式取消全部 Worker，撤权、升级和回滚按程序身份取消对应 Worker。取消令牌只提供单向终止能力，不暴露子进程、Core 或系统句柄。
 

@@ -28,8 +28,9 @@ use nimora_user_code_package::{
     ProgramPackageError, install_program_atomically, load_installed_program, rollback_program,
 };
 use nimora_user_code_policy::{
-    Capability, ExecutionCancellation, ExecutionController, ExecutionHandle, ExecutionPolicy,
-    PolicyError, ProgramManifest, WorkerError, evaluate,
+    Capability, EventAdmission, EventConcurrencyPolicy, EventTriggerScheduler,
+    ExecutionCancellation, ExecutionController, ExecutionHandle, ExecutionPolicy, PolicyError,
+    ProgramManifest, ScheduledEvent, WorkerError, evaluate,
 };
 use nimora_user_code_storage::ProgramDataStore;
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,7 @@ use std::{
     sync::{
         Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc,
     },
     time::Duration,
 };
@@ -108,6 +110,11 @@ struct UserProgramEventSession {
 struct ActiveUserProgramWorker {
     program_id: String,
     cancellation: ExecutionCancellation,
+}
+
+struct UserProgramEventCompletion {
+    scheduled_execution_id: Uuid,
+    result: Result<UserProgramExecutionReceipt, String>,
 }
 
 #[derive(Debug)]
@@ -529,8 +536,6 @@ enum DesktopError {
     UserProgramEventSessionLimit,
     #[error("user program event subscription was not found")]
     UserProgramEventSessionNotFound,
-    #[error("automatic event loop currently requires serial event concurrency")]
-    UserProgramAutomaticConcurrencyUnsupported,
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -1568,11 +1573,8 @@ fn start_user_program_event_loop(
     };
     let installed = load_installed_program(&state.program_store, &program_id)?;
     ensure_program_permissions(&state.program_permissions, &installed.manifest)?;
-    if installed.manifest.event_concurrency
-        != nimora_user_code_policy::EventConcurrencyPolicy::Serial
-    {
-        return Err(DesktopError::UserProgramAutomaticConcurrencyUnsupported);
-    }
+    let concurrency = installed.manifest.event_concurrency;
+    let queue_capacity = installed.manifest.event_queue_capacity;
     {
         let mut sessions = state
             .user_program_event_sessions
@@ -1589,52 +1591,246 @@ fn start_user_program_event_loop(
     }
     std::thread::Builder::new()
         .name(format!("nimora-event-{subscription_id}"))
-        .spawn(move || run_user_program_event_loop(&app, subscription_id))?;
+        .spawn(move || {
+            run_user_program_event_loop(&app, subscription_id, concurrency, queue_capacity);
+        })?;
     Ok(())
 }
 
-fn run_user_program_event_loop(app: &AppHandle, subscription_id: Uuid) {
+fn run_user_program_event_loop(
+    app: &AppHandle,
+    subscription_id: Uuid,
+    concurrency: EventConcurrencyPolicy,
+    queue_capacity: usize,
+) {
+    let mut scheduler = EventTriggerScheduler::new(concurrency, queue_capacity);
+    let mut cancellations = HashMap::<Uuid, ExecutionCancellation>::new();
+    let (completion_sender, completion_receiver) = mpsc::channel::<UserProgramEventCompletion>();
+    let mut reported_scheduler_drops = 0_u64;
     loop {
         let state = app.state::<DesktopState>();
-        let active = state
-            .user_program_event_sessions
-            .lock()
-            .ok()
-            .and_then(|sessions| {
-                sessions
-                    .get(&subscription_id)
-                    .map(|session| session.automatic)
-            })
-            .unwrap_or(false);
-        if !active || ensure_normal_mode(&state).is_err() {
+        if !event_session_is_active(&state, subscription_id) || ensure_normal_mode(&state).is_err()
+        {
             break;
         }
-        match execute_next_user_program_event_inner(app, &state, subscription_id) {
-            Ok(receipt) => {
-                let had_execution = receipt.execution.is_some();
-                if let Ok(mut sessions) = state.user_program_event_sessions.lock()
-                    && let Some(session) = sessions.get_mut(&subscription_id)
-                {
-                    session.dropped = session.dropped.saturating_add(receipt.dropped);
-                    if had_execution {
-                        session.executed = session.executed.saturating_add(1);
-                        session.last_error = None;
+        let mut progressed = match process_event_completions(
+            app,
+            &state,
+            subscription_id,
+            &completion_sender,
+            &completion_receiver,
+            &mut scheduler,
+            &mut cancellations,
+        ) {
+            Ok(progressed) => progressed,
+            Err(error) => {
+                stop_event_session_with_error(&state, subscription_id, error);
+                cancel_scheduled_event_executions(&mut scheduler, &mut cancellations);
+                return;
+            }
+        };
+        let batch = {
+            let Ok(sessions) = state.user_program_event_sessions.lock() else {
+                break;
+            };
+            let Some(session) = sessions.get(&subscription_id) else {
+                break;
+            };
+            match session.subscription.pop() {
+                Ok(batch) => batch,
+                Err(error) => {
+                    drop(sessions);
+                    stop_event_session_with_error(&state, subscription_id, error.to_string());
+                    break;
+                }
+            }
+        };
+        if batch.dropped > 0 {
+            update_event_session_drops(&state, subscription_id, batch.dropped);
+        }
+        if let Some(event) = batch.events.into_iter().next() {
+            progressed = true;
+            match scheduler.admit(event) {
+                EventAdmission::Start(next) => {
+                    if let Err(error) = spawn_scheduled_event_execution(
+                        app,
+                        subscription_id,
+                        next,
+                        &completion_sender,
+                        &mut cancellations,
+                    ) {
+                        stop_event_session_with_error(&state, subscription_id, error.to_string());
+                        break;
                     }
                 }
-                if !had_execution {
-                    std::thread::sleep(Duration::from_millis(50));
+                EventAdmission::CancelAndStart {
+                    cancelled_execution_id,
+                    next,
+                } => {
+                    if let Some(cancellation) = cancellations.get(&cancelled_execution_id) {
+                        cancellation.cancel();
+                    }
+                    if let Err(error) = spawn_scheduled_event_execution(
+                        app,
+                        subscription_id,
+                        next,
+                        &completion_sender,
+                        &mut cancellations,
+                    ) {
+                        stop_event_session_with_error(&state, subscription_id, error.to_string());
+                        break;
+                    }
                 }
-            }
-            Err(error) => {
-                if let Ok(mut sessions) = state.user_program_event_sessions.lock()
-                    && let Some(session) = sessions.get_mut(&subscription_id)
-                {
-                    session.last_error = Some(error.to_string());
-                    session.automatic = false;
-                }
-                break;
+                EventAdmission::Queued | EventAdmission::Dropped => {}
             }
         }
+        let scheduler_drops = scheduler.dropped();
+        if scheduler_drops > reported_scheduler_drops {
+            update_event_session_drops(
+                &state,
+                subscription_id,
+                scheduler_drops - reported_scheduler_drops,
+            );
+            reported_scheduler_drops = scheduler_drops;
+        }
+        if !progressed {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    cancel_scheduled_event_executions(&mut scheduler, &mut cancellations);
+}
+
+fn event_session_is_active(state: &DesktopState, subscription_id: Uuid) -> bool {
+    state
+        .user_program_event_sessions
+        .lock()
+        .ok()
+        .and_then(|sessions| {
+            sessions
+                .get(&subscription_id)
+                .map(|session| session.automatic)
+        })
+        .unwrap_or(false)
+}
+
+fn process_event_completions(
+    app: &AppHandle,
+    state: &DesktopState,
+    subscription_id: Uuid,
+    completion_sender: &mpsc::Sender<UserProgramEventCompletion>,
+    completion_receiver: &mpsc::Receiver<UserProgramEventCompletion>,
+    scheduler: &mut EventTriggerScheduler<Event>,
+    cancellations: &mut HashMap<Uuid, ExecutionCancellation>,
+) -> Result<bool, String> {
+    let mut progressed = false;
+    while let Ok(completion) = completion_receiver.try_recv() {
+        progressed = true;
+        cancellations.remove(&completion.scheduled_execution_id);
+        if !scheduler.is_active(completion.scheduled_execution_id) {
+            continue;
+        }
+        let next = scheduler.finish(completion.scheduled_execution_id);
+        match completion.result {
+            Ok(_) => update_event_session_success(state, subscription_id),
+            Err(error) => return Err(error),
+        }
+        if let Some(next) = next {
+            spawn_scheduled_event_execution(
+                app,
+                subscription_id,
+                next,
+                completion_sender,
+                cancellations,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(progressed)
+}
+
+fn spawn_scheduled_event_execution(
+    app: &AppHandle,
+    subscription_id: Uuid,
+    scheduled: ScheduledEvent<Event>,
+    completion_sender: &mpsc::Sender<UserProgramEventCompletion>,
+    cancellations: &mut HashMap<Uuid, ExecutionCancellation>,
+) -> Result<(), DesktopError> {
+    let cancellation = ExecutionCancellation::default();
+    cancellations.insert(scheduled.execution_id, cancellation.clone());
+    let app = app.clone();
+    let sender = completion_sender.clone();
+    std::thread::Builder::new()
+        .name(format!("nimora-event-worker-{}", scheduled.execution_id))
+        .spawn(move || {
+            let state = app.state::<DesktopState>();
+            let result = (|| {
+                ensure_normal_mode(&state)?;
+                let program_id = state
+                    .user_program_event_sessions
+                    .lock()
+                    .map_err(|_| DesktopError::StatePoisoned)?
+                    .get(&subscription_id)
+                    .ok_or(DesktopError::UserProgramEventSessionNotFound)?
+                    .program_id
+                    .clone();
+                let installed = load_installed_program(&state.program_store, &program_id)?;
+                ensure_program_permissions(&state.program_permissions, &installed.manifest)?;
+                execute_user_program_source_with_cancellation(
+                    &app,
+                    &state,
+                    installed.manifest,
+                    installed.source,
+                    Some(scheduled.event),
+                    cancellation,
+                )
+            })()
+            .map_err(|error: DesktopError| error.to_string());
+            let _ = sender.send(UserProgramEventCompletion {
+                scheduled_execution_id: scheduled.execution_id,
+                result,
+            });
+        })?;
+    Ok(())
+}
+
+fn cancel_scheduled_event_executions(
+    scheduler: &mut EventTriggerScheduler<Event>,
+    cancellations: &mut HashMap<Uuid, ExecutionCancellation>,
+) {
+    if let Some(execution_id) = scheduler.cancel_all()
+        && let Some(cancellation) = cancellations.get(&execution_id)
+    {
+        cancellation.cancel();
+    }
+    for cancellation in cancellations.values() {
+        cancellation.cancel();
+    }
+    cancellations.clear();
+}
+
+fn update_event_session_success(state: &DesktopState, subscription_id: Uuid) {
+    if let Ok(mut sessions) = state.user_program_event_sessions.lock()
+        && let Some(session) = sessions.get_mut(&subscription_id)
+    {
+        session.executed = session.executed.saturating_add(1);
+        session.last_error = None;
+    }
+}
+
+fn update_event_session_drops(state: &DesktopState, subscription_id: Uuid, dropped: u64) {
+    if let Ok(mut sessions) = state.user_program_event_sessions.lock()
+        && let Some(session) = sessions.get_mut(&subscription_id)
+    {
+        session.dropped = session.dropped.saturating_add(dropped);
+    }
+}
+
+fn stop_event_session_with_error(state: &DesktopState, subscription_id: Uuid, error: String) {
+    if let Ok(mut sessions) = state.user_program_event_sessions.lock()
+        && let Some(session) = sessions.get_mut(&subscription_id)
+    {
+        session.last_error = Some(error);
+        session.automatic = false;
     }
 }
 
@@ -1795,8 +1991,28 @@ fn execute_user_program_source(
     source: String,
     event: Option<Event>,
 ) -> Result<UserProgramExecutionReceipt, DesktopError> {
+    execute_user_program_source_with_cancellation(
+        app,
+        state,
+        manifest,
+        source,
+        event,
+        ExecutionCancellation::default(),
+    )
+}
+
+fn execute_user_program_source_with_cancellation(
+    app: &AppHandle,
+    state: &DesktopState,
+    manifest: ProgramManifest,
+    source: String,
+    event: Option<Event>,
+    cancellation: ExecutionCancellation,
+) -> Result<UserProgramExecutionReceipt, DesktopError> {
     let policy = evaluate(manifest.clone())?;
-    let execution = state.execution_controller.admit(&policy)?;
+    let execution = state
+        .execution_controller
+        .admit_with_cancellation(&policy, cancellation)?;
     let execution_id = execution.execution_id();
     state
         .active_user_program_workers

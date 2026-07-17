@@ -160,11 +160,11 @@ ID / 标题 / 优先级 / 前置条件
 | SCRIPT-009 | 安全模式、撤权、升级或回滚 | 对应事件会话立即取消，旧订阅 ID 不再可读取 | P0 |
 | SCRIPT-010 | Renderer 伪造事件 | IPC 不接受事件正文，过滤器只能来自已安装 Manifest | P0 |
 | SCRIPT-011 | 可信事件执行 | 每次只消费 Rust 队列最旧一条，保留余下事件；执行前复验 active 版本完整性与精确权限，并只读注入 `nimora.input.trigger` | P0 |
-| SCRIPT-012 | 事件并发策略 | `serial` 有界保留最新事件，`drop` 统计丢弃，`cancel-previous` 忽略旧执行完成，安全取消清空队列并推进代际 | P0 |
-| SCRIPT-013 | 后台事件循环 | 同一会话重复启动不创建重复线程；关闭、撤权、升级、回滚及安全模式后循环退出，状态接口保留执行数、丢弃数和最后错误 | P0 |
+| SCRIPT-012 | 自动事件循环三策略 | `serial` 有界保留最新待执行事件且失败后不继续队列，`drop` 忙时丢新事件，`cancel-previous` 取消旧 Worker 并立即启动最新事件 | P0 |
+| SCRIPT-013 | 后台事件循环 | 同一会话重复启动不创建重复线程；关闭、撤权、升级、回滚及安全模式后循环退出，状态接口保留执行数、订阅与调度丢弃总数及最后错误 | P0 |
 | SCRIPT-014 | Manifest 队列容量 | Rust 订阅实际采用 `eventQueueCapacity`；非法容量安装失败，Renderer 无法覆盖容量 | P0 |
-| SCRIPT-015 | 跨线程 Worker 取消 | 对无限循环 Worker 发送共享取消令牌，在 Manifest 超时前强杀并回收子进程，返回 `Cancelled` | P0 |
-| SCRIPT-016 | Worker 生命周期清理 | 正常、启动失败、协议失败、Gateway 失败、手动停止、安全模式、撤权、升级和回滚后均无遗留 active 注册 | P0 |
+| SCRIPT-015 | `cancel-previous` 迟到完成隔离 | 连续替换 Worker 后，旧完成不增加 executed、不覆盖 last_error、不终止当前执行 | P0 |
+| SCRIPT-016 | 会话撤销与 Worker 强制取消 | 对无限循环 Worker 关闭会话、撤权、升级、回滚或进入安全模式，在 Manifest 超时前强杀回收，且无遗留 active 注册 | P0 |
 | SCRIPT-017 | 程序本地数据隔离 | 程序 A 只能读写自己的命名空间，不能通过请求指定程序 B 身份 | P0 |
 | SCRIPT-018 | 本地数据权限 | 缺少 `store-local-data` 时读写删均被 Gateway 拒绝 | P0 |
 | SCRIPT-019 | 本地数据配额与原子性 | 单值、总配额、覆盖旧值、异常中断和符号链接场景均保持不变量 | P0 |

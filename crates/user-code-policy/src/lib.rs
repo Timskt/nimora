@@ -124,6 +124,11 @@ impl<T> EventTriggerScheduler<T> {
         self.generation
     }
 
+    #[must_use]
+    pub fn is_active(&self, execution_id: Uuid) -> bool {
+        self.active_execution_id == Some(execution_id)
+    }
+
     fn start(&mut self, event: T) -> ScheduledEvent<T> {
         let execution_id = Uuid::now_v7();
         self.active_execution_id = Some(execution_id);
@@ -210,6 +215,19 @@ impl ExecutionController {
     ///
     /// Returns [`WorkerError::ConcurrencyLimit`] when all slots are occupied.
     pub fn admit(&self, policy: &ExecutionPolicy) -> Result<ExecutionHandle, WorkerError> {
+        self.admit_with_cancellation(policy, ExecutionCancellation::default())
+    }
+
+    /// Reserves one bounded worker slot controlled by a supervisor-owned cancellation token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorkerError::ConcurrencyLimit`] when all slots are occupied.
+    pub fn admit_with_cancellation(
+        &self,
+        policy: &ExecutionPolicy,
+        cancellation: ExecutionCancellation,
+    ) -> Result<ExecutionHandle, WorkerError> {
         let mut current = self.active.load(Ordering::Acquire);
         loop {
             if current >= self.max_concurrent {
@@ -228,7 +246,7 @@ impl ExecutionController {
         Ok(ExecutionHandle {
             execution_id: Uuid::now_v7(),
             active: Arc::clone(&self.active),
-            cancelled: Arc::new(AtomicBool::new(false)),
+            cancelled: cancellation.cancelled,
             deadline: Instant::now() + Duration::from_millis(policy.manifest.timeout_ms),
             output_bytes: Mutex::new(0),
             limits: WorkerLimits {
@@ -533,6 +551,19 @@ mod tests {
     }
 
     #[test]
+    fn serial_event_scheduler_ignores_stale_completion_after_advancing() {
+        let mut scheduler = EventTriggerScheduler::new(EventConcurrencyPolicy::Serial, 2);
+        let EventAdmission::Start(first) = scheduler.admit("first") else {
+            panic!("first event should start");
+        };
+        assert_eq!(scheduler.admit("second"), EventAdmission::Queued);
+        let second = scheduler.finish(first.execution_id).unwrap();
+        assert!(scheduler.is_active(second.execution_id));
+        assert!(scheduler.finish(first.execution_id).is_none());
+        assert!(scheduler.is_active(second.execution_id));
+    }
+
+    #[test]
     fn drop_event_scheduler_rejects_events_while_active() {
         let mut scheduler = EventTriggerScheduler::new(EventConcurrencyPolicy::Drop, 16);
         let EventAdmission::Start(first) = scheduler.admit("first") else {
@@ -540,6 +571,7 @@ mod tests {
         };
         assert_eq!(scheduler.admit("second"), EventAdmission::Dropped);
         assert_eq!(scheduler.dropped(), 1);
+        assert!(scheduler.is_active(first.execution_id));
         assert!(scheduler.finish(first.execution_id).is_none());
     }
 
@@ -563,6 +595,31 @@ mod tests {
     }
 
     #[test]
+    fn cancel_previous_scheduler_tracks_only_latest_replacement() {
+        let mut scheduler = EventTriggerScheduler::new(EventConcurrencyPolicy::CancelPrevious, 16);
+        let EventAdmission::Start(first) = scheduler.admit(1) else {
+            panic!("first event should start");
+        };
+        let EventAdmission::CancelAndStart { next: second, .. } = scheduler.admit(2) else {
+            panic!("second event should replace first");
+        };
+        let EventAdmission::CancelAndStart {
+            cancelled_execution_id,
+            next: third,
+        } = scheduler.admit(3)
+        else {
+            panic!("third event should replace second");
+        };
+        assert_eq!(cancelled_execution_id, second.execution_id);
+        assert!(!scheduler.is_active(first.execution_id));
+        assert!(!scheduler.is_active(second.execution_id));
+        assert!(scheduler.is_active(third.execution_id));
+        assert!(scheduler.finish(first.execution_id).is_none());
+        assert!(scheduler.finish(second.execution_id).is_none());
+        assert!(scheduler.is_active(third.execution_id));
+    }
+
+    #[test]
     fn cancelling_scheduler_clears_queue_and_advances_generation() {
         let mut scheduler = EventTriggerScheduler::new(EventConcurrencyPolicy::Serial, 16);
         let EventAdmission::Start(first) = scheduler.admit(1) else {
@@ -583,6 +640,18 @@ mod tests {
         assert!(handle.record_output(MAX_OUTPUT_BYTES).is_ok());
         assert_eq!(handle.record_output(1), Err(WorkerError::OutputLimit));
         handle.cancel();
+        assert_eq!(handle.checkpoint(), Err(WorkerError::Cancelled));
+    }
+
+    #[test]
+    fn supervisor_owned_cancellation_stops_an_admitted_execution() {
+        let policy = evaluate(manifest()).unwrap();
+        let controller = ExecutionController::default();
+        let cancellation = ExecutionCancellation::default();
+        let handle = controller
+            .admit_with_cancellation(&policy, cancellation.clone())
+            .unwrap();
+        cancellation.cancel();
         assert_eq!(handle.checkpoint(), Err(WorkerError::Cancelled));
     }
 

@@ -76,6 +76,8 @@ any → disabled → deleted
 - 休眠恢复、时钟跳变和离线期间按声明的 missed-run policy 处理。
 - 事件订阅使用独立有界队列，不消费 UI 或其他程序的事件；当前每会话 64 条、全局 32 个会话，满载时丢弃该会话最旧事件并报告 `dropped`，安全模式、撤权、升级与回滚会取消会话。事件过滤器只能来自已安装 Manifest，Renderer 不能注入事件正文。
 - Manifest 必须使用 `eventConcurrency` 声明 `serial`、`drop` 或 `cancel-previous`，并以 `eventQueueCapacity` 声明 1–64 的每程序触发队列；字段缺失或无效时直接拒绝安装，不进行隐式补全。该策略由 Rust 调度器执行，不能由 Renderer 临时放宽。
+- 自动事件 Supervisor 已执行全部三种策略：`serial` 有界保留最新待执行事件，`drop` 忙时丢弃新触发，`cancel-previous` 强制终止旧 Worker 并隔离其迟到完成；关闭会话、撤权、升级、回滚和安全模式都会取消 active Worker。
+- 每次事件执行都重新加载 active 程序、校验完整性和精确授权，再经 Capability Gateway 调用模块能力；脚本不能直接持有模块实例、系统句柄或绕过每次调用的鉴权。
 
 ## 6. 权限与信任
 
