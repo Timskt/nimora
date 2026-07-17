@@ -60,6 +60,18 @@ export interface AssetPackageSummary {
   totalBytes: number;
 }
 
+export interface AssetPreviewImage {
+  mediaType: "image/png" | "image/webp";
+  bytes: number[];
+  width: number;
+  height: number;
+}
+
+export interface AssetPreviewReport {
+  summary: AssetPackageSummary;
+  poster: AssetPreviewImage | null;
+}
+
 export interface AssetCatalogSnapshot {
   assets: AssetPackageSummary[];
   rejected: Array<{ directory: string; reason: string }>;
@@ -215,7 +227,7 @@ export interface DesktopApi {
   activeCharacter(): Promise<ActiveCharacterSnapshot>;
   activeCharacterRenderer(): Promise<CharacterRendererSnapshot>;
   activateCharacter(assetId: string): Promise<ActiveCharacterSnapshot>;
-  previewAsset(request: InstallAssetRequest): Promise<AssetPackageSummary | null>;
+  previewAsset(request: InstallAssetRequest): Promise<AssetPreviewReport | null>;
   exportAsset(request: ExportAssetRequest): Promise<AssetPackageSummary | null>;
   installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
   rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
@@ -367,7 +379,7 @@ export function createDesktopApi(
     activeCharacter: async () => await invokeCommand("active_character") as ActiveCharacterSnapshot,
     activeCharacterRenderer: async () => await invokeCommand("active_character_renderer") as CharacterRendererSnapshot,
     activateCharacter: async (assetId) => await invokeCommand("activate_character", { assetId }) as ActiveCharacterSnapshot,
-    previewAsset: async (request) => await invokeCommand("preview_asset", { request }) as AssetPackageSummary,
+    previewAsset: async (request) => await invokeCommand("preview_asset", { request }) as AssetPreviewReport,
     exportAsset: async (request) => await invokeCommand("export_asset", { request }) as AssetPackageSummary,
     installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
     rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,

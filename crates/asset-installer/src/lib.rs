@@ -26,6 +26,8 @@ pub struct GeneratedInstallFile {
 const MAX_FILES: usize = 10_000;
 const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
+const MAX_PREVIEW_IMAGE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_PREVIEW_IMAGE_EDGE: u32 = 4096;
 const MAX_ARCHIVE_COMPRESSION_RATIO: u64 = 200;
 const MANIFEST_FILE: &str = "manifest.json";
 
@@ -94,6 +96,22 @@ pub struct AssetPackageSummary {
     pub total_bytes: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetPreviewImage {
+    pub media_type: String,
+    pub bytes: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetPreviewReport {
+    pub summary: AssetPackageSummary,
+    pub poster: Option<AssetPreviewImage>,
+}
+
 #[derive(Debug)]
 struct PreparedAssetSource {
     root: PathBuf,
@@ -114,6 +132,7 @@ struct ValidatedAssetPackage {
     renderer: Option<AssetRendererDescriptor>,
     files: Vec<InstallFile>,
     media_types: BTreeMap<PathBuf, String>,
+    preview_poster: Option<PathBuf>,
     integrity_path: PathBuf,
     integrity_bytes: Vec<u8>,
 }
@@ -159,6 +178,7 @@ struct AssetEntrypoints {
     animation_graph: Option<PathBuf>,
     clips: Option<PathBuf>,
     hitboxes: Option<PathBuf>,
+    preview_poster: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -317,6 +337,26 @@ pub fn inspect_asset_package(source_root: &Path) -> Result<AssetPackageSummary, 
 pub fn inspect_asset_source(source: &Path) -> Result<AssetPackageSummary, InstallError> {
     let prepared = prepare_asset_source(source)?;
     inspect_asset_package(&prepared.root)
+}
+
+/// Opens and verifies a package, then reads its explicitly declared preview
+/// poster while the isolated source is still available.
+///
+/// # Errors
+///
+/// Returns an error when the package or declared preview violates its contract.
+pub fn inspect_asset_source_preview(source: &Path) -> Result<AssetPreviewReport, InstallError> {
+    let prepared = prepare_asset_source(source)?;
+    let package = load_asset_package(&prepared.root)?;
+    let poster = package
+        .preview_poster
+        .as_deref()
+        .map(|path| read_preview_image(&prepared.root, path, &package.media_types))
+        .transpose()?;
+    Ok(AssetPreviewReport {
+        summary: package.summary,
+        poster,
+    })
 }
 
 /// Verifies an expanded package directory and writes a deterministic `.nimora`
@@ -597,6 +637,81 @@ pub fn read_verified_asset_image(
     Ok((fs::read(canonical)?, media_type.clone()))
 }
 
+fn read_preview_image(
+    source_root: &Path,
+    relative_path: &Path,
+    media_types: &BTreeMap<PathBuf, String>,
+) -> Result<AssetPreviewImage, InstallError> {
+    let relative_path = safe_relative_path(relative_path)?;
+    let media_type = media_types.get(relative_path).ok_or_else(|| {
+        InstallError::InvalidMetadata("preview poster is outside the verified inventory".to_owned())
+    })?;
+    if !["image/png", "image/webp"].contains(&media_type.as_str()) {
+        return Err(InstallError::InvalidMetadata(
+            "preview poster must be PNG or WebP".to_owned(),
+        ));
+    }
+    require_image_extension(relative_path, media_type)?;
+    let bytes = fs::read(source_root.join(relative_path))?;
+    if bytes.len() as u64 > MAX_PREVIEW_IMAGE_BYTES {
+        return Err(InstallError::BudgetExceeded);
+    }
+    let (width, height) = preview_image_dimensions(&bytes, media_type)?;
+    if width == 0
+        || height == 0
+        || width > MAX_PREVIEW_IMAGE_EDGE
+        || height > MAX_PREVIEW_IMAGE_EDGE
+    {
+        return Err(InstallError::BudgetExceeded);
+    }
+    Ok(AssetPreviewImage {
+        media_type: media_type.clone(),
+        bytes,
+        width,
+        height,
+    })
+}
+
+fn preview_image_dimensions(bytes: &[u8], media_type: &str) -> Result<(u32, u32), InstallError> {
+    let dimensions = match media_type {
+        "image/png" if bytes.len() >= 24 && bytes.starts_with(b"\x89PNG\r\n\x1a\n") => Some((
+            u32::from_be_bytes(bytes[16..20].try_into().expect("fixed PNG width")),
+            u32::from_be_bytes(bytes[20..24].try_into().expect("fixed PNG height")),
+        )),
+        "image/webp"
+            if bytes.len() >= 30
+                && bytes.starts_with(b"RIFF")
+                && bytes.get(8..12) == Some(b"WEBP") =>
+        {
+            webp_dimensions(bytes)
+        }
+        _ => None,
+    };
+    dimensions.ok_or_else(|| {
+        InstallError::InvalidMetadata("preview poster image header is invalid".to_owned())
+    })
+}
+
+fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    match bytes.get(12..16)? {
+        b"VP8X" if bytes.len() >= 30 => Some((
+            1 + u32::from_le_bytes([bytes[24], bytes[25], bytes[26], 0]),
+            1 + u32::from_le_bytes([bytes[27], bytes[28], bytes[29], 0]),
+        )),
+        b"VP8L" if bytes.len() >= 25 && bytes[20] == 0x2f => Some((
+            1 + u32::from(bytes[21]) + ((u32::from(bytes[22]) & 0x3f) << 8),
+            1 + (u32::from(bytes[22]) >> 6)
+                + (u32::from(bytes[23]) << 2)
+                + ((u32::from(bytes[24]) & 0x0f) << 10),
+        )),
+        b"VP8 " if bytes.len() >= 30 && bytes.get(23..26) == Some(&[0x9d, 0x01, 0x2a]) => Some((
+            u32::from(u16::from_le_bytes([bytes[26], bytes[27]]) & 0x3fff),
+            u32::from(u16::from_le_bytes([bytes[28], bytes[29]]) & 0x3fff),
+        )),
+        _ => None,
+    }
+}
+
 fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, InstallError> {
     let manifest_bytes = read_metadata(source_root, Path::new(MANIFEST_FILE))?;
     let manifest: AssetManifestHeader = serde_json::from_slice(&manifest_bytes)
@@ -612,6 +727,10 @@ fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, Insta
     let integrity: AssetIntegrityDocument = serde_json::from_slice(&integrity_bytes)
         .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
     let renderer = load_sprite_renderer(source_root, &manifest, &integrity.files)?;
+    let preview_poster = manifest
+        .entrypoints
+        .as_ref()
+        .and_then(|entrypoints| entrypoints.preview_poster.clone());
     let media_types = integrity
         .files
         .iter()
@@ -658,6 +777,7 @@ fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, Insta
         renderer,
         files,
         media_types,
+        preview_poster,
         integrity_path: integrity_path.to_path_buf(),
         integrity_bytes,
     })
@@ -958,6 +1078,7 @@ fn validate_manifest_header(manifest: &AssetManifestHeader) -> Result<(), Instal
             entrypoints.animation_graph.as_ref(),
             entrypoints.clips.as_ref(),
             entrypoints.hitboxes.as_ref(),
+            entrypoints.preview_poster.as_ref(),
         ]
         .into_iter()
         .flatten()
@@ -1284,6 +1405,53 @@ mod tests {
         format!("{:x}", Sha256::digest(contents))
     }
 
+    const ONE_PIXEL_PNG: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 8, 215, 99, 248, 207, 192, 240, 31,
+        0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+
+    fn write_preview_package(root: &Path, poster: &[u8]) {
+        fs::create_dir_all(root.join("preview")).unwrap();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "spec": "nimora.asset/1",
+            "id": "theme.example.preview",
+            "type": "theme",
+            "version": "1.0.0",
+            "name": { "en": "Preview" },
+            "publisher": "publisher.example",
+            "license": "MIT",
+            "engines": { "nimora": ">=0.1.0" },
+            "entrypoints": { "previewPoster": "preview/poster.png" },
+            "capabilities": [],
+            "fallbacks": {},
+            "locales": ["en"],
+            "integrity": { "algorithm": "sha256", "files": "integrity.json" }
+        }))
+        .unwrap();
+        fs::write(root.join(MANIFEST_FILE), &manifest).unwrap();
+        fs::write(root.join("preview/poster.png"), poster).unwrap();
+        let integrity = serde_json::to_vec(&serde_json::json!({
+            "files": [
+                {
+                    "path": MANIFEST_FILE,
+                    "sha256": sha256(&manifest),
+                    "bytes": manifest.len(),
+                    "mediaType": "application/json"
+                },
+                {
+                    "path": "preview/poster.png",
+                    "sha256": sha256(poster),
+                    "bytes": poster.len(),
+                    "mediaType": "image/png"
+                }
+            ],
+            "totalBytes": manifest.len() + poster.len()
+        }))
+        .unwrap();
+        fs::write(root.join("integrity.json"), integrity).unwrap();
+    }
+
     fn write_asset_package(root: &Path, asset_id: &str) {
         fs::create_dir_all(root.join("animations")).unwrap();
         fs::create_dir_all(root.join("sprites")).unwrap();
@@ -1391,6 +1559,49 @@ mod tests {
         archive.start_file(name, options).unwrap();
         archive.write_all(contents).unwrap();
         archive.finish().unwrap();
+    }
+
+    #[test]
+    fn previews_an_inventory_verified_static_poster() {
+        let root = std::env::temp_dir().join("nimora-installer-preview-poster");
+        let _ = fs::remove_dir_all(&root);
+        write_preview_package(&root, ONE_PIXEL_PNG);
+
+        let report = inspect_asset_source_preview(&root).unwrap();
+        let poster = report.poster.unwrap();
+        assert_eq!(report.summary.id, "theme.example.preview");
+        assert_eq!(poster.media_type, "image/png");
+        assert_eq!((poster.width, poster.height), (1, 1));
+        assert_eq!(poster.bytes, ONE_PIXEL_PNG);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_a_preview_poster_with_an_invalid_image_header() {
+        let root = std::env::temp_dir().join("nimora-installer-preview-invalid");
+        let _ = fs::remove_dir_all(&root);
+        write_preview_package(&root, b"not-a-png");
+
+        let error = inspect_asset_source_preview(&root).unwrap_err();
+        assert!(
+            matches!(error, InstallError::InvalidMetadata(message) if message.contains("image header"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_a_preview_poster_above_the_dimension_budget() {
+        let root = std::env::temp_dir().join("nimora-installer-preview-dimensions");
+        let _ = fs::remove_dir_all(&root);
+        let mut poster = ONE_PIXEL_PNG.to_vec();
+        poster[16..20].copy_from_slice(&4097_u32.to_be_bytes());
+        write_preview_package(&root, &poster);
+
+        assert!(matches!(
+            inspect_asset_source_preview(&root),
+            Err(InstallError::BudgetExceeded)
+        ));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

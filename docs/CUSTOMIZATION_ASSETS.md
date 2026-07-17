@@ -76,7 +76,8 @@ character.example.mochi/
   "entrypoints": {
     "animationGraph": "animations/graph.json",
     "clips": "animations/clips.json",
-    "hitboxes": "interactions/hitboxes.json"
+    "hitboxes": "interactions/hitboxes.json",
+    "previewPoster": "preview/poster.webp"
   },
   "capabilities": ["pet.walk", "pet.drag", "pet.sleep"],
   "fallbacks": { "pet.happy": "pet.idle" },
@@ -220,7 +221,7 @@ Character 基础
 
 热重载只用于开发者模式。正式包切换必须保持当前 Pet 状态并映射到兼容动作。
 
-当前步骤 1、2、4 的宿主验证与原子安装，以及安装前元数据报告已经实现；步骤 3 的包内视觉海报/模型隔离预览和步骤 5 的独立测试实例仍待实现。
+当前步骤 1、2、4 的宿主验证与原子安装已经实现。步骤 3 已实现受完整性保护的静态海报预览：`entrypoints.previewPoster` 必须指向 inventory 内的 PNG 或 WebP，宿主限制为 2 MiB、最长边 4096 px，仅向 Control Center 返回验证后的图片字节，不暴露临时目录；取消、换包或卸载界面时立即释放浏览器 Blob URL。它不执行资产行为，也不等同于 Live2D、VRM、glTF 或 Sprite 动画的隔离实例预览。步骤 5 的独立测试实例仍待实现。
 
 ## 12. 活动角色选择
 

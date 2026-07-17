@@ -203,6 +203,7 @@ export const assetManifestSchema = z.object({
     animationGraph: safeAssetPathSchema.optional(),
     clips: safeAssetPathSchema.optional(),
     hitboxes: safeAssetPathSchema.optional(),
+    previewPoster: safeAssetPathSchema.optional(),
   }).optional(),
   capabilities: z.array(assetIdentifierSchema).max(64).default([]),
   fallbacks: z.record(assetIdentifierSchema, assetIdentifierSchema).default({}),

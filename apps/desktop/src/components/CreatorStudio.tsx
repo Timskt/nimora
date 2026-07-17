@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { ActiveCharacterSnapshot, AssetCatalogSnapshot, AssetPackageSummary } from "../platform/desktop";
+import type { ActiveCharacterSnapshot, AssetCatalogSnapshot, AssetPackageSummary, AssetPreviewReport } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const backends = ["Sprite Atlas", "Live2D Cubism", "VRM", "glTF"] as const;
@@ -22,7 +22,8 @@ export function CreatorStudio() {
   const [activeCharacter, setActiveCharacter] = useState<ActiveCharacterSnapshot | null>(null);
   const [activationError, setActivationError] = useState<string | null>(null);
   const [activating, setActivating] = useState<string | null>(null);
-  const [pendingImport, setPendingImport] = useState<{ sourcePath: string; summary: AssetPackageSummary } | null>(null);
+  const [pendingImport, setPendingImport] = useState<{ sourcePath: string; report: AssetPreviewReport } | null>(null);
+  const [previewPosterUrl, setPreviewPosterUrl] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
@@ -39,6 +40,17 @@ export function CreatorStudio() {
       })
       .catch(() => setCatalogError(true));
   }, []);
+
+  useEffect(() => {
+    const poster = pendingImport?.report.poster;
+    if (!poster) {
+      setPreviewPosterUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([new Uint8Array(poster.bytes)], { type: poster.mediaType }));
+    setPreviewPosterUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [pendingImport]);
 
   async function activate(assetId: string) {
     setActivating(assetId);
@@ -64,9 +76,9 @@ export function CreatorStudio() {
         filters: [{ name: "Nimora 资源包", extensions: ["nimora"] }],
       });
       if (typeof selected !== "string") return;
-      const summary = await desktopApi.previewAsset({ sourcePath: selected });
-      if (!summary) throw new Error("当前环境不支持资源包预览");
-      setPendingImport({ sourcePath: selected, summary });
+      const report = await desktopApi.previewAsset({ sourcePath: selected });
+      if (!report) throw new Error("当前环境不支持资源包预览");
+      setPendingImport({ sourcePath: selected, report });
     } catch (error) {
       setPendingImport(null);
       setImportError(error instanceof Error ? error.message : "资源包未通过安全检查");
@@ -84,7 +96,7 @@ export function CreatorStudio() {
       if (!receipt) throw new Error("当前环境不支持资源包安装");
       setCatalog(await desktopApi.assetCatalog());
       setPendingImport(null);
-      setImportNotice(`${pendingImport.summary.id} 已完成复验并原子安装`);
+      setImportNotice(`${pendingImport.report.summary.id} 已完成复验并原子安装`);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "资源包安装失败");
     } finally {
@@ -103,7 +115,7 @@ export function CreatorStudio() {
       if (!preview) throw new Error("当前环境不支持资源包导出");
       const destinationPath = await save({
         title: "导出 Nimora 资源包",
-        defaultPath: `${preview.id}-${preview.version}.nimora`,
+        defaultPath: `${preview.summary.id}-${preview.summary.version}.nimora`,
         filters: [{ name: "Nimora 资源包", extensions: ["nimora"] }],
       });
       if (typeof destinationPath !== "string") return;
@@ -179,14 +191,16 @@ export function CreatorStudio() {
         {importError ? <p className="catalog-empty error" role="alert">{importError}</p> : null}
         {importNotice ? <p className="catalog-empty success" role="status">{importNotice}</p> : null}
         {pendingImport ? <div className="asset-preview-report">
-          <div className="asset-preview-title"><span className="asset-kind">{pendingImport.summary.assetType.slice(0, 1).toUpperCase()}</span><div><strong>{assetDisplayName(pendingImport.summary)}</strong><p>{pendingImport.summary.id} · {pendingImport.summary.version}</p></div></div>
+          {previewPosterUrl ? <figure className="asset-preview-poster"><img src={previewPosterUrl} alt={`${assetDisplayName(pendingImport.report.summary)} 资源包预览海报`} /><figcaption>{pendingImport.report.poster?.width} × {pendingImport.report.poster?.height} · 已验证静态预览</figcaption></figure> : null}
+          <div className="asset-preview-title"><span className="asset-kind">{pendingImport.report.summary.assetType.slice(0, 1).toUpperCase()}</span><div><strong>{assetDisplayName(pendingImport.report.summary)}</strong><p>{pendingImport.report.summary.id} · {pendingImport.report.summary.version}</p></div></div>
           <dl>
-            <div><dt>发布者</dt><dd>{pendingImport.summary.publisher}</dd></div>
-            <div><dt>许可证</dt><dd>{pendingImport.summary.license}</dd></div>
-            <div><dt>渲染后端</dt><dd>{pendingImport.summary.rendererBackend ?? "无"}</dd></div>
-            <div><dt>包内容</dt><dd>{pendingImport.summary.fileCount} 个文件 · {formatBytes(pendingImport.summary.totalBytes)}</dd></div>
+            <div><dt>发布者</dt><dd>{pendingImport.report.summary.publisher}</dd></div>
+            <div><dt>许可证</dt><dd>{pendingImport.report.summary.license}</dd></div>
+            <div><dt>渲染后端</dt><dd>{pendingImport.report.summary.rendererBackend ?? "无"}</dd></div>
+            <div><dt>包内容</dt><dd>{pendingImport.report.summary.fileCount} 个文件 · {formatBytes(pendingImport.report.summary.totalBytes)}</dd></div>
           </dl>
-          {pendingImport.summary.rendererBackend && !["sprite-sequence", "sprite-atlas"].includes(pendingImport.summary.rendererBackend) ? <p className="asset-preview-warning">该后端当前只能验证和安装，Pet Overlay 尚不能真实渲染，将使用内置角色。</p> : null}
+          {!pendingImport.report.poster ? <p className="asset-preview-warning">资源包未声明静态预览海报；元数据已验证，但安装前无法展示包内视觉内容。</p> : null}
+          {pendingImport.report.summary.rendererBackend && !["sprite-sequence", "sprite-atlas"].includes(pendingImport.report.summary.rendererBackend) ? <p className="asset-preview-warning">该后端当前只能验证和安装，Pet Overlay 尚不能真实渲染，将使用内置角色。</p> : null}
           <div className="asset-preview-actions"><button className="text-button" type="button" disabled={importing} onClick={() => setPendingImport(null)}>取消</button><button className="primary-button" type="button" disabled={importing} onClick={() => void confirmInstall()}>{importing ? "正在复验…" : "确认并安装"}</button></div>
         </div> : null}
       </section>

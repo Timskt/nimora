@@ -26,7 +26,11 @@ const validAssetManifest = {
     defaultScale: 0.5,
     pixelArt: false,
   },
-  entrypoints: { animationGraph: "animations/graph.json", clips: "animations/clips.json" },
+  entrypoints: {
+    animationGraph: "animations/graph.json",
+    clips: "animations/clips.json",
+    previewPoster: "preview/poster.webp",
+  },
   capabilities: ["pet.walk", "pet.drag"],
   fallbacks: { "pet.happy": "pet.idle" },
   locales: ["zh-CN", "en"],
@@ -143,6 +147,14 @@ describe("assetManifestSchema", () => {
       ...validAssetManifest,
       render: { ...validAssetManifest.render, backend: "obj" },
       entrypoints: { animationGraph: "../outside.json" },
+    }).success).toBe(false);
+  });
+
+  it("accepts only package-relative preview poster paths", () => {
+    expect(assetManifestSchema.safeParse(validAssetManifest).success).toBe(true);
+    expect(assetManifestSchema.safeParse({
+      ...validAssetManifest,
+      entrypoints: { ...validAssetManifest.entrypoints, previewPoster: "../poster.webp" },
     }).success).toBe(false);
   });
 

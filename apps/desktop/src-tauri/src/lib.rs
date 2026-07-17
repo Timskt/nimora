@@ -1,7 +1,8 @@
 use nimora_asset_installer::{
-    AssetPackageSummary, AssetRendererDescriptor, InstallError, InstallFile, RenderAnchor,
-    RenderCanvas, SpriteClips, export_asset_package, inspect_asset_package, inspect_asset_renderer,
-    inspect_asset_source, install_asset_source, read_verified_asset_image, rollback_latest,
+    AssetPackageSummary, AssetPreviewReport, AssetRendererDescriptor, InstallError, InstallFile,
+    RenderAnchor, RenderCanvas, SpriteClips, export_asset_package, inspect_asset_package,
+    inspect_asset_renderer, inspect_asset_source_preview, install_asset_source,
+    read_verified_asset_image, rollback_latest,
 };
 use nimora_persistence_sqlite::{
     ProgramPermissionGrant, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
@@ -39,7 +40,8 @@ use std::{
     time::Duration,
 };
 use tauri::{
-    AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
     menu::{Menu, MenuItem},
     tray::{TrayIconBuilder, TrayIconEvent},
 };
@@ -444,6 +446,8 @@ enum DesktopError {
     SafeModeActive,
     #[error("desktop window is unavailable: {0}")]
     WindowUnavailable(String),
+    #[error("operation is unavailable from this window")]
+    WindowForbidden,
     #[error("pet position must be a finite 32-bit screen coordinate")]
     InvalidPosition,
     #[error(transparent)]
@@ -771,12 +775,16 @@ fn install_asset(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn preview_asset(
+    window: WebviewWindow,
     state: State<'_, DesktopState>,
     request: InstallAssetRequest,
-) -> Result<AssetPackageSummary, DesktopError> {
+) -> Result<AssetPreviewReport, DesktopError> {
+    if window.label() != CONTROL_CENTER_LABEL {
+        return Err(DesktopError::WindowForbidden);
+    }
     ensure_normal_mode(&state)?;
     validate_package_source(&request.source_path)?;
-    Ok(inspect_asset_source(&request.source_path)?)
+    Ok(inspect_asset_source_preview(&request.source_path)?)
 }
 
 #[tauri::command]
