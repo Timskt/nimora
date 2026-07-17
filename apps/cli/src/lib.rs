@@ -1,6 +1,7 @@
 use nimora_agent_provider_worker::{OllamaEndpoint, WorkerOllamaProvider, verify_provider_sidecar};
 use nimora_agent_runtime::{
-    AgentBudget, AgentCoordinator, AgentTask, AgentTaskOrigin, CancellationFlag,
+    AgentAutonomy, AgentBudget, AgentCoordinator, AgentTask, AgentTaskGateway,
+    AgentTaskGatewayPolicy, AgentTaskOrigin, AgentTaskRequest, CancellationFlag,
     DataClassification, DeterministicLocalProvider, ProviderExecutionContext, ProviderMessage,
     ProviderMessageRole, ProviderRegistry, ProviderStepInput, ProviderStepOutcome,
 };
@@ -447,14 +448,12 @@ fn execute_with_sidecar(
         .as_millis()
         .try_into()
         .map_err(|_| CliError::new("clock", "system clock is outside supported range", 10))?;
-    let mut task = AgentTask::new(
-        AgentTaskOrigin::Cli,
-        "cli:local-user",
-        input.provider_id,
-        AgentBudget::default(),
-        now_ms,
-    )
-    .map_err(runtime_error)?;
+    let tool_ids = tools
+        .descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.id.to_string())
+        .collect::<Vec<_>>();
+    let mut task = admit_cli_agent_task(input.provider_id, tool_ids, now_ms)?;
     let coordinator = AgentCoordinator::new(&providers, &tools);
     let history_model = input.model.clone();
     let history_prompt = input.prompt.clone();
@@ -519,6 +518,39 @@ fn execute_with_sidecar(
             5,
         )),
     }
+}
+
+fn admit_cli_agent_task(
+    provider_id: String,
+    tool_ids: Vec<String>,
+    now_ms: u64,
+) -> Result<AgentTask, CliError> {
+    let policy = AgentTaskGatewayPolicy::new(
+        "cli:local-user",
+        [AgentTaskOrigin::Cli],
+        [PROVIDER_ID.to_owned(), OLLAMA_PROVIDER_ID.to_owned()],
+        tool_ids.clone(),
+        DataClassification::Personal,
+        AgentAutonomy::Draft,
+        AgentBudget::default(),
+        1,
+    )
+    .map_err(runtime_error)?;
+    AgentTaskGateway::new(policy)
+        .admit(
+            AgentTaskRequest::new(
+                AgentTaskOrigin::Cli,
+                "cli:local-user",
+                provider_id,
+                tool_ids,
+                DataClassification::Personal,
+                AgentAutonomy::Draft,
+                AgentBudget::default(),
+            ),
+            now_ms,
+        )
+        .map(|admission| admission.task)
+        .map_err(runtime_error)
 }
 
 fn runtime_error(error: impl std::fmt::Display) -> CliError {

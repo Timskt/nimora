@@ -157,14 +157,14 @@ flowchart LR
 - `crates/user-code-gateway` 已让 Agent 与用户程序复用 Backend，但使用彼此独立的 Policy，避免权限继承。
 - `apps/desktop/src-tauri` 已接通 Desktop 与 CLI 的 Agent 入口、Ollama Worker、待批准续跑和历史持久化。
 - `crates/agent-runtime` 已实现宿主无关的 `AgentTaskGateway` 准入核心：精确调用方、来源、Provider、Tool allowlist、数据等级、主动性、最大深度与预算上限全部 fail-closed；子任务继承 Trace，并取请求、调用方策略和父任务剩余预算的交集，不能通过递归重置额度。
-- Desktop 和 CLI 尚未迁移到该网关；Automation、Skill、Connector 和 User Program 也尚无生产入口。当前实现证明统一准入契约，但不代表反向 Provider 执行链已经贯通。
+- Desktop 对话、Desktop 独立 Tool 准备入口和 CLI 非交互任务均已迁移到 `AgentTaskGateway`；其 Provider 与 Tool 集合从当前生产目录生成，入口不能通过自定义请求扩大策略。Automation、Skill、Connector 和 User Program 尚无生产入口，因此模块反向调用仍未全部贯通。
 - Tool Registry 当前仍是内建目录，尚未接入 Extension Contribution Manifest；新增模块不得直接把工具硬编码进 Provider Adapter。
 
 ## 12. 实施顺序
 
-1. 将 Desktop 与 CLI 任务创建迁移到 `AgentTaskGateway`，消除现有专用准入逻辑。
-2. 在 Gateway 外层接入调用方 Capability、结果 Schema、持久 Task Tree 和共享根预算账本。
-3. 为 Automation 增加 `agent.task.run` Action，并完成注入扫描、并发和费用门禁。
+1. 在 Gateway 外层接入调用方 Capability、结果 Schema、持久 Task Tree 和共享根预算账本。
+2. 为 Automation 增加 `agent.task.run` Action，并完成注入扫描、并发和费用门禁。
+3. 将后续 Skill、Connector 和 User Program 任务创建接入同一 Gateway。
 4. 扩展 Automation 保存/启停/运行工具，形成“AI 生成并安全保存规则”闭环。
 5. 接入 Skill 与 Connector Contribution Manifest，动态汇入 Tool Registry。
 6. 增加 Files、Clipboard、Notification、Calendar、Memory 和 Vision 的窄能力 Adapter。

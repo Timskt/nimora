@@ -2,7 +2,8 @@ use nimora_agent_provider_worker::{
     OllamaEndpoint, OllamaModel, WorkerOllamaProvider, probe_ollama_worker, verify_provider_sidecar,
 };
 use nimora_agent_runtime::{
-    AgentBudget, AgentCoordinator, AgentTask, AgentTaskOrigin, AgentTaskStatus, BaseRiskEvaluator,
+    AgentAutonomy, AgentBudget, AgentCoordinator, AgentTask, AgentTaskGateway,
+    AgentTaskGatewayPolicy, AgentTaskOrigin, AgentTaskRequest, AgentTaskStatus, BaseRiskEvaluator,
     CancellationFlag, DataClassification, DeterministicLocalProvider, PlannedToolCall,
     ProviderExecutionContext, ProviderMessage, ProviderMessageRole, ProviderRegistry,
     ProviderResponse, ProviderStepInput, ProviderStepOutcome, ProviderToolTurn, ToolAdmission,
@@ -1097,14 +1098,7 @@ fn run_local_agent_inner(
     }
     let providers = desktop_provider_registry(state)?;
     let now_ms = current_time_ms()?;
-    let task = AgentTask::new(
-        AgentTaskOrigin::Desktop,
-        "desktop:local-user",
-        request.provider_id,
-        AgentBudget::default(),
-        now_ms,
-    )
-    .map_err(|error| DesktopError::Agent(error.to_string()))?;
+    let task = admit_desktop_agent_task(request.provider_id, now_ms)?;
     let outcome = advance_provider_agent(
         &providers,
         state,
@@ -1143,6 +1137,44 @@ fn desktop_agent_run_result(outcome: ProviderAgentOutcome) -> DesktopAgentRunRes
             pending_tools: pending,
         },
     }
+}
+
+fn admit_desktop_agent_task(provider_id: String, now_ms: u64) -> Result<AgentTask, DesktopError> {
+    let tool_ids = production_tool_registry()
+        .map_err(agent_error)?
+        .descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.id.to_string())
+        .collect::<Vec<_>>();
+    let policy = AgentTaskGatewayPolicy::new(
+        "desktop:local-user",
+        [AgentTaskOrigin::Desktop],
+        [
+            DETERMINISTIC_PROVIDER_ID.to_owned(),
+            "provider:ollama-loopback".to_owned(),
+        ],
+        tool_ids.clone(),
+        DataClassification::Personal,
+        AgentAutonomy::ConfirmEach,
+        AgentBudget::default(),
+        1,
+    )
+    .map_err(agent_error)?;
+    AgentTaskGateway::new(policy)
+        .admit(
+            AgentTaskRequest::new(
+                AgentTaskOrigin::Desktop,
+                "desktop:local-user",
+                provider_id,
+                tool_ids,
+                DataClassification::Personal,
+                AgentAutonomy::ConfirmEach,
+                AgentBudget::default(),
+            ),
+            now_ms,
+        )
+        .map(|admission| admission.task)
+        .map_err(agent_error)
 }
 
 fn advance_provider_agent(
@@ -1372,14 +1404,7 @@ fn prepare_agent_tool_inner(
     let providers = ProviderRegistry::default();
     let coordinator = AgentCoordinator::new(&providers, &tools);
     let now_ms = current_time_ms()?;
-    let mut task = AgentTask::new(
-        AgentTaskOrigin::Desktop,
-        "desktop:local-user",
-        "provider:deterministic-local",
-        AgentBudget::default(),
-        now_ms,
-    )
-    .map_err(agent_error)?;
+    let mut task = admit_desktop_agent_task(DETERMINISTIC_PROVIDER_ID.to_owned(), now_ms)?;
     task.transition(AgentTaskStatus::Planning, now_ms)
         .map_err(agent_error)?;
     let invocation =
