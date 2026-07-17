@@ -22,6 +22,18 @@ export interface DesktopSnapshot {
   safety: SafetySnapshot;
 }
 
+export interface InstallAssetRequest {
+  assetId: string;
+  sourcePath: string;
+  files: string[];
+}
+
+export interface AssetInstallReceipt {
+  assetId: string;
+  activePath: string;
+  replacedPrevious: boolean;
+}
+
 export interface DesktopApi {
   readonly native: boolean;
   snapshot(): Promise<DesktopSnapshot>;
@@ -36,6 +48,7 @@ export interface DesktopApi {
   clickPet(x: number, y: number, button: PointerButton): Promise<NimoraCommand | null>;
   dragPet(): Promise<NimoraCommand | null>;
   setClickThrough(enabled: boolean): Promise<void>;
+  installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
 }
 
 type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -95,6 +108,7 @@ export function createDesktopApi(
       async clickPet() { return null; },
       async dragPet() { return null; },
       async setClickThrough() {},
+      async installAsset() { return null; },
     };
   }
 
@@ -123,6 +137,7 @@ export function createDesktopApi(
       return await invokeCommand("finish_pet_drag") as NimoraCommand;
     },
     setClickThrough: async (enabled) => { await invokeCommand("set_click_through", { enabled }); },
+    installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
   };
 }
 

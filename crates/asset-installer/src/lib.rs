@@ -18,6 +18,8 @@ pub enum InstallError {
     UnsafePath(PathBuf),
     #[error("asset file is missing: {0}")]
     MissingFile(PathBuf),
+    #[error("asset file resolves outside package root: {0}")]
+    EscapedSource(PathBuf),
     #[error("filesystem operation failed: {0}")]
     Io(#[from] io::Error),
 }
@@ -42,6 +44,7 @@ pub fn install_atomically(
     if !source_root.is_dir() {
         return Err(InstallError::SourceNotDirectory);
     }
+    let canonical_source_root = source_root.canonicalize()?;
     let parent = active_path
         .parent()
         .ok_or_else(|| InstallError::UnsafePath(active_path.to_path_buf()))?;
@@ -54,6 +57,10 @@ pub fn install_atomically(
             let source = source_root.join(relative);
             if !source.is_file() {
                 return Err(InstallError::MissingFile(file.relative_path.clone()));
+            }
+            let canonical_source = source.canonicalize()?;
+            if !canonical_source.starts_with(&canonical_source_root) {
+                return Err(InstallError::EscapedSource(file.relative_path.clone()));
             }
             let destination = staging.join(relative);
             if let Some(destination_parent) = destination.parent() {
@@ -161,6 +168,28 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, InstallError::UnsafePath(_)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_escape_from_source_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join("nimora-installer-symlink");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(root.join("secret"), b"secret").unwrap();
+        symlink(root.join("secret"), source.join("linked")).unwrap();
+        let error = install_atomically(
+            &source,
+            &root.join("active"),
+            &[InstallFile {
+                relative_path: "linked".into(),
+            }],
+        )
+        .unwrap_err();
+        assert!(matches!(error, InstallError::EscapedSource(_)));
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1,3 +1,4 @@
+use nimora_asset_installer::{InstallError, InstallFile, install_atomically};
 use nimora_persistence_sqlite::{
     SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
 };
@@ -12,7 +13,7 @@ use nimora_runtime_core::{
 use serde::{Deserialize, Serialize};
 use std::{
     io,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -41,6 +42,7 @@ struct DesktopState {
     policy_before_safe_mode: Mutex<Option<WindowPolicy>>,
     position_revision: AtomicU64,
     dragging: AtomicBool,
+    asset_store: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -66,7 +68,7 @@ impl WindowPolicy {
 }
 
 impl DesktopState {
-    fn open(database_path: &Path) -> Result<Self, DesktopError> {
+    fn open(database_path: &Path, asset_store: PathBuf) -> Result<Self, DesktopError> {
         let events = RuntimeEventBus::default();
         let runtime = RuntimeService::initialize_with_event_bus(
             SqlitePetRepository::open(database_path)?,
@@ -87,6 +89,7 @@ impl DesktopState {
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
+            asset_store,
         })
     }
 }
@@ -112,6 +115,22 @@ struct ClickPetRequest {
     x: f64,
     y: f64,
     button: PointerButton,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallAssetRequest {
+    asset_id: String,
+    source_path: PathBuf,
+    files: Vec<PathBuf>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AssetInstallReceipt {
+    asset_id: String,
+    active_path: PathBuf,
+    replaced_previous: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +176,10 @@ enum DesktopError {
     NativePolicyRollback { primary: String, rollback: String },
     #[error(transparent)]
     Persistence(#[from] SqlitePersistenceError),
+    #[error(transparent)]
+    AssetInstall(#[from] InstallError),
+    #[error("asset identifier must be a lowercase namespaced identifier")]
+    InvalidAssetIdentifier,
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -418,6 +441,41 @@ fn set_click_through(
     Ok(())
 }
 
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn install_asset(
+    state: State<'_, DesktopState>,
+    request: InstallAssetRequest,
+) -> Result<AssetInstallReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    if !valid_asset_identifier(&request.asset_id) {
+        return Err(DesktopError::InvalidAssetIdentifier);
+    }
+    let active_path = state.asset_store.join(&request.asset_id);
+    let files = request
+        .files
+        .into_iter()
+        .map(|relative_path| InstallFile { relative_path })
+        .collect::<Vec<_>>();
+    let result = install_atomically(&request.source_path, &active_path, &files)?;
+    Ok(AssetInstallReceipt {
+        asset_id: request.asset_id,
+        active_path: result.active_path,
+        replaced_previous: result.backup_path.is_some(),
+    })
+}
+
+fn valid_asset_identifier(value: &str) -> bool {
+    let segments = value.split('.').collect::<Vec<_>>();
+    segments.len() >= 3
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+}
+
 fn ensure_normal_mode(state: &DesktopState) -> Result<(), DesktopError> {
     if state.safety.snapshot()?.mode == RuntimeMode::Safe {
         return Err(DesktopError::SafeModeActive);
@@ -668,7 +726,10 @@ pub fn run() {
         .setup(|app| {
             let data_directory = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_directory)?;
-            app.manage(DesktopState::open(&data_directory.join("runtime.sqlite3"))?);
+            app.manage(DesktopState::open(
+                &data_directory.join("runtime.sqlite3"),
+                data_directory.join("assets"),
+            )?);
             create_pet_window(app.handle())?;
             create_tray(app.handle())?;
             Ok(())
@@ -699,7 +760,8 @@ pub fn run() {
             click_pet,
             begin_pet_drag,
             finish_pet_drag,
-            set_click_through
+            set_click_through,
+            install_asset
         ])
         .run(tauri::generate_context!())
         .expect("Nimora desktop runtime failed");
@@ -709,6 +771,7 @@ pub fn run() {
 mod tests {
     use super::{
         DesktopError, PetAction, ProfilePolicy, TrayAction, WindowPolicy, screen_coordinate,
+        valid_asset_identifier,
     };
 
     #[test]
@@ -774,5 +837,13 @@ mod tests {
                 click_through: false,
             }
         );
+    }
+
+    #[test]
+    fn asset_identifiers_require_safe_namespaced_segments() {
+        assert!(valid_asset_identifier("character.example.mochi"));
+        assert!(!valid_asset_identifier("character.example"));
+        assert!(!valid_asset_identifier("character.example../escape"));
+        assert!(!valid_asset_identifier("Character.example.mochi"));
     }
 }

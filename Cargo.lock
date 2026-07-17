@@ -1824,6 +1824,7 @@ dependencies = [
 name = "nimora-desktop"
 version = "0.1.0"
 dependencies = [
+ "nimora-asset-installer",
  "nimora-persistence-sqlite",
  "nimora-runtime-app",
  "nimora-runtime-core",

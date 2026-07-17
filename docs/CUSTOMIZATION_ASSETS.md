@@ -93,6 +93,8 @@ character.example.mochi/
 
 Rust 侧 `nimora-asset-installer` 提供最小原子安装边界：它只复制计划中列出的相对文件到独立暂存目录，拒绝绝对路径、父目录和缺失文件；已有版本先移动为备份，暂存目录切换失败时恢复旧版本。上层适配器仍必须在调用前完成压缩包解包限制、符号链接检查、SHA-256 校验、签名验证和资源预算检查。
 
+桌面端通过类型化 `install_asset` IPC 命令调用安装器，目标目录始终由 Tauri 从应用数据目录和合法的 namespaced asset ID 推导，WebView 不能指定任意安装目标。安全模式会拒绝安装；源目录中的文件即使通过父目录符号链接指向包外，也必须在复制前拒绝。
+
 ## 5. 渲染后端
 
 第一阶段必须支持 `sprite-sequence` 和 `sprite-atlas`。版本化 Renderer Adapter 进一步支持 Lottie、Spine、Live2D Cubism、glTF/GLB 与 VRM；OBJ/FBX 仅作为隔离转换输入。任何格式不得改变 Pet Runtime 的动作语义，完整规则见 [`MODEL_RENDERING_IMPORT.md`](MODEL_RENDERING_IMPORT.md)。

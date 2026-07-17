@@ -32,6 +32,11 @@ describe("desktop platform adapter", () => {
     await api.clickPet(12, 24, "left");
     await api.dragPet();
     await api.setClickThrough(true);
+    await api.installAsset({
+      assetId: "character.example.mochi",
+      sourcePath: "/tmp/nimora-import",
+      files: ["manifest.json", "sprites/idle.webp"],
+    });
     expect(invoke.mock.calls).toEqual([
       ["drain_runtime_events"],
       ["profile_snapshot"],
@@ -45,6 +50,11 @@ describe("desktop platform adapter", () => {
       ["begin_pet_drag"],
       ["finish_pet_drag"],
       ["set_click_through", { enabled: true }],
+      ["install_asset", { request: {
+        assetId: "character.example.mochi",
+        sourcePath: "/tmp/nimora-import",
+        files: ["manifest.json", "sprites/idle.webp"],
+      } }],
     ]);
     expect(startDragging).toHaveBeenCalledOnce();
   });
