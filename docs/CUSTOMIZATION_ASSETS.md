@@ -116,6 +116,30 @@ pet.click pet.happy pet.sad pet.hungry pet.talk
 
 ## 6. 动画图
 
+Sprite 资源的 `entrypoints.clips` 必须指向 `nimora.sprite-clips/1` JSON。该文档使用 `backend` 判别联合，首版只接受：
+
+- `sprite-sequence`：每个动作声明 `loop` 与 1–1000 个 `{ file, durationMs }` 帧；文件必须是包内安全相对路径。
+- `sprite-atlas`：文档声明单一 `image`，每个动作声明 `loop` 与 1–1000 个 `{ x, y, width, height, durationMs }` 帧。
+- 所有文档必须包含 `pet.idle`；帧时长为 16–60,000 ms，尺寸与坐标有硬上限，动作名必须是 namespaced ID。
+- Renderer 不接受脚本、远程 URL、CSS 或任意 HTML。共享 `@nimora/schemas` 的 `spriteClipsSchema` 是 Creator、Importer 和 Renderer 的统一契约。
+
+Sequence 示例：
+
+```json
+{
+  "spec": "nimora.sprite-clips/1",
+  "backend": "sprite-sequence",
+  "clips": {
+    "pet.idle": {
+      "loop": true,
+      "frames": [
+        { "file": "sprites/idle/0001.webp", "durationMs": 100 }
+      ]
+    }
+  }
+}
+```
+
 动画图是声明式有限状态图，包含：
 
 - 状态、Clip、循环模式和播放速度。

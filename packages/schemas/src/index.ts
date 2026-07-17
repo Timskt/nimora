@@ -147,6 +147,42 @@ export const rendererBackendSchema = z.enum([
   "vrm",
   "gltf",
 ]);
+const spriteActionSchema = z.string().regex(/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/);
+const spriteDurationSchema = z.number().int().min(16).max(60_000);
+const spriteSequenceClipSchema = z.object({
+  loop: z.boolean(),
+  frames: z.array(z.object({
+    file: safeAssetPathSchema,
+    durationMs: spriteDurationSchema,
+  })).min(1).max(1_000),
+});
+const spriteAtlasClipSchema = z.object({
+  loop: z.boolean(),
+  frames: z.array(z.object({
+    x: z.number().int().nonnegative().max(16_384),
+    y: z.number().int().nonnegative().max(16_384),
+    width: z.number().int().positive().max(4_096),
+    height: z.number().int().positive().max(4_096),
+    durationMs: spriteDurationSchema,
+  })).min(1).max(1_000),
+});
+export const spriteClipsSchema = z.discriminatedUnion("backend", [
+  z.object({
+    spec: z.literal("nimora.sprite-clips/1"),
+    backend: z.literal("sprite-sequence"),
+    clips: z.record(spriteActionSchema, spriteSequenceClipSchema),
+  }),
+  z.object({
+    spec: z.literal("nimora.sprite-clips/1"),
+    backend: z.literal("sprite-atlas"),
+    image: safeAssetPathSchema,
+    clips: z.record(spriteActionSchema, spriteAtlasClipSchema),
+  }),
+]).superRefine((document, context) => {
+  if (!("pet.idle" in document.clips)) {
+    context.addIssue({ code: "custom", message: "sprite clips must define pet.idle", path: ["clips"] });
+  }
+});
 export const assetManifestSchema = z.object({
   spec: z.literal("nimora.asset/1"),
   id: namespacedId,
@@ -223,6 +259,7 @@ export type SafeModeReason = z.infer<typeof safeModeReasonSchema>;
 export type SafetySnapshot = z.infer<typeof safetySnapshotSchema>;
 export type AssetType = z.infer<typeof assetTypeSchema>;
 export type RendererBackend = z.infer<typeof rendererBackendSchema>;
+export type SpriteClips = z.infer<typeof spriteClipsSchema>;
 export type AssetManifest = z.infer<typeof assetManifestSchema>;
 export type AssetFile = z.infer<typeof assetFileSchema>;
 export type AssetDependency = z.infer<typeof assetDependencySchema>;

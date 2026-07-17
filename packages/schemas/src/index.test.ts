@@ -7,6 +7,7 @@ import {
   pointerButtonSchema,
   profileSnapshotSchema,
   safetySnapshotSchema,
+  spriteClipsSchema,
 } from "./index";
 
 const validAssetManifest = {
@@ -25,7 +26,7 @@ const validAssetManifest = {
     defaultScale: 0.5,
     pixelArt: false,
   },
-  entrypoints: { animationGraph: "animations/graph.json" },
+  entrypoints: { animationGraph: "animations/graph.json", clips: "animations/clips.json" },
   capabilities: ["pet.walk", "pet.drag"],
   fallbacks: { "pet.happy": "pet.idle" },
   locales: ["zh-CN", "en"],
@@ -142,6 +143,30 @@ describe("assetManifestSchema", () => {
       ...validAssetManifest,
       render: { ...validAssetManifest.render, backend: "obj" },
       entrypoints: { animationGraph: "../outside.json" },
+    }).success).toBe(false);
+  });
+});
+
+describe("spriteClipsSchema", () => {
+  it("accepts bounded sequence and atlas documents", () => {
+    expect(spriteClipsSchema.safeParse({
+      spec: "nimora.sprite-clips/1",
+      backend: "sprite-sequence",
+      clips: { "pet.idle": { loop: true, frames: [{ file: "sprites/idle/0001.webp", durationMs: 100 }] } },
+    }).success).toBe(true);
+    expect(spriteClipsSchema.safeParse({
+      spec: "nimora.sprite-clips/1",
+      backend: "sprite-atlas",
+      image: "sprites/atlas.webp",
+      clips: { "pet.idle": { loop: true, frames: [{ x: 0, y: 0, width: 256, height: 256, durationMs: 100 }] } },
+    }).success).toBe(true);
+  });
+
+  it("rejects path escape, missing idle, and unbounded timing", () => {
+    expect(spriteClipsSchema.safeParse({
+      spec: "nimora.sprite-clips/1",
+      backend: "sprite-sequence",
+      clips: { "pet.walk": { loop: true, frames: [{ file: "../escape.png", durationMs: 1 }] } },
     }).success).toBe(false);
   });
 });
