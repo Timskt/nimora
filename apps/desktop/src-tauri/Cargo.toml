@@ -17,6 +17,7 @@ tauri-build = { version = "2.5", features = [] }
 nimora-agent-provider-worker = { path = "../../../crates/agent-provider-worker" }
 nimora-agent-runtime = { path = "../../../crates/agent-runtime" }
 nimora-agent-tools = { path = "../../../crates/agent-tools" }
+nimora-automation-capability-bridge = { path = "../../../crates/automation-capability-bridge" }
 nimora-automation-runtime = { path = "../../../crates/automation-runtime" }
 nimora-asset-installer = { path = "../../../crates/asset-installer" }
 nimora-model-importer = { path = "../../../crates/model-importer" }

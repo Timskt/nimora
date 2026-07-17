@@ -430,6 +430,7 @@ export interface DesktopApi {
   drainEvents(): Promise<NimoraEvent[]>;
   outboxSnapshot(): Promise<OutboxSnapshot>;
   testAutomation(definition: AutomationDefinition, eventType: string, eventData: unknown): Promise<AutomationRun>;
+  runAutomation(definition: AutomationDefinition, eventType: string, eventData: unknown): Promise<AutomationRun>;
   automationRunStatus(runId: string): Promise<AutomationJournalEntry | null>;
   agentCatalog(): Promise<AgentCatalog>;
   agentProviderStatus(providerId: string): Promise<AgentProviderStatus>;
@@ -589,6 +590,7 @@ export function createDesktopApi(
           reason: status === "planned" ? null : "测试事件未通过触发器或条件",
         };
       },
+      async runAutomation() { throw new Error("Live automation requires the Nimora desktop runtime."); },
       async automationRunStatus() { return null; },
       async agentCatalog() {
         return {
@@ -762,6 +764,7 @@ export function createDesktopApi(
     drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],
     outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,
     testAutomation: async (definition, eventType, eventData) => await invokeCommand("test_automation", { request: { definition, eventType, eventData } }) as AutomationRun,
+    runAutomation: async (definition, eventType, eventData) => await invokeCommand("run_automation", { request: { definition, eventType, eventData } }) as AutomationRun,
     automationRunStatus: async (runId) => await invokeCommand("automation_run_status", { runId }) as AutomationJournalEntry | null,
     agentCatalog: async () => await invokeCommand("agent_catalog") as AgentCatalog,
     agentProviderStatus: async (providerId) => await invokeCommand("agent_provider_status", { request: { providerId } }) as AgentProviderStatus,

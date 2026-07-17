@@ -22,6 +22,14 @@ pub struct AgentGatewayPolicy {
     pub commands: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleGatewayPolicy {
+    pub execution_id: Uuid,
+    pub trace_id: Uuid,
+    pub read_capabilities: BTreeSet<String>,
+    pub commands: BTreeSet<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CapabilityRequest {
@@ -310,7 +318,29 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
         policy: &AgentGatewayPolicy,
         envelope: GatewayEnvelope,
     ) -> Result<CapabilityResponse, GatewayError> {
-        if envelope.execution_id != policy.task_id.to_string()
+        self.dispatch_module(
+            &ModuleGatewayPolicy {
+                execution_id: policy.task_id,
+                trace_id: policy.trace_id,
+                read_capabilities: policy.read_capabilities.clone(),
+                commands: policy.commands.clone(),
+            },
+            envelope,
+        )
+    }
+
+    /// Authorizes one host module request through the shared capability boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for correlation mismatch, undeclared capability or command,
+    /// unsupported local storage, or backend failure.
+    pub fn dispatch_module(
+        &self,
+        policy: &ModuleGatewayPolicy,
+        envelope: GatewayEnvelope,
+    ) -> Result<CapabilityResponse, GatewayError> {
+        if envelope.execution_id != policy.execution_id.to_string()
             || envelope.trace_id != policy.trace_id.to_string()
         {
             return Err(GatewayError::ExecutionMismatch);
@@ -383,7 +413,7 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
                 definition,
                 event_type,
                 event_data,
-            } => self.dispatch_agent_automation(policy, &definition, &event_type, &event_data),
+            } => self.dispatch_module_automation(policy, &definition, &event_type, &event_data),
             CapabilityRequest::InvokeCommand { command, arguments } => {
                 if !policy.commands.contains(&command) {
                     return Err(GatewayError::CommandNotDeclared(command));
@@ -404,9 +434,9 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
         }
     }
 
-    fn dispatch_agent_automation(
+    fn dispatch_module_automation(
         &self,
-        policy: &AgentGatewayPolicy,
+        policy: &ModuleGatewayPolicy,
         definition: &Value,
         event_type: &str,
         event_data: &Value,

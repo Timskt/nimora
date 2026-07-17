@@ -17,6 +17,7 @@ use nimora_asset_installer::{
     inspect_asset_source_preview, install_asset_source, install_gltf_character,
     read_verified_asset_image, read_verified_asset_model, rollback_latest,
 };
+use nimora_automation_capability_bridge::{AutomationCapabilityBridge, AutomationCapabilityPolicy};
 use nimora_automation_runtime::{
     ActionFailure, AutomationBackend, AutomationDefinition, AutomationEngine, AutomationError,
     AutomationExecutionContext, AutomationRun, RunMode, Uncancelled,
@@ -32,10 +33,10 @@ use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
 };
 use nimora_persistence_sqlite::{
-    AgentHistoryRecord, AutomationJournalEntry, BackupCoordinator, BackupHealth, BackupPolicy,
-    BackupRecord, DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant,
-    SqliteAgentHistoryRepository, SqliteAutomationJournal, SqliteOutboxRepository,
-    SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
+    AgentHistoryRecord, AutomationJournalEntry, AutomationRunStart, BackupCoordinator,
+    BackupHealth, BackupPolicy, BackupRecord, DATABASE_VERSION, OutboxSnapshot,
+    ProgramPermissionGrant, SqliteAgentHistoryRepository, SqliteAutomationJournal,
+    SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
     SqliteProgramPermissionRepository, apply_pending_restore, verify_database_file,
 };
 use nimora_runtime_app::{
@@ -792,6 +793,56 @@ impl AutomationBackend for DryRunAutomationBackend {
 #[tauri::command]
 fn test_automation(request: AutomationTestRequest) -> Result<AutomationRun, DesktopError> {
     dry_run_automation(&request.definition, request.event_type, request.event_data)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri managed state command arguments are owned extractors"
+)]
+fn run_automation(
+    request: AutomationTestRequest,
+    state: State<'_, DesktopState>,
+) -> Result<AutomationRun, DesktopError> {
+    run_live_automation(&state, request)
+}
+
+fn run_live_automation(
+    state: &DesktopState,
+    request: AutomationTestRequest,
+) -> Result<AutomationRun, DesktopError> {
+    ensure_normal_mode(state)?;
+    AutomationEngine::validate(&request.definition)?;
+    let event = Event::new(
+        request.event_type,
+        EventSource::Automation(request.definition.id.clone()),
+        request.event_data,
+    )
+    .map_err(RuntimeError::from)?;
+    let run_id = Uuid::now_v7();
+    state.automation_journal.start(&AutomationRunStart {
+        run_id,
+        automation_id: request.definition.id.clone(),
+        trace_id: event.trace_id,
+        event_id: event.id.to_string(),
+        started_at_ms: current_time_ms()?,
+    })?;
+    let backend = AutomationCapabilityBridge::new(
+        DesktopCapabilityBackend { state },
+        AutomationCapabilityPolicy::pet_actions(),
+    );
+    let run = AutomationEngine::run_with_id(
+        run_id,
+        &request.definition,
+        &event,
+        RunMode::Live,
+        &backend,
+        &Uncancelled,
+    )?;
+    state
+        .automation_journal
+        .complete(&run, current_time_ms()?)?;
+    Ok(run)
 }
 
 #[tauri::command]
@@ -4483,6 +4534,7 @@ pub fn run() {
             desktop_snapshot,
             agent_catalog,
             test_automation,
+            run_automation,
             automation_run_status,
             agent_provider_status,
             agent_history_list,
@@ -4668,9 +4720,9 @@ mod tests {
         open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
         permission_grant, persist_active_character, prepare_agent_tool_inner,
         reject_agent_tool_inner, resolve_active_character, resolve_character_renderer,
-        run_local_agent_inner, screen_coordinate, serve_asset_protocol, test_automation,
-        user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
-        validate_requested_animation_map,
+        run_live_automation, run_local_agent_inner, screen_coordinate, serve_asset_protocol,
+        test_automation, user_program_input, valid_asset_identifier, validate_model_source,
+        validate_package_source, validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentTask, AgentTaskOrigin, AgentTaskStatus, DataClassification,
@@ -4948,6 +5000,83 @@ mod tests {
         assert_eq!(run.steps.len(), 1);
         assert_eq!(run.steps[0].command, "pet.animation.play");
         assert_eq!(run.steps[0].attempts, 0);
+    }
+
+    fn live_move_request(command: &str, risk: &str) -> AutomationTestRequest {
+        serde_json::from_value(json!({
+            "definition": {
+                "spec": "nimora.automation/1",
+                "id": "local.pet.move-on-build",
+                "name": "Move on build",
+                "enabled": true,
+                "trigger": { "eventType": "dev.build.finished" },
+                "conditions": [],
+                "actions": [{
+                    "id": "move",
+                    "command": command,
+                    "arguments": { "x": 41.0, "y": 73.0 },
+                    "risk": risk,
+                    "retrySafe": true,
+                    "idempotencyKey": "live-build-move",
+                    "compensation": null
+                }],
+                "policy": { "timeoutMs": 5000, "failure": "stop" }
+            },
+            "eventType": "dev.build.finished",
+            "eventData": {}
+        }))
+        .expect("live automation request")
+    }
+
+    #[test]
+    fn live_automation_changes_pet_through_gateway_and_completes_journal() {
+        let (root, state) = normal_desktop_state();
+        let run = run_live_automation(&state, live_move_request("pet.position.move", "low"))
+            .expect("live automation");
+        assert_eq!(
+            run.status,
+            nimora_automation_runtime::AutomationRunStatus::Succeeded
+        );
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").position,
+            Position { x: 41.0, y: 73.0 }
+        );
+        let journal = state
+            .automation_journal
+            .get(run.run_id)
+            .expect("journal query")
+            .expect("journal entry");
+        assert_eq!(journal.status, AutomationJournalStatus::Completed);
+        assert_eq!(journal.result, Some(run));
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn live_automation_denies_unknown_understated_and_safe_mode_actions() {
+        let (root, state) = normal_desktop_state();
+        for request in [
+            live_move_request("profile.active.switch", "medium"),
+            live_move_request("pet.position.move", "safe"),
+        ] {
+            let run = run_live_automation(&state, request).expect("denied run is journaled");
+            assert_eq!(
+                run.status,
+                nimora_automation_runtime::AutomationRunStatus::Failed
+            );
+        }
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").position,
+            Position { x: 0.0, y: 0.0 }
+        );
+        state
+            .safety
+            .enter(nimora_runtime_core::SafeModeReason::Manual)
+            .expect("safe mode");
+        assert!(matches!(
+            run_live_automation(&state, live_move_request("pet.position.move", "low")),
+            Err(DesktopError::SafeModeActive)
+        ));
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]
