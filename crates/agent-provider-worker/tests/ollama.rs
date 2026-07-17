@@ -119,6 +119,61 @@ fn mock_ollama(response: serde_json::Value) -> (OllamaEndpoint, thread::JoinHand
     (endpoint, handle)
 }
 
+fn mock_ollama_sequence(
+    responses: Vec<serde_json::Value>,
+) -> (OllamaEndpoint, thread::JoinHandle<Vec<Vec<u8>>>) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind mock Ollama");
+    let endpoint = OllamaEndpoint::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        listener.local_addr().expect("address").port(),
+    )
+    .expect("endpoint");
+    let handle = thread::spawn(move || {
+        responses
+            .into_iter()
+            .map(|response| {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut request_bytes = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                let header_end = loop {
+                    let read = stream.read(&mut buffer).expect("read request");
+                    assert_ne!(read, 0);
+                    request_bytes.extend_from_slice(&buffer[..read]);
+                    if let Some(position) = request_bytes
+                        .windows(4)
+                        .position(|part| part == b"\r\n\r\n")
+                    {
+                        break position;
+                    }
+                };
+                let headers =
+                    std::str::from_utf8(&request_bytes[..header_end]).expect("headers");
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Content-Length: "))
+                    .expect("content length")
+                    .parse::<usize>()
+                    .expect("content length number");
+                while request_bytes.len() < header_end + 4 + content_length {
+                    let read = stream.read(&mut buffer).expect("read body");
+                    assert_ne!(read, 0);
+                    request_bytes.extend_from_slice(&buffer[..read]);
+                }
+                let response_body = serde_json::to_vec(&response).expect("response JSON");
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    response_body.len()
+                )
+                .expect("write headers");
+                stream.write_all(&response_body).expect("write body");
+                request_bytes
+            })
+            .collect()
+    });
+    (endpoint, handle)
+}
+
 fn request_document(request_bytes: &[u8]) -> serde_json::Value {
     let header_end = request_bytes
         .windows(4)
@@ -321,6 +376,97 @@ fn registry_completes_through_the_real_worker_process() {
     assert_eq!(response.content, "sidecar verified");
     assert_eq!(response.request_id, provider_request.request_id);
     server.join().expect("mock server");
+}
+
+#[test]
+fn real_worker_completes_a_correlated_tool_call_continuation() {
+    let tool = ToolDescriptor::new(
+        "profile.appearance.inspect",
+        "Inspect appearance",
+        "Reads the current appearance through the capability gateway.",
+        json!({"type": "object"}),
+        json!({"type": "object"}),
+        CommandRisk::Safe,
+        ToolEffect::ReadOnly,
+    )
+    .expect("tool");
+    let (endpoint, server) = mock_ollama_sequence(vec![
+        json!({
+            "message": {"role": "assistant", "content": "", "tool_calls": [{"function": {
+                "name": "profile.appearance.inspect",
+                "arguments": {}
+            }}]},
+            "done": true,
+            "done_reason": "tool_calls",
+            "prompt_eval_count": 7,
+            "eval_count": 2
+        }),
+        json!({
+            "message": {"role": "assistant", "content": "当前主题是 violet"},
+            "done": true,
+            "done_reason": "stop",
+            "prompt_eval_count": 12,
+            "eval_count": 5
+        }),
+    ]);
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(
+            WorkerOllamaProvider::new(env!("CARGO_BIN_EXE_nimora-agent-provider-worker"), endpoint)
+                .expect("worker provider"),
+        )
+        .expect("register provider");
+    let first_request = request(vec![tool.clone()]);
+    let context = || ProviderExecutionContext {
+        timeout: Duration::from_secs(5),
+        cancellation: CancellationFlag::default(),
+        credential_reference: None,
+    };
+    let first = registry
+        .complete(&first_request, context(), true)
+        .expect("first worker completion");
+    assert_eq!(first.finish_reason, ProviderFinishReason::ToolCalls);
+    assert_eq!(first.tool_calls.len(), 1);
+    let call = &first.tool_calls[0];
+    assert_eq!(call.tool_id.as_str(), "profile.appearance.inspect");
+
+    let messages = vec![
+        first_request.messages[0].clone(),
+        ProviderMessage::assistant_tool_calls(&first),
+        ProviderMessage::tool_result(call, &json!({"theme": "violet"}))
+            .expect("correlated tool result"),
+    ];
+    let continuation = ProviderRequest::new(
+        first_request.task_id,
+        first_request.trace_id,
+        "provider:ollama-loopback",
+        "qwen3:8b",
+        messages,
+        vec![tool],
+        128,
+    )
+    .expect("continuation request");
+    let completed = registry
+        .complete(&continuation, context(), true)
+        .expect("continued worker completion");
+    assert_eq!(completed.finish_reason, ProviderFinishReason::Completed);
+    assert_eq!(completed.content, "当前主题是 violet");
+
+    let requests = server.join().expect("mock server");
+    assert_eq!(requests.len(), 2);
+    let continuation_document = request_document(&requests[1]);
+    assert_eq!(
+        continuation_document["messages"][1]["tool_calls"][0]["function"]["name"],
+        "profile.appearance.inspect"
+    );
+    assert_eq!(
+        continuation_document["messages"][2]["tool_call_id"],
+        first.tool_calls[0].id
+    );
+    assert_eq!(
+        continuation_document["messages"][2]["content"],
+        json!({"theme": "violet"}).to_string()
+    );
 }
 
 #[test]
