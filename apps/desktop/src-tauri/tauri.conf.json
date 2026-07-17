@@ -33,6 +33,10 @@
     "category": "Productivity",
     "shortDescription": "Local-first extensible desktop companion",
     "longDescription": "Nimora is a local-first desktop companion, automation runtime and creator platform.",
-    "externalBin": ["binaries/nimora-user-code-worker", "binaries/nimora-model-importer-worker"]
+    "externalBin": [
+      "binaries/nimora-user-code-worker",
+      "binaries/nimora-model-importer-worker",
+      "binaries/nimora-agent-provider-worker"
+    ]
   }
 }

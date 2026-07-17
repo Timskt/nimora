@@ -1,7 +1,8 @@
-import { chmod, cp, mkdir, rm } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
@@ -11,6 +12,11 @@ const target = process.env.TAURI_ENV_TARGET_TRIPLE ?? (await rustHostTriple());
 const sidecars = [
   { packageName: "nimora-user-code-worker", binaryName: "nimora-user-code-worker" },
   { packageName: "nimora-model-importer", binaryName: "nimora-model-importer-worker" },
+  {
+    packageName: "nimora-agent-provider-worker",
+    binaryName: "nimora-agent-provider-worker",
+    providerId: "provider:ollama-loopback",
+  },
 ];
 
 await mkdir(outputDirectory, { recursive: true });
@@ -18,7 +24,7 @@ for (const sidecar of sidecars) {
   await prepareSidecar(sidecar);
 }
 
-async function prepareSidecar({ packageName, binaryName }) {
+async function prepareSidecar({ packageName, binaryName, providerId }) {
   await execFileAsync("cargo", ["build", "-p", packageName, "--release"], { cwd: root });
   const executableSuffix = process.platform === "win32" ? ".exe" : "";
   const source = join(root, "target/release", `${binaryName}${executableSuffix}`);
@@ -26,7 +32,28 @@ async function prepareSidecar({ packageName, binaryName }) {
   await rm(destination, { force: true });
   await cp(source, destination);
   if (process.platform !== "win32") await chmod(destination, 0o755);
+  if (providerId) await writeProviderManifest(destination, providerId);
   console.log(`Prepared ${binaryName} for ${target}`);
+}
+
+async function writeProviderManifest(executablePath, providerId) {
+  const executable = basename(executablePath);
+  const bytes = await readFile(executablePath);
+  const manifest = {
+    spec: "nimora.provider-sidecar/1",
+    providerId,
+    protocolVersion: 1,
+    executable,
+    executableBytes: bytes.byteLength,
+    executableSha256: createHash("sha256").update(bytes).digest("hex"),
+  };
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
+  const manifestPath = join(outputDirectory, "ollama-provider.json");
+  await writeFile(manifestPath, manifestBytes);
+  await writeFile(
+    `${manifestPath}.sha256`,
+    `${createHash("sha256").update(manifestBytes).digest("hex")}  ollama-provider.json\n`,
+  );
 }
 
 async function rustHostTriple() {

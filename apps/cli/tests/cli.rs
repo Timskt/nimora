@@ -87,3 +87,79 @@ fn provider_probe_executes_a_real_local_request() {
     assert_eq!(document["healthy"], true);
     assert_eq!(document["providerId"], "provider:deterministic-local");
 }
+
+#[test]
+fn ollama_run_requires_verified_sidecar() {
+    let mut child = nimora()
+        .args(["ai", "run", "--input", "-", "--output", "json"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn nimora");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(br#"{"prompt":"hello","providerId":"provider:ollama-loopback"}"#)
+        .expect("write input");
+    let output = child.wait_with_output().expect("wait for nimora");
+    assert_eq!(output.status.code(), Some(4));
+    assert!(output.stdout.is_empty());
+    let document: Value = serde_json::from_slice(&output.stderr).expect("json error");
+    assert_eq!(document["error"], "sidecar-required");
+}
+
+#[test]
+fn sidecar_arguments_must_be_provided_together() {
+    let output = nimora()
+        .args([
+            "ai",
+            "run",
+            "--input",
+            "-",
+            "--output",
+            "json",
+            "--sidecar-root",
+            ".",
+        ])
+        .output()
+        .expect("run nimora");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let document: Value = serde_json::from_slice(&output.stderr).expect("json error");
+    assert_eq!(document["error"], "usage");
+}
+
+#[test]
+fn invalid_trusted_sidecar_digest_fails_closed() {
+    let mut child = nimora()
+        .args([
+            "ai",
+            "run",
+            "--input",
+            "-",
+            "--output",
+            "json",
+            "--sidecar-root",
+            ".",
+            "--sidecar-manifest-sha256",
+            "invalid",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn nimora");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(br#"{"prompt":"hello","providerId":"provider:ollama-loopback"}"#)
+        .expect("write input");
+    let output = child.wait_with_output().expect("wait for nimora");
+    assert_eq!(output.status.code(), Some(4));
+    assert!(output.stdout.is_empty());
+    let document: Value = serde_json::from_slice(&output.stderr).expect("json error");
+    assert_eq!(document["error"], "sidecar-integrity");
+}

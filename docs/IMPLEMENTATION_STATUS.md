@@ -30,7 +30,7 @@
 | 扩展与 Skill 生态 | 未实现 | 规格、Manifest/Gateway 设计及用户代码基础设施 | Extension Host、贡献点、安装停用卸载、崩溃隔离、官方番茄钟与提醒 |
 | 自动化引擎 | 未实现 | Command/Event、结构化用户程序计划基础 | Trigger/Condition/Action/Policy、事务执行历史、重试补偿、测试运行和事件回放 |
 | 开放 Gateway 与 Connector | 未实现 | Capability Gateway 为进程内用户代码提供窄能力边界 | 配对、Token/Scope、REST/WS/SSE、HTTP/UDP Sink、Source Connector、2 秒安全停机 |
-| AI Agent 与 CLI | 部分实现 | Tool Registry、风险与批准、任务硬预算；Provider/Tool 单步协调；`nimora` 离线 CLI；确定性本地 Provider；独立 sidecar 中真实 Ollama `/api/chat` Adapter、loopback-only SSRF 边界、有界 Worker/HTTP 协议、超时取消强杀、Tool Call 转换及跨进程 mock 集成测试 | OpenAI-compatible Adapter、签名 sidecar 打包发现与 CLI/桌面接线、Capability Gateway 生产工具目录、持久计划恢复、交互 Chat/任务/历史、Safe Mode 强停与完整 Prompt Injection 防护 |
+| AI Agent 与 CLI | 部分实现 | Tool Registry、风险与批准、任务硬预算；Provider/Tool 单步协调；`nimora` 离线 CLI；确定性本地 Provider；独立 sidecar 中真实 Ollama `/api/chat` Adapter；loopback-only SSRF 边界；Manifest 与宿主可信摘要驱动的 Worker 完整性发现；CLI Ollama 接线；有界协议、超时取消强杀、Tool Call 转换及跨进程 mock 集成测试 | OpenAI-compatible Adapter、发布者数字签名与桌面自动发现、Capability Gateway 生产工具目录、持久计划恢复、交互 Chat/任务/历史、Safe Mode 强停与完整 Prompt Injection 防护 |
 | 包签名与 Registry | 未实现 | SHA-256 本地完整性锁和原子回滚 | 发布者签名、信任根、撤销、Registry、兼容检测、更新策略、离线 CLI 验证 |
 | 安全与隐私 | 部分实现 | 安全模式、精确授权、路径/符号链接防护、Worker 隔离、审计边界文档 | OS 沙箱、系统密钥存储、网络目标策略、隐私面板、威胁模型自动门禁 |
 | 稳定性与可观测性 | 部分实现 | 结构化错误、Trace、Outbox 健康、故障回退、版本化脱敏诊断摘要包、14 天/1 MiB/64 段有界固定事件日志、跨重启恢复、损坏尾行跳过、存储失败内存降级、用户可取消事件导出及单元/集成测试 | 自由文本日志与筛选、用户选择 Trace、指标、崩溃循环恢复、资源预算监控、soak/chaos 和 SLO 门禁 |

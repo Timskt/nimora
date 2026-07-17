@@ -230,6 +230,8 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-024 | Ollama SSRF 边界 | IPv4/IPv6 loopback 可用；非 loopback、零端口、凭据和超时越界在连接前拒绝 | P0 |
 | AGT-025 | Worker 输出背压 | stdout 被并发有界读取；超限、畸形 JSON、异常退出、超时和取消均终止且不泄漏传输细节 | P0 |
 | AGT-026 | Ollama Tool Call | Function name/arguments 转为 Runtime Tool Call，后续仍经过 Tool Registry 和 Capability Gateway | P0 |
+| AGT-027 | Provider Sidecar 信任 | Manifest 名称、可信摘要、Provider ID、协议、普通文件、根目录约束、文件大小和 Worker 摘要任一不符均在启动前 fail-closed | P0 |
+| AGT-028 | CLI Ollama 发现 | Sidecar root 与可信 Manifest 摘要必须成对提供；缺少 Sidecar、摘要无效和完整性失败分别返回稳定机器错误且 stdout 为空 | P0 |
 
 ## 14. 信任中心与安全模式
 

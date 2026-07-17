@@ -33,7 +33,9 @@ format/lint
 
 发布流水线必须可复现并锁定依赖。签名密钥只存在于受保护的 CI 环境。
 
-桌面构建前必须运行 `pnpm build:sidecars`，按 `TAURI_ENV_TARGET_TRIPLE` 为当前目标编译并放置 `nimora-user-code-worker` 与 `nimora-model-importer-worker`。每个平台发布任务必须验证两个 external binary 均存在、架构匹配、可启动并被最终安装包包含；本机产物不能代替 Windows、macOS Intel 或其它目标的 CI 验证。
+桌面构建前必须运行 `pnpm build:sidecars`，按 `TAURI_ENV_TARGET_TRIPLE` 为当前目标编译并放置 `nimora-user-code-worker`、`nimora-model-importer-worker` 与 `nimora-agent-provider-worker`。每个平台发布任务必须验证三个 external binary 均存在、架构匹配、可启动并被最终安装包包含；本机产物不能代替 Windows、macOS Intel 或其它目标的 CI 验证。
+
+Agent Worker 构建同时生成 `ollama-provider.json` 与 `ollama-provider.json.sha256`。发布流水线必须把 Manifest 摘要写入经过代码签名保护的宿主资源、签名元数据或等价不可由普通用户写入的信任锚，再由宿主传给验证器；禁止运行时从 Worker 同一可写目录读取 `.sha256` 并直接信任。当前 SHA-256 完整性链不等价于发布者数字签名，桌面自动发现必须在信任锚接线完成后启用。
 
 ## 4. Windows 交付
 

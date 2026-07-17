@@ -12,8 +12,13 @@ use std::{
 };
 
 mod host;
+mod sidecar;
 
 pub use host::WorkerOllamaProvider;
+pub use sidecar::{
+    ProviderSidecarManifest, SidecarVerificationError, VerifiedProviderSidecar,
+    verify_provider_sidecar,
+};
 
 const MAX_PROTOCOL_BYTES: usize = 1024 * 1024;
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;

@@ -2145,6 +2145,8 @@ dependencies = [
  "nimora-runtime-core",
  "serde",
  "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
  "uuid",
 ]
 
@@ -2175,6 +2177,7 @@ dependencies = [
 name = "nimora-cli"
 version = "0.1.0"
 dependencies = [
+ "nimora-agent-provider-worker",
  "nimora-agent-runtime",
  "serde",
  "serde_json",

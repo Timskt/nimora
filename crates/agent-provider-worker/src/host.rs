@@ -19,7 +19,7 @@ type OutputReader = JoinHandle<Result<Vec<u8>, ProviderError>>;
 #[derive(Debug)]
 pub struct WorkerOllamaProvider {
     descriptor: ProviderDescriptor,
-    executable: String,
+    executable: std::path::PathBuf,
     endpoint: OllamaEndpoint,
 }
 
@@ -30,11 +30,11 @@ impl WorkerOllamaProvider {
     ///
     /// Returns an error for an empty executable or invalid Provider descriptor.
     pub fn new(
-        executable: impl Into<String>,
+        executable: impl Into<std::path::PathBuf>,
         endpoint: OllamaEndpoint,
     ) -> Result<Self, ProviderError> {
         let executable = executable.into();
-        if executable.trim().is_empty() {
+        if executable.as_os_str().is_empty() {
             return Err(stable_error(
                 ProviderErrorKind::InvalidRequest,
                 "provider worker executable is invalid",
@@ -105,7 +105,10 @@ fn validate_context(context: &ProviderExecutionContext) -> Result<(), ProviderEr
     Ok(())
 }
 
-fn spawn_worker(executable: &str, payload: &[u8]) -> Result<(Child, OutputReader), ProviderError> {
+fn spawn_worker(
+    executable: &std::path::Path,
+    payload: &[u8],
+) -> Result<(Child, OutputReader), ProviderError> {
     let mut child = Command::new(executable)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

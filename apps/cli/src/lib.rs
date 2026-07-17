@@ -1,3 +1,4 @@
+use nimora_agent_provider_worker::{OllamaEndpoint, WorkerOllamaProvider, verify_provider_sidecar};
 use nimora_agent_runtime::{
     AgentBudget, AgentCoordinator, AgentTask, AgentTaskOrigin, CancellationFlag,
     DataClassification, DeterministicLocalProvider, ProviderExecutionContext, ProviderMessage,
@@ -13,6 +14,13 @@ use std::{
 };
 
 const PROVIDER_ID: &str = "provider:deterministic-local";
+const OLLAMA_PROVIDER_ID: &str = "provider:ollama-loopback";
+
+#[derive(Debug, Clone, Copy)]
+struct SidecarConfig<'a> {
+    root: &'a str,
+    manifest_sha256: &'a str,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliError {
@@ -52,6 +60,8 @@ struct RunInput {
     provider_id: String,
     #[serde(default = "default_output_tokens")]
     max_output_tokens: u64,
+    #[serde(default = "default_ollama_port")]
+    ollama_port: u16,
 }
 
 fn default_model() -> String {
@@ -62,6 +72,9 @@ fn default_provider() -> String {
 }
 const fn default_output_tokens() -> u64 {
     512
+}
+const fn default_ollama_port() -> u16 {
+    11_434
 }
 
 /// Runs one CLI invocation and returns exactly one machine-readable JSON document.
@@ -96,21 +109,49 @@ fn help() -> Value {
             "nimora ai provider probe",
             "nimora ai tool list",
             "nimora ai tool describe <tool-id>",
-            "nimora ai run --input <path|-> --output json [--offline]"
+            "nimora ai run --input <path|-> --output json [--offline] [--sidecar-root <path> --sidecar-manifest-sha256 <digest>]"
         ]
     })
 }
 
-fn registry() -> Result<ProviderRegistry, CliError> {
+fn registry(
+    sidecar: Option<SidecarConfig<'_>>,
+    ollama_port: u16,
+) -> Result<ProviderRegistry, CliError> {
     let mut providers = ProviderRegistry::default();
     providers
         .register(DeterministicLocalProvider::new().map_err(runtime_error)?)
         .map_err(runtime_error)?;
+    if let Some(config) = sidecar {
+        let verified = verify_provider_sidecar(
+            Path::new(config.root),
+            "ollama-provider.json",
+            config.manifest_sha256,
+        )
+        .map_err(|_| {
+            CliError::new(
+                "sidecar-integrity",
+                "Ollama provider sidecar integrity verification failed",
+                4,
+            )
+        })?;
+        let endpoint = OllamaEndpoint::new(
+            "127.0.0.1".parse().expect("constant loopback address"),
+            ollama_port,
+        )
+        .map_err(runtime_error)?;
+        providers
+            .register(
+                WorkerOllamaProvider::new(verified.executable_path, endpoint)
+                    .map_err(runtime_error)?,
+            )
+            .map_err(runtime_error)?;
+    }
     Ok(providers)
 }
 
 fn provider_list() -> Result<Value, CliError> {
-    let providers = registry()?;
+    let providers = registry(None, default_ollama_port())?;
     Ok(json!({"spec": "nimora.ai-provider-list/1", "providers": providers.descriptors()}))
 }
 
@@ -121,6 +162,7 @@ fn provider_probe() -> Result<Value, CliError> {
             model: default_model(),
             provider_id: default_provider(),
             max_output_tokens: 32,
+            ollama_port: default_ollama_port(),
         },
         true,
     )?;
@@ -145,6 +187,8 @@ fn run_task(arguments: &[&str]) -> Result<Value, CliError> {
     let mut input_path = None;
     let mut offline = false;
     let mut json_output = false;
+    let mut sidecar_root = None;
+    let mut sidecar_manifest_sha256 = None;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index] {
@@ -160,6 +204,14 @@ fn run_task(arguments: &[&str]) -> Result<Value, CliError> {
                 offline = true;
                 index += 1;
             }
+            "--sidecar-root" if index + 1 < arguments.len() => {
+                sidecar_root = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--sidecar-manifest-sha256" if index + 1 < arguments.len() => {
+                sidecar_manifest_sha256 = Some(arguments[index + 1]);
+                index += 2;
+            }
             _ => {
                 return Err(CliError::new(
                     "usage",
@@ -173,6 +225,20 @@ fn run_task(arguments: &[&str]) -> Result<Value, CliError> {
     if !json_output {
         return Err(CliError::new("usage", "missing --output json", 2));
     }
+    let sidecar = match (sidecar_root, sidecar_manifest_sha256) {
+        (Some(root), Some(manifest_sha256)) => Some(SidecarConfig {
+            root,
+            manifest_sha256,
+        }),
+        (None, None) => None,
+        _ => {
+            return Err(CliError::new(
+                "usage",
+                "--sidecar-root and --sidecar-manifest-sha256 must be provided together",
+                2,
+            ));
+        }
+    };
     let bytes = if input_path == "-" {
         let mut bytes = Vec::new();
         io::stdin()
@@ -189,13 +255,22 @@ fn run_task(arguments: &[&str]) -> Result<Value, CliError> {
     }
     let input: RunInput = serde_json::from_slice(&bytes)
         .map_err(|_| CliError::new("input", "input must match the bounded task schema", 3))?;
-    execute(input, offline)
+    execute_with_sidecar(input, offline, sidecar)
 }
 
 fn execute(input: RunInput, offline: bool) -> Result<Value, CliError> {
+    execute_with_sidecar(input, offline, None)
+}
+
+fn execute_with_sidecar(
+    input: RunInput,
+    offline: bool,
+    sidecar: Option<SidecarConfig<'_>>,
+) -> Result<Value, CliError> {
     if input.prompt.is_empty()
         || input.prompt.len() > 256 * 1024
-        || input.provider_id != PROVIDER_ID
+        || !matches!(input.provider_id.as_str(), PROVIDER_ID | OLLAMA_PROVIDER_ID)
+        || input.ollama_port == 0
     {
         return Err(CliError::new(
             "input",
@@ -203,7 +278,14 @@ fn execute(input: RunInput, offline: bool) -> Result<Value, CliError> {
             3,
         ));
     }
-    let providers = registry()?;
+    if input.provider_id == OLLAMA_PROVIDER_ID && sidecar.is_none() {
+        return Err(CliError::new(
+            "sidecar-required",
+            "Ollama provider requires a verified provider sidecar",
+            4,
+        ));
+    }
+    let providers = registry(sidecar, input.ollama_port)?;
     let tools = ToolRegistry::default();
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
