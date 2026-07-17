@@ -2,7 +2,7 @@ use nimora_agent_runtime::{
     AgentAutonomy, AgentBudget, AgentTaskAdmission, AgentTaskGateway, AgentTaskGatewayPolicy,
     AgentTaskOrigin, AgentTaskParent, AgentTaskRequest, DataClassification,
 };
-use nimora_automation_runtime::{ActionFailure, AutomationBackend};
+use nimora_automation_runtime::{ActionFailure, AutomationBackend, AutomationExecutionContext};
 use nimora_runtime_core::{Command, CommandRisk};
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -73,11 +73,15 @@ where
     S: AgentTaskSubmitter,
     C: AutomationAgentContext,
 {
-    fn execute(&self, command: Command) -> Result<(), ActionFailure> {
+    fn execute(
+        &self,
+        context: &AutomationExecutionContext,
+        command: Command,
+    ) -> Result<(), ActionFailure> {
         if command.command_id.to_string() != AGENT_TASK_RUN_COMMAND {
-            return self.fallback.execute(command);
+            return self.fallback.execute(context, command);
         }
-        self.execute_agent(&command)
+        self.execute_agent(context, &command)
     }
 }
 
@@ -86,7 +90,11 @@ where
     S: AgentTaskSubmitter,
     C: AutomationAgentContext,
 {
-    fn execute_agent(&self, command: &Command) -> Result<(), ActionFailure> {
+    fn execute_agent(
+        &self,
+        context: &AutomationExecutionContext,
+        command: &Command,
+    ) -> Result<(), ActionFailure> {
         if matches!(command.risk, CommandRisk::Safe | CommandRisk::Low) {
             return Err(permanent("agent task action risk must be medium or higher"));
         }
@@ -119,9 +127,9 @@ where
             autonomy: arguments.autonomy,
             budget: arguments.budget,
             parent: Some(AgentTaskParent {
-                root_task_id: command.execution_id,
-                parent_task_id: command.execution_id,
-                trace_id: command.trace_id,
+                root_task_id: context.run_id,
+                parent_task_id: context.run_id,
+                trace_id: context.trace_id,
                 call_depth: 0,
                 remaining_budget,
             }),
@@ -187,6 +195,7 @@ mod tests {
     use nimora_runtime_core::{Event, EventSource};
     use serde_json::json;
     use std::sync::Mutex;
+    use uuid::Uuid;
 
     #[derive(Debug, Default)]
     struct Fallback {
@@ -194,7 +203,11 @@ mod tests {
     }
 
     impl AutomationBackend for Fallback {
-        fn execute(&self, command: Command) -> Result<(), ActionFailure> {
+        fn execute(
+            &self,
+            _context: &AutomationExecutionContext,
+            command: Command,
+        ) -> Result<(), ActionFailure> {
             self.commands
                 .lock()
                 .expect("commands")
@@ -328,6 +341,8 @@ mod tests {
         let tasks = bridge.submitter.tasks.lock().expect("tasks");
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].admission.task.trace_id, event.trace_id);
+        assert_eq!(tasks[0].admission.root_task_id, run.run_id);
+        assert_eq!(tasks[0].admission.parent_task_id, Some(run.run_id));
         assert_eq!(tasks[0].admission.task.budget.max_steps, 3);
         assert_eq!(tasks[0].admission.task.budget.max_tool_calls, 1);
         assert_eq!(tasks[0].admission.call_depth, 1);
@@ -354,7 +369,14 @@ mod tests {
         let bridge = bridge();
         let command =
             Command::new("pet.animation.play", json!({}), CommandRisk::Low).expect("command");
-        bridge.execute(command).expect("fallback");
+        let context = AutomationExecutionContext {
+            run_id: Uuid::from_u128(1),
+            automation_id: "local.focus.ai-summary".to_owned(),
+            action_id: "summarize".to_owned(),
+            event_id: "event:test".to_owned(),
+            trace_id: Uuid::from_u128(2),
+        };
+        bridge.execute(&context, command).expect("fallback");
         assert_eq!(
             *bridge.fallback.commands.lock().expect("commands"),
             ["pet.animation.play"]

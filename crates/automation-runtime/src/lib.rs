@@ -125,13 +125,26 @@ pub struct ActionFailure {
     pub transient: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutomationExecutionContext {
+    pub run_id: Uuid,
+    pub automation_id: String,
+    pub action_id: String,
+    pub event_id: String,
+    pub trace_id: Uuid,
+}
+
 pub trait AutomationBackend: std::fmt::Debug + Send + Sync {
     /// Executes an admitted command through a host-owned capability boundary.
     ///
     /// # Errors
     ///
     /// Returns a classified action failure without exposing host internals.
-    fn execute(&self, command: Command) -> Result<(), ActionFailure>;
+    fn execute(
+        &self,
+        context: &AutomationExecutionContext,
+        command: Command,
+    ) -> Result<(), ActionFailure>;
 }
 
 pub trait RunControl: std::fmt::Debug + Send + Sync {
@@ -272,14 +285,21 @@ impl AutomationEngine {
                 run.reason = Some("automation execution interrupted".to_owned());
                 return Ok(run);
             }
-            let (mut step, succeeded) = execute_action(action, event, backend)?;
+            let context = AutomationExecutionContext {
+                run_id: run.run_id,
+                automation_id: definition.id.clone(),
+                action_id: action.id.clone(),
+                event_id: event.id.to_string(),
+                trace_id: event.trace_id,
+            };
+            let (mut step, succeeded) = execute_action(action, event, &context, backend)?;
             if !succeeded {
                 step.status = CommandStatus::Failed;
                 run.steps.push(step);
                 run.status = AutomationRunStatus::Failed;
                 run.reason = Some("action execution failed".to_owned());
                 if definition.policy.failure == FailurePolicy::Compensate
-                    && !compensate(definition, event, backend, &mut run.steps)
+                    && !compensate(definition, event, run.run_id, backend, &mut run.steps)
                 {
                     run.status = AutomationRunStatus::CompensationFailed;
                     run.reason = Some("action and compensation execution failed".to_owned());
@@ -296,6 +316,7 @@ impl AutomationEngine {
 fn execute_action(
     action: &AutomationAction,
     event: &Event,
+    context: &AutomationExecutionContext,
     backend: &dyn AutomationBackend,
 ) -> Result<(AutomationStepResult, bool), AutomationError> {
     let attempts = if action.retry_safe {
@@ -318,7 +339,7 @@ fn execute_action(
         command.trace_id = event.trace_id;
         command.status = CommandStatus::Running;
         command.idempotency_key.clone_from(&action.idempotency_key);
-        match backend.execute(command) {
+        match backend.execute(context, command) {
             Ok(()) => {
                 step.status = CommandStatus::Succeeded;
                 return Ok((step, true));
@@ -337,6 +358,7 @@ fn execute_action(
 fn compensate(
     definition: &AutomationDefinition,
     event: &Event,
+    run_id: Uuid,
     backend: &dyn AutomationBackend,
     steps: &mut [AutomationStepResult],
 ) -> bool {
@@ -358,7 +380,14 @@ fn compensate(
         };
         command.trace_id = event.trace_id;
         command.status = CommandStatus::Running;
-        match backend.execute(command) {
+        let context = AutomationExecutionContext {
+            run_id,
+            automation_id: definition.id.clone(),
+            action_id: action.id.clone(),
+            event_id: event.id.to_string(),
+            trace_id: event.trace_id,
+        };
+        match backend.execute(&context, command) {
             Ok(()) => step.compensated = true,
             Err(error) => {
                 complete = false;
@@ -430,12 +459,21 @@ mod tests {
     #[derive(Debug, Default)]
     struct Backend {
         commands: Mutex<Vec<String>>,
+        contexts: Mutex<Vec<AutomationExecutionContext>>,
         transient_failures: Mutex<usize>,
         fail_command: Option<String>,
     }
 
     impl AutomationBackend for Backend {
-        fn execute(&self, command: Command) -> Result<(), ActionFailure> {
+        fn execute(
+            &self,
+            context: &AutomationExecutionContext,
+            command: Command,
+        ) -> Result<(), ActionFailure> {
+            self.contexts
+                .lock()
+                .expect("contexts")
+                .push(context.clone());
             self.commands
                 .lock()
                 .expect("commands")
@@ -567,6 +605,19 @@ mod tests {
         .expect("run");
         assert_eq!(run.status, AutomationRunStatus::Succeeded);
         assert_eq!(run.steps[0].attempts, 3);
+        let contexts = backend.contexts.lock().expect("contexts");
+        assert_eq!(contexts.len(), 3);
+        assert!(contexts.iter().all(|context| context.run_id == run.run_id));
+        assert!(
+            contexts
+                .iter()
+                .all(|context| context.trace_id == run.trace_id)
+        );
+        assert!(
+            contexts
+                .iter()
+                .all(|context| context.action_id == "celebrate")
+        );
 
         let mut invalid = definition();
         invalid.actions[0].idempotency_key = None;

@@ -19,7 +19,7 @@ use nimora_asset_installer::{
 };
 use nimora_automation_runtime::{
     ActionFailure, AutomationBackend, AutomationDefinition, AutomationEngine, AutomationError,
-    AutomationRun, RunMode, Uncancelled,
+    AutomationExecutionContext, AutomationRun, RunMode, Uncancelled,
 };
 use nimora_diagnostics_bundle::{
     ApplicationSummary, DataProtectionSummary, DiagnosticBundleError, DiagnosticBundleReceipt,
@@ -771,7 +771,11 @@ struct AutomationTestRequest {
 struct DryRunAutomationBackend;
 
 impl AutomationBackend for DryRunAutomationBackend {
-    fn execute(&self, _command: Command) -> Result<(), ActionFailure> {
+    fn execute(
+        &self,
+        _context: &AutomationExecutionContext,
+        _command: Command,
+    ) -> Result<(), ActionFailure> {
         Err(ActionFailure {
             message: "dry-run backend cannot execute commands".to_owned(),
             transient: false,

@@ -105,7 +105,7 @@ flowchart LR
 
 可信 Event Admission → 字段分类与注入扫描 → 模板生成受界定上下文 → 创建 `AgentTaskRequest` → 获取结构化结果 → Condition 校验 → 需要动作时进入 Automation Action Gateway。必须设置每规则并发、冷却时间、每日次数、Token 和费用预算。
 
-当前 `crates/automation-agent-bridge` 已实现独立 Adapter：只拦截固定 `agent.task.run` Command，其余动作继续进入原 Automation Backend；AI 动作要求 Medium 以上风险、幂等键、受信静态 instruction、显式 Provider/Tool/Data/Autonomy/预算，并通过 `AgentTaskGateway` 创建继承 Automation Trace 和根剩余预算的子任务。准入时钟与根剩余预算由宿主 `AutomationAgentContext` 提供，不接受规则作者声明；规则尝试注入 `nowMs` 或 `rootRemainingBudget` 会被严格参数反序列化拒绝。标记为 `untrusted` 的动态上下文在专用 Context Admission 落地前 fail-closed。宿主仍需实现 `AgentTaskSubmitter`，因此该桥接已完成引擎到任务准入纵切，但桌面生产执行与结果回填尚未贯通。
+当前 `crates/automation-agent-bridge` 已实现独立 Adapter：只拦截固定 `agent.task.run` Command，其余动作继续进入原 Automation Backend；Automation Engine 为每次 Backend 调用提供不可由规则覆盖的 `run_id/automation_id/action_id/event_id/trace_id` 执行上下文，重试与补偿保持同一 Run 因果链。AI 动作要求 Medium 以上风险、幂等键、受信静态 instruction、显式 Provider/Tool/Data/Autonomy/预算，并通过 `AgentTaskGateway` 创建以 Automation Run 为根、继承 Trace 和根剩余预算的子任务。准入时钟与根剩余预算由宿主 `AutomationAgentContext` 提供，不接受规则作者声明；规则尝试注入 `nowMs` 或 `rootRemainingBudget` 会被严格参数反序列化拒绝。标记为 `untrusted` 的动态上下文在专用 Context Admission 落地前 fail-closed。宿主仍需实现 `AgentTaskSubmitter`，因此该桥接已完成引擎到任务准入纵切，但桌面生产执行与结果回填尚未贯通。
 
 ### 6.3 用户代码与 AI
 

@@ -208,6 +208,7 @@ ID / 标题 / 优先级 / 前置条件
 - 标记为不可信的 Automation 动态上下文在 Context Admission 与注入检测完成前必须 fail-closed，且永久拒绝不得重试。
 - Automation AI Action 必须要求 Medium 以上风险和稳定幂等键；普通 Command 必须继续进入原 Automation Backend。
 - Automation 规则不能声明或扩大宿主准入时间与根剩余预算；伪造 `nowMs`、`rootRemainingBudget` 或其它未知字段必须在 Submitter 前拒绝。
+- Automation 动作、重试和补偿必须获得同一 `runId/traceId`，并带有精确 `automationId/actionId/eventId`；AI 子任务根 ID 必须绑定 Automation Run 而非随机 Action Command。
 
 | ID | 场景 | 预期结果 | P |
 |---|---|---|---:|
