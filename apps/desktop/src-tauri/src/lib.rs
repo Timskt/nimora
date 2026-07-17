@@ -29,7 +29,7 @@ use nimora_user_code_storage::ProgramDataStore;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     sync::{
         Mutex,
@@ -46,6 +46,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 const CONTROL_CENTER_LABEL: &str = "control-center";
+const BUILTIN_CHARACTER_ID: &str = "builtin.aster";
+const ACTIVE_CHARACTER_SPEC: &str = "nimora.active-character/1";
+const ACTIVE_CHARACTER_FILE: &str = ".active-character.json";
 const PET_WINDOW_LABEL: &str = "pet";
 const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
@@ -63,6 +66,7 @@ struct DesktopState {
     position_revision: AtomicU64,
     dragging: AtomicBool,
     asset_store: PathBuf,
+    active_character_write: Mutex<()>,
     program_store: PathBuf,
     program_data_store: ProgramDataStore,
     program_permissions: SqliteProgramPermissionRepository,
@@ -159,6 +163,7 @@ impl DesktopState {
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
             asset_store,
+            active_character_write: Mutex::new(()),
             program_store,
             program_data_store,
             program_permissions: SqliteProgramPermissionRepository::open(database_path)?,
@@ -228,6 +233,28 @@ struct AssetRollbackReceipt {
 struct AssetCatalogSnapshot {
     assets: Vec<AssetPackageSummary>,
     rejected: Vec<RejectedAssetPackage>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActiveCharacterSnapshot {
+    asset_id: String,
+    source: ActiveCharacterSource,
+    fallback_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum ActiveCharacterSource {
+    BuiltIn,
+    Installed,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredActiveCharacter {
+    spec: String,
+    asset_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -404,6 +431,8 @@ enum DesktopError {
     AssetInstall(#[from] InstallError),
     #[error("asset identifier must be a lowercase namespaced identifier")]
     InvalidAssetIdentifier,
+    #[error("only installed character assets can be activated")]
+    AssetIsNotCharacter,
     #[error(transparent)]
     UserCodePolicy(#[from] PolicyError),
     #[error(transparent)]
@@ -710,6 +739,116 @@ fn install_asset(
 #[allow(clippy::needless_pass_by_value)]
 fn asset_catalog(state: State<'_, DesktopState>) -> Result<AssetCatalogSnapshot, DesktopError> {
     inspect_asset_catalog(&state.asset_store)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn active_character(
+    state: State<'_, DesktopState>,
+) -> Result<ActiveCharacterSnapshot, DesktopError> {
+    resolve_active_character(&state.asset_store, state.safety.snapshot()?.mode)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn activate_character(
+    state: State<'_, DesktopState>,
+    asset_id: String,
+) -> Result<ActiveCharacterSnapshot, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let _write_guard = state
+        .active_character_write
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    if asset_id != BUILTIN_CHARACTER_ID && !valid_asset_identifier(&asset_id) {
+        return Err(DesktopError::InvalidAssetIdentifier);
+    }
+    if asset_id != BUILTIN_CHARACTER_ID {
+        let asset = inspect_asset_package(&state.asset_store.join(&asset_id))?;
+        if asset.id != asset_id || asset.asset_type != "character" {
+            return Err(DesktopError::AssetIsNotCharacter);
+        }
+    }
+    persist_active_character(&state.asset_store, &asset_id)?;
+    resolve_active_character(&state.asset_store, RuntimeMode::Normal)
+}
+
+fn resolve_active_character(
+    asset_store: &Path,
+    runtime_mode: RuntimeMode,
+) -> Result<ActiveCharacterSnapshot, DesktopError> {
+    if runtime_mode == RuntimeMode::Safe {
+        return Ok(builtin_character(Some(
+            "safe mode uses the built-in character".to_owned(),
+        )));
+    }
+    let selection_path = asset_store.join(ACTIVE_CHARACTER_FILE);
+    let stored = match fs::read(&selection_path) {
+        Ok(bytes) => match serde_json::from_slice::<StoredActiveCharacter>(&bytes) {
+            Ok(stored) if stored.spec == ACTIVE_CHARACTER_SPEC => stored,
+            Ok(_) => {
+                return Ok(builtin_character(Some(
+                    "unknown selection contract".to_owned(),
+                )));
+            }
+            Err(_) => {
+                return Ok(builtin_character(Some(
+                    "selection record is corrupt".to_owned(),
+                )));
+            }
+        },
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(builtin_character(None));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if stored.asset_id == BUILTIN_CHARACTER_ID {
+        return Ok(builtin_character(None));
+    }
+    if !valid_asset_identifier(&stored.asset_id) {
+        return Ok(builtin_character(Some(
+            "selection identifier is invalid".to_owned(),
+        )));
+    }
+    match inspect_asset_package(&asset_store.join(&stored.asset_id)) {
+        Ok(asset) if asset.id == stored.asset_id && asset.asset_type == "character" => {
+            Ok(ActiveCharacterSnapshot {
+                asset_id: stored.asset_id,
+                source: ActiveCharacterSource::Installed,
+                fallback_reason: None,
+            })
+        }
+        Ok(_) => Ok(builtin_character(Some(
+            "selected asset is not a valid character".to_owned(),
+        ))),
+        Err(error) => Ok(builtin_character(Some(format!(
+            "selected character is unavailable: {error}"
+        )))),
+    }
+}
+
+fn builtin_character(fallback_reason: Option<String>) -> ActiveCharacterSnapshot {
+    ActiveCharacterSnapshot {
+        asset_id: BUILTIN_CHARACTER_ID.to_owned(),
+        source: ActiveCharacterSource::BuiltIn,
+        fallback_reason,
+    }
+}
+
+fn persist_active_character(asset_store: &Path, asset_id: &str) -> Result<(), DesktopError> {
+    fs::create_dir_all(asset_store)?;
+    let destination = asset_store.join(ACTIVE_CHARACTER_FILE);
+    let temporary = asset_store.join(format!("{ACTIVE_CHARACTER_FILE}.{}.tmp", Uuid::now_v7()));
+    let payload = serde_json::to_vec(&StoredActiveCharacter {
+        spec: ACTIVE_CHARACTER_SPEC.to_owned(),
+        asset_id: asset_id.to_owned(),
+    })?;
+    fs::write(&temporary, payload)?;
+    if let Err(error) = fs::rename(&temporary, &destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 fn inspect_asset_catalog(asset_store: &Path) -> Result<AssetCatalogSnapshot, DesktopError> {
@@ -1899,6 +2038,8 @@ pub fn run() {
             finish_pet_drag,
             set_click_through,
             asset_catalog,
+            active_character,
+            activate_character,
             install_asset,
             rollback_asset,
             install_user_program,
@@ -1926,12 +2067,13 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        DesktopError, PetAction, ProfilePolicy, TrayAction, WindowPolicy,
-        ensure_program_permissions, inspect_asset_catalog, parse_user_program_plan,
-        permission_grant, screen_coordinate, user_program_input, valid_asset_identifier,
+        ACTIVE_CHARACTER_FILE, BUILTIN_CHARACTER_ID, DesktopError, PetAction, ProfilePolicy,
+        TrayAction, WindowPolicy, ensure_program_permissions, inspect_asset_catalog,
+        parse_user_program_plan, permission_grant, persist_active_character,
+        resolve_active_character, screen_coordinate, user_program_input, valid_asset_identifier,
     };
     use nimora_persistence_sqlite::SqliteProgramPermissionRepository;
-    use nimora_runtime_core::{Event, EventSource};
+    use nimora_runtime_core::{Event, EventSource, RuntimeMode};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
 
@@ -1952,6 +2094,34 @@ mod tests {
         assert!(snapshot.assets.is_empty());
         assert_eq!(snapshot.rejected.len(), 1);
         assert_eq!(snapshot.rejected[0].directory, "character.example.broken");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn active_character_defaults_and_persists_builtin_selection() {
+        let root = std::env::temp_dir().join("nimora-active-character-default");
+        let _ = std::fs::remove_dir_all(&root);
+        let initial = resolve_active_character(&root, RuntimeMode::Normal).unwrap();
+        assert_eq!(initial.asset_id, BUILTIN_CHARACTER_ID);
+        assert!(initial.fallback_reason.is_none());
+        persist_active_character(&root, BUILTIN_CHARACTER_ID).unwrap();
+        let restored = resolve_active_character(&root, RuntimeMode::Normal).unwrap();
+        assert_eq!(restored.asset_id, BUILTIN_CHARACTER_ID);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn active_character_falls_back_for_corrupt_selection_and_safe_mode() {
+        let root = std::env::temp_dir().join("nimora-active-character-fallback");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(ACTIVE_CHARACTER_FILE), b"not-json").unwrap();
+        let corrupt = resolve_active_character(&root, RuntimeMode::Normal).unwrap();
+        assert_eq!(corrupt.asset_id, BUILTIN_CHARACTER_ID);
+        assert!(corrupt.fallback_reason.is_some());
+        let safe = resolve_active_character(&root, RuntimeMode::Safe).unwrap();
+        assert_eq!(safe.asset_id, BUILTIN_CHARACTER_ID);
+        assert!(safe.fallback_reason.is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
 

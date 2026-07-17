@@ -57,6 +57,12 @@ export interface AssetCatalogSnapshot {
   rejected: Array<{ directory: string; reason: string }>;
 }
 
+export interface ActiveCharacterSnapshot {
+  assetId: string;
+  source: "built-in" | "installed";
+  fallbackReason: string | null;
+}
+
 export type UserCodeCapability =
   | "read-pet-state"
   | "read-profile-state"
@@ -186,6 +192,8 @@ export interface DesktopApi {
   dragPet(): Promise<NimoraCommand | null>;
   setClickThrough(enabled: boolean): Promise<void>;
   assetCatalog(): Promise<AssetCatalogSnapshot>;
+  activeCharacter(): Promise<ActiveCharacterSnapshot>;
+  activateCharacter(assetId: string): Promise<ActiveCharacterSnapshot>;
   installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
   rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
   validateUserProgram(manifest: UserProgramManifest): Promise<ProgramPolicyReport | null>;
@@ -266,6 +274,8 @@ export function createDesktopApi(
       async dragPet() { return null; },
       async setClickThrough() {},
       async assetCatalog() { return { assets: [], rejected: [] }; },
+      async activeCharacter() { return { assetId: "builtin.aster", source: "built-in", fallbackReason: null }; },
+      async activateCharacter(assetId) { return { assetId, source: assetId === "builtin.aster" ? "built-in" : "installed", fallbackReason: null }; },
       async installAsset() { return null; },
       async rollbackAsset() { return null; },
       async validateUserProgram() { return null; },
@@ -314,6 +324,8 @@ export function createDesktopApi(
     },
     setClickThrough: async (enabled) => { await invokeCommand("set_click_through", { enabled }); },
     assetCatalog: async () => await invokeCommand("asset_catalog") as AssetCatalogSnapshot,
+    activeCharacter: async () => await invokeCommand("active_character") as ActiveCharacterSnapshot,
+    activateCharacter: async (assetId) => await invokeCommand("activate_character", { assetId }) as ActiveCharacterSnapshot,
     installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
     rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,
     validateUserProgram: async (manifest) => await invokeCommand("validate_user_program", { manifest }) as ProgramPolicyReport,

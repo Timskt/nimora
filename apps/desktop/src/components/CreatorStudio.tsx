@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AssetCatalogSnapshot, AssetPackageSummary } from "../platform/desktop";
+import type { ActiveCharacterSnapshot, AssetCatalogSnapshot, AssetPackageSummary } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const backends = ["Sprite Atlas", "Live2D Cubism", "VRM", "glTF"] as const;
@@ -18,13 +18,31 @@ export function CreatorStudio() {
   const [draftSaved, setDraftSaved] = useState(false);
   const [catalog, setCatalog] = useState<AssetCatalogSnapshot | null>(null);
   const [catalogError, setCatalogError] = useState(false);
+  const [activeCharacter, setActiveCharacter] = useState<ActiveCharacterSnapshot | null>(null);
+  const [activationError, setActivationError] = useState<string | null>(null);
+  const [activating, setActivating] = useState<string | null>(null);
   const completion = useMemo(() => checks.filter((check) => check.status === "通过").length, []);
 
   useEffect(() => {
-    void desktopApi.assetCatalog()
-      .then(setCatalog)
+    void Promise.all([desktopApi.assetCatalog(), desktopApi.activeCharacter()])
+      .then(([nextCatalog, nextActiveCharacter]) => {
+        setCatalog(nextCatalog);
+        setActiveCharacter(nextActiveCharacter);
+      })
       .catch(() => setCatalogError(true));
   }, []);
+
+  async function activate(assetId: string) {
+    setActivating(assetId);
+    setActivationError(null);
+    try {
+      setActiveCharacter(await desktopApi.activateCharacter(assetId));
+    } catch (error) {
+      setActivationError(error instanceof Error ? error.message : "角色激活失败");
+    } finally {
+      setActivating(null);
+    }
+  }
 
   function saveDraft() {
     setDraftSaved(true);
@@ -85,8 +103,10 @@ export function CreatorStudio() {
         {catalogError ? <p className="catalog-empty error">资源目录暂时不可读取，当前角色不受影响。</p> : null}
         {!catalogError && catalog === null ? <p className="catalog-empty">正在验证已安装资源…</p> : null}
         {catalog?.assets.length === 0 ? <p className="catalog-empty">尚未安装第三方资源，默认角色继续离线可用。</p> : null}
+        {activeCharacter?.fallbackReason ? <p className="catalog-empty error">已安全回退默认角色：{activeCharacter.fallbackReason}</p> : null}
+        {activationError ? <p className="catalog-empty error">{activationError}</p> : null}
         {catalog && catalog.assets.length > 0 ? <ul className="asset-list">
-          {catalog.assets.map((asset) => <AssetCatalogItem asset={asset} key={asset.id} />)}
+          {catalog.assets.map((asset) => <AssetCatalogItem asset={asset} active={activeCharacter?.assetId === asset.id} activating={activating === asset.id} key={asset.id} onActivate={activate} />)}
         </ul> : null}
         {catalog && catalog.rejected.length > 0 ? <details className="rejected-assets">
           <summary>{catalog.rejected.length} 个资源未通过健康检查</summary>
@@ -102,12 +122,12 @@ export function CreatorStudio() {
   );
 }
 
-function AssetCatalogItem({ asset }: { asset: AssetPackageSummary }) {
+function AssetCatalogItem({ asset, active, activating, onActivate }: { asset: AssetPackageSummary; active: boolean; activating: boolean; onActivate(assetId: string): Promise<void> }) {
   const displayName = assetDisplayName(asset);
   return <li>
     <span className="asset-kind">{asset.assetType.slice(0, 1).toUpperCase()}</span>
     <div><strong>{displayName}</strong><p>{asset.id} · {asset.version}</p></div>
-    <span className="asset-backend">{asset.rendererBackend ?? "无渲染后端"}</span>
+    {asset.assetType === "character" ? <button className="text-button" type="button" disabled={active || activating} onClick={() => void onActivate(asset.id)}>{active ? "当前角色" : activating ? "验证中…" : "设为角色"}</button> : <span className="asset-backend">{asset.rendererBackend ?? "无渲染后端"}</span>}
   </li>;
 }
 
