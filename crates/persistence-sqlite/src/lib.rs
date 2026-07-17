@@ -45,6 +45,11 @@ pub struct SqliteProgramPermissionRepository {
 }
 
 #[derive(Debug)]
+pub struct SqliteSkillStateRepository {
+    connection: Mutex<Connection>,
+}
+
+#[derive(Debug)]
 pub struct SqliteOutboxRepository {
     connection: Mutex<Connection>,
 }
@@ -554,6 +559,207 @@ pub struct ProgramPermissionGrant {
     pub capabilities: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkillStateRecord {
+    pub skill_id: String,
+    pub version: String,
+    pub capabilities: Vec<String>,
+    pub authorized: bool,
+    pub enabled: bool,
+}
+
+impl SqliteSkillStateRepository {
+    /// Opens the shared application database and initializes its schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `SQLite` cannot open, configure, or initialize the database.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, SqlitePersistenceError> {
+        Self::from_connection(Connection::open(path)?)
+    }
+
+    /// Creates an isolated Skill state store for tests and ephemeral tools.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `SQLite` cannot configure or initialize the database.
+    pub fn in_memory() -> Result<Self, SqlitePersistenceError> {
+        Self::from_connection(Connection::open_in_memory()?)
+    }
+
+    fn from_connection(mut connection: Connection) -> Result<Self, SqlitePersistenceError> {
+        prepare_connection(&mut connection)?;
+        Ok(Self {
+            connection: Mutex::new(connection),
+        })
+    }
+
+    /// Replaces the exact-version Skill grant and desired activation state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid records or persistence failures.
+    pub fn save(&self, record: &SkillStateRecord) -> Result<(), SqlitePersistenceError> {
+        let capabilities = canonical_skill_capabilities(record)?;
+        let payload = serde_json::to_string(&capabilities)?;
+        self.connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?
+            .execute(
+                "INSERT INTO skill_state
+                    (skill_id, skill_version, capabilities, authorized, enabled)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(skill_id) DO UPDATE SET
+                    skill_version = excluded.skill_version,
+                    capabilities = excluded.capabilities,
+                    authorized = excluded.authorized,
+                    enabled = excluded.enabled,
+                    updated_at = CURRENT_TIMESTAMP",
+                params![
+                    record.skill_id,
+                    record.version,
+                    payload,
+                    record.authorized,
+                    record.enabled
+                ],
+            )?;
+        Ok(())
+    }
+
+    /// Loads the persisted state for one Skill identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed stored data or persistence failures.
+    pub fn load(&self, skill_id: &str) -> Result<Option<SkillStateRecord>, SqlitePersistenceError> {
+        validate_skill_identity(skill_id)?;
+        let row = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?
+            .query_row(
+                "SELECT skill_version, capabilities, authorized, enabled
+                 FROM skill_state WHERE skill_id = ?1",
+                params![skill_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, bool>(2)?,
+                        row.get::<_, bool>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|(version, payload, authorized, enabled)| {
+            let capabilities = serde_json::from_str::<Vec<String>>(&payload)?;
+            let record = SkillStateRecord {
+                skill_id: skill_id.to_owned(),
+                version,
+                capabilities,
+                authorized,
+                enabled,
+            };
+            canonical_skill_capabilities(&record)?;
+            Ok(record)
+        })
+        .transpose()
+    }
+
+    /// Lists all persisted Skill states in stable identity order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed stored data or persistence failures.
+    pub fn list(&self) -> Result<Vec<SkillStateRecord>, SqlitePersistenceError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
+        let mut statement = connection.prepare(
+            "SELECT skill_id, skill_version, capabilities, authorized, enabled
+             FROM skill_state ORDER BY skill_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, bool>(3)?,
+                row.get::<_, bool>(4)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (skill_id, version, payload, authorized, enabled) = row?;
+            let capabilities = serde_json::from_str::<Vec<String>>(&payload)?;
+            let record = SkillStateRecord {
+                skill_id,
+                version,
+                capabilities,
+                authorized,
+                enabled,
+            };
+            canonical_skill_capabilities(&record)?;
+            Ok(record)
+        })
+        .collect()
+    }
+
+    /// Removes all persisted authorization and desired state for one Skill.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid identities or persistence failures.
+    pub fn remove(&self, skill_id: &str) -> Result<(), SqlitePersistenceError> {
+        validate_skill_identity(skill_id)?;
+        self.connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?
+            .execute(
+                "DELETE FROM skill_state WHERE skill_id = ?1",
+                params![skill_id],
+            )?;
+        Ok(())
+    }
+}
+
+fn canonical_skill_capabilities(
+    record: &SkillStateRecord,
+) -> Result<Vec<String>, SqlitePersistenceError> {
+    validate_skill_identity(&record.skill_id)?;
+    if record.version.trim().is_empty()
+        || record.version.len() > 128
+        || (record.enabled && !record.authorized)
+    {
+        return Err(SqlitePersistenceError::InvalidSkillState);
+    }
+    let mut capabilities = record.capabilities.clone();
+    if capabilities
+        .iter()
+        .any(|capability| capability.trim().is_empty() || capability.len() > 128)
+    {
+        return Err(SqlitePersistenceError::InvalidSkillState);
+    }
+    capabilities.sort_unstable();
+    if capabilities.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(SqlitePersistenceError::InvalidSkillState);
+    }
+    Ok(capabilities)
+}
+
+fn validate_skill_identity(skill_id: &str) -> Result<(), SqlitePersistenceError> {
+    if skill_id.is_empty()
+        || skill_id.len() > 128
+        || !skill_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(SqlitePersistenceError::InvalidSkillState);
+    }
+    Ok(())
+}
+
 impl SqliteProgramPermissionRepository {
     /// Opens the shared application database and initializes its schema.
     ///
@@ -890,7 +1096,15 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
             UNIQUE (run_id, idempotency_key)
         );
         CREATE INDEX IF NOT EXISTS automation_agent_journal_updated_idx
-            ON automation_agent_journal(updated_at_ms DESC, task_id DESC);",
+            ON automation_agent_journal(updated_at_ms DESC, task_id DESC);
+        CREATE TABLE IF NOT EXISTS skill_state (
+            skill_id TEXT PRIMARY KEY,
+            skill_version TEXT NOT NULL,
+            capabilities TEXT NOT NULL,
+            authorized INTEGER NOT NULL CHECK (authorized IN (0, 1)),
+            enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );",
     )?;
     Ok(())
 }
@@ -1108,6 +1322,8 @@ pub enum SqlitePersistenceError {
     UnsupportedProfileSnapshotVersion(u32),
     #[error("user program permission grant is invalid")]
     InvalidPermissionGrant,
+    #[error("Skill persisted state is invalid")]
+    InvalidSkillState,
     #[error("outbox request is invalid")]
     InvalidOutboxRequest,
     #[error("Agent history record or request is invalid")]
@@ -1276,6 +1492,77 @@ mod tests {
                 })
                 .expect("check")
         );
+    }
+
+    #[test]
+    fn skill_state_is_exact_versioned_and_stably_listed() {
+        let repository = SqliteSkillStateRepository::in_memory().expect("database");
+        let first = SkillStateRecord {
+            skill_id: "studio.example.focus".to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities: vec!["invoke-commands".to_owned()],
+            authorized: true,
+            enabled: true,
+        };
+        repository.save(&first).expect("save");
+        repository
+            .save(&SkillStateRecord {
+                skill_id: "studio.example.clock".to_owned(),
+                version: "2.0.0".to_owned(),
+                capabilities: Vec::new(),
+                authorized: false,
+                enabled: false,
+            })
+            .expect("save");
+        assert_eq!(repository.load(&first.skill_id).expect("load"), Some(first));
+        let records = repository.list().expect("list");
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].skill_id, "studio.example.clock");
+        assert_eq!(records[1].skill_id, "studio.example.focus");
+    }
+
+    #[test]
+    fn skill_upgrade_replaces_grant_and_remove_revokes_state() {
+        let repository = SqliteSkillStateRepository::in_memory().expect("database");
+        for version in ["1.0.0", "2.0.0"] {
+            repository
+                .save(&SkillStateRecord {
+                    skill_id: "studio.example.focus".to_owned(),
+                    version: version.to_owned(),
+                    capabilities: vec!["invoke-commands".to_owned()],
+                    authorized: true,
+                    enabled: version == "2.0.0",
+                })
+                .expect("save");
+        }
+        let current = repository
+            .load("studio.example.focus")
+            .expect("load")
+            .expect("record");
+        assert_eq!(current.version, "2.0.0");
+        assert!(current.enabled);
+        repository.remove("studio.example.focus").expect("remove");
+        assert!(
+            repository
+                .load("studio.example.focus")
+                .expect("load")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn skill_state_rejects_duplicate_capabilities() {
+        let repository = SqliteSkillStateRepository::in_memory().expect("database");
+        assert!(matches!(
+            repository.save(&SkillStateRecord {
+                skill_id: "studio.example.focus".to_owned(),
+                version: "1.0.0".to_owned(),
+                capabilities: vec!["invoke-commands".to_owned(), "invoke-commands".to_owned()],
+                authorized: true,
+                enabled: true,
+            }),
+            Err(SqlitePersistenceError::InvalidSkillState)
+        ));
     }
 
     #[test]

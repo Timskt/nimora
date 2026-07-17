@@ -164,6 +164,7 @@ ID / 标题 / 优先级 / 前置条件
 | EXT-018 | Skill 安装后完整性复验 | 修改源码、Manifest 或完整性锁，新增未跟踪文件、符号链接或路径逃逸时 fail-closed，Worker 不启动 | P0 |
 | EXT-019 | Package 到 Runtime 精确租约 | 只有复验返回的 `ValidatedSkillManifest` 可安装进 Host；授权与激活后 `active_manifest` 必须逐字段一致 | P0 |
 | EXT-020 | Skill 包库存边界 | 缺少动态 entrypoint、重复/保留/非 UTF-8 路径、超过 256 文件或 16 MiB 均在切换 active 前拒绝 | P0 |
+| EXT-021 | Skill 授权与启用持久化 | 安装不自动授权；授权绑定精确版本和完整 Capability 集，未授权不能保存 enabled；升级替换旧授权，删除状态同时撤销恢复资格 | P0 |
 | SCRIPT-001 | 用户脚本调用已授权 Command | 正常执行并产生 Run、Trace 和审计记录 | P0 |
 | SCRIPT-002 | 脚本访问未授权文件、网络、进程 | Host 拒绝，不能绕过 Capability Broker | P0 |
 | SCRIPT-003 | 死循环、内存泄漏、事件递归 | 对应实例被限流或终止，Core 继续运行 | P0 |
