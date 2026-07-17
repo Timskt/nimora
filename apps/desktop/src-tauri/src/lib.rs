@@ -796,12 +796,12 @@ fn run_local_agent(request: LocalAgentRequest) -> Result<LocalAgentResult, Deskt
             &mut task,
             ProviderStepInput {
                 model: "model:echo-v1".to_owned(),
-                messages: vec![ProviderMessage {
-                    role: ProviderMessageRole::User,
-                    content: request.prompt,
-                    classification: DataClassification::Personal,
-                    trusted: true,
-                }],
+                messages: vec![ProviderMessage::text(
+                    ProviderMessageRole::User,
+                    request.prompt,
+                    DataClassification::Personal,
+                    true,
+                )],
                 max_output_tokens: 512,
                 context: ProviderExecutionContext {
                     timeout: Duration::from_secs(30),

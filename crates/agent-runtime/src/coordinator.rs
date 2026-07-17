@@ -280,12 +280,12 @@ mod tests {
     fn input() -> ProviderStepInput {
         ProviderStepInput {
             model: "model:local".to_owned(),
-            messages: vec![ProviderMessage {
-                role: ProviderMessageRole::User,
-                content: "Apply my selected appearance".to_owned(),
-                classification: DataClassification::Personal,
-                trusted: true,
-            }],
+            messages: vec![ProviderMessage::text(
+                ProviderMessageRole::User,
+                "Apply my selected appearance",
+                DataClassification::Personal,
+                true,
+            )],
             max_output_tokens: 128,
             context: ProviderExecutionContext {
                 timeout: Duration::from_secs(5),

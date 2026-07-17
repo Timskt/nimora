@@ -2,8 +2,9 @@ use nimora_agent_provider_worker::{
     OllamaEndpoint, ProviderWorkerRequest, ProviderWorkerResponse, WorkerOllamaProvider, execute,
 };
 use nimora_agent_runtime::{
-    CancellationFlag, DataClassification, ProviderExecutionContext, ProviderMessage,
-    ProviderMessageRole, ProviderRegistry, ProviderRequest, ToolDescriptor, ToolEffect,
+    CancellationFlag, DataClassification, ProviderExecutionContext, ProviderFinishReason,
+    ProviderMessage, ProviderMessageRole, ProviderRegistry, ProviderRequest, ProviderResponse,
+    ProviderToolCall, ProviderUsage, ToolDescriptor, ToolEffect,
 };
 use nimora_runtime_core::CommandRisk;
 use serde_json::json;
@@ -21,12 +22,12 @@ fn request(tools: Vec<ToolDescriptor>) -> ProviderRequest {
         Uuid::now_v7(),
         "provider:ollama-loopback",
         "qwen3:8b",
-        vec![ProviderMessage {
-            role: ProviderMessageRole::User,
-            content: "inspect my profile".to_owned(),
-            classification: DataClassification::Personal,
-            trusted: true,
-        }],
+        vec![ProviderMessage::text(
+            ProviderMessageRole::User,
+            "inspect my profile",
+            DataClassification::Personal,
+            true,
+        )],
         tools,
         128,
     )
@@ -82,6 +83,14 @@ fn mock_ollama(response: serde_json::Value) -> (OllamaEndpoint, thread::JoinHand
         request_bytes
     });
     (endpoint, handle)
+}
+
+fn request_document(request_bytes: &[u8]) -> serde_json::Value {
+    let header_end = request_bytes
+        .windows(4)
+        .position(|part| part == b"\r\n\r\n")
+        .expect("header boundary");
+    serde_json::from_slice(&request_bytes[header_end + 4..]).expect("request JSON")
 }
 
 #[test]
@@ -155,6 +164,78 @@ fn converts_ollama_function_calls_to_runtime_tool_calls() {
         "profile:active"
     );
     server.join().expect("mock server");
+}
+
+#[test]
+fn sends_correlated_assistant_calls_and_tool_results_on_continuation() {
+    let tool = ToolDescriptor::new(
+        "profile.appearance.inspect",
+        "Inspect appearance",
+        "Reads the current appearance through the capability gateway.",
+        json!({"type": "object"}),
+        json!({"type": "object"}),
+        CommandRisk::Safe,
+        ToolEffect::ReadOnly,
+    )
+    .expect("tool");
+    let call = ProviderToolCall {
+        id: "ollama:0".to_owned(),
+        tool_id: tool.id.clone(),
+        arguments: json!({"profileRef": "profile:active"}),
+    };
+    let first_response = ProviderResponse {
+        spec: "nimora.agent-provider-response/1".to_owned(),
+        request_id: Uuid::now_v7(),
+        content: String::new(),
+        tool_calls: vec![call.clone()],
+        finish_reason: ProviderFinishReason::ToolCalls,
+        usage: ProviderUsage {
+            input_tokens: 5,
+            output_tokens: 3,
+            cost_microunits: 0,
+        },
+    };
+    let messages = vec![
+        ProviderMessage::text(
+            ProviderMessageRole::User,
+            "inspect my profile",
+            DataClassification::Personal,
+            true,
+        ),
+        ProviderMessage::assistant_tool_calls(&first_response),
+        ProviderMessage::tool_result(&call, &json!({"theme": "violet"})).expect("tool result"),
+    ];
+    let provider_request = ProviderRequest::new(
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        "provider:ollama-loopback",
+        "qwen3:8b",
+        messages,
+        vec![tool],
+        128,
+    )
+    .expect("continuation request");
+    let (endpoint, server) = mock_ollama(json!({
+        "message": {"role": "assistant", "content": "profile inspected"},
+        "done": true,
+        "done_reason": "stop"
+    }));
+    let response = execute(ProviderWorkerRequest::Complete {
+        request: provider_request,
+        endpoint,
+        timeout_ms: 2_000,
+    });
+    assert!(matches!(response, ProviderWorkerResponse::Completed { .. }));
+    let document = request_document(&server.join().expect("mock server"));
+    assert_eq!(
+        document["messages"][1]["tool_calls"][0]["function"]["name"],
+        "profile.appearance.inspect"
+    );
+    assert_eq!(document["messages"][2]["tool_call_id"], "ollama:0");
+    assert_eq!(
+        document["messages"][2]["tool_name"],
+        "profile.appearance.inspect"
+    );
 }
 
 #[test]

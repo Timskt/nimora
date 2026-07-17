@@ -57,6 +57,7 @@ flowchart LR
 - Tool ID 使用至少三段的小写点分命名，例如 `core.pet.state-read`、`skill.timer.session-start`。
 - Tool Backend 只能收到描述、受控参数、Trace 和超时，不获得 Provider 凭据或 Agent 内部记忆。
 - `AgentCoordinator` 把模型推进与工具执行拆成独立的确定性单步：Provider 返回的 Tool Call 先转换为新的 `ToolInvocation`，再经过 Registry admission；模型响应不能直接触发 Backend。
+- Provider 续跑消息保留 Assistant 的结构化 Tool Call、Provider Call ID 与 Tool ID；Tool Result 必须引用先前尚未解析的同一调用。未知工具、错配工具、孤立结果和重复结果在进入 Adapter 前拒绝，避免模型把无关模块输出冒充成已授权调用结果。
 - 工具执行单步必须校验 Task/Trace 归属，在真正调用模块 Capability Gateway Backend 前扣减工具预算，并重新验证批准指纹。
 
 首个生产工具目录位于 `crates/agent-tools`，当前公开 `pet.state.read`、`profile.state.read`、`pet.animation.play` 与 `pet.position.move`。目录只包含 Tool Descriptor 和固定模块 Adapter，不暴露 `DesktopState`、Repository、Tauri Command、任意命令字符串或文件路径。两个写工具固定映射到 `safe.pet.animate` 和 `safe.pet.move`，模型无法把参数中的字符串提升为 Gateway 命令；Invocation ID 作为幂等键、Task/Trace 作为关联上下文进入共享 Capability Gateway。只读工具允许 Safe 自动执行，两个写工具即使基础风险为 Low 也必须绑定实际参数批准。
@@ -91,7 +92,7 @@ running → paused → running
 
 Provider 只能看到任务授权的数据视图，不接触 Secure Store。凭据由宿主按 Provider ID 注入请求 Adapter；错误返回稳定类别，不把 Key、完整请求或底层网络细节写入 UI 和诊断包。
 
-运行时当前强制：最多 64 个 Adapter、256 条消息、256 KiB 消息正文、1 MiB 响应正文、32 个 Tool Call 和 10 分钟单次超时；离线模式在调用 Adapter 前拒绝网络 Provider。Provider 返回的未知 Tool、非对象参数、错配 Request ID、超出输出预算或不一致 Finish Reason 全部 fail-closed。
+运行时当前强制：最多 64 个 Adapter、256 条消息、256 KiB 消息正文、1 MiB 响应正文、32 个 Tool Call 和 10 分钟单次超时；离线模式在调用 Adapter 前拒绝网络 Provider。Provider 返回的未知 Tool、非对象参数、错配 Request ID、超出输出预算或不一致 Finish Reason 全部 fail-closed。续跑对话中的 Assistant Tool Call 与 Tool Result 也执行调用 ID、工具名、先后关系和单次解析校验。
 
 `crates/agent-provider-worker` 已实现真实 Ollama `/api/chat` 非流式 Adapter。HTTP 只能由独立 sidecar 发往 IPv4/IPv6 loopback，禁止远程地址、凭据和重定向；Worker 协议、HTTP Header、Body、stdout、超时与取消均有硬边界。宿主并发读取有限 stdout，防止管道背压死锁，并在取消或超时后强制终止进程。
 
@@ -138,4 +139,4 @@ nimora ai history export|delete
 
 工作台提供生产 Tool Catalog 的真实执行验证入口：只读工具经 Tool Registry 和共享 Capability Gateway 立即执行；写工具由 Rust 宿主生成参数绑定的 Invocation 与 Approval，并仅在 UI 展示实际 Tool ID、参数、风险和期限。Approval 不交给前端，宿主最多持有 32 个待确认项，5 分钟过期，确认或拒绝时一次性移除后再处理，因此不能换参、重放或在执行失败后隐式重试。进入 Safe Mode 会撤销全部待确认项；Recovery Mode 不允许创建或确认工具调用。
 
-桌面侧后续 Provider 自动提出的 Tool Call、计划和模块动作仍必须复用当前 `AgentCoordinator`、Tool Registry、参数绑定批准与 Capability Gateway。禁止在 React、Tauri Command 或 Provider Adapter 中新增直连模块的捷径。桌面 Ollama 自动发现、Provider Tool Call 到现有确认卡的接线、历史持久化和任务恢复尚未实现。
+运行时与 Ollama Worker 已能在后续 Provider Step 中完整传递 Assistant Tool Call 和关联 Tool Result，不再把工具结果降格为无关联文本。桌面侧后续 Provider 自动提出的 Tool Call、计划和模块动作仍必须复用当前 `AgentCoordinator`、Tool Registry、参数绑定批准与 Capability Gateway；同一 Provider Turn 的多个调用必须由宿主聚合，全部成功后才可续跑，任一拒绝则终止该 Turn，禁止部分结果被伪装成完整结果。禁止在 React、Tauri Command 或 Provider Adapter 中新增直连模块的捷径。桌面 Ollama 自动发现、Provider Tool Call 到现有确认卡的接线、历史持久化和任务恢复尚未实现。

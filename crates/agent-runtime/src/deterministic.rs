@@ -108,12 +108,12 @@ mod tests {
             Uuid::now_v7(),
             provider.descriptor().id.clone(),
             "model:echo-v1",
-            vec![ProviderMessage {
-                role: ProviderMessageRole::User,
-                content: "offline check".to_owned(),
-                classification: DataClassification::Internal,
-                trusted: true,
-            }],
+            vec![ProviderMessage::text(
+                ProviderMessageRole::User,
+                "offline check",
+                DataClassification::Internal,
+                true,
+            )],
             Vec::new(),
             64,
         )

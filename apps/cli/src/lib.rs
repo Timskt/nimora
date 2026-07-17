@@ -317,12 +317,12 @@ fn execute_with_sidecar(
             &mut task,
             ProviderStepInput {
                 model: input.model,
-                messages: vec![ProviderMessage {
-                    role: ProviderMessageRole::User,
-                    content: input.prompt,
-                    classification: DataClassification::Personal,
-                    trusted: true,
-                }],
+                messages: vec![ProviderMessage::text(
+                    ProviderMessageRole::User,
+                    input.prompt,
+                    DataClassification::Personal,
+                    true,
+                )],
                 max_output_tokens: input.max_output_tokens,
                 context: ProviderExecutionContext {
                     timeout: Duration::from_secs(30),

@@ -184,7 +184,7 @@ fn ollama_payload(request: &ProviderRequest) -> Value {
         .messages
         .iter()
         .map(|message| {
-            json!({
+            let mut document = json!({
                 "role": match message.role {
                     ProviderMessageRole::System => "system",
                     ProviderMessageRole::User => "user",
@@ -192,7 +192,28 @@ fn ollama_payload(request: &ProviderRequest) -> Value {
                     ProviderMessageRole::Tool => "tool",
                 },
                 "content": message.content,
-            })
+            });
+            if !message.tool_calls.is_empty() {
+                document["tool_calls"] = json!(
+                    message
+                        .tool_calls
+                        .iter()
+                        .map(|call| json!({
+                            "function": {
+                                "name": call.tool_id.to_string(),
+                                "arguments": call.arguments,
+                            }
+                        }))
+                        .collect::<Vec<_>>()
+                );
+            }
+            if let Some(tool_call_id) = &message.tool_call_id {
+                document["tool_call_id"] = json!(tool_call_id);
+            }
+            if let Some(tool_name) = &message.tool_name {
+                document["tool_name"] = json!(tool_name.to_string());
+            }
+            document
         })
         .collect::<Vec<_>>();
     let tools = request

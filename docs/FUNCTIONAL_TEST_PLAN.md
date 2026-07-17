@@ -239,6 +239,8 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-033 | 桌面 Agent 输入边界 | 空 Prompt 与超过 32768 bytes 的 Prompt 在 Provider 前拒绝，且不触发模块 Backend | P0 |
 | AGT-034 | 桌面参数绑定确认 | 写工具在确认前无副作用；宿主不向前端暴露 Approval；确认后只经固定 Gateway 映射执行一次，再次确认失败 | P0 |
 | AGT-035 | 桌面拒绝与强停 | 拒绝、过期、Safe Mode 和 Recovery Mode 均撤销或拒绝待确认 Invocation；退出 Safe Mode 后旧确认不可恢复 | P0 |
+| AGT-036 | Provider Tool Result 关联 | 续跑消息保留 Assistant Tool Call；Tool Result 必须匹配先前 Call ID 与 Tool ID，孤立、错配和重复结果均在 Provider Adapter 前拒绝 | P0 |
+| AGT-037 | Ollama Tool 续跑载荷 | Worker 向真实 loopback `/api/chat` 发送结构化 Assistant Tool Call 及关联 Tool Result，而不是无关联文本；响应继续经过有界协议校验 | P0 |
 
 ## 14. 信任中心与安全模式
 
