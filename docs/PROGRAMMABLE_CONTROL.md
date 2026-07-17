@@ -56,6 +56,8 @@ export default defineScript({
 
 API 不暴露 Core 对象、数据库连接、Renderer 实例或 Secure Store。模型操作使用语义 Command；只有经过审核的 Renderer Adapter 才接触格式私有参数。
 
+实现层通过 `CapabilityBackend` 适配其它模块：Worker 只发送版本化 JSON 请求，Gateway 验证运行身份、Capability、Manifest 命令白名单、取消与截止时间后，才把请求路由到 Pet、Renderer、Connector、Skill 等模块适配器。模块不能向 Worker 返回内部句柄，也不能自行绕过 Gateway 建立第二条调用通道。
+
 ## 5. 生命周期与执行语义
 
 ```text

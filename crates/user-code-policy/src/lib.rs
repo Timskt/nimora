@@ -5,6 +5,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use uuid::Uuid;
 
 const MAX_SUBSCRIPTIONS: usize = 32;
 const MAX_COMMANDS: usize = 32;
@@ -101,6 +102,7 @@ impl ExecutionController {
             }
         }
         Ok(ExecutionHandle {
+            execution_id: Uuid::now_v7(),
             active: Arc::clone(&self.active),
             cancelled: Arc::new(AtomicBool::new(false)),
             deadline: Instant::now() + Duration::from_millis(policy.manifest.timeout_ms),
@@ -116,6 +118,7 @@ impl ExecutionController {
 
 #[derive(Debug)]
 pub struct ExecutionHandle {
+    execution_id: Uuid,
     active: Arc<AtomicUsize>,
     cancelled: Arc<AtomicBool>,
     deadline: Instant,
@@ -124,6 +127,11 @@ pub struct ExecutionHandle {
 }
 
 impl ExecutionHandle {
+    #[must_use]
+    pub const fn execution_id(&self) -> Uuid {
+        self.execution_id
+    }
+
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }

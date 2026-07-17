@@ -3,6 +3,7 @@ members = [
   "crates/asset-installer",
   "crates/user-code-policy",
   "crates/user-code-host",
+  "crates/user-code-gateway",
   "crates/persistence-sqlite",
   "crates/runtime-app",
   "crates/runtime-core",

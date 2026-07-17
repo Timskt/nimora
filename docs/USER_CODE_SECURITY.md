@@ -34,6 +34,8 @@
 
 `nimora-user-code-host` 提供独立进程 Supervisor 和版本化 JSONL 协议。Supervisor 不在进程内执行用户代码：它启动外部 Worker，关闭标准错误继承，限制协议输出，等待终态消息，并在取消、超时、输出超限或 Worker 崩溃时终止对应进程。Supervisor 本身不授予能力；Worker 的请求仍必须经过 Capability Gateway 和策略层。
 
+`nimora-user-code-gateway` 已实现逐次能力授权。每个请求必须携带与准入句柄一致的 `executionId`、非空 `traceId` 和可选 `idempotencyKey`；读取宠物状态需要 `read-pet-state`，调用命令需要 `invoke-safe-commands`，且命令必须出现在当前程序版本的 Manifest 白名单中。Gateway 只把 JSON 值交给 `CapabilityBackend`，因此其它模块可以通过后端适配器暴露语义能力，而不会把 Core、数据库、Renderer 或 Tauri 句柄交给用户代码。
+
 ## 模块调用模型
 
 ```text
@@ -57,4 +59,4 @@ User Code
 - 审计日志、失败重试上限和安全模式联动。
 - 离线环境中仍可运行已安装代码，但不能绕过本地策略。
 
-当前仓库已完成 Manifest 策略评估、Tauri Gateway、Worker 准入边界、独立进程 Supervisor、取消/截止时间/输出预算和契约测试；JS/WASM 引擎适配、强制内存限制、Capability Gateway 实际路由和用户代码安装生命周期尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。
+当前仓库已完成 Manifest 策略评估、Tauri 校验入口、Worker 准入边界、独立进程 Supervisor、逐请求 Capability Gateway、取消/截止时间/输出预算和契约测试；JS/WASM 引擎适配、强制内存限制、桌面模块后端注册和用户代码安装生命周期尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。
