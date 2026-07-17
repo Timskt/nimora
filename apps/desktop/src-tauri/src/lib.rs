@@ -16,6 +16,10 @@ use nimora_asset_installer::{
     inspect_asset_source_preview, install_asset_source, install_gltf_character,
     read_verified_asset_image, read_verified_asset_model, rollback_latest,
 };
+use nimora_automation_runtime::{
+    ActionFailure, AutomationBackend, AutomationDefinition, AutomationEngine, AutomationError,
+    AutomationRun, RunMode, Uncancelled,
+};
 use nimora_diagnostics_bundle::{
     ApplicationSummary, DataProtectionSummary, DiagnosticBundleError, DiagnosticBundleReceipt,
     DiagnosticBundleSelection, DiagnosticComponent, DiagnosticEvent, DiagnosticEventCode,
@@ -722,6 +726,8 @@ enum DesktopError {
     UserCodeGateway(#[from] GatewayError),
     #[error(transparent)]
     UserCodePackage(#[from] ProgramPackageError),
+    #[error(transparent)]
+    Automation(#[from] AutomationError),
     #[error("user program execution was not found")]
     UserProgramNotFound,
     #[error("user program permissions must be granted for this exact installed version")]
@@ -750,6 +756,43 @@ struct LocalAgentRequest {
     provider_id: String,
     #[serde(default = "default_agent_model")]
     model: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AutomationTestRequest {
+    definition: AutomationDefinition,
+    event_type: String,
+    event_data: serde_json::Value,
+}
+
+#[derive(Debug)]
+struct DryRunAutomationBackend;
+
+impl AutomationBackend for DryRunAutomationBackend {
+    fn execute(&self, _command: Command) -> Result<(), ActionFailure> {
+        Err(ActionFailure {
+            message: "dry-run backend cannot execute commands".to_owned(),
+            transient: false,
+        })
+    }
+}
+
+#[tauri::command]
+fn test_automation(request: AutomationTestRequest) -> Result<AutomationRun, DesktopError> {
+    let event = Event::new(
+        request.event_type,
+        EventSource::System("automation-test".to_owned()),
+        request.event_data,
+    )
+    .map_err(RuntimeError::from)?;
+    Ok(AutomationEngine::run(
+        &request.definition,
+        &event,
+        RunMode::DryRun,
+        &DryRunAutomationBackend,
+        &Uncancelled,
+    )?)
 }
 
 fn default_agent_provider_id() -> String {
@@ -4369,6 +4412,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_snapshot,
             agent_catalog,
+            test_automation,
             agent_provider_status,
             agent_history_list,
             delete_agent_history,
@@ -4543,18 +4587,18 @@ fn discover_ollama_worker(app: &AppHandle) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVE_CHARACTER_FILE, AssetInstallReceipt, BUILTIN_CHARACTER_ID, CapabilityBackend,
-        DesktopCapabilityBackend, DesktopError, DesktopState, LocalAgentRequest, PetAction,
-        PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest, StartupMode, TrayAction,
-        UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
+        ACTIVE_CHARACTER_FILE, AssetInstallReceipt, AutomationTestRequest, BUILTIN_CHARACTER_ID,
+        CapabilityBackend, DesktopCapabilityBackend, DesktopError, DesktopState, LocalAgentRequest,
+        PetAction, PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest, StartupMode,
+        TrayAction, UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
         cancel_all_pending_agent_tools, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
         default_agent_model, default_agent_provider_id, diagnostic_report, ensure_normal_mode,
         ensure_program_permissions, inspect_asset_catalog, install_gltf_character,
         open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
         permission_grant, persist_active_character, prepare_agent_tool_inner,
         reject_agent_tool_inner, resolve_active_character, resolve_character_renderer,
-        run_local_agent_inner, screen_coordinate, serve_asset_protocol, user_program_input,
-        valid_asset_identifier, validate_model_source, validate_package_source,
+        run_local_agent_inner, screen_coordinate, serve_asset_protocol, test_automation,
+        user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
         validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
@@ -4757,6 +4801,41 @@ mod tests {
             ]
         );
         std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn automation_test_run_returns_a_side_effect_free_plan() {
+        let request = serde_json::from_value::<AutomationTestRequest>(json!({
+            "definition": {
+                "spec": "nimora.automation/1",
+                "id": "local.focus.on-build",
+                "name": "Build companion",
+                "enabled": true,
+                "trigger": { "eventType": "dev.build.finished" },
+                "conditions": [{ "pointer": "/succeeded", "equals": true }],
+                "actions": [{
+                    "id": "celebrate",
+                    "command": "pet.animation.play",
+                    "arguments": { "action": "celebrate" },
+                    "risk": "low",
+                    "retrySafe": true,
+                    "idempotencyKey": "preview-build-celebrate",
+                    "compensation": null
+                }],
+                "policy": { "timeoutMs": 5000, "failure": "stop" }
+            },
+            "eventType": "dev.build.finished",
+            "eventData": { "succeeded": true }
+        }))
+        .expect("automation request");
+        let run = test_automation(request).expect("automation test run");
+        assert_eq!(
+            run.status,
+            nimora_automation_runtime::AutomationRunStatus::Planned
+        );
+        assert_eq!(run.steps.len(), 1);
+        assert_eq!(run.steps[0].command, "pet.animation.play");
+        assert_eq!(run.steps[0].attempts, 0);
     }
 
     #[test]

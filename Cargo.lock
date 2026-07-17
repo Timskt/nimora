@@ -2185,6 +2185,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nimora-automation-runtime"
+version = "0.1.0"
+dependencies = [
+ "nimora-runtime-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
 name = "nimora-cli"
 version = "0.1.0"
 dependencies = [
@@ -2205,6 +2216,7 @@ dependencies = [
  "nimora-agent-runtime",
  "nimora-agent-tools",
  "nimora-asset-installer",
+ "nimora-automation-runtime",
  "nimora-diagnostics-bundle",
  "nimora-model-importer",
  "nimora-persistence-sqlite",

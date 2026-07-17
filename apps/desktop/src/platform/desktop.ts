@@ -369,11 +369,54 @@ export type UserProgramCapabilityResponse =
   | { type: "localDataDeleted"; deleted: boolean }
   | { type: "commandAccepted"; value: NimoraCommand };
 
+export interface AutomationDefinition {
+  spec: "nimora.automation/1";
+  id: string;
+  name: string;
+  enabled: boolean;
+  trigger: { eventType: string };
+  conditions: Array<{ pointer: string; equals: unknown }>;
+  actions: Array<{
+    id: string;
+    command: string;
+    arguments: Record<string, unknown>;
+    risk: "safe" | "low" | "medium" | "high" | "critical";
+    retrySafe: boolean;
+    idempotencyKey: string | null;
+    compensation: null | {
+      command: string;
+      arguments: Record<string, unknown>;
+      risk: "safe" | "low" | "medium" | "high" | "critical";
+    };
+  }>;
+  policy: { timeoutMs: number; failure: "stop" | "compensate" };
+}
+
+export interface AutomationRun {
+  spec: "nimora.automation-run/1";
+  runId: string;
+  automationId: string;
+  traceId: string;
+  eventId: string;
+  mode: "dry_run" | "live";
+  status: "trigger_not_matched" | "condition_not_matched" | "planned" | "succeeded" | "failed" | "compensation_failed" | "cancelled" | "timed_out";
+  steps: Array<{
+    actionId: string;
+    command: string;
+    status: string;
+    attempts: number;
+    compensated: boolean;
+    error: string | null;
+  }>;
+  reason: string | null;
+}
+
 export interface DesktopApi {
   readonly native: boolean;
   snapshot(): Promise<DesktopSnapshot>;
   drainEvents(): Promise<NimoraEvent[]>;
   outboxSnapshot(): Promise<OutboxSnapshot>;
+  testAutomation(definition: AutomationDefinition, eventType: string, eventData: unknown): Promise<AutomationRun>;
   agentCatalog(): Promise<AgentCatalog>;
   agentProviderStatus(providerId: string): Promise<AgentProviderStatus>;
   agentHistory(limit?: number, before?: { createdAtMs: number; taskId: string }): Promise<AgentHistoryPage>;
@@ -491,7 +534,7 @@ export function createDesktopApi(
       usage: AgentHistoryRecord["usage"],
     ) => {
       const completedAtMs = Date.now();
-      previewAgentHistory = [{
+      const record: AgentHistoryRecord = {
         spec: "nimora.agent-history/1",
         task: { ...task, createdAtMs: completedAtMs },
         model,
@@ -500,13 +543,38 @@ export function createDesktopApi(
         finishReason,
         usage,
         completedAtMs,
-      }, ...previewAgentHistory.filter((record) => record.task.id !== task.id)];
+      };
+      previewAgentHistory = [record, ...previewAgentHistory.filter((existing) => existing.task.id !== task.id)];
+      return record;
     };
     return {
       native: false,
       async snapshot() { return structuredClone(previewSnapshot); },
       async drainEvents() { return []; },
       async outboxSnapshot() { return { pending: 0, leased: 0, delivered: 0, deadLetter: 0 }; },
+      async testAutomation(definition, eventType, eventData) {
+        const matched = definition.enabled && definition.trigger.eventType === eventType;
+        const conditionsMatched = definition.conditions.every(({ pointer, equals }) => {
+          if (!pointer.startsWith("/")) return false;
+          const value = pointer.slice(1).split("/").reduce<unknown>((current, segment) => {
+            if (current && typeof current === "object") return (current as Record<string, unknown>)[segment.replaceAll("~1", "/").replaceAll("~0", "~")];
+            return undefined;
+          }, eventData);
+          return JSON.stringify(value) === JSON.stringify(equals);
+        });
+        const status = !matched ? "trigger_not_matched" : !conditionsMatched ? "condition_not_matched" : "planned";
+        return {
+          spec: "nimora.automation-run/1",
+          runId: crypto.randomUUID(),
+          automationId: definition.id,
+          traceId: crypto.randomUUID(),
+          eventId: crypto.randomUUID(),
+          mode: "dry_run",
+          status,
+          steps: status === "planned" ? definition.actions.map((action) => ({ actionId: action.id, command: action.command, status: "pending", attempts: 0, compensated: false, error: null })) : [],
+          reason: status === "planned" ? null : "测试事件未通过触发器或条件",
+        };
+      },
       async agentCatalog() {
         return {
           spec: "nimora.desktop-agent-catalog/1",
@@ -572,8 +640,8 @@ export function createDesktopApi(
         const task = { id: crypto.randomUUID(), status: "succeeded", providerId };
         const content = `[${model}] ${prompt}`;
         const usage = { inputTokens: Math.max(1, Math.ceil(prompt.length / 4)), outputTokens: Math.max(1, Math.ceil(prompt.length / 4)), costMicrounits: 0 };
-        recordPreviewAgentHistory(task, prompt, model, content, "stop", usage);
-        return { spec: "nimora.desktop-agent-result/1", status: "completed", task, content, finishReason: "stop", usage, pendingTools: [] };
+        const historyRecord = recordPreviewAgentHistory(task, prompt, model, content, "stop", usage);
+        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: historyRecord.task, content, finishReason: "stop", usage, pendingTools: [] };
       },
       async prepareAgentTool(toolId, argumentsValue) {
         const invocationId = crypto.randomUUID();
@@ -591,8 +659,8 @@ export function createDesktopApi(
         previewAgentTask = { ...previewAgentTask, status: "succeeded" };
         const content = "模块操作已经安全完成。";
         const usage = { inputTokens: 12, outputTokens: 8, costMicrounits: 0 };
-        recordPreviewAgentHistory(previewAgentTask, previewAgentPrompt, previewAgentModel, content, "completed", usage);
-        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: structuredClone(previewAgentTask), content, finishReason: "completed", usage, pendingTools: [] };
+        const historyRecord = recordPreviewAgentHistory(previewAgentTask, previewAgentPrompt, previewAgentModel, content, "completed", usage);
+        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: structuredClone(historyRecord.task), content, finishReason: "completed", usage, pendingTools: [] };
       },
       async rejectAgentTool() { previewAgentPendingTools = []; },
       async backupHealth() {
@@ -677,6 +745,7 @@ export function createDesktopApi(
     snapshot: async () => await invokeCommand("desktop_snapshot") as DesktopSnapshot,
     drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],
     outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,
+    testAutomation: async (definition, eventType, eventData) => await invokeCommand("test_automation", { request: { definition, eventType, eventData } }) as AutomationRun,
     agentCatalog: async () => await invokeCommand("agent_catalog") as AgentCatalog,
     agentProviderStatus: async (providerId) => await invokeCommand("agent_provider_status", { request: { providerId } }) as AgentProviderStatus,
     agentHistory: async (limit = 50, before) => await invokeCommand("agent_history_list", { request: { beforeCreatedAtMs: before?.createdAtMs ?? null, beforeTaskId: before?.taskId ?? null, limit } }) as AgentHistoryPage,

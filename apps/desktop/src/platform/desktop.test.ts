@@ -29,6 +29,26 @@ describe("desktop platform adapter", () => {
     await expect(api.playAction("celebrate")).resolves.toBeNull();
   });
 
+  it("previews automation plans without executing commands", async () => {
+    const api = createDesktopApi(false);
+    const definition = {
+      spec: "nimora.automation/1" as const,
+      id: "local.focus.on-build",
+      name: "Build companion",
+      enabled: true,
+      trigger: { eventType: "dev.build.finished" },
+      conditions: [{ pointer: "/succeeded", equals: true }],
+      actions: [{ id: "celebrate", command: "pet.animation.play", arguments: { action: "celebrate" }, risk: "low" as const, retrySafe: true, idempotencyKey: "preview", compensation: null }],
+      policy: { timeoutMs: 5_000, failure: "stop" as const },
+    };
+    const planned = await api.testAutomation(definition, "dev.build.finished", { succeeded: true });
+    expect(planned).toMatchObject({ mode: "dry_run", status: "planned" });
+    expect(planned.steps).toEqual([expect.objectContaining({ command: "pet.animation.play", attempts: 0, status: "pending" })]);
+    const skipped = await api.testAutomation(definition, "dev.build.finished", { succeeded: false });
+    expect(skipped.status).toBe("condition_not_matched");
+    expect(skipped.steps).toEqual([]);
+  });
+
   it("preserves an explicitly selected preview provider and model", async () => {
     const api = createDesktopApi(false);
     const result = await api.runLocalAgent("检查模型选择", "provider:preview-scripted", "qwen3:8b");
@@ -72,7 +92,10 @@ describe("desktop platform adapter", () => {
   it("paginates and deletes preview agent history", async () => {
     const api = createDesktopApi(false);
     const first = await api.runLocalAgent("第一条");
-    await new Promise((resolve) => setTimeout(resolve, 1));
+    const firstHistory = await api.agentHistory(1);
+    while (Date.now() <= firstHistory.records[0]!.task.createdAtMs) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
     const second = await api.runLocalAgent("第二条");
 
     const latest = await api.agentHistory(1);

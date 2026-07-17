@@ -79,6 +79,8 @@ any → disabled → deleted
 - 自动事件 Supervisor 已执行全部三种策略：`serial` 有界保留最新待执行事件，`drop` 忙时丢弃新触发，`cancel-previous` 强制终止旧 Worker 并隔离其迟到完成；关闭会话、撤权、升级、回滚和安全模式都会取消 active Worker。
 - 每次事件执行都重新加载 active 程序、校验完整性和精确授权，再经 Capability Gateway 调用模块能力；脚本不能直接持有模块实例、系统句柄或绕过每次调用的鉴权。
 
+当前自动化内核位于 `crates/automation-runtime`，直接复用 `nimora.command/1` 与 `nimora.event/1`。`nimora.automation/1` 已实现事件类型触发、JSON Pointer 等值条件、有界顺序 Action、取消、运行超时、显式失败策略、逆序补偿，以及只有同时声明 `retrySafe` 和幂等键才允许的最多三次瞬时错误重试。`nimora.automation-run/1` 保留 Run ID、Trace ID、Event ID、逐步状态、尝试次数、补偿结果和失败原因。桌面“自动化”工作区通过原生 `test_automation` IPC 或浏览器同契约预览执行 dry-run；该路径只验证并生成预计步骤，Backend 即使被错误调用也会拒绝执行，因此不会触发 Renderer、Worker、网络或桌面 Command。持久规则仓储、定时调度、真实 Action Backend、运行历史与事件回放仍需继续实现。
+
 ## 6. 权限与信任
 
 - 首次启用显示代码来源、触发条件、数据访问、外部目标和系统影响。

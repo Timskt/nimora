@@ -63,9 +63,26 @@ flowchart LR
 
 首个生产工具目录位于 `crates/agent-tools`，当前公开十二项工具：`asset.catalog.read`、`character.state.read`、`pet.action.catalog.read`、`pet.state.read`、`profile.state.read`、`program.catalog.read`、`runtime.health.read`、`pet.animation.play`、`pet.position.move`、`profile.active.switch`、`character.active.switch` 与 `program.installed.execute`。目录只包含 Tool Descriptor 和固定模块 Adapter，不暴露 `DesktopState`、Repository、Tauri Command、任意命令字符串或文件路径。只读授权使用可扩展能力集合；资源目录只返回已验证资产摘要，角色状态只返回当前 Asset ID、渲染后端、画布/锚点和能力布尔值，主动剔除模型路径与资源 URL；动作目录直接从 Runtime 的 `PetAction` 当前词汇生成，并指明对应写工具与参数，避免 Provider 猜测动作；程序目录只返回完整性复验通过的已安装程序身份、Manifest 声明、预算与精确版本授权摘要，损坏项只计数，不返回源码、安装路径、Worker 路径或宿主句柄；运行健康只返回启动、安全、Outbox 与备份摘要，不包含日志、用户正文、路径或密钥。
 
+### 3.1 模块互动覆盖矩阵
+
+| 模块 | 模块向 AI 提供能力 | AI 向模块发起操作 | 当前状态 |
+| --- | --- | --- | --- |
+| Pet Runtime | 状态、动作目录 | 播放动作、移动位置 | 已贯通 Gateway |
+| Profile | 当前 Profile 与策略摘要 | 切换已有 Profile | 已贯通 Gateway，写操作确认 |
+| Character / Asset | 当前角色、渲染能力、已安装资产 | 切换已验证角色 | 已贯通 Gateway，路径脱敏 |
+| User Program | 已安装程序与精确版本授权摘要 | 执行指定程序版本 | 已贯通隔离 Worker，外部副作用确认 |
+| Runtime Health | Safe/Recovery、事件和备份健康摘要 | 无写入口 | 已贯通只读 Gateway |
+| Automation | 规则、Dry-run、运行记录 | 创建、测试、启停和运行规则 | 尚未注册生产 Tool；不得由 AI 绕过自动化仓储和 Action Gateway |
+| Diagnostics / Backup | 脱敏诊断、备份健康 | 导出诊断、创建或恢复备份 | 仅健康摘要已提供；导出与恢复应采用高风险专用 Tool |
+| Extension / Skill | Contribution Catalog、Skill 状态 | 安装、启停、执行 Skill | Extension Host 未实现，禁止预留任意命令工具 |
+| Connector | 已配对连接与 Scope 摘要 | 发送、订阅、断开连接 | Gateway 尚未实现；网络目标、数据分类和用户确认必须叠加 |
+| Notification / Calendar / Shortcut | 可用通道与授权状态 | 通知、日历、快捷键动作 | 尚未实现；必须由 OS 权限 Adapter 承担，不向 Provider 暴露系统句柄 |
+
+新增模块不得通过扩大一个“万能 Tool”接入。每项能力必须同时提供最小 Tool Schema、参数风险评估、固定 Gateway Adapter、Capability Policy、脱敏返回值、取消与超时语义、审计事件和失败测试。其它模块调用 AI 时也必须通过 `agent.task.create` 和任务预算；Automation Action、用户代码或 Skill 不能把任意 Prompt、任意 Tool allowlist 或已有批准转交给新任务。
+
 五项写入或外部副作用工具固定映射到 `safe.pet.animate`、`safe.pet.move`、`safe.profile.switch`、`safe.character.switch` 和 `safe.program.execute`，模型无法把参数中的字符串提升为 Gateway 命令。Profile 切换复用桌面原生窗口策略预应用、持久化和失败回滚用例；角色切换只接受内置或已安装且复验通过的 Character Asset ID，持久化选择后热刷新 Pet Renderer，刷新失败回滚原选择；程序执行必须把 `programId + version` 共同绑定到批准，执行瞬间重新加载 active 安装并复验完整性、精确版本与该版本持久授权，再经既有隔离 Worker 和 Capability Gateway 调用程序声明的模块能力。Agent 专属程序目录能力不会下放给用户程序，避免程序递归枚举或启动其它程序。三类原生操作没有受控桌面上下文时都在状态写入或 Worker 启动前失败。Invocation ID 作为幂等键、Task/Trace 作为关联上下文进入共享 Capability Gateway。只读工具允许 Safe 自动执行，其余五项工具必须绑定实际参数批准。
 
-### 3.1 桌面任务历史生命周期
+### 3.2 桌面任务历史生命周期
 
 - 桌面宿主只在 Provider 得到最终完成结果后写入 `SqliteAgentHistoryRepository`；等待确认、拒绝、取消和未完成 Turn 不生成伪历史。
 - 记录保留 Task、Provider、模型、最初用户 Prompt、最终 Response、Finish Reason、Usage 与完成时间，并使用 Task ID 保证只写一次。

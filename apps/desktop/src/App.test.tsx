@@ -11,6 +11,7 @@ describe("navItemClassName", () => {
 describe("navigation", () => {
   it("exposes the local Agent workspace as a first-class destination", () => {
     expect(navigation).toContain("Agent");
+    expect(navigation).toContain("自动化");
   });
 });
 
