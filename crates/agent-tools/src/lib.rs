@@ -14,6 +14,7 @@ const PET_ACTION_CATALOG_READ: &str = "pet.action.catalog.read";
 const PROFILE_STATE_READ: &str = "profile.state.read";
 const PROFILE_ACTIVE_SWITCH: &str = "profile.active.switch";
 const CHARACTER_STATE_READ: &str = "character.state.read";
+const CHARACTER_ACTIVE_SWITCH: &str = "character.active.switch";
 const ASSET_CATALOG_READ: &str = "asset.catalog.read";
 const RUNTIME_HEALTH_READ: &str = "runtime.health.read";
 const PET_ANIMATION_PLAY: &str = "pet.animation.play";
@@ -21,6 +22,7 @@ const PET_POSITION_MOVE: &str = "pet.position.move";
 const SAFE_PET_ANIMATE: &str = "safe.pet.animate";
 const SAFE_PET_MOVE: &str = "safe.pet.move";
 const SAFE_PROFILE_SWITCH: &str = "safe.profile.switch";
+const SAFE_CHARACTER_SWITCH: &str = "safe.character.switch";
 
 /// Builds the bounded production Tool Registry exposed to Agent providers.
 ///
@@ -89,6 +91,7 @@ pub fn production_tool_descriptors() -> Result<Vec<ToolDescriptor>, AgentRuntime
             CommandRisk::Safe,
             ToolEffect::ReadOnly,
         )?,
+        character_switch_descriptor()?,
         descriptor(
             ASSET_CATALOG_READ,
             "Read asset catalog",
@@ -137,6 +140,24 @@ pub fn production_tool_descriptors() -> Result<Vec<ToolDescriptor>, AgentRuntime
     ])
 }
 
+fn character_switch_descriptor() -> Result<ToolDescriptor, AgentRuntimeError> {
+    descriptor(
+        CHARACTER_ACTIVE_SWITCH,
+        "Switch active character",
+        "Switches to one installed character asset and refreshes the pet renderer through the Capability Gateway.",
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["assetId"],
+            "properties": {
+                "assetId": {"type": "string", "minLength": 1, "maxLength": 128}
+            }
+        }),
+        CommandRisk::Low,
+        ToolEffect::ReversibleWrite,
+    )
+}
+
 #[derive(Debug)]
 pub struct GatewayToolBackend<B> {
     gateway: CapabilityGateway<B>,
@@ -169,6 +190,7 @@ impl<B: CapabilityBackend> GatewayToolBackend<B> {
                 SAFE_PET_ANIMATE.to_owned(),
                 SAFE_PET_MOVE.to_owned(),
                 SAFE_PROFILE_SWITCH.to_owned(),
+                SAFE_CHARACTER_SWITCH.to_owned(),
             ]),
         }
     }
@@ -197,6 +219,10 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
             }
             PROFILE_ACTIVE_SWITCH => CapabilityRequest::InvokeCommand {
                 command: SAFE_PROFILE_SWITCH.to_owned(),
+                arguments: invocation.arguments.clone(),
+            },
+            CHARACTER_ACTIVE_SWITCH => CapabilityRequest::InvokeCommand {
+                command: SAFE_CHARACTER_SWITCH.to_owned(),
                 arguments: invocation.arguments.clone(),
             },
             CHARACTER_STATE_READ => {

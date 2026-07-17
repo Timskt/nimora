@@ -37,8 +37,8 @@ use nimora_runtime_app::{
     RuntimeEventBus, RuntimeEventSubscription, RuntimeService, SafetyService, SafetyServiceError,
 };
 use nimora_runtime_core::{
-    Command, CommandRisk, Event, EventSource, Pet, PetAction, PointerButton, Position, ProfileId,
-    ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
+    Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction, PointerButton,
+    Position, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
 };
 use nimora_user_code_gateway::{
     CapabilityBackend, CapabilityGateway, CapabilityResponse, GatewayEnvelope, GatewayError,
@@ -692,6 +692,8 @@ enum DesktopError {
     Safety(#[from] SafetyServiceError),
     #[error("operation failed ({primary}); native window policy rollback also failed ({rollback})")]
     NativePolicyRollback { primary: String, rollback: String },
+    #[error("character activation failed ({primary}); selection rollback also failed ({rollback})")]
+    CharacterActivationRollback { primary: String, rollback: String },
     #[error(transparent)]
     Persistence(#[from] SqlitePersistenceError),
     #[error(transparent)]
@@ -2467,24 +2469,45 @@ fn activate_character(
     state: State<'_, DesktopState>,
     asset_id: String,
 ) -> Result<ActiveCharacterSnapshot, DesktopError> {
-    ensure_normal_mode(&state)?;
+    activate_character_inner(&app, &state, &asset_id)
+}
+
+fn activate_character_inner(
+    app: &AppHandle,
+    state: &DesktopState,
+    asset_id: &str,
+) -> Result<ActiveCharacterSnapshot, DesktopError> {
+    ensure_normal_mode(state)?;
     let _write_guard = state
         .active_character_write
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?;
-    if asset_id != BUILTIN_CHARACTER_ID && !valid_asset_identifier(&asset_id) {
+    if asset_id != BUILTIN_CHARACTER_ID && !valid_asset_identifier(asset_id) {
         return Err(DesktopError::InvalidAssetIdentifier);
     }
     if asset_id != BUILTIN_CHARACTER_ID {
-        let asset = inspect_asset_package(&state.asset_store.join(&asset_id))?;
+        let asset = inspect_asset_package(&state.asset_store.join(asset_id))?;
         if asset.id != asset_id || asset.asset_type != "character" {
             return Err(DesktopError::AssetIsNotCharacter);
         }
     }
-    persist_active_character(&state.asset_store, &asset_id)?;
-    let snapshot = resolve_active_character(&state.asset_store, RuntimeMode::Normal)?;
-    app.emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
-    Ok(snapshot)
+    let previous = resolve_active_character(&state.asset_store, RuntimeMode::Normal)?;
+    persist_active_character(&state.asset_store, asset_id)?;
+    let activation = (|| {
+        let snapshot = resolve_active_character(&state.asset_store, RuntimeMode::Normal)?;
+        app.emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
+        Ok(snapshot)
+    })();
+    match activation {
+        Ok(snapshot) => Ok(snapshot),
+        Err(primary) => match persist_active_character(&state.asset_store, &previous.asset_id) {
+            Ok(()) => Err(primary),
+            Err(rollback) => Err(DesktopError::CharacterActivationRollback {
+                primary: primary.to_string(),
+                rollback: rollback.to_string(),
+            }),
+        },
+    }
 }
 
 fn resolve_active_character(
@@ -3925,6 +3948,27 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
                     .ok_or_else(|| "native desktop context is unavailable".to_owned())?;
                 switch_profile_inner(app, self.state, profile_id).map_err(|error| error.to_string())
             }
+            "safe.character.switch" => {
+                let asset_id = arguments
+                    .get("assetId")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| "assetId must be a string".to_owned())?;
+                let app = self
+                    .state
+                    .native_app
+                    .as_ref()
+                    .ok_or_else(|| "native desktop context is unavailable".to_owned())?;
+                let snapshot = activate_character_inner(app, self.state, asset_id)
+                    .map_err(|error| error.to_string())?;
+                let mut command = Command::new(
+                    "safe.character.switch",
+                    serde_json::to_value(snapshot).map_err(|error| error.to_string())?,
+                    CommandRisk::Low,
+                )
+                .map_err(|error| error.to_string())?;
+                command.status = CommandStatus::Succeeded;
+                Ok(command)
+            }
             _ => return Err("command has no registered desktop backend".to_owned()),
         }?;
         result.trace_id = trace_id
@@ -4613,6 +4657,7 @@ mod tests {
             tool_ids,
             [
                 "asset.catalog.read".to_owned(),
+                "character.active.switch".to_owned(),
                 "character.state.read".to_owned(),
                 "pet.action.catalog.read".to_owned(),
                 "pet.animation.play".to_owned(),
@@ -4682,6 +4727,28 @@ mod tests {
                 .active_profile_id,
             before.active_profile_id
         );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn character_switch_backend_fails_closed_without_native_context() {
+        let (root, state) = normal_desktop_state();
+        let before = resolve_active_character(&state.asset_store, RuntimeMode::Normal)
+            .expect("before character");
+        let error = DesktopCapabilityBackend { state: &state }
+            .invoke_command(
+                "safe.character.switch",
+                json!({"assetId": "character.local.aurora"}),
+                &Uuid::now_v7().to_string(),
+                Some("character-switch-1"),
+            )
+            .expect_err("native context must be required");
+        assert_eq!(error, "native desktop context is unavailable");
+        let after = resolve_active_character(&state.asset_store, RuntimeMode::Normal)
+            .expect("after character");
+        assert_eq!(after.asset_id, before.asset_id);
+        assert_eq!(after.fallback_reason, before.fallback_reason);
+        assert!(!state.asset_store.join(ACTIVE_CHARACTER_FILE).exists());
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 

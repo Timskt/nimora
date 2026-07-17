@@ -251,6 +251,53 @@ fn profile_switch_requires_bound_approval_and_fixed_gateway_command() {
 }
 
 #[test]
+fn character_switch_requires_bound_approval_and_fixed_gateway_command() {
+    let tools = production_tool_registry().expect("registry");
+    let providers = ProviderRegistry::default();
+    let coordinator = AgentCoordinator::new(&providers, &tools);
+    let mut task = task();
+    let capability_backend = Backend::default();
+    let command_log = Arc::clone(&capability_backend.commands);
+    let backend = GatewayToolBackend::new(
+        capability_backend,
+        GatewayToolBackend::<Backend>::standard_policy(task.id, task.trace_id),
+    );
+    let invocation = ToolInvocation::new(
+        task.id,
+        task.trace_id,
+        "character.active.switch",
+        json!({"assetId": "character.local.aurora"}),
+    )
+    .expect("invocation");
+    let waiting = coordinator
+        .tool_step(&mut task, &backend, invocation.clone(), None, 1_001)
+        .expect("admission");
+    assert!(matches!(
+        waiting,
+        ToolStepOutcome::ConfirmationRequired { .. }
+    ));
+    assert!(command_log.lock().expect("command log").is_empty());
+
+    let ToolAdmission::ConfirmationRequired { effective_risk, .. } =
+        tools.admit(&invocation).expect("admit")
+    else {
+        panic!("character switch must require confirmation");
+    };
+    let approval = ToolApproval::bind(&invocation, effective_risk);
+    let completed = coordinator
+        .tool_step(&mut task, &backend, invocation, Some(&approval), 1_002)
+        .expect("approved tool step");
+    assert!(matches!(completed, ToolStepOutcome::Completed { .. }));
+    let commands = command_log.lock().expect("command log");
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].command, "safe.character.switch");
+    assert_eq!(
+        commands[0].arguments,
+        json!({"assetId": "character.local.aurora"})
+    );
+}
+
+#[test]
 fn gateway_rejects_policy_correlation_mismatch_before_dispatch() {
     let tools = production_tool_registry().expect("registry");
     let task = task();
