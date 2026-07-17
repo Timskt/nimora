@@ -17,6 +17,9 @@ pub struct GatewayEnvelope {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CapabilityRequest {
     ReadPetState,
+    ReadLocalData { key: String },
+    WriteLocalData { key: String, value: Value },
+    DeleteLocalData { key: String },
     InvokeCommand { command: String, arguments: Value },
 }
 
@@ -24,6 +27,9 @@ pub enum CapabilityRequest {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CapabilityResponse {
     PetState { value: Value },
+    LocalData { value: Option<Value> },
+    LocalDataWritten,
+    LocalDataDeleted { deleted: bool },
     CommandAccepted { value: Value },
 }
 
@@ -34,6 +40,27 @@ pub trait CapabilityBackend: std::fmt::Debug + Send + Sync {
     ///
     /// Returns a backend-specific error when state cannot be read.
     fn read_pet_state(&self) -> Result<Value, String>;
+
+    /// Reads a value from the program's isolated local-data namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend-specific error when the value cannot be read.
+    fn read_local_data(&self, program_id: &str, key: &str) -> Result<Option<Value>, String>;
+
+    /// Atomically writes a value to the program's isolated local-data namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend-specific error when validation, quota, or persistence fails.
+    fn write_local_data(&self, program_id: &str, key: &str, value: &Value) -> Result<(), String>;
+
+    /// Deletes a value from the program's isolated local-data namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend-specific error when the value cannot be deleted.
+    fn delete_local_data(&self, program_id: &str, key: &str) -> Result<bool, String>;
 
     /// Invokes one registered safe command.
     ///
@@ -107,6 +134,33 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
                     .map(|value| CapabilityResponse::PetState { value })
                     .map_err(GatewayError::Backend)
             }
+            CapabilityRequest::ReadLocalData { key } => {
+                if !policy.can_store_local_data {
+                    return Err(GatewayError::CapabilityDenied);
+                }
+                self.backend
+                    .read_local_data(&policy.manifest.id, &key)
+                    .map(|value| CapabilityResponse::LocalData { value })
+                    .map_err(GatewayError::Backend)
+            }
+            CapabilityRequest::WriteLocalData { key, value } => {
+                if !policy.can_store_local_data {
+                    return Err(GatewayError::CapabilityDenied);
+                }
+                self.backend
+                    .write_local_data(&policy.manifest.id, &key, &value)
+                    .map(|()| CapabilityResponse::LocalDataWritten)
+                    .map_err(GatewayError::Backend)
+            }
+            CapabilityRequest::DeleteLocalData { key } => {
+                if !policy.can_store_local_data {
+                    return Err(GatewayError::CapabilityDenied);
+                }
+                self.backend
+                    .delete_local_data(&policy.manifest.id, &key)
+                    .map(|deleted| CapabilityResponse::LocalDataDeleted { deleted })
+                    .map_err(GatewayError::Backend)
+            }
             CapabilityRequest::InvokeCommand { command, arguments } => {
                 if !policy.can_invoke_commands {
                     return Err(GatewayError::CapabilityDenied);
@@ -144,6 +198,23 @@ mod tests {
             Ok(json!({"state": "idle"}))
         }
 
+        fn read_local_data(&self, _program_id: &str, key: &str) -> Result<Option<Value>, String> {
+            Ok(Some(json!({"key": key})))
+        }
+
+        fn write_local_data(
+            &self,
+            _program_id: &str,
+            _key: &str,
+            _value: &Value,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn delete_local_data(&self, _program_id: &str, _key: &str) -> Result<bool, String> {
+            Ok(true)
+        }
+
         fn invoke_command(
             &self,
             command: &str,
@@ -164,7 +235,11 @@ mod tests {
         evaluate(ProgramManifest {
             id: "studio.example.focus".into(),
             version: "1.0.0".into(),
-            capabilities: vec![Capability::ReadPetState, Capability::InvokeSafeCommands],
+            capabilities: vec![
+                Capability::ReadPetState,
+                Capability::InvokeSafeCommands,
+                Capability::StoreLocalData,
+            ],
             subscriptions: vec![],
             event_concurrency: EventConcurrencyPolicy::default(),
             event_queue_capacity: 16,
@@ -253,5 +328,29 @@ mod tests {
             envelope(&another, CapabilityRequest::ReadPetState),
         );
         assert_eq!(result, Err(GatewayError::ExecutionMismatch));
+    }
+
+    #[test]
+    fn dispatches_program_scoped_local_storage() {
+        let policy = policy();
+        let execution = ExecutionController::default().admit(&policy).unwrap();
+        let response = CapabilityGateway::new(Backend)
+            .dispatch(
+                &policy,
+                &execution,
+                envelope(
+                    &execution,
+                    CapabilityRequest::ReadLocalData {
+                        key: "settings".into(),
+                    },
+                ),
+            )
+            .unwrap();
+        assert_eq!(
+            response,
+            CapabilityResponse::LocalData {
+                value: Some(json!({"key": "settings"}))
+            }
+        );
     }
 }

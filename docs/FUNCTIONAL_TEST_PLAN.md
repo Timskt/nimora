@@ -140,6 +140,10 @@ ID / 标题 / 优先级 / 前置条件
 | SCRIPT-014 | Manifest 队列容量 | Rust 订阅实际采用 `eventQueueCapacity`；非法容量安装失败，Renderer 无法覆盖容量 | P0 |
 | SCRIPT-015 | 跨线程 Worker 取消 | 对无限循环 Worker 发送共享取消令牌，在 Manifest 超时前强杀并回收子进程，返回 `Cancelled` | P0 |
 | SCRIPT-016 | Worker 生命周期清理 | 正常、启动失败、协议失败、Gateway 失败、手动停止、安全模式、撤权、升级和回滚后均无遗留 active 注册 | P0 |
+| SCRIPT-017 | 程序本地数据隔离 | 程序 A 只能读写自己的命名空间，不能通过请求指定程序 B 身份 | P0 |
+| SCRIPT-018 | 本地数据权限 | 缺少 `store-local-data` 时读写删均被 Gateway 拒绝 | P0 |
+| SCRIPT-019 | 本地数据配额与原子性 | 单值、总配额、覆盖旧值、异常中断和符号链接场景均保持不变量 | P0 |
+| SCRIPT-020 | 结构化计划总预算 | 命令与存储操作合计超过 32 时在 Gateway 前拒绝，后续操作不执行 | P0 |
 | SCRIPT-005 | 离线、休眠、时钟回拨 | 按 missed-run policy 执行，无任务风暴 | P1 |
 
 ## 11. Gateway 与鉴权

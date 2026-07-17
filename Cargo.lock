@@ -2156,6 +2156,7 @@ dependencies = [
  "nimora-user-code-host",
  "nimora-user-code-package",
  "nimora-user-code-policy",
+ "nimora-user-code-storage",
  "serde",
  "serde_json",
  "tauri",
@@ -2235,6 +2236,15 @@ name = "nimora-user-code-policy"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "nimora-user-code-storage"
+version = "0.1.0"
+dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "uuid",

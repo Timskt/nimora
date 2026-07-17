@@ -22,6 +22,7 @@ use nimora_user_code_policy::{
     Capability, ExecutionCancellation, ExecutionController, ExecutionHandle, ExecutionPolicy,
     PolicyError, ProgramManifest, WorkerError, evaluate,
 };
+use nimora_user_code_storage::ProgramDataStore;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -45,7 +46,7 @@ const CONTROL_CENTER_LABEL: &str = "control-center";
 const PET_WINDOW_LABEL: &str = "pet";
 const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
-const MAX_USER_PROGRAM_COMMANDS: usize = 32;
+const MAX_USER_PROGRAM_OPERATIONS: usize = 32;
 const MAX_USER_PROGRAM_EVENT_SESSIONS: usize = 32;
 
 #[derive(Debug)]
@@ -60,6 +61,7 @@ struct DesktopState {
     dragging: AtomicBool,
     asset_store: PathBuf,
     program_store: PathBuf,
+    program_data_store: ProgramDataStore,
     program_permissions: SqliteProgramPermissionRepository,
     user_program_event_sessions: Mutex<HashMap<Uuid, UserProgramEventSession>>,
     active_user_program_workers: Mutex<HashMap<Uuid, ActiveUserProgramWorker>>,
@@ -142,6 +144,8 @@ impl DesktopState {
             events.clone(),
         )?;
         let window_policy = active_window_policy(&profiles.snapshot()?)?;
+        let program_data_store =
+            ProgramDataStore::new(program_store.with_file_name("program-data"));
         Ok(Self {
             runtime,
             profiles,
@@ -153,6 +157,7 @@ impl DesktopState {
             dragging: AtomicBool::new(false),
             asset_store,
             program_store,
+            program_data_store,
             program_permissions: SqliteProgramPermissionRepository::open(database_path)?,
             user_program_event_sessions: Mutex::new(HashMap::new()),
             active_user_program_workers: Mutex::new(HashMap::new()),
@@ -308,7 +313,24 @@ struct UserProgramEventSessionStatus {
 #[serde(deny_unknown_fields)]
 struct UserProgramPlan {
     #[serde(default)]
+    storage: Vec<UserProgramStorageOperation>,
+    #[serde(default)]
     commands: Vec<UserProgramPlanCommand>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+enum UserProgramStorageOperation {
+    Read {
+        key: String,
+    },
+    Write {
+        key: String,
+        value: serde_json::Value,
+    },
+    Delete {
+        key: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -1189,7 +1211,31 @@ fn execute_user_program_source(
     };
     let plan = parse_user_program_plan(value)?;
     let gateway = CapabilityGateway::new(DesktopCapabilityBackend { state });
-    let mut responses = Vec::with_capacity(plan.commands.len());
+    let mut responses = Vec::with_capacity(plan.storage.len() + plan.commands.len());
+    for operation in plan.storage {
+        execution.checkpoint()?;
+        let request = match operation {
+            UserProgramStorageOperation::Read { key } => {
+                nimora_user_code_gateway::CapabilityRequest::ReadLocalData { key }
+            }
+            UserProgramStorageOperation::Write { key, value } => {
+                nimora_user_code_gateway::CapabilityRequest::WriteLocalData { key, value }
+            }
+            UserProgramStorageOperation::Delete { key } => {
+                nimora_user_code_gateway::CapabilityRequest::DeleteLocalData { key }
+            }
+        };
+        responses.push(gateway.dispatch(
+            &policy,
+            &execution,
+            GatewayEnvelope {
+                execution_id: execution_id.to_string(),
+                trace_id: Uuid::now_v7().to_string(),
+                idempotency_key: None,
+                request,
+            },
+        )?);
+    }
     for (index, command) in plan.commands.into_iter().enumerate() {
         execution.checkpoint()?;
         responses.push(
@@ -1219,9 +1265,9 @@ fn execute_user_program_source(
 fn parse_user_program_plan(value: serde_json::Value) -> Result<UserProgramPlan, DesktopError> {
     let plan = serde_json::from_value::<UserProgramPlan>(value)
         .map_err(|error| DesktopError::UserCodeHost(format!("invalid capability plan: {error}")))?;
-    if plan.commands.len() > MAX_USER_PROGRAM_COMMANDS {
+    if plan.storage.len() + plan.commands.len() > MAX_USER_PROGRAM_OPERATIONS {
         return Err(DesktopError::UserCodeHost(format!(
-            "capability plan exceeds the {MAX_USER_PROGRAM_COMMANDS}-command limit"
+            "capability plan exceeds the {MAX_USER_PROGRAM_OPERATIONS}-operation limit"
         )));
     }
     Ok(plan)
@@ -1415,6 +1461,36 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
                 .map_err(|error| error.to_string())?,
         )
         .map_err(|error| error.to_string())
+    }
+
+    fn read_local_data(
+        &self,
+        program_id: &str,
+        key: &str,
+    ) -> Result<Option<serde_json::Value>, String> {
+        self.state
+            .program_data_store
+            .read(program_id, key)
+            .map_err(|error| error.to_string())
+    }
+
+    fn write_local_data(
+        &self,
+        program_id: &str,
+        key: &str,
+        value: &serde_json::Value,
+    ) -> Result<(), String> {
+        self.state
+            .program_data_store
+            .write(program_id, key, value)
+            .map_err(|error| error.to_string())
+    }
+
+    fn delete_local_data(&self, program_id: &str, key: &str) -> Result<bool, String> {
+        self.state
+            .program_data_store
+            .delete(program_id, key)
+            .map_err(|error| error.to_string())
     }
 
     fn invoke_command(
@@ -1793,6 +1869,7 @@ mod tests {
     #[test]
     fn parses_a_bounded_user_program_capability_plan() {
         let plan = parse_user_program_plan(json!({
+            "storage": [{"type": "write", "key": "settings", "value": {"volume": 0.8}}],
             "commands": [{
                 "command": "safe.pet.animate",
                 "arguments": {"action": "work"},
@@ -1800,6 +1877,7 @@ mod tests {
             }]
         }))
         .expect("valid plan");
+        assert_eq!(plan.storage.len(), 1);
         assert_eq!(plan.commands.len(), 1);
         assert_eq!(plan.commands[0].command, "safe.pet.animate");
         assert_eq!(
@@ -1810,12 +1888,15 @@ mod tests {
 
     #[test]
     fn rejects_oversized_user_program_capability_plans() {
-        let commands = (0..33)
-            .map(|_| json!({"command": "safe.pet.animate"}))
+        let storage = (0..32)
+            .map(|index| json!({"type": "read", "key": format!("key-{index}")}))
             .collect::<Vec<_>>();
         assert!(matches!(
-            parse_user_program_plan(json!({"commands": commands})),
-            Err(DesktopError::UserCodeHost(message)) if message.contains("32-command")
+            parse_user_program_plan(json!({
+                "storage": storage,
+                "commands": [{"command": "safe.pet.animate"}]
+            })),
+            Err(DesktopError::UserCodeHost(message)) if message.contains("32-operation")
         ));
     }
 

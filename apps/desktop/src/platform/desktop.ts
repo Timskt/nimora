@@ -132,6 +132,9 @@ export interface UserProgramEventSessionStatus {
 
 export type UserProgramCapabilityRequest =
   | { type: "readPetState" }
+  | { type: "readLocalData"; key: string }
+  | { type: "writeLocalData"; key: string; value: unknown }
+  | { type: "deleteLocalData"; key: string }
   | { type: "invokeCommand"; command: string; arguments: unknown };
 
 export interface UserProgramGatewayEnvelope {
@@ -143,6 +146,9 @@ export interface UserProgramGatewayEnvelope {
 
 export type UserProgramCapabilityResponse =
   | { type: "petState"; value: unknown }
+  | { type: "localData"; value: unknown | null }
+  | { type: "localDataWritten" }
+  | { type: "localDataDeleted"; deleted: boolean }
   | { type: "commandAccepted"; value: NimoraCommand };
 
 export interface DesktopApi {

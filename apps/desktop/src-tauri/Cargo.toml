@@ -21,6 +21,7 @@ nimora-user-code-policy = { path = "../../../crates/user-code-policy" }
 nimora-user-code-gateway = { path = "../../../crates/user-code-gateway" }
 nimora-user-code-host = { path = "../../../crates/user-code-host" }
 nimora-user-code-package = { path = "../../../crates/user-code-package" }
+nimora-user-code-storage = { path = "../../../crates/user-code-storage" }
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.11", features = ["macos-private-api", "tray-icon"] }
