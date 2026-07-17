@@ -67,6 +67,7 @@ export interface DiagnosticReport {
     pendingRestore: boolean;
     lastBackupError: boolean;
   };
+  sources: { eventCount: number };
   privacy: {
     includesLogs: false;
     includesUserContent: false;
@@ -316,7 +317,7 @@ export interface DesktopApi {
   createBackup(): Promise<BackupRecord | null>;
   requestDatabaseRestore(backupId: string): Promise<void>;
   previewDiagnosticReport(): Promise<DiagnosticReport>;
-  exportDiagnostics(destinationPath: string): Promise<DiagnosticBundleReceipt | null>;
+  exportDiagnostics(destinationPath: string, includeEvents: boolean): Promise<DiagnosticBundleReceipt | null>;
   profiles(): Promise<ProfileSnapshot>;
   createProfile(name: string, policy: ProfilePolicy): Promise<NimoraCommand | null>;
   switchProfile(profileId: string): Promise<NimoraCommand | null>;
@@ -427,6 +428,7 @@ export function createDesktopApi(
           system: { os: "browser-preview", architecture: "web" },
           runtime: { startupMode: previewRecoveryMode ? "recovery" : "normal", startupReason: previewRecoveryMode ? "database-unavailable" : null, safetyMode: "normal", outboxPending: 0, outboxDeadLetter: 0 },
           dataProtection: { databaseSchema: 1, backupCount: previewRecoveryMode ? 1 : 0, latestBackupAtMs: previewRecoveryMode ? 1_784_294_125_392 : null, pendingRestore: false, lastBackupError: false },
+          sources: { eventCount: previewRecoveryMode ? 1 : 2 },
           privacy: { includesLogs: false, includesUserContent: false, includesSecrets: false, includesFilePaths: false, automaticallyUploaded: false },
         };
       },
@@ -496,7 +498,7 @@ export function createDesktopApi(
     createBackup: async () => await invokeCommand("create_backup") as BackupRecord,
     requestDatabaseRestore: async (backupId) => { await invokeCommand("request_database_restore", { backupId }); },
     previewDiagnosticReport: async () => await invokeCommand("preview_diagnostic_report") as DiagnosticReport,
-    exportDiagnostics: async (destinationPath) => await invokeCommand("export_diagnostics", { request: { destinationPath } }) as DiagnosticBundleReceipt,
+    exportDiagnostics: async (destinationPath, includeEvents) => await invokeCommand("export_diagnostics", { request: { destinationPath, includeEvents } }) as DiagnosticBundleReceipt,
     profiles: async () => await invokeCommand("profile_snapshot") as ProfileSnapshot,
     createProfile: async (name, policy) => await invokeCommand("create_profile", { name, policy }) as NimoraCommand,
     switchProfile: async (profileId) => await invokeCommand("switch_profile", { profileId }) as NimoraCommand,

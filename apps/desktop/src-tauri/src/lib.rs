@@ -7,7 +7,9 @@ use nimora_asset_installer::{
 };
 use nimora_diagnostics_bundle::{
     ApplicationSummary, DataProtectionSummary, DiagnosticBundleError, DiagnosticBundleReceipt,
-    DiagnosticReport, PrivacySummary, RuntimeSummary, SystemSummary, export_diagnostic_bundle,
+    DiagnosticBundleSelection, DiagnosticComponent, DiagnosticEvent, DiagnosticEventCode,
+    DiagnosticJournal, DiagnosticReport, DiagnosticSeverity, DiagnosticSourcesSummary,
+    PrivacySummary, RuntimeSummary, SystemSummary, export_diagnostic_bundle,
 };
 use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
@@ -92,6 +94,7 @@ struct DesktopState {
     outbox: SqliteOutboxRepository,
     backups: BackupCoordinator,
     backup_last_error: Mutex<Option<String>>,
+    diagnostic_journal: Mutex<DiagnosticJournal>,
     user_program_event_sessions: Mutex<HashMap<Uuid, UserProgramEventSession>>,
     active_user_program_workers: Mutex<HashMap<Uuid, ActiveUserProgramWorker>>,
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
@@ -196,6 +199,12 @@ impl DesktopState {
         let window_policy = active_window_policy(&profiles.snapshot()?)?;
         let program_data_store =
             ProgramDataStore::new(program_store.with_file_name("program-data"));
+        let mut diagnostic_journal = DiagnosticJournal::default();
+        diagnostic_journal.record(diagnostic_event(
+            DiagnosticSeverity::Info,
+            DiagnosticComponent::Application,
+            DiagnosticEventCode::ApplicationStarted,
+        )?);
         Ok(Self {
             runtime,
             profiles,
@@ -213,6 +222,7 @@ impl DesktopState {
             outbox: SqliteOutboxRepository::open(database_path)?,
             backups,
             backup_last_error: Mutex::new(None),
+            diagnostic_journal: Mutex::new(diagnostic_journal),
             user_program_event_sessions: Mutex::new(HashMap::new()),
             active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
@@ -241,6 +251,12 @@ impl DesktopState {
         let window_policy = active_window_policy(&profiles.snapshot()?)?;
         let program_data_store =
             ProgramDataStore::new(program_store.with_file_name("program-data-recovery"));
+        let mut diagnostic_journal = DiagnosticJournal::default();
+        diagnostic_journal.record(diagnostic_event(
+            DiagnosticSeverity::Error,
+            DiagnosticComponent::Persistence,
+            DiagnosticEventCode::RecoveryModeStarted,
+        )?);
         Ok(Self {
             runtime,
             profiles,
@@ -258,6 +274,7 @@ impl DesktopState {
             outbox: SqliteOutboxRepository::in_memory()?,
             backups,
             backup_last_error: Mutex::new(None),
+            diagnostic_journal: Mutex::new(diagnostic_journal),
             user_program_event_sessions: Mutex::new(HashMap::new()),
             active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
@@ -311,6 +328,7 @@ struct ExportAssetRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExportDiagnosticRequest {
     destination_path: PathBuf,
+    include_events: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -735,6 +753,42 @@ fn request_database_restore(
     Ok(())
 }
 
+fn current_time_ms() -> Result<u64, DesktopError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(SqlitePersistenceError::from)?
+        .as_millis()
+        .try_into()
+        .map_err(|_| SqlitePersistenceError::InvalidBackupRequest.into())
+}
+
+fn diagnostic_event(
+    severity: DiagnosticSeverity,
+    component: DiagnosticComponent,
+    code: DiagnosticEventCode,
+) -> Result<DiagnosticEvent, DesktopError> {
+    Ok(DiagnosticEvent {
+        occurred_at_ms: current_time_ms()?,
+        severity,
+        component,
+        code,
+    })
+}
+
+fn record_diagnostic_event(
+    state: &DesktopState,
+    severity: DiagnosticSeverity,
+    component: DiagnosticComponent,
+    code: DiagnosticEventCode,
+) -> Result<(), DesktopError> {
+    state
+        .diagnostic_journal
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .record(diagnostic_event(severity, component, code)?);
+    Ok(())
+}
+
 fn diagnostic_report(state: &DesktopState) -> Result<DiagnosticReport, DesktopError> {
     let safety = state.safety.snapshot()?;
     let outbox = state.outbox.snapshot()?;
@@ -744,10 +798,12 @@ fn diagnostic_report(state: &DesktopState) -> Result<DiagnosticReport, DesktopEr
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?;
     backup_health.last_error.clone_from(&last_error);
-    let generated_at_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(SqlitePersistenceError::from)?
-        .as_millis()
+    let generated_at_ms = current_time_ms()?;
+    let event_count = state
+        .diagnostic_journal
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .len()
         .try_into()
         .map_err(|_| SqlitePersistenceError::InvalidBackupRequest)?;
     Ok(DiagnosticReport {
@@ -784,6 +840,7 @@ fn diagnostic_report(state: &DesktopState) -> Result<DiagnosticReport, DesktopEr
             pending_restore: backup_health.pending_restore.is_some(),
             last_backup_error: backup_health.last_error.is_some(),
         },
+        sources: DiagnosticSourcesSummary { event_count },
         privacy: PrivacySummary {
             includes_logs: false,
             includes_user_content: false,
@@ -816,8 +873,17 @@ fn export_diagnostics(
     if window.label() != CONTROL_CENTER_LABEL {
         return Err(DesktopError::WindowForbidden);
     }
+    let events = state
+        .diagnostic_journal
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .snapshot();
     Ok(export_diagnostic_bundle(
         &diagnostic_report(&state)?,
+        &events,
+        DiagnosticBundleSelection {
+            include_events: request.include_events,
+        },
         &request.destination_path,
     )?)
 }
@@ -3054,15 +3120,29 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
             loop {
                 let state = backup_app.state::<DesktopState>();
                 match state.backups.create_if_due() {
-                    Ok(_) => {
+                    Ok(created) => {
                         if let Ok(mut last_error) = state.backup_last_error.lock() {
                             *last_error = None;
+                        }
+                        if created.is_some() {
+                            let _ = record_diagnostic_event(
+                                &state,
+                                DiagnosticSeverity::Info,
+                                DiagnosticComponent::Backup,
+                                DiagnosticEventCode::ScheduledBackupCompleted,
+                            );
                         }
                     }
                     Err(error) => {
                         if let Ok(mut last_error) = state.backup_last_error.lock() {
                             *last_error = Some(error.to_string());
                         }
+                        let _ = record_diagnostic_event(
+                            &state,
+                            DiagnosticSeverity::Warning,
+                            DiagnosticComponent::Backup,
+                            DiagnosticEventCode::ScheduledBackupFailed,
+                        );
                     }
                 }
                 std::thread::sleep(Duration::from_mins(15));
@@ -3087,6 +3167,7 @@ mod tests {
         validate_model_source, validate_package_source, validate_requested_animation_map,
     };
     use nimora_asset_installer::{GltfCharacterMetadata, ModelAnimationBinding};
+    use nimora_diagnostics_bundle::{DiagnosticComponent, DiagnosticEventCode, DiagnosticSeverity};
     use nimora_persistence_sqlite::{
         BackupCoordinator, BackupPolicy, SqliteProgramPermissionRepository,
     };
@@ -3127,6 +3208,22 @@ mod tests {
         assert!(!diagnostic.privacy.includes_user_content);
         assert!(!diagnostic.privacy.includes_file_paths);
         assert!(!diagnostic.privacy.automatically_uploaded);
+        assert_eq!(diagnostic.sources.event_count, 1);
+        let events = state
+            .diagnostic_journal
+            .lock()
+            .expect("diagnostic journal")
+            .snapshot();
+        assert_eq!(events.entries.len(), 1);
+        assert_eq!(events.entries[0].severity, DiagnosticSeverity::Error);
+        assert_eq!(
+            events.entries[0].component,
+            DiagnosticComponent::Persistence
+        );
+        assert_eq!(
+            events.entries[0].code,
+            DiagnosticEventCode::RecoveryModeStarted
+        );
         assert_eq!(
             std::fs::read(&database).expect("preserved database"),
             corrupt_bytes

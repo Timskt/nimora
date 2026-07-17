@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -7,7 +8,10 @@ use zip::write::SimpleFileOptions;
 
 const REPORT_PATH: &str = "report.json";
 const MANIFEST_PATH: &str = "manifest.json";
+const EVENTS_PATH: &str = "events.json";
 const MAX_REPORT_BYTES: usize = 256 * 1024;
+const MAX_EVENTS_BYTES: usize = 256 * 1024;
+pub const MAX_DIAGNOSTIC_EVENTS: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -18,6 +22,7 @@ pub struct DiagnosticReport {
     pub system: SystemSummary,
     pub runtime: RuntimeSummary,
     pub data_protection: DataProtectionSummary,
+    pub sources: DiagnosticSourcesSummary,
     pub privacy: PrivacySummary,
 }
 
@@ -57,6 +62,12 @@ pub struct DataProtectionSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DiagnosticSourcesSummary {
+    pub event_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct PrivacySummary {
     pub includes_logs: bool,
@@ -64,6 +75,92 @@ pub struct PrivacySummary {
     pub includes_secrets: bool,
     pub includes_file_paths: bool,
     pub automatically_uploaded: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiagnosticSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiagnosticComponent {
+    Application,
+    Persistence,
+    Backup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiagnosticEventCode {
+    ApplicationStarted,
+    RecoveryModeStarted,
+    ScheduledBackupCompleted,
+    ScheduledBackupFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DiagnosticEvent {
+    pub occurred_at_ms: u64,
+    pub severity: DiagnosticSeverity,
+    pub component: DiagnosticComponent,
+    pub code: DiagnosticEventCode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DiagnosticEventLog {
+    pub spec: String,
+    pub entries: Vec<DiagnosticEvent>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiagnosticJournal {
+    entries: VecDeque<DiagnosticEvent>,
+}
+
+impl Default for DiagnosticJournal {
+    fn default() -> Self {
+        Self {
+            entries: VecDeque::with_capacity(MAX_DIAGNOSTIC_EVENTS),
+        }
+    }
+}
+
+impl DiagnosticJournal {
+    pub fn record(&mut self, event: DiagnosticEvent) {
+        if self.entries.len() == MAX_DIAGNOSTIC_EVENTS {
+            self.entries.pop_front();
+        }
+        self.entries.push_back(event);
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> DiagnosticEventLog {
+        DiagnosticEventLog {
+            spec: "nimora.diagnostic-events/1".to_owned(),
+            entries: self.entries.iter().cloned().collect(),
+        }
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DiagnosticBundleSelection {
+    pub include_events: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +192,8 @@ pub enum DiagnosticBundleError {
     InvalidDestination,
     #[error("diagnostic report exceeds the size budget")]
     ReportTooLarge,
+    #[error("diagnostic events exceed the size budget")]
+    EventsTooLarge,
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -114,6 +213,8 @@ pub enum DiagnosticBundleError {
 /// [`DiagnosticBundleError::ReportTooLarge`].
 pub fn export_diagnostic_bundle(
     report: &DiagnosticReport,
+    events: &DiagnosticEventLog,
+    selection: DiagnosticBundleSelection,
     destination: &Path,
 ) -> Result<DiagnosticBundleReceipt, DiagnosticBundleError> {
     validate_destination(destination)?;
@@ -121,17 +222,40 @@ pub fn export_diagnostic_bundle(
     if report_bytes.len() > MAX_REPORT_BYTES {
         return Err(DiagnosticBundleError::ReportTooLarge);
     }
+    let events_bytes = if selection.include_events {
+        let bytes = serde_json::to_vec_pretty(events)?;
+        if bytes.len() > MAX_EVENTS_BYTES {
+            return Err(DiagnosticBundleError::EventsTooLarge);
+        }
+        Some(bytes)
+    } else {
+        None
+    };
+    let mut files = vec![BundleFile {
+        path: REPORT_PATH.to_owned(),
+        bytes: report_bytes.len() as u64,
+        sha256: sha256_hex(&report_bytes),
+    }];
+    if let Some(bytes) = &events_bytes {
+        files.push(BundleFile {
+            path: EVENTS_PATH.to_owned(),
+            bytes: bytes.len() as u64,
+            sha256: sha256_hex(bytes),
+        });
+    }
     let manifest = BundleManifest {
         spec: "nimora.diagnostic-bundle-manifest/1".to_owned(),
-        files: vec![BundleFile {
-            path: REPORT_PATH.to_owned(),
-            bytes: report_bytes.len() as u64,
-            sha256: sha256_hex(&report_bytes),
-        }],
+        files,
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
     let partial = partial_path(destination);
-    let result = write_bundle(&partial, &report_bytes, &manifest_bytes).and_then(|()| {
+    let result = write_bundle(
+        &partial,
+        &report_bytes,
+        events_bytes.as_deref(),
+        &manifest_bytes,
+    )
+    .and_then(|()| {
         let file = File::open(&partial)?;
         file.sync_all()?;
         fs::rename(&partial, destination)?;
@@ -165,6 +289,7 @@ fn validate_destination(destination: &Path) -> Result<(), DiagnosticBundleError>
 fn write_bundle(
     destination: &Path,
     report: &[u8],
+    events: Option<&[u8]>,
     manifest: &[u8],
 ) -> Result<(), DiagnosticBundleError> {
     let file = File::create(destination)?;
@@ -174,6 +299,10 @@ fn write_bundle(
         .unix_permissions(0o600);
     archive.start_file(REPORT_PATH, options)?;
     archive.write_all(report)?;
+    if let Some(events) = events {
+        archive.start_file(EVENTS_PATH, options)?;
+        archive.write_all(events)?;
+    }
     archive.start_file(MANIFEST_PATH, options)?;
     archive.write_all(manifest)?;
     archive.finish()?.sync_all()?;
@@ -251,6 +380,7 @@ mod tests {
                 pending_restore: false,
                 last_backup_error: false,
             },
+            sources: DiagnosticSourcesSummary { event_count: 1 },
             privacy: PrivacySummary {
                 includes_logs: false,
                 includes_user_content: false,
@@ -261,6 +391,18 @@ mod tests {
         }
     }
 
+    fn events() -> DiagnosticEventLog {
+        DiagnosticEventLog {
+            spec: "nimora.diagnostic-events/1".to_owned(),
+            entries: vec![DiagnosticEvent {
+                occurred_at_ms: 1_700_000_000_001,
+                severity: DiagnosticSeverity::Warning,
+                component: DiagnosticComponent::Persistence,
+                code: DiagnosticEventCode::RecoveryModeStarted,
+            }],
+        }
+    }
+
     #[test]
     fn exports_a_verified_private_bundle_without_sensitive_fields() {
         let root =
@@ -268,16 +410,43 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("fixture");
         let destination = root.join("support.nimora-diagnostics.zip");
-        let receipt = export_diagnostic_bundle(&report(), &destination).expect("export");
+        let receipt = export_diagnostic_bundle(
+            &report(),
+            &events(),
+            DiagnosticBundleSelection {
+                include_events: true,
+            },
+            &destination,
+        )
+        .expect("export");
         assert_eq!(receipt.sha256.len(), 64);
         let file = File::open(&destination).expect("bundle");
         let mut archive = zip::ZipArchive::new(file).expect("archive");
-        assert_eq!(archive.len(), 2);
+        assert_eq!(archive.len(), 3);
         let report: DiagnosticReport =
             serde_json::from_reader(archive.by_name(REPORT_PATH).expect("report"))
                 .expect("report json");
         assert!(!report.privacy.includes_secrets);
         assert!(!report.privacy.includes_user_content);
+        let event_log: DiagnosticEventLog =
+            serde_json::from_reader(archive.by_name(EVENTS_PATH).expect("events"))
+                .expect("events json");
+        assert_eq!(event_log.entries.len(), 1);
+        let event_bytes = serde_json::to_vec_pretty(&event_log).expect("event bytes");
+        let manifest: BundleManifest =
+            serde_json::from_reader(archive.by_name(MANIFEST_PATH).expect("manifest"))
+                .expect("manifest json");
+        let event_inventory = manifest
+            .files
+            .iter()
+            .find(|file| file.path == EVENTS_PATH)
+            .expect("event inventory");
+        assert_eq!(event_inventory.bytes, event_bytes.len() as u64);
+        assert_eq!(event_inventory.sha256, sha256_hex(&event_bytes));
+        let serialized = String::from_utf8(event_bytes).expect("utf8 event log");
+        for forbidden in ["message", "path", "secret", "content", "username"] {
+            assert!(!serialized.to_lowercase().contains(forbidden));
+        }
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -292,11 +461,63 @@ mod tests {
         let existing = root.join("existing.nimora-diagnostics.zip");
         fs::write(&existing, b"keep").expect("existing");
         assert!(matches!(
-            export_diagnostic_bundle(&report(), &existing),
+            export_diagnostic_bundle(
+                &report(),
+                &events(),
+                DiagnosticBundleSelection::default(),
+                &existing
+            ),
             Err(DiagnosticBundleError::InvalidDestination)
         ));
         assert_eq!(fs::read(&existing).expect("preserved"), b"keep");
-        assert!(export_diagnostic_bundle(&report(), &root.join("support.zip")).is_err());
+        assert!(
+            export_diagnostic_bundle(
+                &report(),
+                &events(),
+                DiagnosticBundleSelection::default(),
+                &root.join("support.zip")
+            )
+            .is_err()
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn journal_is_bounded_and_discards_oldest_entries() {
+        let mut journal = DiagnosticJournal::default();
+        for occurred_at_ms in 0..=MAX_DIAGNOSTIC_EVENTS as u64 {
+            journal.record(DiagnosticEvent {
+                occurred_at_ms,
+                severity: DiagnosticSeverity::Info,
+                component: DiagnosticComponent::Application,
+                code: DiagnosticEventCode::ApplicationStarted,
+            });
+        }
+        let snapshot = journal.snapshot();
+        assert_eq!(snapshot.entries.len(), MAX_DIAGNOSTIC_EVENTS);
+        assert_eq!(snapshot.entries[0].occurred_at_ms, 1);
+    }
+
+    #[test]
+    fn excludes_optional_events_when_user_cancels_them() {
+        let root = std::env::temp_dir().join(format!(
+            "nimora-diagnostic-selection-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("fixture");
+        let destination = root.join("summary.nimora-diagnostics.zip");
+        export_diagnostic_bundle(
+            &report(),
+            &events(),
+            DiagnosticBundleSelection::default(),
+            &destination,
+        )
+        .expect("export");
+        let file = File::open(&destination).expect("bundle");
+        let mut archive = zip::ZipArchive::new(file).expect("archive");
+        assert_eq!(archive.len(), 2);
+        assert!(archive.by_name(EVENTS_PATH).is_err());
         fs::remove_dir_all(root).expect("cleanup");
     }
 }

@@ -20,6 +20,7 @@ export function backupActionDisabled(recoveryMode: boolean, busy: boolean): bool
 export function DataProtection({ recoveryMode, onNotice }: DataProtectionProps) {
   const [health, setHealth] = useState<BackupHealth | null>(null);
   const [diagnostic, setDiagnostic] = useState<DiagnosticReport | null>(null);
+  const [includeEvents, setIncludeEvents] = useState(true);
   const [busy, setBusy] = useState(false);
 
   async function refresh() {
@@ -44,7 +45,7 @@ export function DataProtection({ recoveryMode, onNotice }: DataProtectionProps) 
     if (typeof destinationPath !== "string") return;
     setBusy(true);
     try {
-      const receipt = await desktopApi.exportDiagnostics(destinationPath);
+      const receipt = await desktopApi.exportDiagnostics(destinationPath, includeEvents);
       onNotice(receipt ? `脱敏诊断包已保存 · ${formatBackupBytes(receipt.bytes)}` : "诊断包未写入");
     } catch {
       onNotice("诊断包导出失败，目标文件未被覆盖");
@@ -116,8 +117,12 @@ export function DataProtection({ recoveryMode, onNotice }: DataProtectionProps) 
       <div>
         <p className="card-label">支持与诊断</p>
         <h3 id="diagnostic-heading">导出前内容预览</h3>
-        <p>仅包含应用/系统版本、运行模式、Schema、备份和 Outbox 计数。</p>
+        <p>摘要始终包含版本、运行模式和健康计数；结构化事件可由你取消。</p>
       </div>
+      <label className="diagnostic-source-option">
+        <input type="checkbox" checked={includeEvents} disabled={!diagnostic?.sources.eventCount} onChange={(event) => setIncludeEvents(event.target.checked)} />
+        <span><strong>本次运行的结构化事件</strong><small>{diagnostic?.sources.eventCount ?? 0} 条 · 仅固定事件码和时间，不含文本</small></span>
+      </label>
       <ul className="privacy-list" aria-label="诊断包隐私边界">
         <li>不含密钥</li><li>不含用户正文</li><li>不含文件路径</li><li>不会自动上传</li>
       </ul>
