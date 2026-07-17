@@ -1,5 +1,6 @@
 use nimora_agent_provider_worker::{
     OllamaEndpoint, ProviderWorkerRequest, ProviderWorkerResponse, WorkerOllamaProvider, execute,
+    probe_ollama_worker,
 };
 use nimora_agent_runtime::{
     CancellationFlag, DataClassification, ProviderExecutionContext, ProviderFinishReason,
@@ -32,6 +33,39 @@ fn request(tools: Vec<ToolDescriptor>) -> ProviderRequest {
         128,
     )
     .expect("request")
+}
+
+fn mock_ollama_tags(response: serde_json::Value) -> (OllamaEndpoint, thread::JoinHandle<Vec<u8>>) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind mock Ollama");
+    let endpoint = OllamaEndpoint::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        listener.local_addr().expect("address").port(),
+    )
+    .expect("endpoint");
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut request_bytes = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let read = stream.read(&mut buffer).expect("read request");
+            assert_ne!(read, 0);
+            request_bytes.extend_from_slice(&buffer[..read]);
+            if request_bytes.windows(4).any(|part| part == b"\r\n\r\n") {
+                break;
+            }
+        }
+        assert!(request_bytes.starts_with(b"GET /api/tags HTTP/1.1\r\n"));
+        let response_body = serde_json::to_vec(&response).expect("response JSON");
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            response_body.len()
+        )
+        .expect("write headers");
+        stream.write_all(&response_body).expect("write body");
+        request_bytes
+    });
+    (endpoint, handle)
 }
 
 fn mock_ollama(response: serde_json::Value) -> (OllamaEndpoint, thread::JoinHandle<Vec<u8>>) {
@@ -287,4 +321,37 @@ fn registry_completes_through_the_real_worker_process() {
     assert_eq!(response.content, "sidecar verified");
     assert_eq!(response.request_id, provider_request.request_id);
     server.join().expect("mock server");
+}
+
+#[test]
+fn probes_sorted_deduplicated_models_through_real_worker_process() {
+    let (endpoint, server) = mock_ollama_tags(json!({
+        "models": [
+            {"name": "zeta:latest", "size": 20, "modified_at": "2026-07-18T00:00:00Z"},
+            {"name": "alpha:latest", "size": 10},
+            {"name": "alpha:latest", "size": 11}
+        ]
+    }));
+    let probe = probe_ollama_worker(
+        std::path::Path::new(env!("CARGO_BIN_EXE_nimora-agent-provider-worker")),
+        endpoint,
+        Duration::from_secs(2),
+    )
+    .expect("worker probe");
+    assert_eq!(probe.models.len(), 2);
+    assert_eq!(probe.models[0].name, "alpha:latest");
+    assert_eq!(probe.models[1].name, "zeta:latest");
+    server.join().expect("mock server");
+}
+
+#[test]
+fn probe_rejects_non_loopback_target() {
+    let response = execute(ProviderWorkerRequest::Probe {
+        endpoint: OllamaEndpoint {
+            address: "192.0.2.1".parse().expect("address"),
+            port: 11_434,
+        },
+        timeout_ms: 100,
+    });
+    assert!(matches!(response, ProviderWorkerResponse::Error { .. }));
 }

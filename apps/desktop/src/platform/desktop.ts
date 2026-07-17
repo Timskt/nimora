@@ -48,6 +48,16 @@ export interface AgentCatalog {
   tools: AgentToolDescriptor[];
 }
 
+export interface AgentProviderStatus {
+  spec: "nimora.desktop-agent-provider-status/1";
+  providerId: string;
+  state: "ready" | "unavailable";
+  workerVerified: boolean;
+  serviceReachable: boolean;
+  models: Array<{ name: string; size: number; modifiedAt: string | null }>;
+  message: string;
+}
+
 export interface LocalAgentResult {
   spec: "nimora.desktop-agent-result/1";
   status: "completed" | "waitingForConfirmation";
@@ -348,6 +358,7 @@ export interface DesktopApi {
   drainEvents(): Promise<NimoraEvent[]>;
   outboxSnapshot(): Promise<OutboxSnapshot>;
   agentCatalog(): Promise<AgentCatalog>;
+  agentProviderStatus(providerId: string): Promise<AgentProviderStatus>;
   runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
   prepareAgentTool(toolId: string, argumentsValue: Record<string, unknown>): Promise<AgentToolResult>;
   confirmAgentTool(invocationId: string): Promise<AgentToolResult>;
@@ -469,6 +480,18 @@ export function createDesktopApi(
           ],
         } as AgentCatalog;
       },
+      async agentProviderStatus(providerId) {
+        const scripted = providerId === "provider:preview-scripted";
+        return {
+          spec: "nimora.desktop-agent-provider-status/1",
+          providerId,
+          state: "ready",
+          workerVerified: true,
+          serviceReachable: true,
+          models: [{ name: scripted ? "qwen3:8b" : "model:echo-v1", size: 0, modifiedAt: null }],
+          message: scripted ? "预览脚本 Provider 可用" : "内置离线 Provider 可用",
+        };
+      },
       async runLocalAgent(prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") {
         if (prompt.includes("移动") || prompt.includes("工具确认")) {
           previewAgentTask = { id: crypto.randomUUID(), status: "waiting_for_confirmation", providerId: "provider:preview-scripted" };
@@ -582,6 +605,7 @@ export function createDesktopApi(
     drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],
     outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,
     agentCatalog: async () => await invokeCommand("agent_catalog") as AgentCatalog,
+    agentProviderStatus: async (providerId) => await invokeCommand("agent_provider_status", { request: { providerId } }) as AgentProviderStatus,
     runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") => await invokeCommand("run_local_agent", { request: { prompt, providerId, model } }) as LocalAgentResult,
     prepareAgentTool: async (toolId, argumentsValue) => await invokeCommand("prepare_agent_tool", { request: { toolId, arguments: argumentsValue } }) as AgentToolResult,
     confirmAgentTool: async (invocationId) => await invokeCommand("confirm_agent_tool", { request: { invocationId } }) as AgentToolResult,

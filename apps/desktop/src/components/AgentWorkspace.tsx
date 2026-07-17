@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { desktopApi, type AgentCatalog, type AgentToolResult, type LocalAgentResult } from "../platform/desktop";
+import { desktopApi, type AgentCatalog, type AgentProviderStatus, type AgentToolResult, type LocalAgentResult } from "../platform/desktop";
 
 interface AgentWorkspaceProps {
   safeMode: boolean;
@@ -23,12 +23,20 @@ export function defaultModelForProvider(providerId: string): string {
   return providerId === "provider:ollama-loopback" ? "qwen3:8b" : "model:echo-v1";
 }
 
+export function providerStatusLabel(status: AgentProviderStatus | null): string {
+  if (!status) return "检测中";
+  if (!status.serviceReachable) return "服务离线";
+  if (status.models.length === 0) return "无模型";
+  return status.providerId === "provider:deterministic-local" ? "可用" : "服务在线";
+}
+
 export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorkspaceProps) {
   const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
   const [prompt, setPrompt] = useState("总结一下当前可用的本地能力");
   const [providerId, setProviderId] = useState("provider:deterministic-local");
   const [model, setModel] = useState("model:echo-v1");
   const [result, setResult] = useState<LocalAgentResult | null>(null);
+  const [providerStatus, setProviderStatus] = useState<AgentProviderStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [toolBusy, setToolBusy] = useState(false);
   const [toolResult, setToolResult] = useState<AgentToolResult | null>(null);
@@ -39,6 +47,21 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
   useEffect(() => {
     void desktopApi.agentCatalog().then(setCatalog).catch(() => onNotice("Agent 工具目录暂时不可用"));
   }, [onNotice]);
+
+  useEffect(() => {
+    let current = true;
+    setProviderStatus(null);
+    void desktopApi.agentProviderStatus(providerId).then((status) => {
+      if (current) {
+        setProviderStatus(status);
+        const firstModel = status.models[0];
+        if (firstModel && !status.models.some((item) => item.name === model)) {
+          setModel(firstModel.name);
+        }
+      }
+    }).catch(() => current && setProviderStatus({ spec: "nimora.desktop-agent-provider-status/1", providerId, state: "unavailable", workerVerified: false, serviceReachable: false, models: [], message: "Provider 状态不可用" }));
+    return () => { current = false; };
+  }, [providerId]);
 
   async function run() {
     if (!prompt.trim() || busy) return;
@@ -143,16 +166,16 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
       <form className="agent-composer" onSubmit={(event) => { event.preventDefault(); void run(); }}>
         <div className="agent-runtime-controls">
           <label><span>Provider</span><select aria-label="Agent Provider" disabled={busy} value={providerId} onChange={(event) => { const nextProviderId = event.target.value; setProviderId(nextProviderId); setModel(defaultModelForProvider(nextProviderId)); }}>{catalog?.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
-          <label><span>模型</span><input aria-label="Agent 模型" disabled={busy} maxLength={128} value={model} onChange={(event) => setModel(event.target.value)} /></label>
+          <label><span>模型</span><input aria-label="Agent 模型" disabled={busy} list="agent-provider-models" maxLength={128} value={model} onChange={(event) => setModel(event.target.value)} /><datalist id="agent-provider-models">{providerStatus?.models.map((item) => <option key={item.name} value={item.name} />)}</datalist></label>
         </div>
         <textarea value={prompt} maxLength={32768} onChange={(event) => setPrompt(event.target.value)} aria-label="Agent 任务内容" />
-        <div><span>不会自动执行写操作</span><button className="primary-button" disabled={busy || !prompt.trim() || !model.trim()} type="submit">{busy ? "运行中…" : "运行任务"}</button></div>
+        <div><span>{providerStatus?.message ?? "正在检查 Provider"}</span><button className="primary-button" disabled={busy || !prompt.trim() || !model.trim() || providerStatus?.state !== "ready" || !providerStatus.models.some((item) => item.name === model)} type="submit">{busy ? "运行中…" : "运行任务"}</button></div>
       </form>
     </div>
 
     <aside className="agent-inspector" aria-label="Agent 运行检查器">
       <div className="inspector-title"><div><p className="card-label">运行检查器</p><h3>能力与边界</h3></div><span>{catalog?.tools.length ?? 0} tools</span></div>
-      <div className="provider-tile"><span className="provider-glyph">⌁</span><div><strong>{activeProvider?.name ?? activeProviderId}</strong><p>{activeProvider?.locality === "network" ? "网络 Provider · 受数据策略约束" : "本地 Provider · 可离线运行"}</p></div><i>已连接</i></div>
+      <div className="provider-tile"><span className="provider-glyph">⌁</span><div><strong>{activeProvider?.name ?? activeProviderId}</strong><p>{activeProvider?.locality === "network" ? "网络 Provider · 受数据策略约束" : "本地 Provider · 可离线运行"}</p></div><i>{providerStatusLabel(providerStatus)}</i></div>
       <div className="boundary-note"><strong>{safeMode ? "安全模式已启用" : recoveryMode ? "恢复模式已启用" : "确认策略正常"}</strong><p>写操作与外部副作用始终要求绑定实际参数的批准。</p></div>
       <div className="tool-catalog"><p className="card-label">模块工具</p>{catalog?.tools.map((tool) => <article key={tool.id}><span>{tool.effect === "read_only" ? "R" : "W"}</span><div><strong>{tool.title}</strong><code>{tool.id}</code></div><button className={tool.effect === "read_only" ? "read-only" : "approval"} disabled={toolBusy || safeMode || recoveryMode} onClick={() => void prepareTool(tool.id)} type="button">{agentToolAccessLabel(tool.effect)}</button></article>)}</div>
       {toolResult?.requiresConfirmation && <section className="tool-confirmation" aria-labelledby="tool-confirmation-heading">

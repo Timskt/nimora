@@ -246,6 +246,9 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-040 | 桌面确认组续跑 UI | 等待态展示全部实际参数；部分批准仅保留剩余项；最后批准回填同一 Provider 的最终回答；拒绝不展示部分 Tool Result | P0 |
 | AGT-041 | 桌面 Ollama Worker 发现 | 构建嵌入可信 Manifest 摘要；运行时 Manifest 或 Worker 缺失、换包、篡改、符号链接或越界均不注册 Provider；验证通过才加入 Catalog | P0 |
 | AGT-042 | 桌面 Provider 与模型选择 | UI 只列 Registry Provider；任务携带显式 Provider ID 与模型；未知 Provider、空值和超过 128 bytes 的模型在 Adapter 前拒绝 | P0 |
+| AGT-043 | Ollama 健康与模型目录 | `/api/tags` 只能经受验证 Worker 访问 loopback；模型去重排序，非 200、chunked、长度错配、超预算和畸形字段 fail-closed | P0 |
+| AGT-044 | Provider 状态语义 | Worker 验证、服务可达和模型可用分别展示；服务离线或模型未安装时禁用运行，切换 Provider 清除旧状态 | P0 |
+| AGT-045 | 安全模式探测边界 | Safe/Recovery Mode 不启动 Provider Worker；状态返回稳定不可用且不泄漏路径、摘要或原始网络错误 | P0 |
 
 ## 14. 信任中心与安全模式
 

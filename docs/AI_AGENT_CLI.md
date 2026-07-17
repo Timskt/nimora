@@ -144,4 +144,6 @@ nimora ai history export|delete
 
 桌面 IPC 统一返回 `completed` 或 `waitingForConfirmation`，等待态不是错误。工作台会展示同一 Turn 的全部 Tool ID、实际参数、风险和过期时间；部分批准只返回剩余项，最后一项批准后回填 Provider 最终回答，任一拒绝显示整组取消。Approval 仍只存在于 Rust 宿主。浏览器预览使用独立的确定性 Scripted Provider 验证双工具 UI，它不是生产 Provider，也不进入 Tauri 注册表。
 
-生产桌面构建会嵌入 `ollama-provider.json` 的 SHA-256 信任摘要。启动时宿主仅从受控资源候选目录发现 sidecar，并复用 CLI 的 Manifest 路径、Manifest 摘要、普通文件、大小和 Worker 摘要校验；全部通过后才把 `provider:ollama-loopback` 注册到同一 `ProviderRegistry`。工作台只展示 Registry 中真实可用的 Provider，任务显式携带 Provider ID 与可编辑模型名，未知 Provider、空模型和越界模型名在调用前拒绝。Worker 可发现只证明发布物完整，不代表本机 Ollama 服务在线或对应模型已安装；健康探测和模型目录仍需独立实现。禁止在 React、Tauri Command 或 Provider Adapter 中新增直连模块的捷径。生产 Ollama Tool Call 的桌面实测、历史持久化和任务恢复尚未实现。
+生产桌面构建会嵌入 `ollama-provider.json` 的 SHA-256 信任摘要。启动时宿主仅从受控资源候选目录发现 sidecar，并复用 CLI 的 Manifest 路径、Manifest 摘要、普通文件、大小和 Worker 摘要校验；全部通过后才把 `provider:ollama-loopback` 注册到同一 `ProviderRegistry`。工作台只展示 Registry 中真实可用的 Provider，任务显式携带 Provider ID 与模型名，未知 Provider、空模型和越界模型名在调用前拒绝。
+
+桌面健康检查通过同一受验证 Worker 请求 loopback-only `/api/tags`，Tauri Core 与 React 均不直接联网。协议限制 2 秒桌面超时、16 KiB Header、1 MiB Body、256 个模型和 128 bytes 模型名，拒绝 chunked、长度错配、非 200、畸形字段与远程地址；结果去重并稳定排序。UI 分别表达 Worker 完整性、服务可达性和模型可用性，模型目录用于 `datalist` 建议与运行前 fail-closed 校验。Safe/Recovery Mode 禁止启动 Worker 探测。生产 Ollama Tool Call 的桌面实测、历史持久化和任务恢复尚未实现。

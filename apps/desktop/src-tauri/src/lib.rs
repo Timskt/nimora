@@ -1,4 +1,6 @@
-use nimora_agent_provider_worker::{OllamaEndpoint, WorkerOllamaProvider, verify_provider_sidecar};
+use nimora_agent_provider_worker::{
+    OllamaEndpoint, OllamaModel, WorkerOllamaProvider, probe_ollama_worker, verify_provider_sidecar,
+};
 use nimora_agent_runtime::{
     AgentBudget, AgentCoordinator, AgentTask, AgentTaskOrigin, AgentTaskStatus, BaseRiskEvaluator,
     CancellationFlag, DataClassification, DeterministicLocalProvider, PlannedToolCall,
@@ -751,6 +753,24 @@ struct AgentCatalog {
     tools: Vec<nimora_agent_runtime::ToolDescriptor>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgentProviderStatusRequest {
+    provider_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentProviderStatus {
+    spec: &'static str,
+    provider_id: String,
+    state: &'static str,
+    worker_verified: bool,
+    service_reachable: bool,
+    models: Vec<OllamaModel>,
+    message: &'static str,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopAgentRunResult {
@@ -836,6 +856,80 @@ fn agent_catalog_inner(state: &DesktopState) -> Result<AgentCatalog, DesktopErro
         providers: providers.descriptors().into_iter().cloned().collect(),
         tools: tools.descriptors().into_iter().cloned().collect(),
     })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn agent_provider_status(
+    request: AgentProviderStatusRequest,
+    state: State<'_, DesktopState>,
+) -> Result<AgentProviderStatus, DesktopError> {
+    agent_provider_status_inner(request, &state)
+}
+
+fn agent_provider_status_inner(
+    request: AgentProviderStatusRequest,
+    state: &DesktopState,
+) -> Result<AgentProviderStatus, DesktopError> {
+    if request.provider_id == DETERMINISTIC_PROVIDER_ID {
+        return Ok(AgentProviderStatus {
+            spec: "nimora.desktop-agent-provider-status/1",
+            provider_id: request.provider_id,
+            state: "ready",
+            worker_verified: true,
+            service_reachable: true,
+            models: vec![OllamaModel {
+                name: DEFAULT_AGENT_MODEL.to_owned(),
+                size: 0,
+                modified_at: None,
+            }],
+            message: "内置离线 Provider 可用",
+        });
+    }
+    if request.provider_id != "provider:ollama-loopback" {
+        return Err(DesktopError::Agent("Provider is not registered".to_owned()));
+    }
+    let Some(executable) = &state.ollama_worker else {
+        return Err(DesktopError::Agent("Provider is not registered".to_owned()));
+    };
+    if state.startup.mode == StartupMode::Recovery
+        || state.safety.snapshot()?.mode == RuntimeMode::Safe
+    {
+        return Ok(AgentProviderStatus {
+            spec: "nimora.desktop-agent-provider-status/1",
+            provider_id: request.provider_id,
+            state: "unavailable",
+            worker_verified: true,
+            service_reachable: false,
+            models: Vec::new(),
+            message: "当前安全模式禁止启动 Provider Worker",
+        });
+    }
+    let endpoint = OllamaEndpoint::default_ipv4();
+    match probe_ollama_worker(executable, endpoint, Duration::from_secs(2)) {
+        Ok(probe) => Ok(AgentProviderStatus {
+            spec: "nimora.desktop-agent-provider-status/1",
+            provider_id: request.provider_id,
+            state: if probe.models.is_empty() {
+                "unavailable"
+            } else {
+                "ready"
+            },
+            worker_verified: true,
+            service_reachable: true,
+            models: probe.models,
+            message: "Ollama 服务已响应",
+        }),
+        Err(_) => Ok(AgentProviderStatus {
+            spec: "nimora.desktop-agent-provider-status/1",
+            provider_id: request.provider_id,
+            state: "unavailable",
+            worker_verified: true,
+            service_reachable: false,
+            models: Vec::new(),
+            message: "Ollama 服务不可用",
+        }),
+    }
 }
 
 #[tauri::command]
@@ -3928,6 +4022,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_snapshot,
             agent_catalog,
+            agent_provider_status,
             run_local_agent,
             prepare_agent_tool,
             confirm_agent_tool,

@@ -1,4 +1,4 @@
-use crate::{OllamaEndpoint, ProviderWorkerRequest, ProviderWorkerResponse};
+use crate::{OllamaEndpoint, OllamaProbe, ProviderWorkerRequest, ProviderWorkerResponse};
 use nimora_agent_runtime::{
     ProviderAdapter, ProviderCapabilities, ProviderCapability, ProviderDescriptor, ProviderError,
     ProviderErrorKind, ProviderExecutionContext, ProviderLocality, ProviderRequest,
@@ -85,7 +85,48 @@ impl ProviderAdapter for WorkerOllamaProvider {
             )
         })?;
         let (mut child, reader) = spawn_worker(&self.executable, &payload)?;
-        supervise_worker(&mut child, reader, context)
+        match supervise_worker(&mut child, reader, context.timeout, || {
+            context.cancellation.is_cancelled()
+        })? {
+            ProviderWorkerResponse::Completed { response } => Ok(response),
+            ProviderWorkerResponse::Error { error } => Err(error),
+            ProviderWorkerResponse::Probed { .. } => Err(stable_error(
+                ProviderErrorKind::MalformedResponse,
+                "provider worker returned an unexpected response",
+            )),
+        }
+    }
+}
+
+/// Probes the local Ollama service through the isolated Provider Worker.
+///
+/// # Errors
+///
+/// Returns a stable Provider error when the Worker or loopback service fails.
+pub fn probe_ollama_worker(
+    executable: &std::path::Path,
+    endpoint: OllamaEndpoint,
+    timeout: Duration,
+) -> Result<OllamaProbe, ProviderError> {
+    let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+    let payload = serde_json::to_vec(&ProviderWorkerRequest::Probe {
+        endpoint,
+        timeout_ms,
+    })
+    .map_err(|_| {
+        stable_error(
+            ProviderErrorKind::InvalidRequest,
+            "provider worker request serialization failed",
+        )
+    })?;
+    let (mut child, reader) = spawn_worker(executable, &payload)?;
+    match supervise_worker(&mut child, reader, timeout, || false)? {
+        ProviderWorkerResponse::Probed { probe } => Ok(probe),
+        ProviderWorkerResponse::Error { error } => Err(error),
+        ProviderWorkerResponse::Completed { .. } => Err(stable_error(
+            ProviderErrorKind::MalformedResponse,
+            "provider worker returned an unexpected response",
+        )),
     }
 }
 
@@ -163,18 +204,19 @@ fn spawn_worker(
 fn supervise_worker(
     child: &mut Child,
     reader: OutputReader,
-    context: &ProviderExecutionContext,
-) -> Result<ProviderResponse, ProviderError> {
+    timeout: Duration,
+    is_cancelled: impl Fn() -> bool,
+) -> Result<ProviderWorkerResponse, ProviderError> {
     let started = Instant::now();
     loop {
-        if context.cancellation.is_cancelled() {
+        if is_cancelled() {
             terminate(child);
             return Err(stable_error(
                 ProviderErrorKind::Cancelled,
                 "provider request was cancelled",
             ));
         }
-        if started.elapsed() >= context.timeout {
+        if started.elapsed() >= timeout {
             terminate(child);
             return Err(stable_error(
                 ProviderErrorKind::Timeout,
@@ -201,7 +243,7 @@ fn supervise_worker(
     }
 }
 
-fn decode_worker_output(reader: OutputReader) -> Result<ProviderResponse, ProviderError> {
+fn decode_worker_output(reader: OutputReader) -> Result<ProviderWorkerResponse, ProviderError> {
     let output = reader.join().map_err(|_| {
         stable_error(
             ProviderErrorKind::MalformedResponse,
@@ -214,14 +256,12 @@ fn decode_worker_output(reader: OutputReader) -> Result<ProviderResponse, Provid
             "provider worker output exceeded limits",
         ));
     }
-    match serde_json::from_slice(&output) {
-        Ok(ProviderWorkerResponse::Completed { response }) => Ok(response),
-        Ok(ProviderWorkerResponse::Error { error }) => Err(error),
-        Err(_) => Err(stable_error(
+    serde_json::from_slice(&output).map_err(|_| {
+        stable_error(
             ProviderErrorKind::MalformedResponse,
             "provider worker response is malformed",
-        )),
-    }
+        )
+    })
 }
 
 fn terminate(child: &mut Child) {

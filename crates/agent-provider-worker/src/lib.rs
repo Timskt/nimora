@@ -14,7 +14,7 @@ use std::{
 mod host;
 mod sidecar;
 
-pub use host::WorkerOllamaProvider;
+pub use host::{WorkerOllamaProvider, probe_ollama_worker};
 pub use sidecar::{
     ProviderSidecarManifest, SidecarVerificationError, VerifiedProviderSidecar,
     verify_provider_sidecar,
@@ -23,6 +23,8 @@ pub use sidecar::{
 const MAX_PROTOCOL_BYTES: usize = 1024 * 1024;
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
+const MAX_OLLAMA_MODELS: usize = 256;
+const MAX_OLLAMA_MODEL_NAME_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
@@ -32,13 +34,32 @@ pub enum ProviderWorkerRequest {
         endpoint: OllamaEndpoint,
         timeout_ms: u64,
     },
+    Probe {
+        endpoint: OllamaEndpoint,
+        timeout_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum ProviderWorkerResponse {
     Completed { response: ProviderResponse },
+    Probed { probe: OllamaProbe },
     Error { error: ProviderError },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OllamaProbe {
+    pub models: Vec<OllamaModel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OllamaModel {
+    pub name: String,
+    pub size: u64,
+    pub modified_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +114,13 @@ pub fn execute(request: ProviderWorkerRequest) -> ProviderWorkerResponse {
             Ok(response) => ProviderWorkerResponse::Completed { response },
             Err(error) => ProviderWorkerResponse::Error { error },
         },
+        ProviderWorkerRequest::Probe {
+            endpoint,
+            timeout_ms,
+        } => match probe_ollama(endpoint, timeout_ms) {
+            Ok(probe) => ProviderWorkerResponse::Probed { probe },
+            Err(error) => ProviderWorkerResponse::Error { error },
+        },
     }
 }
 
@@ -127,6 +155,50 @@ fn complete_ollama(
     endpoint: OllamaEndpoint,
     timeout_ms: u64,
 ) -> Result<ProviderResponse, ProviderError> {
+    validate_execution_policy(endpoint, timeout_ms)?;
+    let payload = ollama_payload(request);
+    let body = serde_json::to_vec(&payload).map_err(|_| {
+        stable_error(
+            ProviderErrorKind::InvalidRequest,
+            "provider payload is invalid",
+        )
+    })?;
+    let timeout = Duration::from_millis(timeout_ms);
+    let mut stream = connect_ollama(endpoint, timeout)?;
+    let headers = format!(
+        "POST /api/chat HTTP/1.1\r\nHost: localhost:{}\r\nContent-Type: application/json\r\nAccept: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        endpoint.port,
+        body.len()
+    );
+    stream
+        .write_all(headers.as_bytes())
+        .and_then(|()| stream.write_all(&body))
+        .and_then(|()| stream.flush())
+        .map_err(|_| stable_error(ProviderErrorKind::Unavailable, "provider request failed"))?;
+    let response_body = read_http_response(&mut stream)?;
+    parse_ollama_response(request, &response_body)
+}
+
+fn probe_ollama(endpoint: OllamaEndpoint, timeout_ms: u64) -> Result<OllamaProbe, ProviderError> {
+    validate_execution_policy(endpoint, timeout_ms)?;
+    let timeout = Duration::from_millis(timeout_ms);
+    let mut stream = connect_ollama(endpoint, timeout)?;
+    let request = format!(
+        "GET /api/tags HTTP/1.1\r\nHost: localhost:{}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+        endpoint.port
+    );
+    stream
+        .write_all(request.as_bytes())
+        .and_then(|()| stream.flush())
+        .map_err(|_| stable_error(ProviderErrorKind::Unavailable, "provider request failed"))?;
+    let body = read_http_response(&mut stream)?;
+    parse_ollama_probe(&body)
+}
+
+fn validate_execution_policy(
+    endpoint: OllamaEndpoint,
+    timeout_ms: u64,
+) -> Result<(), ProviderError> {
     if !endpoint.address.is_loopback()
         || endpoint.port == 0
         || timeout_ms == 0
@@ -137,15 +209,11 @@ fn complete_ollama(
             "worker execution policy rejected request",
         ));
     }
-    let payload = ollama_payload(request);
-    let body = serde_json::to_vec(&payload).map_err(|_| {
-        stable_error(
-            ProviderErrorKind::InvalidRequest,
-            "provider payload is invalid",
-        )
-    })?;
-    let timeout = Duration::from_millis(timeout_ms);
-    let mut stream =
+    Ok(())
+}
+
+fn connect_ollama(endpoint: OllamaEndpoint, timeout: Duration) -> Result<TcpStream, ProviderError> {
+    let stream =
         TcpStream::connect_timeout(&SocketAddr::new(endpoint.address, endpoint.port), timeout)
             .map_err(|_| {
                 stable_error(
@@ -165,18 +233,56 @@ fn complete_ollama(
             "provider timeout setup failed",
         )
     })?;
-    let headers = format!(
-        "POST /api/chat HTTP/1.1\r\nHost: localhost:{}\r\nContent-Type: application/json\r\nAccept: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
-        endpoint.port,
-        body.len()
-    );
-    stream
-        .write_all(headers.as_bytes())
-        .and_then(|()| stream.write_all(&body))
-        .and_then(|()| stream.flush())
-        .map_err(|_| stable_error(ProviderErrorKind::Unavailable, "provider request failed"))?;
-    let response_body = read_http_response(&mut stream)?;
-    parse_ollama_response(request, &response_body)
+    Ok(stream)
+}
+
+fn parse_ollama_probe(body: &[u8]) -> Result<OllamaProbe, ProviderError> {
+    let document: OllamaTagsResponse = serde_json::from_slice(body).map_err(|_| {
+        stable_error(
+            ProviderErrorKind::MalformedResponse,
+            "provider model catalog is malformed",
+        )
+    })?;
+    if document.models.len() > MAX_OLLAMA_MODELS {
+        return Err(stable_error(
+            ProviderErrorKind::MalformedResponse,
+            "provider model catalog exceeded limits",
+        ));
+    }
+    let mut models = document
+        .models
+        .into_iter()
+        .map(|model| {
+            if model.name.is_empty() || model.name.len() > MAX_OLLAMA_MODEL_NAME_BYTES {
+                return Err(stable_error(
+                    ProviderErrorKind::MalformedResponse,
+                    "provider model name is invalid",
+                ));
+            }
+            Ok(OllamaModel {
+                name: model.name,
+                size: model.size,
+                modified_at: model.modified_at,
+            })
+        })
+        .collect::<Result<Vec<_>, ProviderError>>()?;
+    models.sort_by(|left, right| left.name.cmp(&right.name));
+    models.dedup_by(|left, right| left.name == right.name);
+    Ok(OllamaProbe { models })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OllamaTagsResponse {
+    models: Vec<OllamaTagModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaTagModel {
+    name: String,
+    size: u64,
+    #[serde(default)]
+    modified_at: Option<String>,
 }
 
 fn ollama_payload(request: &ProviderRequest) -> Value {
