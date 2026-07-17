@@ -6,6 +6,21 @@ use std::{collections::BTreeMap, fmt, str::FromStr, time::Duration};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod coordinator;
+mod provider;
+
+pub use coordinator::{
+    AgentCoordinator, CoordinatorError, PlannedToolCall, ProviderStepInput, ProviderStepOutcome,
+    ToolStepOutcome,
+};
+pub use provider::{
+    CancellationFlag, ProviderAdapter, ProviderCapabilities, ProviderCapability,
+    ProviderDataPreview, ProviderDescriptor, ProviderError, ProviderErrorKind,
+    ProviderExecutionContext, ProviderFinishReason, ProviderLocality, ProviderMessage,
+    ProviderMessageRole, ProviderRegistry, ProviderRequest, ProviderResponse, ProviderToolCall,
+    ProviderUsage,
+};
+
 const MAX_TOOLS: usize = 512;
 const MAX_TOOL_ID_BYTES: usize = 128;
 const MAX_SCHEMA_BYTES: usize = 64 * 1024;
@@ -304,7 +319,7 @@ impl fmt::Display for ToolId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DataClassification {
     Public,

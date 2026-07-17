@@ -219,6 +219,11 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-013 | 批准参数绑定 | Tool ID、参数、风险、任务或 Trace 变化后旧批准立即失效 | P0 |
 | AGT-014 | 其它模块创建任务 | Automation、Skill 和宿主模块只能用获准 Provider、Tool allowlist、数据分类和预算创建任务 | P0 |
 | AGT-015 | CLI 非交互确认 | 需确认操作返回结构化错误且不执行；`--yes` 不能覆盖写入、外部副作用或 Medium 以上风险 | P0 |
+| AGT-016 | Provider 离线边界 | `--offline` 在 Adapter 调用前拒绝网络 Provider，本地 Provider 可继续运行 | P0 |
+| AGT-017 | Provider 畸形 Tool Call | 未注册 Tool、非对象参数、错配 Request ID 和 Finish Reason 不一致均 fail-closed | P0 |
+| AGT-018 | AI 调用模块 | Provider Tool Call 只生成待门禁 Invocation；未确认写操作不扣工具执行预算且不进入 Backend | P0 |
+| AGT-019 | 跨任务调用隔离 | Task ID 或 Trace ID 不匹配的 Invocation 在 Capability Gateway 前拒绝 | P0 |
+| AGT-020 | 单步协调恢复 | Provider 与 Tool 每次仅推进一个确定性步骤，暂停或崩溃后不会隐式重放副作用 | P0 |
 
 ## 14. 信任中心与安全模式
 

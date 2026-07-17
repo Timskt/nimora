@@ -56,6 +56,8 @@ flowchart LR
 - Registry 最多加载 512 个 Tool，单个输入或输出 Schema 最大 64 KiB。
 - Tool ID 使用至少三段的小写点分命名，例如 `core.pet.state-read`、`skill.timer.session-start`。
 - Tool Backend 只能收到描述、受控参数、Trace 和超时，不获得 Provider 凭据或 Agent 内部记忆。
+- `AgentCoordinator` 把模型推进与工具执行拆成独立的确定性单步：Provider 返回的 Tool Call 先转换为新的 `ToolInvocation`，再经过 Registry admission；模型响应不能直接触发 Backend。
+- 工具执行单步必须校验 Task/Trace 归属，在真正调用模块 Capability Gateway Backend 前扣减工具预算，并重新验证批准指纹。
 
 ## 4. 任务生命周期与预算
 
@@ -79,13 +81,15 @@ running → paused → running
 
 ## 5. Provider Adapter
 
-统一 Provider 接口覆盖能力发现、流式响应、结构化 Tool Call、取消、Token 用量、费用估算、上下文窗口和错误分类。首批适配目标：
+当前 `nimora.agent-provider/1` Rust 契约已覆盖能力集合发现、本地/网络属性、结构化 Tool Call、取消、Token 用量、费用、上下文窗口、有界请求响应和稳定错误分类。能力使用可扩展集合而非固定布尔字段，新增 Provider 能力不要求破坏描述结构。流式事件协议和真实网络 Adapter 尚未实现。首批适配目标：
 
 - OpenAI-compatible HTTPS Provider。
 - Ollama 与其它显式配置的本地回环 Provider。
 - 测试用确定性 Mock、超时、畸形响应和 Prompt Injection Provider。
 
 Provider 只能看到任务授权的数据视图，不接触 Secure Store。凭据由宿主按 Provider ID 注入请求 Adapter；错误返回稳定类别，不把 Key、完整请求或底层网络细节写入 UI 和诊断包。
+
+运行时当前强制：最多 64 个 Adapter、256 条消息、256 KiB 消息正文、1 MiB 响应正文、32 个 Tool Call 和 10 分钟单次超时；离线模式在调用 Adapter 前拒绝网络 Provider。Provider 返回的未知 Tool、非对象参数、错配 Request ID、超出输出预算或不一致 Finish Reason 全部 fail-closed。
 
 ## 6. CLI
 
@@ -118,4 +122,3 @@ nimora ai history export|delete
 ## 8. 完成标准
 
 完整实现至少证明：桌面与 CLI 任务等价、多 Provider 可替换、本地离线运行、模块双向调用、实际参数风险确认、批准失效、预算终止、Prompt Injection 防护、Safe Mode 强停、历史与记忆删除、Provider 数据预览、故障恢复、跨平台桌面验证和真实 UI 截图。
-
