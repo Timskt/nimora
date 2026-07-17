@@ -44,6 +44,8 @@ Click/Drag FSM 自动化证据必须覆盖：Sleep 被 Drag 抢占、重复 Begi
 
 SQLite 事务 Outbox 自动化证据必须覆盖：新库版本为 v3、v1/v2 非破坏性升级保留原快照、宠物动作与 Profile 创建/切换写入完整 Event、Outbox JSON 可反序列化，以及重复 Event ID 使快照更新与事件插入整体回滚。当前门禁只证明事务持久化；在实现消费者 ACK、持久游标、重试、死信和清理测试前，不得宣称可靠投递或 exactly-once。
 
+离线恢复自动化证据必须使用 SQLite Online Backup API，而不是复制主库或 WAL 文件：备份必须包含活动 WAL 中的页面，备份副本重新打开后必须恢复最新快照。备份失败不得覆盖可恢复的源数据库。
+
 ### M1 Creator Foundation
 
 - Character、Skin、Theme 包 Schema 和解析器可用。

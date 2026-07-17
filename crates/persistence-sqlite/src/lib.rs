@@ -4,7 +4,7 @@ use nimora_runtime_app::{
     PetRepository, ProfileRepository, ProfileServiceError, ProfileSnapshot, RepositoryError,
 };
 use nimora_runtime_core::{Event, Pet};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, backup::Backup, params};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Mutex, time::Duration};
 use thiserror::Error;
@@ -36,6 +36,16 @@ impl SqlitePetRepository {
     /// Returns an error when `SQLite` cannot configure or migrate the database.
     pub fn in_memory() -> Result<Self, SqlitePersistenceError> {
         Self::from_connection(Connection::open_in_memory()?)
+    }
+
+    /// Creates a consistent online backup, including WAL-backed pages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the destination cannot be created or `SQLite`
+    /// cannot complete the online backup.
+    pub fn backup_to(&self, destination: impl AsRef<Path>) -> Result<(), SqlitePersistenceError> {
+        backup_connection(&self.connection, destination)
     }
 
     fn from_connection(mut connection: Connection) -> Result<Self, SqlitePersistenceError> {
@@ -206,6 +216,19 @@ fn insert_outbox_event(
     Ok(())
 }
 
+fn backup_connection(
+    source: &Mutex<Connection>,
+    destination: impl AsRef<Path>,
+) -> Result<(), SqlitePersistenceError> {
+    let source = source
+        .lock()
+        .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
+    let mut destination = Connection::open(destination)?;
+    let backup = Backup::new(&source, &mut destination)?;
+    backup.run_to_completion(128, Duration::from_millis(10), None)?;
+    Ok(())
+}
+
 #[derive(Debug)]
 pub struct SqliteProfileRepository {
     connection: Mutex<Connection>,
@@ -223,6 +246,16 @@ impl SqliteProfileRepository {
         Ok(Self {
             connection: Mutex::new(connection),
         })
+    }
+
+    /// Creates a consistent online backup, including WAL-backed pages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the destination cannot be created or `SQLite`
+    /// cannot complete the online backup.
+    pub fn backup_to(&self, destination: impl AsRef<Path>) -> Result<(), SqlitePersistenceError> {
+        backup_connection(&self.connection, destination)
     }
 
     fn load_snapshot(&self) -> Result<Option<ProfileSnapshot>, SqlitePersistenceError> {
@@ -473,6 +506,37 @@ mod tests {
             );
         }
         std::fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn online_backup_restores_wal_backed_runtime_state() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let source = std::env::temp_dir().join(format!(
+            "nimora-backup-source-{}-{unique}.sqlite3",
+            std::process::id()
+        ));
+        let destination = std::env::temp_dir().join(format!(
+            "nimora-backup-destination-{}-{unique}.sqlite3",
+            std::process::id()
+        ));
+        let mut pet = Pet::new("Aster").expect("pet");
+        pet.apply_action(PetAction::Sleep);
+        {
+            let repository = SqlitePetRepository::open(&source).expect("source");
+            repository.save(&pet).expect("save");
+            repository.backup_to(&destination).expect("backup");
+        }
+        let restored = SqlitePetRepository::open(&destination)
+            .expect("destination")
+            .load_snapshot()
+            .expect("load")
+            .expect("snapshot");
+        assert_eq!(restored.state, PetState::Sleeping);
+        std::fs::remove_file(source).expect("remove source");
+        std::fs::remove_file(destination).expect("remove destination");
     }
 
     #[test]
