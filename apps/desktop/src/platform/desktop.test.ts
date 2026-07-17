@@ -63,6 +63,7 @@ describe("desktop platform adapter", () => {
     await api.rollbackUserProgram(manifest.id);
     await api.startUserProgram(manifest);
     await api.executeUserProgram(manifest, "({ commands: [] })");
+    await api.executeInstalledUserProgram(manifest.id);
     const envelope = {
       executionId: "018f0000-0000-7000-8000-000000000001",
       traceId: "018f0000-0000-7000-8000-000000000002",
@@ -98,6 +99,7 @@ describe("desktop platform adapter", () => {
       ["rollback_user_program", { programId: manifest.id }],
       ["start_user_program", { manifest }],
       ["execute_user_program", { manifest, source: "({ commands: [] })" }],
+      ["execute_installed_user_program", { programId: manifest.id }],
       ["invoke_user_program_capability", { envelope }],
       ["stop_user_program", { executionId: envelope.executionId }],
     ]);

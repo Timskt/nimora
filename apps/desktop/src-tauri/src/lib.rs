@@ -14,7 +14,9 @@ use nimora_user_code_gateway::{
     CapabilityBackend, CapabilityGateway, CapabilityResponse, GatewayEnvelope, GatewayError,
 };
 use nimora_user_code_host::{WorkerConfig, WorkerMessage, WorkerProcess};
-use nimora_user_code_package::{ProgramPackageError, install_program_atomically, rollback_program};
+use nimora_user_code_package::{
+    ProgramPackageError, install_program_atomically, load_installed_program, rollback_program,
+};
 use nimora_user_code_policy::{
     Capability, ExecutionController, ExecutionHandle, ExecutionPolicy, PolicyError,
     ProgramManifest, WorkerError, evaluate,
@@ -707,6 +709,27 @@ fn execute_user_program(
     source: String,
 ) -> Result<UserProgramExecutionReceipt, DesktopError> {
     ensure_normal_mode(&state)?;
+    execute_user_program_source(&app, &state, manifest, source)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn execute_installed_user_program(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    program_id: String,
+) -> Result<UserProgramExecutionReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let installed = load_installed_program(&state.program_store, &program_id)?;
+    execute_user_program_source(&app, &state, installed.manifest, installed.source)
+}
+
+fn execute_user_program_source(
+    app: &AppHandle,
+    state: &DesktopState,
+    manifest: ProgramManifest,
+    source: String,
+) -> Result<UserProgramExecutionReceipt, DesktopError> {
     let policy = evaluate(manifest.clone())?;
     let execution = state.execution_controller.admit(&policy)?;
     let execution_id = execution.execution_id();
@@ -721,7 +744,7 @@ fn execute_user_program(
         source,
         input,
     };
-    let mut worker = WorkerProcess::spawn(worker_config(&app, &execution), &request)
+    let mut worker = WorkerProcess::spawn(worker_config(app, &execution), &request)
         .map_err(|error| DesktopError::UserCodeHost(error.to_string()))?;
     let response = worker
         .wait()
@@ -738,7 +761,7 @@ fn execute_user_program(
         }
     };
     let plan = parse_user_program_plan(value)?;
-    let gateway = CapabilityGateway::new(DesktopCapabilityBackend { state: &state });
+    let gateway = CapabilityGateway::new(DesktopCapabilityBackend { state });
     let mut responses = Vec::with_capacity(plan.commands.len());
     for (index, command) in plan.commands.into_iter().enumerate() {
         execution.checkpoint()?;
@@ -1242,6 +1265,7 @@ pub fn run() {
             validate_user_program,
             start_user_program,
             execute_user_program,
+            execute_installed_user_program,
             invoke_user_program_capability,
             stop_user_program
         ])

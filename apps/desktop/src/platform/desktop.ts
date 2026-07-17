@@ -130,6 +130,7 @@ export interface DesktopApi {
   rollbackUserProgram(programId: string): Promise<UserProgramRollbackReceipt | null>;
   startUserProgram(manifest: UserProgramManifest): Promise<UserProgramSessionReceipt | null>;
   executeUserProgram(manifest: UserProgramManifest, source: string): Promise<UserProgramExecutionReceipt | null>;
+  executeInstalledUserProgram(programId: string): Promise<UserProgramExecutionReceipt | null>;
   invokeUserProgramCapability(envelope: UserProgramGatewayEnvelope): Promise<UserProgramCapabilityResponse | null>;
   stopUserProgram(executionId: string): Promise<void>;
 }
@@ -198,6 +199,7 @@ export function createDesktopApi(
       async rollbackUserProgram() { return null; },
       async startUserProgram() { return null; },
       async executeUserProgram() { return null; },
+      async executeInstalledUserProgram() { return null; },
       async invokeUserProgramCapability() { return null; },
       async stopUserProgram() {},
     };
@@ -235,6 +237,7 @@ export function createDesktopApi(
     rollbackUserProgram: async (programId) => await invokeCommand("rollback_user_program", { programId }) as UserProgramRollbackReceipt,
     startUserProgram: async (manifest) => await invokeCommand("start_user_program", { manifest }) as UserProgramSessionReceipt,
     executeUserProgram: async (manifest, source) => await invokeCommand("execute_user_program", { manifest, source }) as UserProgramExecutionReceipt,
+    executeInstalledUserProgram: async (programId) => await invokeCommand("execute_installed_user_program", { programId }) as UserProgramExecutionReceipt,
     invokeUserProgramCapability: async (envelope) => await invokeCommand("invoke_user_program_capability", { envelope }) as UserProgramCapabilityResponse,
     stopUserProgram: async (executionId) => { await invokeCommand("stop_user_program", { executionId }); },
   };

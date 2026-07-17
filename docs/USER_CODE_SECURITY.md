@@ -58,6 +58,8 @@
 
 桌面端通过 `install_user_program` 把验证后的程序原子安装到应用数据目录的 `programs/<program-id>/active`。升级时旧版本先移动为不可变备份，新版本只有在完整复制和二次校验后才会激活；激活失败会恢复旧版本。`rollback_user_program` 会隔离当前失败版本并恢复最近备份。安装和回滚在安全模式中均被拒绝，防止故障处置期间改变可执行内容。
 
+`execute_installed_user_program` 只接受 namespaced 程序 ID，从当前 `active` 目录重新加载并校验 Manifest 与固定入口，不允许 Renderer 再次提交或替换源码。Manifest ID 必须与目录身份一致，入口和 Manifest 的 canonical path 必须仍位于 active 目录内；安装后被替换成外部符号链接会在 Worker 启动前被拒绝。该路径不依赖 Registry 或网络，已安装且不请求远程能力的程序可以完全离线运行。
+
 ## 模块调用模型
 
 ```text

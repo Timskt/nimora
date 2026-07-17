@@ -72,6 +72,7 @@ any → disabled → deleted
 - 可变更 Command 使用幂等键；重试只用于声明为安全的操作。
 - 脚本版本升级保留配置迁移和最近可用版本，失败自动回滚。
 - 当前程序包格式固定包含 `manifest.json` 与 `main.js`；安装采用清单哈希校验、暂存、原子激活和最近版本回滚，离线环境不依赖 Registry 即可启动已安装版本。
+- 正式运行使用 `execute_installed_user_program(programId)` 从激活版本加载源码；直接提交源码的入口仅用于 Creator Studio 草稿预览，不能替代安装版本身份。
 - 休眠恢复、时钟跳变和离线期间按声明的 missed-run policy 处理。
 
 ## 6. 权限与信任
