@@ -85,6 +85,7 @@ pub struct AssetPackageSummary {
 #[derive(Debug)]
 struct ValidatedAssetPackage {
     summary: AssetPackageSummary,
+    renderer: Option<AssetRendererDescriptor>,
     files: Vec<InstallFile>,
     integrity_path: PathBuf,
     integrity_bytes: Vec<u8>,
@@ -105,7 +106,7 @@ struct AssetManifestHeader {
     #[serde(default)]
     render: Option<AssetRenderHeader>,
     #[serde(default)]
-    entrypoints: Option<serde_json::Value>,
+    entrypoints: Option<AssetEntrypoints>,
     #[serde(default)]
     capabilities: Vec<String>,
     #[serde(default = "empty_json_object")]
@@ -116,11 +117,91 @@ struct AssetManifestHeader {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AssetRenderHeader {
     backend: String,
-    #[serde(flatten)]
-    remaining: BTreeMap<String, serde_json::Value>,
+    canvas: RenderCanvas,
+    anchor: RenderAnchor,
+    default_scale: f64,
+    pixel_art: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AssetEntrypoints {
+    animation_graph: Option<PathBuf>,
+    clips: Option<PathBuf>,
+    hitboxes: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenderCanvas {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenderAnchor {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetRendererDescriptor {
+    pub backend: String,
+    pub canvas: RenderCanvas,
+    pub anchor: RenderAnchor,
+    pub default_scale: f64,
+    pub pixel_art: bool,
+    pub clips: SpriteClips,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "backend", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum SpriteClips {
+    SpriteSequence {
+        spec: String,
+        clips: BTreeMap<String, SpriteSequenceClip>,
+    },
+    SpriteAtlas {
+        spec: String,
+        image: PathBuf,
+        clips: BTreeMap<String, SpriteAtlasClip>,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SpriteSequenceClip {
+    pub r#loop: bool,
+    pub frames: Vec<SpriteSequenceFrame>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SpriteSequenceFrame {
+    pub file: PathBuf,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SpriteAtlasClip {
+    pub r#loop: bool,
+    pub frames: Vec<SpriteAtlasFrame>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SpriteAtlasFrame {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,6 +265,17 @@ pub fn inspect_asset_package(source_root: &Path) -> Result<AssetPackageSummary, 
     Ok(load_asset_package(source_root)?.summary)
 }
 
+/// Verifies a package and returns its host-authoritative sprite renderer contract.
+///
+/// # Errors
+///
+/// Returns an error for unsupported renderers or any invalid package metadata.
+pub fn inspect_asset_renderer(source_root: &Path) -> Result<AssetRendererDescriptor, InstallError> {
+    load_asset_package(source_root)?.renderer.ok_or_else(|| {
+        InstallError::InvalidMetadata("asset has no supported sprite renderer".to_owned())
+    })
+}
+
 fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, InstallError> {
     let manifest_bytes = read_metadata(source_root, Path::new(MANIFEST_FILE))?;
     let manifest: AssetManifestHeader = serde_json::from_slice(&manifest_bytes)
@@ -198,6 +290,7 @@ fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, Insta
     let integrity_bytes = read_metadata(source_root, integrity_path)?;
     let integrity: AssetIntegrityDocument = serde_json::from_slice(&integrity_bytes)
         .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    let renderer = load_sprite_renderer(source_root, &manifest, &integrity.files)?;
     let files = integrity
         .files
         .into_iter()
@@ -228,11 +321,9 @@ fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, Insta
             asset_type: manifest.asset_type,
             version: manifest.version,
             name: manifest.name,
-            renderer_backend: manifest.render.map(|render| {
-                let _ = render.remaining;
-                render.backend
-            }),
+            renderer_backend: manifest.render.map(|render| render.backend),
         },
+        renderer,
         files,
         integrity_path: integrity_path.to_path_buf(),
         integrity_bytes,
@@ -304,6 +395,167 @@ fn read_metadata(source_root: &Path, relative_path: &Path) -> Result<Vec<u8>, In
     fs::read(canonical_path).map_err(InstallError::from)
 }
 
+fn load_sprite_renderer(
+    source_root: &Path,
+    manifest: &AssetManifestHeader,
+    inventory: &[AssetIntegrityFile],
+) -> Result<Option<AssetRendererDescriptor>, InstallError> {
+    let Some(render) = manifest.render.as_ref() else {
+        return Ok(None);
+    };
+    if !["sprite-sequence", "sprite-atlas"].contains(&render.backend.as_str()) {
+        if manifest
+            .entrypoints
+            .as_ref()
+            .and_then(|entrypoints| entrypoints.clips.as_ref())
+            .is_some()
+        {
+            return Err(InstallError::InvalidMetadata(
+                "entrypoints.clips is only valid for sprite renderers".to_owned(),
+            ));
+        }
+        return Ok(None);
+    }
+    let clips_path = manifest
+        .entrypoints
+        .as_ref()
+        .and_then(|entrypoints| entrypoints.clips.as_ref())
+        .ok_or_else(|| {
+            InstallError::InvalidMetadata(
+                "sprite characters and skins require entrypoints.clips".to_owned(),
+            )
+        })?;
+    let clips_path = safe_relative_path(clips_path)?;
+    require_inventory_media(inventory, clips_path, &["application/json"])?;
+    let clips: SpriteClips = serde_json::from_slice(&read_metadata(source_root, clips_path)?)
+        .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    validate_sprite_clips(&clips, &render.backend, inventory)?;
+    Ok(Some(AssetRendererDescriptor {
+        backend: render.backend.clone(),
+        canvas: render.canvas.clone(),
+        anchor: render.anchor.clone(),
+        default_scale: render.default_scale,
+        pixel_art: render.pixel_art,
+        clips,
+    }))
+}
+
+fn validate_sprite_clips(
+    document: &SpriteClips,
+    expected_backend: &str,
+    inventory: &[AssetIntegrityFile],
+) -> Result<(), InstallError> {
+    let image_media = ["image/png", "image/webp", "image/jpeg", "image/gif"];
+    let (spec, backend, has_idle) = match document {
+        SpriteClips::SpriteSequence { spec, clips } => {
+            validate_clip_map(clips, |clip| {
+                for frame in &clip.frames {
+                    if !(16..=60_000).contains(&frame.duration_ms) {
+                        return Err(invalid_sprite("frame duration is outside 16..60000ms"));
+                    }
+                    require_inventory_media(
+                        inventory,
+                        safe_relative_path(&frame.file)?,
+                        &image_media,
+                    )?;
+                }
+                Ok(())
+            })?;
+            (spec, "sprite-sequence", clips.contains_key("pet.idle"))
+        }
+        SpriteClips::SpriteAtlas { spec, image, clips } => {
+            require_inventory_media(inventory, safe_relative_path(image)?, &image_media)?;
+            validate_clip_map(clips, |clip| {
+                for frame in &clip.frames {
+                    if frame.width == 0
+                        || frame.height == 0
+                        || frame.x > 16_384
+                        || frame.y > 16_384
+                        || frame.width > 4_096
+                        || frame.height > 4_096
+                        || !(16..=60_000).contains(&frame.duration_ms)
+                    {
+                        return Err(invalid_sprite("atlas frame exceeds renderer bounds"));
+                    }
+                }
+                Ok(())
+            })?;
+            (spec, "sprite-atlas", clips.contains_key("pet.idle"))
+        }
+    };
+    if spec != "nimora.sprite-clips/1" || backend != expected_backend || !has_idle {
+        return Err(invalid_sprite(
+            "clips spec, backend, or required pet.idle action is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_clip_map<T>(
+    clips: &BTreeMap<String, T>,
+    mut validate: impl FnMut(&T) -> Result<(), InstallError>,
+) -> Result<(), InstallError>
+where
+    T: ClipFrames,
+{
+    for (action, clip) in clips {
+        if !valid_asset_identifier(action) || !(1..=1_000).contains(&clip.frame_count()) {
+            return Err(invalid_sprite("action id or frame count is invalid"));
+        }
+        validate(clip)?;
+    }
+    Ok(())
+}
+
+trait ClipFrames {
+    fn frame_count(&self) -> usize;
+}
+
+impl ClipFrames for SpriteSequenceClip {
+    fn frame_count(&self) -> usize {
+        self.frames.len()
+    }
+}
+
+impl ClipFrames for SpriteAtlasClip {
+    fn frame_count(&self) -> usize {
+        self.frames.len()
+    }
+}
+
+fn require_inventory_media(
+    inventory: &[AssetIntegrityFile],
+    path: &Path,
+    allowed: &[&str],
+) -> Result<(), InstallError> {
+    let file = inventory
+        .iter()
+        .find(|file| file.path == path)
+        .ok_or_else(|| invalid_sprite("renderer references a file outside the inventory"))?;
+    if !allowed.contains(&file.media_type.as_str()) {
+        return Err(invalid_sprite("renderer file has a disallowed media type"));
+    }
+    let expected_extension = match file.media_type.as_str() {
+        "application/json" => &["json"][..],
+        "image/png" => &["png"][..],
+        "image/webp" => &["webp"][..],
+        "image/jpeg" => &["jpg", "jpeg"][..],
+        "image/gif" => &["gif"][..],
+        _ => &[][..],
+    };
+    let extension = path.extension().and_then(std::ffi::OsStr::to_str);
+    if extension.is_none_or(|extension| !expected_extension.contains(&extension)) {
+        return Err(invalid_sprite(
+            "renderer file extension does not match its media type",
+        ));
+    }
+    Ok(())
+}
+
+fn invalid_sprite(message: &str) -> InstallError {
+    InstallError::InvalidMetadata(format!("invalid sprite renderer: {message}"))
+}
+
 fn validate_manifest_header(manifest: &AssetManifestHeader) -> Result<(), InstallError> {
     let supported_types = [
         "character",
@@ -323,6 +575,17 @@ fn validate_manifest_header(manifest: &AssetManifestHeader) -> Result<(), Instal
         || manifest.render.as_ref().is_some_and(|render| {
             !["sprite-sequence", "sprite-atlas", "live2d", "vrm", "gltf"]
                 .contains(&render.backend.as_str())
+                || render.canvas.width == 0
+                || render.canvas.height == 0
+                || render.canvas.width > 4_096
+                || render.canvas.height > 4_096
+                || !render.anchor.x.is_finite()
+                || !render.anchor.y.is_finite()
+                || !(0.0..=1.0).contains(&render.anchor.x)
+                || !(0.0..=1.0).contains(&render.anchor.y)
+                || !render.default_scale.is_finite()
+                || render.default_scale <= 0.0
+                || render.default_scale > 8.0
         })
         || !valid_semver(&manifest.version)
         || manifest.license.trim().is_empty()
@@ -350,7 +613,18 @@ fn validate_manifest_header(manifest: &AssetManifestHeader) -> Result<(), Instal
             "manifest header violates nimora.asset/1".to_owned(),
         ));
     }
-    let _ = (&manifest.render, &manifest.entrypoints);
+    if let Some(entrypoints) = &manifest.entrypoints {
+        for path in [
+            entrypoints.animation_graph.as_ref(),
+            entrypoints.clips.as_ref(),
+            entrypoints.hitboxes.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            safe_relative_path(path)?;
+        }
+    }
     Ok(())
 }
 
@@ -674,7 +948,21 @@ mod tests {
     }
 
     fn write_asset_package(root: &Path, asset_id: &str) {
-        fs::create_dir_all(root).unwrap();
+        fs::create_dir_all(root.join("animations")).unwrap();
+        fs::create_dir_all(root.join("sprites")).unwrap();
+        let clips = serde_json::to_vec(&serde_json::json!({
+            "spec": "nimora.sprite-clips/1",
+            "backend": "sprite-atlas",
+            "image": "sprites/atlas.webp",
+            "clips": {
+                "pet.idle": {
+                    "loop": true,
+                    "frames": [{ "x": 0, "y": 0, "width": 256, "height": 256, "durationMs": 100 }]
+                }
+            }
+        }))
+        .unwrap();
+        let atlas = b"test-webp";
         let manifest = serde_json::to_vec(&serde_json::json!({
             "spec": "nimora.asset/1",
             "id": asset_id,
@@ -691,6 +979,7 @@ mod tests {
                 "defaultScale": 1.0,
                 "pixelArt": false
             },
+            "entrypoints": { "clips": "animations/clips.json" },
             "capabilities": [],
             "fallbacks": {},
             "locales": ["en"],
@@ -698,14 +987,30 @@ mod tests {
         }))
         .unwrap();
         fs::write(root.join(MANIFEST_FILE), &manifest).unwrap();
+        fs::write(root.join("animations/clips.json"), &clips).unwrap();
+        fs::write(root.join("sprites/atlas.webp"), atlas).unwrap();
         let integrity = serde_json::to_vec(&serde_json::json!({
-            "files": [{
-                "path": MANIFEST_FILE,
-                "sha256": sha256(&manifest),
-                "bytes": manifest.len(),
-                "mediaType": "application/json"
-            }],
-            "totalBytes": manifest.len()
+            "files": [
+                {
+                    "path": MANIFEST_FILE,
+                    "sha256": sha256(&manifest),
+                    "bytes": manifest.len(),
+                    "mediaType": "application/json"
+                },
+                {
+                    "path": "animations/clips.json",
+                    "sha256": sha256(&clips),
+                    "bytes": clips.len(),
+                    "mediaType": "application/json"
+                },
+                {
+                    "path": "sprites/atlas.webp",
+                    "sha256": sha256(atlas),
+                    "bytes": atlas.len(),
+                    "mediaType": "image/webp"
+                }
+            ],
+            "totalBytes": manifest.len() + clips.len() + atlas.len()
         }))
         .unwrap();
         fs::write(root.join("integrity.json"), integrity).unwrap();
@@ -731,6 +1036,38 @@ mod tests {
                 .join("character.example.mochi/integrity.json")
                 .is_file()
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn exposes_verified_sprite_renderer_without_filesystem_paths() {
+        let root = std::env::temp_dir().join("nimora-package-renderer");
+        let _ = fs::remove_dir_all(&root);
+        write_asset_package(&root, "character.example.mochi");
+        let renderer = inspect_asset_renderer(&root).unwrap();
+        assert_eq!(renderer.backend, "sprite-atlas");
+        assert_eq!(renderer.canvas.width, 512);
+        match renderer.clips {
+            SpriteClips::SpriteAtlas { image, clips, .. } => {
+                assert_eq!(image, Path::new("sprites/atlas.webp"));
+                assert!(clips.contains_key("pet.idle"));
+            }
+            SpriteClips::SpriteSequence { .. } => panic!("expected atlas"),
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_sprite_backend_mismatch() {
+        let root = std::env::temp_dir().join("nimora-package-renderer-mismatch");
+        let _ = fs::remove_dir_all(&root);
+        write_asset_package(&root, "character.example.mochi");
+        let clips_path = root.join("animations/clips.json");
+        let mut clips: serde_json::Value =
+            serde_json::from_slice(&fs::read(&clips_path).unwrap()).unwrap();
+        clips["backend"] = serde_json::Value::String("sprite-sequence".to_owned());
+        fs::write(&clips_path, serde_json::to_vec(&clips).unwrap()).unwrap();
+        assert!(inspect_asset_renderer(&root).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

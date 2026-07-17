@@ -1,6 +1,7 @@
 use nimora_asset_installer::{
-    AssetPackageSummary, InstallError, InstallFile, inspect_asset_package, install_asset_package,
-    rollback_latest,
+    AssetPackageSummary, AssetRendererDescriptor, InstallError, InstallFile, RenderAnchor,
+    RenderCanvas, SpriteClips, inspect_asset_package, inspect_asset_renderer,
+    install_asset_package, rollback_latest,
 };
 use nimora_persistence_sqlite::{
     ProgramPermissionGrant, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
@@ -244,6 +245,20 @@ struct ActiveCharacterSnapshot {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CharacterRendererSnapshot {
+    spec: &'static str,
+    asset_id: String,
+    backend: String,
+    canvas: RenderCanvas,
+    anchor: RenderAnchor,
+    default_scale: f64,
+    pixel_art: bool,
+    clips: Option<SpriteClips>,
+    fallback_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum ActiveCharacterSource {
     BuiltIn,
@@ -751,6 +766,14 @@ fn active_character(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn active_character_renderer(
+    state: State<'_, DesktopState>,
+) -> Result<CharacterRendererSnapshot, DesktopError> {
+    resolve_character_renderer(&state.asset_store, state.safety.snapshot()?.mode)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn activate_character(
     state: State<'_, DesktopState>,
     asset_id: String,
@@ -831,6 +854,56 @@ fn builtin_character(fallback_reason: Option<String>) -> ActiveCharacterSnapshot
     ActiveCharacterSnapshot {
         asset_id: BUILTIN_CHARACTER_ID.to_owned(),
         source: ActiveCharacterSource::BuiltIn,
+        fallback_reason,
+    }
+}
+
+fn resolve_character_renderer(
+    asset_store: &Path,
+    runtime_mode: RuntimeMode,
+) -> Result<CharacterRendererSnapshot, DesktopError> {
+    let active = resolve_active_character(asset_store, runtime_mode)?;
+    if matches!(active.source, ActiveCharacterSource::BuiltIn) {
+        return Ok(builtin_renderer(active.fallback_reason));
+    }
+    match inspect_asset_renderer(&asset_store.join(&active.asset_id)) {
+        Ok(renderer) => Ok(installed_renderer(active.asset_id, renderer)),
+        Err(error) => Ok(builtin_renderer(Some(format!(
+            "selected character renderer is unavailable: {error}"
+        )))),
+    }
+}
+
+fn installed_renderer(
+    asset_id: String,
+    renderer: AssetRendererDescriptor,
+) -> CharacterRendererSnapshot {
+    CharacterRendererSnapshot {
+        spec: "nimora.renderer/1",
+        asset_id,
+        backend: renderer.backend,
+        canvas: renderer.canvas,
+        anchor: renderer.anchor,
+        default_scale: renderer.default_scale,
+        pixel_art: renderer.pixel_art,
+        clips: Some(renderer.clips),
+        fallback_reason: None,
+    }
+}
+
+fn builtin_renderer(fallback_reason: Option<String>) -> CharacterRendererSnapshot {
+    CharacterRendererSnapshot {
+        spec: "nimora.renderer/1",
+        asset_id: BUILTIN_CHARACTER_ID.to_owned(),
+        backend: "built-in".to_owned(),
+        canvas: RenderCanvas {
+            width: 320,
+            height: 360,
+        },
+        anchor: RenderAnchor { x: 0.5, y: 1.0 },
+        default_scale: 1.0,
+        pixel_art: false,
+        clips: None,
         fallback_reason,
     }
 }
@@ -2039,6 +2112,7 @@ pub fn run() {
             set_click_through,
             asset_catalog,
             active_character,
+            active_character_renderer,
             activate_character,
             install_asset,
             rollback_asset,
@@ -2070,7 +2144,8 @@ mod tests {
         ACTIVE_CHARACTER_FILE, BUILTIN_CHARACTER_ID, DesktopError, PetAction, ProfilePolicy,
         TrayAction, WindowPolicy, ensure_program_permissions, inspect_asset_catalog,
         parse_user_program_plan, permission_grant, persist_active_character,
-        resolve_active_character, screen_coordinate, user_program_input, valid_asset_identifier,
+        resolve_active_character, resolve_character_renderer, screen_coordinate,
+        user_program_input, valid_asset_identifier,
     };
     use nimora_persistence_sqlite::SqliteProgramPermissionRepository;
     use nimora_runtime_core::{Event, EventSource, RuntimeMode};
@@ -2121,6 +2196,24 @@ mod tests {
         assert!(corrupt.fallback_reason.is_some());
         let safe = resolve_active_character(&root, RuntimeMode::Safe).unwrap();
         assert_eq!(safe.asset_id, BUILTIN_CHARACTER_ID);
+        assert!(safe.fallback_reason.is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn renderer_descriptor_uses_builtin_for_safe_mode_and_corrupt_selection() {
+        let root = std::env::temp_dir().join("nimora-character-renderer-fallback");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(ACTIVE_CHARACTER_FILE), b"not-json").unwrap();
+        let corrupt = resolve_character_renderer(&root, RuntimeMode::Normal).unwrap();
+        assert_eq!(corrupt.spec, "nimora.renderer/1");
+        assert_eq!(corrupt.asset_id, BUILTIN_CHARACTER_ID);
+        assert_eq!(corrupt.backend, "built-in");
+        assert!(corrupt.clips.is_none());
+        assert!(corrupt.fallback_reason.is_some());
+        let safe = resolve_character_renderer(&root, RuntimeMode::Safe).unwrap();
+        assert_eq!(safe.backend, "built-in");
         assert!(safe.fallback_reason.is_some());
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -6,6 +6,7 @@ import type {
   ProfilePolicy,
   ProfileSnapshot,
   SafetySnapshot,
+  SpriteClips,
 } from "@nimora/schemas";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -60,6 +61,18 @@ export interface AssetCatalogSnapshot {
 export interface ActiveCharacterSnapshot {
   assetId: string;
   source: "built-in" | "installed";
+  fallbackReason: string | null;
+}
+
+export interface CharacterRendererSnapshot {
+  spec: "nimora.renderer/1";
+  assetId: string;
+  backend: "built-in" | "sprite-sequence" | "sprite-atlas";
+  canvas: { width: number; height: number };
+  anchor: { x: number; y: number };
+  defaultScale: number;
+  pixelArt: boolean;
+  clips: SpriteClips | null;
   fallbackReason: string | null;
 }
 
@@ -193,6 +206,7 @@ export interface DesktopApi {
   setClickThrough(enabled: boolean): Promise<void>;
   assetCatalog(): Promise<AssetCatalogSnapshot>;
   activeCharacter(): Promise<ActiveCharacterSnapshot>;
+  activeCharacterRenderer(): Promise<CharacterRendererSnapshot>;
   activateCharacter(assetId: string): Promise<ActiveCharacterSnapshot>;
   installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
   rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
@@ -275,6 +289,19 @@ export function createDesktopApi(
       async setClickThrough() {},
       async assetCatalog() { return { assets: [], rejected: [] }; },
       async activeCharacter() { return { assetId: "builtin.aster", source: "built-in", fallbackReason: null }; },
+      async activeCharacterRenderer() {
+        return {
+          spec: "nimora.renderer/1",
+          assetId: "builtin.aster",
+          backend: "built-in",
+          canvas: { width: 320, height: 360 },
+          anchor: { x: 0.5, y: 1 },
+          defaultScale: 1,
+          pixelArt: false,
+          clips: null,
+          fallbackReason: null,
+        };
+      },
       async activateCharacter(assetId) { return { assetId, source: assetId === "builtin.aster" ? "built-in" : "installed", fallbackReason: null }; },
       async installAsset() { return null; },
       async rollbackAsset() { return null; },
@@ -325,6 +352,7 @@ export function createDesktopApi(
     setClickThrough: async (enabled) => { await invokeCommand("set_click_through", { enabled }); },
     assetCatalog: async () => await invokeCommand("asset_catalog") as AssetCatalogSnapshot,
     activeCharacter: async () => await invokeCommand("active_character") as ActiveCharacterSnapshot,
+    activeCharacterRenderer: async () => await invokeCommand("active_character_renderer") as CharacterRendererSnapshot,
     activateCharacter: async (assetId) => await invokeCommand("activate_character", { assetId }) as ActiveCharacterSnapshot,
     installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
     rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,

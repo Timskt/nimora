@@ -145,6 +145,17 @@ describe("assetManifestSchema", () => {
       entrypoints: { animationGraph: "../outside.json" },
     }).success).toBe(false);
   });
+
+  it("requires clips exactly for sprite renderers", () => {
+    expect(assetManifestSchema.safeParse({
+      ...validAssetManifest,
+      entrypoints: { animationGraph: "animations/graph.json" },
+    }).success).toBe(false);
+    expect(assetManifestSchema.safeParse({
+      ...validAssetManifest,
+      render: { ...validAssetManifest.render, backend: "vrm" },
+    }).success).toBe(false);
+  });
 });
 
 describe("spriteClipsSchema", () => {

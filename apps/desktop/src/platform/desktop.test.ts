@@ -35,6 +35,7 @@ describe("desktop platform adapter", () => {
     await api.setClickThrough(true);
     await api.assetCatalog();
     await api.activeCharacter();
+    await api.activeCharacterRenderer();
     await api.activateCharacter("character.example.mochi");
     await api.installAsset({
       sourcePath: "/tmp/nimora-import",
@@ -102,6 +103,7 @@ describe("desktop platform adapter", () => {
       ["set_click_through", { enabled: true }],
       ["asset_catalog"],
       ["active_character"],
+      ["active_character_renderer"],
       ["activate_character", { assetId: "character.example.mochi" }],
       ["install_asset", { request: {
         sourcePath: "/tmp/nimora-import",

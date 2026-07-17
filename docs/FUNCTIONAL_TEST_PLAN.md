@@ -87,6 +87,7 @@ ID / 标题 / 优先级 / 前置条件
 | AST-016 | 活动 Character 损坏或缺失 | 读取时自动回退 `builtin.aster`，返回诊断且其它资源不受影响 | P0 |
 | AST-017 | 安全模式角色策略 | 安全模式始终使用内置角色，并拒绝第三方角色激活 | P0 |
 | AST-018 | Sprite Clips 契约 | 拒绝缺少 `pet.idle`、路径逃逸、非法动作名、空帧、超限帧数和非法时长 | P0 |
+| AST-019 | 宿主 Renderer Descriptor | 复验 Sprite Manifest、Clips、后端与 inventory 后返回无文件系统路径的 `nimora.renderer/1`；失败明确回退内置角色 | P0 |
 | MODEL-001 | 导入合法 Live2D/VRM/glTF 模型 | 完成校验、映射与预览，可原子安装 | P0 |
 | MODEL-002 | 导入路径穿越、远程 URI、Zip Bomb 或畸形网格 | 拒绝且 Core 与已安装资源不受影响 | P0 |
 | MODEL-003 | Adapter 崩溃或 GPU context 丢失 | 恢复默认角色，可重建渲染实例 | P0 |

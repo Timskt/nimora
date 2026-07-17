@@ -208,6 +208,23 @@ export const assetManifestSchema = z.object({
   fallbacks: z.record(assetIdentifierSchema, assetIdentifierSchema).default({}),
   locales: z.array(z.string().regex(/^[a-z]{2}(?:-[A-Z]{2})?$/)).max(32).default([]),
   integrity: z.object({ algorithm: z.literal("sha256"), files: safeAssetPathSchema }),
+}).superRefine((manifest, context) => {
+  const backend = manifest.render?.backend;
+  const spriteBackend = backend === "sprite-sequence" || backend === "sprite-atlas";
+  if (spriteBackend && manifest.entrypoints?.clips === undefined) {
+    context.addIssue({
+      code: "custom",
+      message: "sprite characters and skins require entrypoints.clips",
+      path: ["entrypoints", "clips"],
+    });
+  }
+  if (manifest.entrypoints?.clips !== undefined && !spriteBackend) {
+    context.addIssue({
+      code: "custom",
+      message: "entrypoints.clips is only valid for sprite renderers",
+      path: ["entrypoints", "clips"],
+    });
+  }
 });
 export const assetFileSchema = z.object({
   path: safeAssetPathSchema,
