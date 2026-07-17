@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
-use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 
@@ -12,6 +12,8 @@ const EVENTS_PATH: &str = "events.json";
 const MAX_REPORT_BYTES: usize = 256 * 1024;
 const MAX_EVENTS_BYTES: usize = 256 * 1024;
 pub const MAX_DIAGNOSTIC_EVENTS: usize = 256;
+const MILLIS_PER_DAY: u64 = 86_400_000;
+const MAX_JOURNAL_FILES: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -64,6 +66,7 @@ pub struct DataProtectionSummary {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiagnosticSourcesSummary {
     pub event_count: u64,
+    pub event_retention_days: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,6 +161,284 @@ impl DiagnosticJournal {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiagnosticJournalPolicy {
+    pub retention_days: u64,
+    pub max_segment_bytes: u64,
+}
+
+impl Default for DiagnosticJournalPolicy {
+    fn default() -> Self {
+        Self {
+            retention_days: 14,
+            max_segment_bytes: 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PersistentDiagnosticJournal {
+    memory: DiagnosticJournal,
+    directory: Option<PathBuf>,
+    policy: DiagnosticJournalPolicy,
+    segment: Option<File>,
+    segment_path: Option<PathBuf>,
+    segment_bytes: u64,
+    segment_day: u64,
+    segment_sequence: u32,
+}
+
+impl Default for PersistentDiagnosticJournal {
+    fn default() -> Self {
+        Self::in_memory()
+    }
+}
+
+impl PersistentDiagnosticJournal {
+    #[must_use]
+    pub fn in_memory() -> Self {
+        Self {
+            memory: DiagnosticJournal::default(),
+            directory: None,
+            policy: DiagnosticJournalPolicy::default(),
+            segment: None,
+            segment_path: None,
+            segment_bytes: 0,
+            segment_day: 0,
+            segment_sequence: 0,
+        }
+    }
+
+    /// Opens a persistent structured-event journal and loads its newest valid entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the journal directory cannot be created, is not a real directory,
+    /// cannot be cleaned, or a new non-overwriting segment cannot be created.
+    pub fn open(
+        directory: &Path,
+        policy: DiagnosticJournalPolicy,
+        now_ms: u64,
+    ) -> Result<Self, DiagnosticBundleError> {
+        validate_journal_policy(policy)?;
+        fs::create_dir_all(directory)?;
+        let metadata = fs::symlink_metadata(directory)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(DiagnosticBundleError::InvalidJournalPolicy);
+        }
+        let current_day = now_ms / MILLIS_PER_DAY;
+        let files = journal_files(directory)?;
+        cleanup_journal_files(&files, current_day, policy.retention_days, None)?;
+        let retained = journal_files(directory)?;
+        let memory = load_journal(&retained)?;
+        let (segment, segment_path, segment_sequence) =
+            create_journal_segment(directory, current_day, now_ms)?;
+        Ok(Self {
+            memory,
+            directory: Some(directory.to_owned()),
+            policy,
+            segment: Some(segment),
+            segment_path: Some(segment_path),
+            segment_bytes: 0,
+            segment_day: current_day,
+            segment_sequence,
+        })
+    }
+
+    /// Persists one bounded structured event and retains it in the in-memory snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when serialization, segment rotation, or durable storage fails.
+    pub fn record(&mut self, event: DiagnosticEvent) -> Result<(), DiagnosticBundleError> {
+        let serialized = serde_json::to_vec(&event)?;
+        let serialized_bytes = u64::try_from(serialized.len())
+            .map_err(|_| DiagnosticBundleError::InvalidJournalPolicy)?
+            .saturating_add(1);
+        if serialized_bytes > self.policy.max_segment_bytes {
+            return Err(DiagnosticBundleError::InvalidJournalPolicy);
+        }
+        self.memory.record(event);
+        if self.directory.is_none() {
+            return Ok(());
+        }
+        let event_day = self
+            .memory
+            .entries
+            .back()
+            .map_or(self.segment_day, |entry| {
+                entry.occurred_at_ms / MILLIS_PER_DAY
+            });
+        if event_day != self.segment_day
+            || self.segment_bytes.saturating_add(serialized_bytes) > self.policy.max_segment_bytes
+        {
+            self.rotate(event_day)?;
+        }
+        let segment = self
+            .segment
+            .as_mut()
+            .ok_or(DiagnosticBundleError::InvalidJournalPolicy)?;
+        segment.write_all(&serialized)?;
+        segment.write_all(b"\n")?;
+        segment.sync_data()?;
+        self.segment_bytes = self.segment_bytes.saturating_add(serialized_bytes);
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> DiagnosticEventLog {
+        self.memory.snapshot()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.memory.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.memory.is_empty()
+    }
+
+    fn rotate(&mut self, day: u64) -> Result<(), DiagnosticBundleError> {
+        let directory = self
+            .directory
+            .as_deref()
+            .ok_or(DiagnosticBundleError::InvalidJournalPolicy)?;
+        self.segment_sequence = self.segment_sequence.saturating_add(1);
+        let path = journal_segment_path(directory, day, std::process::id(), self.segment_sequence);
+        self.segment = Some(open_new_private_file(&path)?);
+        self.segment_path = Some(path.clone());
+        self.segment_bytes = 0;
+        self.segment_day = day;
+        let files = journal_files(directory)?;
+        cleanup_journal_files(
+            &files,
+            day,
+            self.policy.retention_days,
+            Some(path.as_path()),
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct JournalFile {
+    path: PathBuf,
+    day: u64,
+}
+
+fn validate_journal_policy(policy: DiagnosticJournalPolicy) -> Result<(), DiagnosticBundleError> {
+    if policy.retention_days == 0 || policy.max_segment_bytes < 1024 {
+        return Err(DiagnosticBundleError::InvalidJournalPolicy);
+    }
+    Ok(())
+}
+
+fn journal_files(directory: &Path) -> Result<Vec<JournalFile>, DiagnosticBundleError> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        if !metadata.is_file() || entry.file_type()?.is_symlink() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(day) = parse_journal_day(&name) else {
+            continue;
+        };
+        files.push(JournalFile {
+            path: entry.path(),
+            day,
+        });
+    }
+    files.sort_by(|left, right| {
+        left.day
+            .cmp(&right.day)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    Ok(files)
+}
+
+fn parse_journal_day(name: &str) -> Option<u64> {
+    let rest = name.strip_prefix("events-")?;
+    let (day, suffix) = rest.split_once('-')?;
+    if Path::new(suffix).extension()?.to_str()? != "jsonl" {
+        return None;
+    }
+    day.parse().ok()
+}
+
+fn cleanup_journal_files(
+    files: &[JournalFile],
+    current_day: u64,
+    retention_days: u64,
+    protected: Option<&Path>,
+) -> Result<(), DiagnosticBundleError> {
+    let first_retained_day = current_day.saturating_sub(retention_days.saturating_sub(1));
+    let mut remaining = files.len();
+    for file in files {
+        if protected.is_some_and(|path| path == file.path) {
+            continue;
+        }
+        if file.day < first_retained_day || remaining > MAX_JOURNAL_FILES {
+            fs::remove_file(&file.path)?;
+            remaining = remaining.saturating_sub(1);
+        }
+    }
+    Ok(())
+}
+
+fn load_journal(files: &[JournalFile]) -> Result<DiagnosticJournal, DiagnosticBundleError> {
+    let mut journal = DiagnosticJournal::default();
+    for file in files {
+        let reader = BufReader::new(File::open(&file.path)?);
+        for line in reader.lines() {
+            let Ok(line) = line else { continue };
+            let Ok(event) = serde_json::from_str::<DiagnosticEvent>(&line) else {
+                continue;
+            };
+            journal.record(event);
+        }
+    }
+    Ok(journal)
+}
+
+fn create_journal_segment(
+    directory: &Path,
+    day: u64,
+    now_ms: u64,
+) -> Result<(File, PathBuf, u32), DiagnosticBundleError> {
+    let seed = u32::try_from(now_ms % u64::from(u32::MAX)).unwrap_or(0);
+    for offset in 0..1024_u32 {
+        let sequence = seed.saturating_add(offset);
+        let path = journal_segment_path(directory, day, std::process::id(), sequence);
+        match open_new_private_file(&path) {
+            Ok(file) => return Ok((file, path, sequence)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(DiagnosticBundleError::InvalidJournalPolicy)
+}
+
+fn journal_segment_path(directory: &Path, day: u64, process_id: u32, sequence: u32) -> PathBuf {
+    directory.join(format!("events-{day}-{process_id}-{sequence}.jsonl"))
+}
+
+fn open_new_private_file(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.create_new(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DiagnosticBundleSelection {
     pub include_events: bool,
@@ -194,6 +475,8 @@ pub enum DiagnosticBundleError {
     ReportTooLarge,
     #[error("diagnostic events exceed the size budget")]
     EventsTooLarge,
+    #[error("diagnostic journal policy or storage is invalid")]
+    InvalidJournalPolicy,
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -380,7 +663,10 @@ mod tests {
                 pending_restore: false,
                 last_backup_error: false,
             },
-            sources: DiagnosticSourcesSummary { event_count: 1 },
+            sources: DiagnosticSourcesSummary {
+                event_count: 1,
+                event_retention_days: 14,
+            },
             privacy: PrivacySummary {
                 includes_logs: false,
                 includes_user_content: false,
@@ -400,6 +686,15 @@ mod tests {
                 component: DiagnosticComponent::Persistence,
                 code: DiagnosticEventCode::RecoveryModeStarted,
             }],
+        }
+    }
+
+    fn event(occurred_at_ms: u64) -> DiagnosticEvent {
+        DiagnosticEvent {
+            occurred_at_ms,
+            severity: DiagnosticSeverity::Info,
+            component: DiagnosticComponent::Application,
+            code: DiagnosticEventCode::ApplicationStarted,
         }
     }
 
@@ -486,12 +781,7 @@ mod tests {
     fn journal_is_bounded_and_discards_oldest_entries() {
         let mut journal = DiagnosticJournal::default();
         for occurred_at_ms in 0..=MAX_DIAGNOSTIC_EVENTS as u64 {
-            journal.record(DiagnosticEvent {
-                occurred_at_ms,
-                severity: DiagnosticSeverity::Info,
-                component: DiagnosticComponent::Application,
-                code: DiagnosticEventCode::ApplicationStarted,
-            });
+            journal.record(event(occurred_at_ms));
         }
         let snapshot = journal.snapshot();
         assert_eq!(snapshot.entries.len(), MAX_DIAGNOSTIC_EVENTS);
@@ -518,6 +808,76 @@ mod tests {
         let mut archive = zip::ZipArchive::new(file).expect("archive");
         assert_eq!(archive.len(), 2);
         assert!(archive.by_name(EVENTS_PATH).is_err());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn persistent_journal_rotates_and_recovers_valid_entries() {
+        let root =
+            std::env::temp_dir().join(format!("nimora-persistent-journal-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let now_ms = 100 * MILLIS_PER_DAY;
+        let policy = DiagnosticJournalPolicy {
+            retention_days: 14,
+            max_segment_bytes: 1024,
+        };
+        let mut journal =
+            PersistentDiagnosticJournal::open(&root, policy, now_ms).expect("open journal");
+        for offset in 0..40 {
+            journal.record(event(now_ms + offset)).expect("record");
+        }
+        assert!(journal_files(&root).expect("segments").len() > 1);
+        drop(journal);
+
+        let reopened =
+            PersistentDiagnosticJournal::open(&root, policy, now_ms + 100).expect("reopen");
+        let snapshot = reopened.snapshot();
+        assert_eq!(snapshot.entries.len(), 40);
+        assert_eq!(snapshot.entries[0].occurred_at_ms, now_ms);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn persistent_journal_ignores_corrupt_lines_and_prunes_expired_segments() {
+        let root =
+            std::env::temp_dir().join(format!("nimora-corrupt-journal-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("fixture");
+        let now_ms = 100 * MILLIS_PER_DAY;
+        let valid = serde_json::to_string(&event(now_ms)).expect("valid event");
+        fs::write(
+            root.join("events-100-1-1.jsonl"),
+            format!("{valid}\n{{truncated"),
+        )
+        .expect("current fixture");
+        fs::write(root.join("events-1-1-1.jsonl"), format!("{valid}\n")).expect("expired fixture");
+
+        let journal =
+            PersistentDiagnosticJournal::open(&root, DiagnosticJournalPolicy::default(), now_ms)
+                .expect("open journal");
+        assert_eq!(journal.len(), 1);
+        assert!(!root.join("events-1-1-1.jsonl").exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistent_journal_rejects_a_symbolic_link_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("nimora-journal-symlink-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("real")).expect("real directory");
+        symlink(root.join("real"), root.join("linked")).expect("symlink");
+        assert!(matches!(
+            PersistentDiagnosticJournal::open(
+                &root.join("linked"),
+                DiagnosticJournalPolicy::default(),
+                100 * MILLIS_PER_DAY
+            ),
+            Err(DiagnosticBundleError::InvalidJournalPolicy)
+        ));
         fs::remove_dir_all(root).expect("cleanup");
     }
 }

@@ -8,8 +8,9 @@ use nimora_asset_installer::{
 use nimora_diagnostics_bundle::{
     ApplicationSummary, DataProtectionSummary, DiagnosticBundleError, DiagnosticBundleReceipt,
     DiagnosticBundleSelection, DiagnosticComponent, DiagnosticEvent, DiagnosticEventCode,
-    DiagnosticJournal, DiagnosticReport, DiagnosticSeverity, DiagnosticSourcesSummary,
-    PrivacySummary, RuntimeSummary, SystemSummary, export_diagnostic_bundle,
+    DiagnosticJournalPolicy, DiagnosticReport, DiagnosticSeverity, DiagnosticSourcesSummary,
+    PersistentDiagnosticJournal, PrivacySummary, RuntimeSummary, SystemSummary,
+    export_diagnostic_bundle,
 };
 use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
@@ -94,7 +95,7 @@ struct DesktopState {
     outbox: SqliteOutboxRepository,
     backups: BackupCoordinator,
     backup_last_error: Mutex<Option<String>>,
-    diagnostic_journal: Mutex<DiagnosticJournal>,
+    diagnostic_journal: Mutex<PersistentDiagnosticJournal>,
     user_program_event_sessions: Mutex<HashMap<Uuid, UserProgramEventSession>>,
     active_user_program_workers: Mutex<HashMap<Uuid, ActiveUserProgramWorker>>,
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
@@ -185,6 +186,7 @@ impl DesktopState {
         asset_store: PathBuf,
         program_store: PathBuf,
         backups: BackupCoordinator,
+        mut diagnostic_journal: PersistentDiagnosticJournal,
     ) -> Result<Self, DesktopError> {
         let events = RuntimeEventBus::default();
         let runtime = RuntimeService::initialize_with_event_bus(
@@ -199,8 +201,7 @@ impl DesktopState {
         let window_policy = active_window_policy(&profiles.snapshot()?)?;
         let program_data_store =
             ProgramDataStore::new(program_store.with_file_name("program-data"));
-        let mut diagnostic_journal = DiagnosticJournal::default();
-        diagnostic_journal.record(diagnostic_event(
+        let _ = diagnostic_journal.record(diagnostic_event(
             DiagnosticSeverity::Info,
             DiagnosticComponent::Application,
             DiagnosticEventCode::ApplicationStarted,
@@ -238,6 +239,7 @@ impl DesktopState {
         asset_store: PathBuf,
         program_store: PathBuf,
         backups: BackupCoordinator,
+        mut diagnostic_journal: PersistentDiagnosticJournal,
         reason: &'static str,
     ) -> Result<Self, DesktopError> {
         let events = RuntimeEventBus::default();
@@ -251,8 +253,7 @@ impl DesktopState {
         let window_policy = active_window_policy(&profiles.snapshot()?)?;
         let program_data_store =
             ProgramDataStore::new(program_store.with_file_name("program-data-recovery"));
-        let mut diagnostic_journal = DiagnosticJournal::default();
-        diagnostic_journal.record(diagnostic_event(
+        let _ = diagnostic_journal.record(diagnostic_event(
             DiagnosticSeverity::Error,
             DiagnosticComponent::Persistence,
             DiagnosticEventCode::RecoveryModeStarted,
@@ -785,7 +786,7 @@ fn record_diagnostic_event(
         .diagnostic_journal
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?
-        .record(diagnostic_event(severity, component, code)?);
+        .record(diagnostic_event(severity, component, code)?)?;
     Ok(())
 }
 
@@ -840,7 +841,10 @@ fn diagnostic_report(state: &DesktopState) -> Result<DiagnosticReport, DesktopEr
             pending_restore: backup_health.pending_restore.is_some(),
             last_backup_error: backup_health.last_error.is_some(),
         },
-        sources: DiagnosticSourcesSummary { event_count },
+        sources: DiagnosticSourcesSummary {
+            event_count,
+            event_retention_days: DiagnosticJournalPolicy::default().retention_days,
+        },
         privacy: PrivacySummary {
             includes_logs: false,
             includes_user_content: false,
@@ -3088,6 +3092,11 @@ pub fn run() {
         .expect("Nimora desktop runtime failed");
 }
 
+fn open_diagnostic_journal(directory: &Path, now_ms: u64) -> PersistentDiagnosticJournal {
+    PersistentDiagnosticJournal::open(directory, DiagnosticJournalPolicy::default(), now_ms)
+        .unwrap_or_else(|_| PersistentDiagnosticJournal::in_memory())
+}
+
 fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_directory = app.path().app_data_dir()?;
     std::fs::create_dir_all(&data_directory)?;
@@ -3097,6 +3106,10 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
         BackupCoordinator::new(&database_path, &backup_directory, BackupPolicy::default());
     let asset_store = data_directory.join("assets");
     let program_store = data_directory.join("programs");
+    let diagnostic_journal = open_diagnostic_journal(
+        &data_directory.join("diagnostics/events"),
+        current_time_ms()?,
+    );
     let startup_result = apply_pending_restore(&database_path, &backup_directory).and_then(|_| {
         if database_path.exists() {
             verify_database_file(&database_path)?;
@@ -3104,11 +3117,18 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
         Ok(())
     });
     let state = match startup_result {
-        Ok(()) => DesktopState::open(&database_path, asset_store, program_store, backups)?,
+        Ok(()) => DesktopState::open(
+            &database_path,
+            asset_store,
+            program_store,
+            backups,
+            diagnostic_journal,
+        )?,
         Err(_) => DesktopState::open_recovery(
             asset_store,
             program_store,
             backups,
+            diagnostic_journal,
             "database-unavailable",
         )?,
     };
@@ -3161,13 +3181,16 @@ mod tests {
         DesktopState, PetAction, ProfilePolicy, StartupMode, TrayAction,
         UserProgramRollbackReceipt, WindowPolicy, diagnostic_report, ensure_normal_mode,
         ensure_program_permissions, inspect_asset_catalog, install_gltf_character,
-        parse_asset_protocol_path, parse_user_program_plan, permission_grant,
-        persist_active_character, resolve_active_character, resolve_character_renderer,
-        screen_coordinate, serve_asset_protocol, user_program_input, valid_asset_identifier,
-        validate_model_source, validate_package_source, validate_requested_animation_map,
+        open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
+        permission_grant, persist_active_character, resolve_active_character,
+        resolve_character_renderer, screen_coordinate, serve_asset_protocol, user_program_input,
+        valid_asset_identifier, validate_model_source, validate_package_source,
+        validate_requested_animation_map,
     };
     use nimora_asset_installer::{GltfCharacterMetadata, ModelAnimationBinding};
-    use nimora_diagnostics_bundle::{DiagnosticComponent, DiagnosticEventCode, DiagnosticSeverity};
+    use nimora_diagnostics_bundle::{
+        DiagnosticComponent, DiagnosticEventCode, DiagnosticSeverity, PersistentDiagnosticJournal,
+    };
     use nimora_persistence_sqlite::{
         BackupCoordinator, BackupPolicy, SqliteProgramPermissionRepository,
     };
@@ -3188,6 +3211,7 @@ mod tests {
             root.join("assets"),
             root.join("programs"),
             BackupCoordinator::new(&database, root.join("backups"), BackupPolicy::default()),
+            PersistentDiagnosticJournal::in_memory(),
             "database-unavailable",
         )
         .expect("recovery state");
@@ -3209,6 +3233,7 @@ mod tests {
         assert!(!diagnostic.privacy.includes_file_paths);
         assert!(!diagnostic.privacy.automatically_uploaded);
         assert_eq!(diagnostic.sources.event_count, 1);
+        assert_eq!(diagnostic.sources.event_retention_days, 14);
         let events = state
             .diagnostic_journal
             .lock()
@@ -3228,6 +3253,37 @@ mod tests {
             std::fs::read(&database).expect("preserved database"),
             corrupt_bytes
         );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn unavailable_diagnostic_storage_degrades_to_memory() {
+        let root = std::env::temp_dir().join(format!(
+            "nimora-diagnostic-fallback-{}",
+            uuid::Uuid::now_v7()
+        ));
+        std::fs::create_dir_all(&root).expect("fixture directory");
+        let blocked_path = root.join("events");
+        std::fs::write(&blocked_path, b"not a directory").expect("blocked fixture");
+
+        let mut journal = open_diagnostic_journal(&blocked_path, 1_784_294_125_392);
+        assert!(journal.is_empty());
+        journal
+            .record(
+                super::diagnostic_event(
+                    DiagnosticSeverity::Info,
+                    DiagnosticComponent::Application,
+                    DiagnosticEventCode::ApplicationStarted,
+                )
+                .expect("diagnostic event"),
+            )
+            .expect("memory journal remains available");
+        assert_eq!(journal.len(), 1);
+        assert_eq!(
+            std::fs::read(&blocked_path).expect("preserved fixture"),
+            b"not a directory"
+        );
+
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 

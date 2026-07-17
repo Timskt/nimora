@@ -121,7 +121,7 @@ export function DataProtection({ recoveryMode, onNotice }: DataProtectionProps) 
       </div>
       <label className="diagnostic-source-option">
         <input type="checkbox" checked={includeEvents} disabled={!diagnostic?.sources.eventCount} onChange={(event) => setIncludeEvents(event.target.checked)} />
-        <span><strong>本次运行的结构化事件</strong><small>{diagnostic?.sources.eventCount ?? 0} 条 · 仅固定事件码和时间，不含文本</small></span>
+        <span><strong>最近保留的结构化事件</strong><small>{diagnostic?.sources.eventCount ?? 0} 条 · 默认保留 {diagnostic?.sources.eventRetentionDays ?? 14} 天，可取消导出</small></span>
       </label>
       <ul className="privacy-list" aria-label="诊断包隐私边界">
         <li>不含密钥</li><li>不含用户正文</li><li>不含文件路径</li><li>不会自动上传</li>

@@ -67,7 +67,7 @@ export interface DiagnosticReport {
     pendingRestore: boolean;
     lastBackupError: boolean;
   };
-  sources: { eventCount: number };
+  sources: { eventCount: number; eventRetentionDays: number };
   privacy: {
     includesLogs: false;
     includesUserContent: false;
@@ -428,7 +428,7 @@ export function createDesktopApi(
           system: { os: "browser-preview", architecture: "web" },
           runtime: { startupMode: previewRecoveryMode ? "recovery" : "normal", startupReason: previewRecoveryMode ? "database-unavailable" : null, safetyMode: "normal", outboxPending: 0, outboxDeadLetter: 0 },
           dataProtection: { databaseSchema: 1, backupCount: previewRecoveryMode ? 1 : 0, latestBackupAtMs: previewRecoveryMode ? 1_784_294_125_392 : null, pendingRestore: false, lastBackupError: false },
-          sources: { eventCount: previewRecoveryMode ? 1 : 2 },
+          sources: { eventCount: previewRecoveryMode ? 1 : 2, eventRetentionDays: 14 },
           privacy: { includesLogs: false, includesUserContent: false, includesSecrets: false, includesFilePaths: false, automaticallyUploaded: false },
         };
       },

@@ -15,7 +15,7 @@ describe("desktop platform adapter", () => {
       includesFilePaths: false,
       automaticallyUploaded: false,
     });
-    expect((await api.previewDiagnosticReport()).sources).toEqual({ eventCount: 2 });
+    expect((await api.previewDiagnosticReport()).sources).toEqual({ eventCount: 2, eventRetentionDays: 14 });
     expect((await api.profiles()).profiles[0]?.name).toBe("Default");
     await expect(api.playAction("celebrate")).resolves.toBeNull();
   });
