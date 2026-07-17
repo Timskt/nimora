@@ -49,6 +49,7 @@ flowchart TB
 | WebView UI | 渲染与配置界面 | 可重载，不持有唯一业务状态 |
 | Extension Host | 运行可信或受限 TS 扩展 | 崩溃后限次重启并可禁用 |
 | High-risk Worker | 单个高风险扩展或原生适配器 | 独立生命周期和更严格配额 |
+| Model Importer Worker | 单次探测暂存区内的不可信模型 | 超时强杀；崩溃或拒绝不影响 Core |
 | Agent Worker | Provider 请求、计划和工具循环 | 超时终止，不直接访问 OS |
 
 独立进程只提供崩溃隔离，不等于安全沙箱。所有敏感能力必须经过 Capability Broker。
@@ -68,6 +69,8 @@ Core 包含纯领域逻辑：Pet、Command、Event、Profile、Policy、Permissi
 负责资源解析、继承合并、兼容检查、纹理缓存、动画图和回退。资源包不能执行代码。
 
 第三方模型必须经过隔离 Importer 探测、校验和规范化，再交给版本化 Renderer Adapter。Pet Runtime 只依赖统一动作与表达语义，不直接依赖 Live2D、VRM 或 glTF 私有结构。
+
+当前首个 Importer 实现是 `nimora-model-importer-worker`：仅探测 GLB 2.0，宿主以清空环境、关闭 stdin、固定暂存工作目录的一次性子进程运行，限制 80 MiB 输入、1 MiB JSON、64 KiB 协议输出、执行截止时间以及节点、网格、材质和纹理数量。Worker 拒绝外部 URI、data URI、路径逃逸、错误 chunk 顺序和长度不一致。该实现证明格式验证与 Core 的崩溃/超时隔离，不代表操作系统级文件系统或内存沙箱；桌面导入编排、规范化输出、许可证扫描、GLTF/VRM/Live2D、Renderer Adapter 和安装仍待实现。
 
 ### 4.4 Extension Supervisor
 

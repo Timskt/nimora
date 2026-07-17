@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/asset-installer",
+  "crates/model-importer",
   "crates/user-code-policy",
   "crates/user-code-host",
   "crates/user-code-gateway",

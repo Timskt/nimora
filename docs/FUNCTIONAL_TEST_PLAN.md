@@ -103,6 +103,7 @@ ID / 标题 / 优先级 / 前置条件
 | MODEL-003 | Adapter 崩溃或 GPU context 丢失 | 恢复默认角色，可重建渲染实例 | P0 |
 | MODEL-004 | 连续切换、卸载模型 | 纹理、内存、监听器和临时文件无持续增长 | P1 |
 | MODEL-005 | 脚本发送标准表情与动作 | 序列帧、Live2D、VRM 均映射或明确回退 | P1 |
+| MODEL-006 | GLB 探测 Worker 隔离 | 合法 GLB 返回有界结构报告；远程 URI、路径逃逸和畸形 chunk 被拒绝；超时 Worker 被强杀，崩溃不影响 Core | P0 |
 
 ## 8. Command 与命令面板
 

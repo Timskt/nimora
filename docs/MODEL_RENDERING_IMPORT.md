@@ -127,3 +127,14 @@ pnpm deskpet pack build ./character-pack
 - 连续切换与卸载模型不存在持续纹理、内存、监听器或临时文件增长。
 - 离线状态可加载、切换、编辑和预览全部本地模型。
 - 发布检查覆盖格式、性能、许可证、安全、动作完整性和可访问性。
+
+## 12. 当前实现状态
+
+当前仓库已实现第一个真实 Importer Worker，而不是多格式占位 Adapter：
+
+- `nimora-model-importer-worker` 只接受暂存目录根部的相对 GLB 文件和 `nimora.model-probe/1` 请求。
+- GLB 2.0 探测验证魔数、容器长度、JSON/BIN chunk 顺序和边界、`asset.version`、外部 URI 以及节点、网格、材质和纹理预算。
+- 宿主 Supervisor 清空 Worker 环境、关闭 stdin、固定工作目录，限制 80 MiB 输入、1 MiB JSON、64 KiB 输出并在截止时间后强制终止。
+- 真实进程测试覆盖合法模型、远程 URI、暂存区逃逸、Worker 超时和 Worker 崩溃；这些失败不会进入 Core。
+
+当前未实现桌面文件选择与暂存复制、OS 级文件系统/网络/内存沙箱、模型规范化产物、原子安装、许可证扫描、真实预览与 3D Renderer。GLTF JSON、VRM、Live2D 和其它格式也尚未实现，不能根据本节宣称格式矩阵已经可用。
