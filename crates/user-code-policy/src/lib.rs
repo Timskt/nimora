@@ -1,10 +1,17 @@
 use serde::{Deserialize, Serialize};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const MAX_SUBSCRIPTIONS: usize = 32;
 const MAX_COMMANDS: usize = 32;
 const MAX_RUNTIME_MS: u64 = 30_000;
 const MAX_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_OUTPUT_BYTES: u64 = 1024 * 1024;
+const MAX_CONCURRENT_EXECUTIONS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -35,6 +42,130 @@ pub struct ExecutionPolicy {
     pub can_subscribe_events: bool,
     pub can_invoke_commands: bool,
     pub can_store_local_data: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerLimits {
+    pub timeout: Duration,
+    pub memory_bytes: u64,
+    pub output_bytes: u64,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum WorkerError {
+    #[error("maximum concurrent user programs reached")]
+    ConcurrencyLimit,
+    #[error("worker execution was cancelled")]
+    Cancelled,
+    #[error("worker execution exceeded its deadline")]
+    TimedOut,
+    #[error("worker output exceeded its budget")]
+    OutputLimit,
+}
+
+#[derive(Debug)]
+pub struct ExecutionController {
+    active: Arc<AtomicUsize>,
+    max_concurrent: usize,
+}
+
+impl Default for ExecutionController {
+    fn default() -> Self {
+        Self {
+            active: Arc::new(AtomicUsize::new(0)),
+            max_concurrent: MAX_CONCURRENT_EXECUTIONS,
+        }
+    }
+}
+
+impl ExecutionController {
+    /// Reserves one bounded worker execution slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorkerError::ConcurrencyLimit`] when all slots are occupied.
+    pub fn admit(&self, policy: &ExecutionPolicy) -> Result<ExecutionHandle, WorkerError> {
+        let mut current = self.active.load(Ordering::Acquire);
+        loop {
+            if current >= self.max_concurrent {
+                return Err(WorkerError::ConcurrencyLimit);
+            }
+            match self.active.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(next) => current = next,
+            }
+        }
+        Ok(ExecutionHandle {
+            active: Arc::clone(&self.active),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            deadline: Instant::now() + Duration::from_millis(policy.manifest.timeout_ms),
+            output_bytes: Mutex::new(0),
+            limits: WorkerLimits {
+                timeout: Duration::from_millis(policy.manifest.timeout_ms),
+                memory_bytes: policy.manifest.memory_bytes,
+                output_bytes: MAX_OUTPUT_BYTES,
+            },
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct ExecutionHandle {
+    active: Arc<AtomicUsize>,
+    cancelled: Arc<AtomicBool>,
+    deadline: Instant,
+    output_bytes: Mutex<u64>,
+    pub limits: WorkerLimits,
+}
+
+impl ExecutionHandle {
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    /// Checks whether the execution may continue.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after cancellation or deadline expiry.
+    pub fn checkpoint(&self) -> Result<(), WorkerError> {
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err(WorkerError::Cancelled);
+        }
+        if Instant::now() >= self.deadline {
+            return Err(WorkerError::TimedOut);
+        }
+        Ok(())
+    }
+
+    /// Accounts bytes emitted by an isolated worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after cancellation, timeout, or output budget exhaustion.
+    pub fn record_output(&self, bytes: u64) -> Result<(), WorkerError> {
+        self.checkpoint()?;
+        let mut total = self
+            .output_bytes
+            .lock()
+            .map_err(|_| WorkerError::Cancelled)?;
+        *total = total.checked_add(bytes).ok_or(WorkerError::OutputLimit)?;
+        if *total > self.limits.output_bytes {
+            return Err(WorkerError::OutputLimit);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ExecutionHandle {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -183,5 +314,32 @@ mod tests {
         let mut value = manifest();
         value.timeout_ms = MAX_RUNTIME_MS + 1;
         assert_eq!(evaluate(value), Err(PolicyError::TimeoutExceeded));
+    }
+
+    #[test]
+    fn execution_handle_enforces_output_and_cancellation() {
+        let policy = evaluate(manifest()).unwrap();
+        let controller = ExecutionController::default();
+        let handle = controller.admit(&policy).unwrap();
+        assert!(handle.record_output(MAX_OUTPUT_BYTES).is_ok());
+        assert_eq!(handle.record_output(1), Err(WorkerError::OutputLimit));
+        handle.cancel();
+        assert_eq!(handle.checkpoint(), Err(WorkerError::Cancelled));
+    }
+
+    #[test]
+    fn execution_slots_are_released_when_handles_drop() {
+        let policy = evaluate(manifest()).unwrap();
+        let controller = ExecutionController::default();
+        let mut handles = Vec::new();
+        for _ in 0..MAX_CONCURRENT_EXECUTIONS {
+            handles.push(controller.admit(&policy).unwrap());
+        }
+        assert!(matches!(
+            controller.admit(&policy),
+            Err(WorkerError::ConcurrencyLimit)
+        ));
+        drop(handles);
+        assert!(controller.admit(&policy).is_ok());
     }
 }

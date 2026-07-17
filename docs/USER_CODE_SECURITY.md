@@ -30,6 +30,8 @@
 
 桌面端 `validate_user_program` 命令已接入该策略层。Creator Studio 或未来 CLI 提交 Manifest 后，会获得 `grantedCapabilities`、实际超时和内存预算组成的授权报告；安全模式会直接拒绝校验和后续执行准备。授权报告使用能力列表而非固定布尔字段，新增能力时保持 IPC 契约可扩展。
 
+`ExecutionController` 已提供 Worker 准入边界：默认最多同时执行 8 个用户程序，每个执行句柄携带取消令牌、绝对截止时间、Manifest 内存预算和 1 MiB 输出上限。Worker 必须在事件循环和能力调用前执行 `checkpoint`，并通过 `record_output` 计量日志、返回值和标准输出；句柄释放时自动归还并发槽位。
+
 ## 模块调用模型
 
 ```text
@@ -53,4 +55,4 @@ User Code
 - 审计日志、失败重试上限和安全模式联动。
 - 离线环境中仍可运行已安装代码，但不能绕过本地策略。
 
-当前仓库只完成 Manifest 策略评估、Tauri Gateway 接入和契约测试；独立执行 Worker 尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。
+当前仓库已完成 Manifest 策略评估、Tauri Gateway、Worker 准入/取消/截止时间/输出预算和契约测试；独立进程或 WASM/JS 引擎尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。
