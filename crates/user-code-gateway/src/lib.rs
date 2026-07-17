@@ -27,6 +27,7 @@ pub struct AgentGatewayPolicy {
 pub enum CapabilityRequest {
     ReadPetState,
     ReadProfileState,
+    ReadCharacterState,
     ReadAssetCatalog,
     ReadRuntimeHealth,
     ReadLocalData { key: String },
@@ -40,6 +41,7 @@ pub enum CapabilityRequest {
 pub enum CapabilityResponse {
     PetState { value: Value },
     ProfileState { value: Value },
+    CharacterState { value: Value },
     AssetCatalog { value: Value },
     RuntimeHealth { value: Value },
     LocalData { value: Option<Value> },
@@ -62,6 +64,15 @@ pub trait CapabilityBackend: std::fmt::Debug + Send + Sync {
     ///
     /// Returns a backend-specific error when Profile state cannot be read.
     fn read_profile_state(&self) -> Result<Value, String>;
+
+    /// Returns a path-free active character and renderer summary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend-specific error when character state cannot be read.
+    fn read_character_state(&self) -> Result<Value, String> {
+        Err("character state capability is unavailable".to_owned())
+    }
 
     /// Returns a serialized asset catalog without exposing its store.
     ///
@@ -183,6 +194,7 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
                     .map(|value| CapabilityResponse::ProfileState { value })
                     .map_err(GatewayError::Backend)
             }
+            CapabilityRequest::ReadCharacterState => Err(GatewayError::CapabilityDenied),
             CapabilityRequest::ReadAssetCatalog | CapabilityRequest::ReadRuntimeHealth => {
                 Err(GatewayError::CapabilityDenied)
             }
@@ -268,6 +280,15 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
                     .map(|value| CapabilityResponse::ProfileState { value })
                     .map_err(GatewayError::Backend)
             }
+            CapabilityRequest::ReadCharacterState => {
+                if !policy.read_capabilities.contains("character.state") {
+                    return Err(GatewayError::CapabilityDenied);
+                }
+                self.backend
+                    .read_character_state()
+                    .map(|value| CapabilityResponse::CharacterState { value })
+                    .map_err(GatewayError::Backend)
+            }
             CapabilityRequest::ReadAssetCatalog => {
                 if !policy.read_capabilities.contains("asset.catalog") {
                     return Err(GatewayError::CapabilityDenied);
@@ -325,6 +346,10 @@ mod tests {
 
         fn read_profile_state(&self) -> Result<Value, String> {
             Ok(json!({"activeProfileId": "profile-1"}))
+        }
+
+        fn read_character_state(&self) -> Result<Value, String> {
+            Ok(json!({"active": {"assetId": "builtin.aster"}}))
         }
 
         fn read_local_data(&self, _program_id: &str, key: &str) -> Result<Option<Value>, String> {
@@ -515,6 +540,18 @@ mod tests {
             &policy,
             &execution,
             envelope(&execution, CapabilityRequest::ReadProfileState),
+        );
+        assert_eq!(result, Err(GatewayError::CapabilityDenied));
+    }
+
+    #[test]
+    fn user_programs_do_not_inherit_agent_character_state() {
+        let policy = policy();
+        let execution = ExecutionController::default().admit(&policy).unwrap();
+        let result = CapabilityGateway::new(Backend).dispatch(
+            &policy,
+            &execution,
+            envelope(&execution, CapabilityRequest::ReadCharacterState),
         );
         assert_eq!(result, Err(GatewayError::CapabilityDenied));
     }

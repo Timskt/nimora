@@ -3761,6 +3761,34 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
         .map_err(|error| error.to_string())
     }
 
+    fn read_character_state(&self) -> Result<serde_json::Value, String> {
+        let mode = self
+            .state
+            .safety
+            .snapshot()
+            .map_err(|error| error.to_string())?
+            .mode;
+        let active = resolve_active_character(&self.state.asset_store, mode)
+            .map_err(|error| error.to_string())?;
+        let renderer = resolve_character_renderer(&self.state.asset_store, mode)
+            .map_err(|error| error.to_string())?;
+        Ok(serde_json::json!({
+            "spec": "nimora.character-state/1",
+            "active": active,
+            "renderer": {
+                "assetId": renderer.asset_id,
+                "backend": renderer.backend,
+                "canvas": renderer.canvas,
+                "anchor": renderer.anchor,
+                "defaultScale": renderer.default_scale,
+                "pixelArt": renderer.pixel_art,
+                "fallbacks": renderer.fallbacks,
+                "hasSpriteClips": renderer.clips.is_some(),
+                "hasModel": renderer.model.is_some()
+            }
+        }))
+    }
+
     fn read_asset_catalog(&self) -> Result<serde_json::Value, String> {
         serde_json::to_value(
             inspect_asset_catalog(&self.state.asset_store).map_err(|error| error.to_string())?,
@@ -4337,17 +4365,18 @@ fn discover_ollama_worker(app: &AppHandle) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVE_CHARACTER_FILE, AssetInstallReceipt, BUILTIN_CHARACTER_ID, DesktopError,
-        DesktopState, LocalAgentRequest, PetAction, PrepareAgentToolRequest, ProfilePolicy,
-        ResolveAgentToolRequest, StartupMode, TrayAction, UserProgramRollbackReceipt, WindowPolicy,
-        agent_catalog_inner, cancel_all_pending_agent_tools, confirm_agent_tool_inner,
-        confirm_agent_tool_with_registry, default_agent_model, default_agent_provider_id,
-        diagnostic_report, ensure_normal_mode, ensure_program_permissions, inspect_asset_catalog,
-        install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
-        parse_user_program_plan, permission_grant, persist_active_character,
-        prepare_agent_tool_inner, reject_agent_tool_inner, resolve_active_character,
-        resolve_character_renderer, run_local_agent_inner, screen_coordinate, serve_asset_protocol,
-        user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
+        ACTIVE_CHARACTER_FILE, AssetInstallReceipt, BUILTIN_CHARACTER_ID, CapabilityBackend,
+        DesktopCapabilityBackend, DesktopError, DesktopState, LocalAgentRequest, PetAction,
+        PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest, StartupMode, TrayAction,
+        UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
+        cancel_all_pending_agent_tools, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
+        default_agent_model, default_agent_provider_id, diagnostic_report, ensure_normal_mode,
+        ensure_program_permissions, inspect_asset_catalog, install_gltf_character,
+        open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
+        permission_grant, persist_active_character, prepare_agent_tool_inner,
+        reject_agent_tool_inner, resolve_active_character, resolve_character_renderer,
+        run_local_agent_inner, screen_coordinate, serve_asset_protocol, user_program_input,
+        valid_asset_identifier, validate_model_source, validate_package_source,
         validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
@@ -4535,6 +4564,7 @@ mod tests {
             tool_ids,
             [
                 "asset.catalog.read".to_owned(),
+                "character.state.read".to_owned(),
                 "pet.animation.play".to_owned(),
                 "pet.position.move".to_owned(),
                 "pet.state.read".to_owned(),
@@ -4542,6 +4572,22 @@ mod tests {
                 "runtime.health.read".to_owned(),
             ]
         );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn character_state_capability_is_path_free() {
+        let (root, state) = normal_desktop_state();
+        let value = DesktopCapabilityBackend { state: &state }
+            .read_character_state()
+            .expect("character state");
+        assert_eq!(value["spec"], "nimora.character-state/1");
+        assert_eq!(value["active"]["assetId"], BUILTIN_CHARACTER_ID);
+        assert_eq!(value["renderer"]["backend"], "built-in");
+        let serialized = value.to_string();
+        assert!(!serialized.contains(root.to_string_lossy().as_ref()));
+        assert!(!serialized.contains("assetBaseUrl"));
+        assert!(!serialized.contains("model"));
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 

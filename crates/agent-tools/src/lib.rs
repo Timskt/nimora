@@ -11,6 +11,7 @@ use std::{collections::BTreeSet, time::Duration};
 
 const PET_STATE_READ: &str = "pet.state.read";
 const PROFILE_STATE_READ: &str = "profile.state.read";
+const CHARACTER_STATE_READ: &str = "character.state.read";
 const ASSET_CATALOG_READ: &str = "asset.catalog.read";
 const RUNTIME_HEALTH_READ: &str = "runtime.health.read";
 const PET_ANIMATION_PLAY: &str = "pet.animation.play";
@@ -50,6 +51,14 @@ pub fn production_tool_descriptors() -> Result<Vec<ToolDescriptor>, AgentRuntime
             PROFILE_STATE_READ,
             "Read profile state",
             "Reads the active profile collection through the Capability Gateway.",
+            empty_object_schema(),
+            CommandRisk::Safe,
+            ToolEffect::ReadOnly,
+        )?,
+        descriptor(
+            CHARACTER_STATE_READ,
+            "Read character state",
+            "Reads the active character and a path-free renderer capability summary through the Capability Gateway.",
             empty_object_schema(),
             CommandRisk::Safe,
             ToolEffect::ReadOnly,
@@ -124,6 +133,7 @@ impl<B: CapabilityBackend> GatewayToolBackend<B> {
             trace_id,
             read_capabilities: BTreeSet::from([
                 "asset.catalog".to_owned(),
+                "character.state".to_owned(),
                 "pet.state".to_owned(),
                 "profile.state".to_owned(),
                 "runtime.health".to_owned(),
@@ -149,6 +159,10 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
             PROFILE_STATE_READ => {
                 require_empty_arguments(&invocation.arguments)?;
                 CapabilityRequest::ReadProfileState
+            }
+            CHARACTER_STATE_READ => {
+                require_empty_arguments(&invocation.arguments)?;
+                CapabilityRequest::ReadCharacterState
             }
             ASSET_CATALOG_READ => {
                 require_empty_arguments(&invocation.arguments)?;
@@ -183,6 +197,7 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
         match response {
             CapabilityResponse::PetState { value }
             | CapabilityResponse::ProfileState { value }
+            | CapabilityResponse::CharacterState { value }
             | CapabilityResponse::AssetCatalog { value }
             | CapabilityResponse::RuntimeHealth { value }
             | CapabilityResponse::CommandAccepted { value } => Ok(value),

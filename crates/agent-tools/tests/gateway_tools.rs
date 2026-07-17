@@ -31,6 +31,10 @@ impl CapabilityBackend for Backend {
         Ok(json!({"activeProfileId": "profile:default"}))
     }
 
+    fn read_character_state(&self) -> Result<Value, String> {
+        Ok(json!({"active": {"assetId": "builtin.aster"}, "renderer": {"backend": "built-in"}}))
+    }
+
     fn read_asset_catalog(&self) -> Result<Value, String> {
         Ok(json!({"activeAssetId": "character:builtin.aster", "assets": []}))
     }
@@ -119,6 +123,7 @@ fn module_catalog_and_health_reads_use_explicit_gateway_capabilities() {
     let coordinator = AgentCoordinator::new(&providers, &tools);
     for (tool_id, expected_key) in [
         ("asset.catalog.read", "activeAssetId"),
+        ("character.state.read", "renderer"),
         ("runtime.health.read", "startup"),
     ] {
         let mut task = task();

@@ -61,7 +61,7 @@ flowchart LR
 - `ProviderToolTurn` 以 Provider 原始调用顺序聚合一个 Turn 的结果；未完成、错配和重复结果不能生成续跑消息。宿主因此可以并行执行只读调用、逐项等待写操作确认，但只能在全部调用成功后把完整结果交回 Provider。
 - 工具执行单步必须校验 Task/Trace 归属，在真正调用模块 Capability Gateway Backend 前扣减工具预算，并重新验证批准指纹。
 
-首个生产工具目录位于 `crates/agent-tools`，当前公开 `asset.catalog.read`、`pet.state.read`、`profile.state.read`、`runtime.health.read`、`pet.animation.play` 与 `pet.position.move`。目录只包含 Tool Descriptor 和固定模块 Adapter，不暴露 `DesktopState`、Repository、Tauri Command、任意命令字符串或文件路径。只读授权使用可扩展能力集合；资源目录只返回已验证资产摘要，运行健康只返回启动、安全、Outbox 与备份摘要，不包含日志、用户正文、路径或密钥。两个写工具固定映射到 `safe.pet.animate` 和 `safe.pet.move`，模型无法把参数中的字符串提升为 Gateway 命令；Invocation ID 作为幂等键、Task/Trace 作为关联上下文进入共享 Capability Gateway。只读工具允许 Safe 自动执行，两个写工具即使基础风险为 Low 也必须绑定实际参数批准。
+首个生产工具目录位于 `crates/agent-tools`，当前公开 `asset.catalog.read`、`character.state.read`、`pet.state.read`、`profile.state.read`、`runtime.health.read`、`pet.animation.play` 与 `pet.position.move`。目录只包含 Tool Descriptor 和固定模块 Adapter，不暴露 `DesktopState`、Repository、Tauri Command、任意命令字符串或文件路径。只读授权使用可扩展能力集合；资源目录只返回已验证资产摘要，角色状态只返回当前 Asset ID、渲染后端、画布/锚点和能力布尔值，主动剔除模型路径与资源 URL；运行健康只返回启动、安全、Outbox 与备份摘要，不包含日志、用户正文、路径或密钥。两个写工具固定映射到 `safe.pet.animate` 和 `safe.pet.move`，模型无法把参数中的字符串提升为 Gateway 命令；Invocation ID 作为幂等键、Task/Trace 作为关联上下文进入共享 Capability Gateway。只读工具允许 Safe 自动执行，两个写工具即使基础风险为 Low 也必须绑定实际参数批准。
 
 ### 3.1 桌面任务历史生命周期
 
@@ -148,7 +148,7 @@ nimora ai history delete --database <path> (--task-id <uuid>|--all)
 
 ## 14. 桌面工作台当前纵切
 
-桌面 Control Center 已提供 Agent 一级入口。工作台从宿主读取与 CLI、Provider 请求相同的六项生产 Tool Catalog，明确区分只读能力与必须确认的可逆写能力，并显示本地、无凭据、零费用边界。当前对话路径为 `provider:deterministic-local` 的确定性离线诊断单步，返回真实 Task、Finish Reason 与 Usage；它不伪装成通用对话模型，也不会自行产生 Tool Call。
+桌面 Control Center 已提供 Agent 一级入口。工作台从宿主读取与 CLI、Provider 请求相同的七项生产 Tool Catalog，明确区分只读能力与必须确认的可逆写能力，并显示本地、无凭据、零费用边界。当前对话路径为 `provider:deterministic-local` 的确定性离线诊断单步，返回真实 Task、Finish Reason 与 Usage；它不伪装成通用对话模型，也不会自行产生 Tool Call。
 
 工作台提供生产 Tool Catalog 的真实执行验证入口：只读工具经 Tool Registry 和共享 Capability Gateway 立即执行；写工具由 Rust 宿主生成参数绑定的 Invocation 与 Approval，并仅在 UI 展示实际 Tool ID、参数、风险和期限。Approval 不交给前端，宿主最多持有 32 个待确认项，5 分钟过期，确认或拒绝时一次性移除后再处理，因此不能换参、重放或在执行失败后隐式重试。进入 Safe Mode 会撤销全部待确认项；Recovery Mode 不允许创建或确认工具调用。
 
