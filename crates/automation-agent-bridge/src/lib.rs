@@ -13,6 +13,7 @@ const MAX_INSTRUCTION_BYTES: usize = 32 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutomationAgentTask {
     pub admission: AgentTaskAdmission,
+    pub model: String,
     pub instruction: String,
     pub idempotency_key: String,
 }
@@ -140,6 +141,7 @@ where
         self.submitter
             .submit(AutomationAgentTask {
                 admission,
+                model: arguments.model,
                 instruction: arguments.instruction,
                 idempotency_key,
             })
@@ -162,6 +164,7 @@ enum ContextTrust {
 struct AgentActionArguments {
     requester: String,
     provider_id: String,
+    model: String,
     instruction: String,
     #[serde(default)]
     tool_allowlist: BTreeSet<String>,
@@ -285,6 +288,7 @@ mod tests {
                 arguments: json!({
                     "requester": "automation:local.focus.ai-summary",
                     "providerId": "provider:deterministic-local",
+                    "model": "model:echo-v1",
                     "instruction": "Summarize the completed focus session.",
                     "toolAllowlist": ["runtime.health.read"],
                     "classification": "personal",
@@ -346,6 +350,7 @@ mod tests {
         assert_eq!(tasks[0].admission.task.budget.max_steps, 3);
         assert_eq!(tasks[0].admission.task.budget.max_tool_calls, 1);
         assert_eq!(tasks[0].admission.call_depth, 1);
+        assert_eq!(tasks[0].model, "model:echo-v1");
         assert_eq!(tasks[0].idempotency_key, "focus-session-42-summary");
     }
 

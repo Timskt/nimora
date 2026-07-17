@@ -2239,6 +2239,7 @@ dependencies = [
  "nimora-agent-runtime",
  "nimora-agent-tools",
  "nimora-asset-installer",
+ "nimora-automation-agent-bridge",
  "nimora-automation-capability-bridge",
  "nimora-automation-runtime",
  "nimora-diagnostics-bundle",

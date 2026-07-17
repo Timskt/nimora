@@ -17,6 +17,9 @@ use nimora_asset_installer::{
     inspect_asset_source_preview, install_asset_source, install_gltf_character,
     read_verified_asset_image, read_verified_asset_model, rollback_latest,
 };
+use nimora_automation_agent_bridge::{
+    AgentTaskSubmitter, AutomationAgentBridge, AutomationAgentContext, AutomationAgentTask,
+};
 use nimora_automation_capability_bridge::{AutomationCapabilityBridge, AutomationCapabilityPolicy};
 use nimora_automation_runtime::{
     ActionFailure, AutomationBackend, AutomationDefinition, AutomationEngine, AutomationError,
@@ -62,7 +65,7 @@ use nimora_user_code_policy::{
 use nimora_user_code_storage::ProgramDataStore;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs, io,
     path::{Path, PathBuf},
     sync::{
@@ -98,6 +101,8 @@ const MAX_MODEL_BYTES: u64 = 80 * 1024 * 1024;
 const MODEL_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PENDING_AGENT_TOOLS: usize = 32;
 const AGENT_TOOL_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
+const MAX_AUTOMATION_AGENT_SUBMISSIONS: usize = 4_096;
+const AUTOMATION_AGENT_REQUESTER: &str = "automation:desktop";
 
 #[derive(Debug)]
 struct DesktopState {
@@ -118,6 +123,7 @@ struct DesktopState {
     outbox: SqliteOutboxRepository,
     agent_history: SqliteAgentHistoryRepository,
     automation_journal: SqliteAutomationJournal,
+    automation_agent_submissions: Mutex<HashMap<(Uuid, String), Uuid>>,
     agent_history_last_error: Mutex<bool>,
     backups: BackupCoordinator,
     backup_last_error: Mutex<Option<String>>,
@@ -159,6 +165,7 @@ struct PendingProviderAgent {
     messages: Vec<ProviderMessage>,
     max_output_tokens: u64,
     offline: bool,
+    tool_allowlist: BTreeSet<String>,
     turn: ProviderToolTurn,
     approvals: Vec<Option<ApprovedProviderTool>>,
     remaining_confirmations: usize,
@@ -308,6 +315,7 @@ impl DesktopState {
             outbox: SqliteOutboxRepository::open(database_path)?,
             agent_history: SqliteAgentHistoryRepository::open(database_path)?,
             automation_journal,
+            automation_agent_submissions: Mutex::new(HashMap::new()),
             agent_history_last_error: Mutex::new(false),
             backups,
             backup_last_error: Mutex::new(None),
@@ -368,6 +376,7 @@ impl DesktopState {
             outbox: SqliteOutboxRepository::in_memory()?,
             agent_history: SqliteAgentHistoryRepository::in_memory()?,
             automation_journal: SqliteAutomationJournal::in_memory()?,
+            automation_agent_submissions: Mutex::new(HashMap::new()),
             agent_history_last_error: Mutex::new(false),
             backups,
             backup_last_error: Mutex::new(None),
@@ -819,6 +828,7 @@ fn run_live_automation(
         request.event_data,
     )
     .map_err(RuntimeError::from)?;
+    let agent_policy = desktop_automation_agent_policy()?;
     let run_id = Uuid::now_v7();
     state.automation_journal.start(&AutomationRunStart {
         run_id,
@@ -827,9 +837,14 @@ fn run_live_automation(
         event_id: event.id.to_string(),
         started_at_ms: current_time_ms()?,
     })?;
-    let backend = AutomationCapabilityBridge::new(
-        DesktopCapabilityBackend { state },
-        AutomationCapabilityPolicy::pet_actions(),
+    let backend = AutomationAgentBridge::new(
+        AutomationCapabilityBridge::new(
+            DesktopCapabilityBackend { state },
+            AutomationCapabilityPolicy::pet_actions(),
+        ),
+        DesktopAutomationAgentSubmitter { state },
+        DesktopAutomationAgentContext,
+        agent_policy,
     );
     let run = AutomationEngine::run_with_id(
         run_id,
@@ -843,6 +858,101 @@ fn run_live_automation(
         .automation_journal
         .complete(&run, current_time_ms()?)?;
     Ok(run)
+}
+
+#[derive(Debug)]
+struct DesktopAutomationAgentSubmitter<'a> {
+    state: &'a DesktopState,
+}
+
+impl AgentTaskSubmitter for DesktopAutomationAgentSubmitter<'_> {
+    fn submit(&self, task: AutomationAgentTask) -> Result<(), String> {
+        if task.model.trim().is_empty() || task.model.len() > 128 {
+            return Err("automation Agent model is invalid".to_owned());
+        }
+        ensure_normal_mode(self.state).map_err(|error| error.to_string())?;
+        let submission_key = (task.admission.root_task_id, task.idempotency_key.clone());
+        {
+            let mut submissions = self
+                .state
+                .automation_agent_submissions
+                .lock()
+                .map_err(|_| "automation Agent submission state is unavailable".to_owned())?;
+            if submissions.contains_key(&submission_key) {
+                return Ok(());
+            }
+            if submissions.len() >= MAX_AUTOMATION_AGENT_SUBMISSIONS {
+                return Err("automation Agent submission capacity is exhausted".to_owned());
+            }
+            submissions.insert(submission_key.clone(), task.admission.task.id);
+        }
+        let result = self.execute(task);
+        if result.is_err()
+            && let Ok(mut submissions) = self.state.automation_agent_submissions.lock()
+        {
+            submissions.remove(&submission_key);
+        }
+        result
+    }
+}
+
+impl DesktopAutomationAgentSubmitter<'_> {
+    fn execute(&self, task: AutomationAgentTask) -> Result<(), String> {
+        let providers = desktop_provider_registry(self.state).map_err(|error| error.to_string())?;
+        let tool_allowlist = task
+            .admission
+            .tool_allowlist
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        advance_provider_agent(
+            &providers,
+            self.state,
+            task.admission.task,
+            task.model,
+            vec![ProviderMessage::text(
+                ProviderMessageRole::User,
+                task.instruction,
+                task.admission.classification,
+                true,
+            )],
+            512,
+            true,
+            tool_allowlist,
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DesktopAutomationAgentContext;
+
+impl AutomationAgentContext for DesktopAutomationAgentContext {
+    fn now_ms(&self, _command: &Command) -> Result<u64, String> {
+        current_time_ms().map_err(|error| error.to_string())
+    }
+
+    fn remaining_budget(&self, _command: &Command) -> Result<AgentBudget, String> {
+        Ok(AgentBudget::default())
+    }
+}
+
+fn desktop_automation_agent_policy() -> Result<AgentTaskGatewayPolicy, DesktopError> {
+    AgentTaskGatewayPolicy::new(
+        AUTOMATION_AGENT_REQUESTER,
+        [AgentTaskOrigin::Automation],
+        [
+            DETERMINISTIC_PROVIDER_ID.to_owned(),
+            "provider:ollama-loopback".to_owned(),
+        ],
+        production_agent_tool_allowlist()?,
+        DataClassification::Personal,
+        AgentAutonomy::ConfirmEach,
+        AgentBudget::default(),
+        2,
+    )
+    .map_err(agent_error)
 }
 
 #[tauri::command]
@@ -1174,6 +1284,7 @@ fn run_local_agent_inner(
     let providers = desktop_provider_registry(state)?;
     let now_ms = current_time_ms()?;
     let task = admit_desktop_agent_task(request.provider_id, now_ms)?;
+    let tool_allowlist = production_agent_tool_allowlist()?;
     let outcome = advance_provider_agent(
         &providers,
         state,
@@ -1187,6 +1298,7 @@ fn run_local_agent_inner(
         )],
         512,
         true,
+        tool_allowlist,
     )?;
     Ok(desktop_agent_run_result(outcome))
 }
@@ -1215,12 +1327,7 @@ fn desktop_agent_run_result(outcome: ProviderAgentOutcome) -> DesktopAgentRunRes
 }
 
 fn admit_desktop_agent_task(provider_id: String, now_ms: u64) -> Result<AgentTask, DesktopError> {
-    let tool_ids = production_tool_registry()
-        .map_err(agent_error)?
-        .descriptors()
-        .into_iter()
-        .map(|descriptor| descriptor.id.to_string())
-        .collect::<Vec<_>>();
+    let tool_ids = production_agent_tool_allowlist()?;
     let policy = AgentTaskGatewayPolicy::new(
         "desktop:local-user",
         [AgentTaskOrigin::Desktop],
@@ -1252,6 +1359,16 @@ fn admit_desktop_agent_task(provider_id: String, now_ms: u64) -> Result<AgentTas
         .map_err(agent_error)
 }
 
+fn production_agent_tool_allowlist() -> Result<BTreeSet<String>, DesktopError> {
+    Ok(production_tool_registry()
+        .map_err(agent_error)?
+        .descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.id.to_string())
+        .collect())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn advance_provider_agent(
     providers: &ProviderRegistry,
     state: &DesktopState,
@@ -1260,6 +1377,7 @@ fn advance_provider_agent(
     mut messages: Vec<ProviderMessage>,
     max_output_tokens: u64,
     offline: bool,
+    tool_allowlist: BTreeSet<String>,
 ) -> Result<ProviderAgentOutcome, DesktopError> {
     let tools = production_tool_registry().map_err(agent_error)?;
     let coordinator = AgentCoordinator::new(providers, &tools);
@@ -1289,8 +1407,15 @@ fn advance_provider_agent(
         return Ok(ProviderAgentOutcome::Completed { task, response });
     };
     let mut turn = ProviderToolTurn::new(response).map_err(agent_error)?;
-    let confirmations =
-        execute_ready_provider_tools(providers, state, &mut task, &mut turn, calls, now_ms)?;
+    let confirmations = execute_ready_provider_tools(
+        providers,
+        state,
+        &mut task,
+        &mut turn,
+        calls,
+        now_ms,
+        &tool_allowlist,
+    )?;
     if confirmations.is_empty() {
         messages.extend(turn.continuation_messages().map_err(agent_error)?);
         return advance_provider_agent(
@@ -1301,6 +1426,7 @@ fn advance_provider_agent(
             messages,
             max_output_tokens,
             offline,
+            tool_allowlist,
         );
     }
     register_provider_confirmations(
@@ -1310,6 +1436,7 @@ fn advance_provider_agent(
         messages,
         max_output_tokens,
         offline,
+        tool_allowlist,
         turn,
         confirmations,
         now_ms,
@@ -1353,6 +1480,7 @@ fn execute_ready_provider_tools(
     turn: &mut ProviderToolTurn,
     calls: Vec<PlannedToolCall>,
     now_ms: u64,
+    tool_allowlist: &BTreeSet<String>,
 ) -> Result<Vec<(PlannedToolCall, CommandRisk)>, DesktopError> {
     let tools = production_tool_registry().map_err(agent_error)?;
     let coordinator = AgentCoordinator::new(providers, &tools);
@@ -1362,6 +1490,11 @@ fn execute_ready_provider_tools(
     );
     let mut confirmations = Vec::new();
     for call in calls {
+        if !tool_allowlist.contains(call.invocation.tool_id.as_str()) {
+            return Err(DesktopError::Agent(
+                "Provider requested a tool outside the task allowlist".to_owned(),
+            ));
+        }
         let effective_risk = match call.admission {
             ToolAdmission::Ready { effective_risk }
             | ToolAdmission::ConfirmationRequired { effective_risk, .. } => effective_risk,
@@ -1396,6 +1529,7 @@ fn register_provider_confirmations(
     messages: Vec<ProviderMessage>,
     max_output_tokens: u64,
     offline: bool,
+    tool_allowlist: BTreeSet<String>,
     turn: ProviderToolTurn,
     confirmations: Vec<(PlannedToolCall, CommandRisk)>,
     now_ms: u64,
@@ -1411,6 +1545,7 @@ fn register_provider_confirmations(
         messages,
         max_output_tokens,
         offline,
+        tool_allowlist,
         turn,
         approvals: (0..confirmations.len()).map(|_| None).collect(),
         remaining_confirmations: confirmations.len(),
@@ -1717,7 +1852,7 @@ fn confirm_standalone_agent_tool(
     Ok((completed_agent_tool_result(pending, task, output), None))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn confirm_provider_agent_tool(
     providers: &ProviderRegistry,
     state: &DesktopState,
@@ -1804,6 +1939,7 @@ fn confirm_provider_agent_tool(
     let messages = session_guard.messages.clone();
     let max_output_tokens = session_guard.max_output_tokens;
     let offline = session_guard.offline;
+    let tool_allowlist = session_guard.tool_allowlist.clone();
     drop(session_guard);
     let continuation = advance_provider_agent(
         providers,
@@ -1813,6 +1949,7 @@ fn confirm_provider_agent_tool(
         messages,
         max_output_tokens,
         offline,
+        tool_allowlist,
     )?;
     let final_task = match &continuation {
         ProviderAgentOutcome::Completed { task, .. }
@@ -5080,6 +5217,69 @@ mod tests {
     }
 
     #[test]
+    fn live_automation_submits_correlated_agent_task_and_records_result() {
+        let (root, state) = normal_desktop_state();
+        let request = serde_json::from_value(json!({
+            "definition": {
+                "spec": "nimora.automation/1",
+                "id": "local.focus.ai-summary",
+                "name": "AI focus summary",
+                "enabled": true,
+                "trigger": { "eventType": "focus.session.finished" },
+                "conditions": [],
+                "actions": [{
+                    "id": "summarize",
+                    "command": "agent.task.run",
+                    "arguments": {
+                        "requester": "automation:desktop",
+                        "providerId": "provider:deterministic-local",
+                        "model": "model:echo-v1",
+                        "instruction": "Summarize this completed focus session.",
+                        "toolAllowlist": [],
+                        "classification": "personal",
+                        "autonomy": "draft",
+                        "budget": {
+                            "maxSteps": 4,
+                            "maxToolCalls": 0,
+                            "maxElapsedMs": 30000,
+                            "maxInputTokens": 1000,
+                            "maxOutputTokens": 500,
+                            "maxCostMicrounits": 0
+                        },
+                        "contextTrust": "trusted"
+                    },
+                    "risk": "medium",
+                    "retrySafe": true,
+                    "idempotencyKey": "focus-summary-42",
+                    "compensation": null
+                }],
+                "policy": { "timeoutMs": 30000, "failure": "stop" }
+            },
+            "eventType": "focus.session.finished",
+            "eventData": { "durationMinutes": 25 }
+        }))
+        .expect("Agent automation request");
+        let run = run_live_automation(&state, request).expect("Agent automation run");
+        assert_eq!(
+            run.status,
+            nimora_automation_runtime::AutomationRunStatus::Succeeded
+        );
+        let history = state.agent_history.list(None, 10).expect("Agent history");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].task.origin, AgentTaskOrigin::Automation);
+        assert_eq!(history[0].task.trace_id, run.trace_id);
+        assert_eq!(
+            state
+                .automation_agent_submissions
+                .lock()
+                .expect("submissions")
+                .len(),
+            1
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
     fn desktop_agent_validates_automation_without_confirmation_or_side_effects() {
         let (root, state) = normal_desktop_state();
         let prepared = prepare_agent_tool_inner(
@@ -5374,6 +5574,7 @@ mod tests {
             )],
             128,
             true,
+            BTreeSet::from(["pet.position.move".to_owned()]),
         )
         .expect("first provider step");
         let super::ProviderAgentOutcome::Waiting { pending, .. } = outcome else {
@@ -5399,6 +5600,51 @@ mod tests {
         assert_eq!(
             state.runtime.snapshot().expect("snapshot").position,
             Position { x: 44.0, y: 66.0 }
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn desktop_provider_rejects_tools_outside_task_allowlist() {
+        let (root, state) = normal_desktop_state();
+        let mut providers = ProviderRegistry::default();
+        providers
+            .register(TwoStepDesktopProvider::new())
+            .expect("register provider");
+        let task = AgentTask::new(
+            AgentTaskOrigin::Automation,
+            "automation:test",
+            "provider:desktop-test",
+            AgentBudget::default(),
+            super::current_time_ms().expect("clock"),
+        )
+        .expect("task");
+        let result = super::advance_provider_agent(
+            &providers,
+            &state,
+            task,
+            "model:desktop-test".to_owned(),
+            vec![ProviderMessage::text(
+                ProviderMessageRole::User,
+                "只允许读取运行状态",
+                DataClassification::Personal,
+                true,
+            )],
+            128,
+            true,
+            BTreeSet::from(["runtime.health.read".to_owned()]),
+        );
+        assert!(matches!(result, Err(DesktopError::Agent(_))));
+        assert!(
+            state
+                .pending_agent_tools
+                .lock()
+                .expect("pending")
+                .is_empty()
+        );
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").position,
+            Position { x: 0.0, y: 0.0 }
         );
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
@@ -5431,6 +5677,7 @@ mod tests {
             )],
             128,
             true,
+            BTreeSet::from(["pet.position.move".to_owned()]),
         )
         .expect("first provider step");
         let run_result = super::desktop_agent_run_result(outcome);
