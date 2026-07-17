@@ -1,8 +1,8 @@
 use nimora_asset_installer::{
-    AssetPackageSummary, AssetPreviewReport, AssetRendererDescriptor, InstallError, InstallFile,
-    RenderAnchor, RenderCanvas, SpriteClips, export_asset_package, inspect_asset_package,
-    inspect_asset_renderer, inspect_asset_source_preview, install_asset_source,
-    read_verified_asset_image, rollback_latest,
+    AssetPackageSummary, AssetPreviewReport, AssetRendererDescriptor, GltfCharacterMetadata,
+    InstallError, InstallFile, RenderAnchor, RenderCanvas, SpriteClips, export_asset_package,
+    inspect_asset_package, inspect_asset_renderer, inspect_asset_source_preview,
+    install_asset_source, install_gltf_character, read_verified_asset_image, rollback_latest,
 };
 use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
@@ -227,6 +227,15 @@ struct ExportAssetRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct InspectModelRequest {
     source_path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ImportModelRequest {
+    source_path: PathBuf,
+    asset_id: String,
+    name: String,
+    license: String,
 }
 
 #[derive(Debug)]
@@ -854,6 +863,46 @@ fn inspect_model(
         &request,
         MODEL_PROBE_TIMEOUT,
     )?)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn import_model(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+    request: ImportModelRequest,
+) -> Result<AssetInstallReceipt, DesktopError> {
+    if window.label() != CONTROL_CENTER_LABEL {
+        return Err(DesktopError::WindowForbidden);
+    }
+    ensure_normal_mode(&state)?;
+    validate_model_source(&request.source_path)?;
+    let staging = stage_model(&app, &request.source_path)?;
+    probe_model_in_worker(
+        &model_importer_worker_path(&app),
+        &staging.root,
+        &ModelProbeRequest {
+            spec: "nimora.model-probe/1".to_owned(),
+            source: PathBuf::from("character.glb"),
+        },
+        MODEL_PROBE_TIMEOUT,
+    )?;
+    let result = install_gltf_character(
+        &staging.root.join("character.glb"),
+        &state.asset_store,
+        &GltfCharacterMetadata {
+            id: request.asset_id,
+            version: "1.0.0".to_owned(),
+            name: request.name,
+            publisher: "publisher.local".to_owned(),
+            license: request.license,
+        },
+    )?;
+    Ok(AssetInstallReceipt {
+        asset_id: result.asset_id,
+        replaced_previous: result.install.backup_path.is_some(),
+    })
 }
 
 fn validate_model_source(source_path: &Path) -> Result<(), DesktopError> {
@@ -2453,6 +2502,7 @@ pub fn run() {
             activate_character,
             preview_asset,
             inspect_model,
+            import_model,
             export_asset,
             install_asset,
             rollback_asset,

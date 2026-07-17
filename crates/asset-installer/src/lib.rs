@@ -23,6 +23,15 @@ pub struct GeneratedInstallFile {
     pub contents: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GltfCharacterMetadata {
+    pub id: String,
+    pub version: String,
+    pub name: String,
+    pub publisher: String,
+    pub license: String,
+}
+
 const MAX_FILES: usize = 10_000;
 const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
@@ -177,6 +186,7 @@ struct AssetRenderHeader {
 struct AssetEntrypoints {
     animation_graph: Option<PathBuf>,
     clips: Option<PathBuf>,
+    model: Option<PathBuf>,
     hitboxes: Option<PathBuf>,
     preview_poster: Option<PathBuf>,
 }
@@ -317,6 +327,96 @@ pub fn install_asset_source(
 ) -> Result<AssetPackageInstallResult, InstallError> {
     let prepared = prepare_asset_source(source)?;
     install_asset_package(&prepared.root, asset_store)
+}
+
+/// Normalizes one already-probed GLB into the current Character package schema
+/// and atomically installs it through the same verified package pipeline.
+///
+/// # Errors
+///
+/// Returns an error when metadata is invalid, the staged model is not a regular
+/// GLB file, package generation fails, or the generated package cannot be installed.
+pub fn install_gltf_character(
+    staged_glb: &Path,
+    asset_store: &Path,
+    metadata: &GltfCharacterMetadata,
+) -> Result<AssetPackageInstallResult, InstallError> {
+    if !metadata.id.starts_with("character.local.") {
+        return Err(InstallError::InvalidMetadata(
+            "locally generated characters require the character.local namespace".to_owned(),
+        ));
+    }
+    let source_metadata = fs::symlink_metadata(staged_glb)?;
+    if !source_metadata.file_type().is_file()
+        || staged_glb.extension().and_then(|value| value.to_str()) != Some("glb")
+    {
+        return Err(InstallError::InvalidMetadata(
+            "normalized model source must be a regular GLB file".to_owned(),
+        ));
+    }
+    let package_root = unique_sibling(
+        &std::env::temp_dir().join("nimora-model-package"),
+        "staging",
+    );
+    let package = PreparedAssetSource {
+        root: package_root,
+        temporary: true,
+    };
+    fs::create_dir_all(package.root.join("models"))?;
+    let model_path = package.root.join("models/character.glb");
+    let copied = fs::copy(staged_glb, &model_path)?;
+    if copied != source_metadata.len() {
+        return Err(InstallError::SizeMismatch(PathBuf::from(
+            "models/character.glb",
+        )));
+    }
+    fs::File::open(&model_path)?.sync_all()?;
+
+    let manifest = serde_json::to_vec_pretty(&serde_json::json!({
+        "spec": "nimora.asset/1",
+        "id": metadata.id,
+        "type": "character",
+        "version": metadata.version,
+        "name": { "en": metadata.name },
+        "publisher": metadata.publisher,
+        "license": metadata.license,
+        "engines": { "nimora": ">=0.1.0" },
+        "render": {
+            "backend": "gltf",
+            "canvas": { "width": 512, "height": 512 },
+            "anchor": { "x": 0.5, "y": 1.0 },
+            "defaultScale": 1.0,
+            "pixelArt": false
+        },
+        "entrypoints": { "model": "models/character.glb" },
+        "capabilities": [],
+        "fallbacks": {},
+        "locales": ["en"],
+        "integrity": { "algorithm": "sha256", "files": "integrity.json" }
+    }))
+    .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    fs::write(package.root.join(MANIFEST_FILE), &manifest)?;
+    let model_bytes = fs::read(&model_path)?;
+    let integrity = serde_json::to_vec_pretty(&serde_json::json!({
+        "files": [
+            {
+                "path": MANIFEST_FILE,
+                "sha256": format!("{:x}", Sha256::digest(&manifest)),
+                "bytes": manifest.len(),
+                "mediaType": "application/json"
+            },
+            {
+                "path": "models/character.glb",
+                "sha256": format!("{:x}", Sha256::digest(&model_bytes)),
+                "bytes": model_bytes.len(),
+                "mediaType": "model/gltf-binary"
+            }
+        ],
+        "totalBytes": manifest.len() + model_bytes.len()
+    }))
+    .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    fs::write(package.root.join("integrity.json"), integrity)?;
+    install_asset_package(&package.root, asset_store)
 }
 
 /// Verifies an expanded package without changing the filesystem.
@@ -1077,6 +1177,7 @@ fn validate_manifest_header(manifest: &AssetManifestHeader) -> Result<(), Instal
         for path in [
             entrypoints.animation_graph.as_ref(),
             entrypoints.clips.as_ref(),
+            entrypoints.model.as_ref(),
             entrypoints.hitboxes.as_ref(),
             entrypoints.preview_poster.as_ref(),
         ]
@@ -1085,6 +1186,25 @@ fn validate_manifest_header(manifest: &AssetManifestHeader) -> Result<(), Instal
         {
             safe_relative_path(path)?;
         }
+    }
+    let backend = manifest
+        .render
+        .as_ref()
+        .map(|render| render.backend.as_str());
+    let clips = manifest
+        .entrypoints
+        .as_ref()
+        .and_then(|entrypoints| entrypoints.clips.as_ref());
+    let model = manifest
+        .entrypoints
+        .as_ref()
+        .and_then(|entrypoints| entrypoints.model.as_ref());
+    if matches!(backend, Some("sprite-sequence" | "sprite-atlas")) != clips.is_some()
+        || matches!(backend, Some("live2d" | "vrm" | "gltf")) != model.is_some()
+    {
+        return Err(InstallError::InvalidMetadata(
+            "renderer entrypoint does not match its backend".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -2019,6 +2139,72 @@ mod tests {
             fs::read(active.join(".integrity.json")).unwrap(),
             b"trusted"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn normalizes_a_probed_glb_into_a_verified_character_package() {
+        let root = std::env::temp_dir().join("nimora-installer-gltf-character");
+        let staged = root.join("staged/character.glb");
+        let store = root.join("assets");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        fs::write(&staged, b"glTF-probed-model").unwrap();
+
+        let result = install_gltf_character(
+            &staged,
+            &store,
+            &GltfCharacterMetadata {
+                id: "character.local.aurora".to_owned(),
+                version: "1.0.0".to_owned(),
+                name: "Aurora".to_owned(),
+                publisher: "publisher.local".to_owned(),
+                license: "LicenseRef-Proprietary".to_owned(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.asset_id, "character.local.aurora");
+        let active = store.join("character.local.aurora");
+        assert_eq!(
+            fs::read(active.join("models/character.glb")).unwrap(),
+            b"glTF-probed-model"
+        );
+        let summary = inspect_asset_package(&active).unwrap();
+        assert_eq!(summary.renderer_backend.as_deref(), Some("gltf"));
+        assert_eq!(summary.file_count, 2);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(active.join(MANIFEST_FILE)).unwrap()).unwrap();
+        assert_eq!(
+            manifest
+                .pointer("/entrypoints/model")
+                .and_then(serde_json::Value::as_str),
+            Some("models/character.glb")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn local_model_import_cannot_replace_a_publisher_namespace() {
+        let root = std::env::temp_dir().join("nimora-installer-gltf-namespace");
+        let staged = root.join("character.glb");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&staged, b"glTF-probed-model").unwrap();
+        let error = install_gltf_character(
+            &staged,
+            &root.join("assets"),
+            &GltfCharacterMetadata {
+                id: "character.publisher.aurora".to_owned(),
+                version: "1.0.0".to_owned(),
+                name: "Aurora".to_owned(),
+                publisher: "publisher.local".to_owned(),
+                license: "LicenseRef-Proprietary".to_owned(),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, InstallError::InvalidMetadata(_)));
+        assert!(!root.join("assets/character.publisher.aurora").exists());
         fs::remove_dir_all(root).unwrap();
     }
 

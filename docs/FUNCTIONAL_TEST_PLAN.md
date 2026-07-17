@@ -105,6 +105,8 @@ ID / 标题 / 优先级 / 前置条件
 | MODEL-005 | 脚本发送标准表情与动作 | 序列帧、Live2D、VRM 均映射或明确回退 | P1 |
 | MODEL-006 | GLB 探测 Worker 隔离 | 合法 GLB 返回有界结构报告；远程 URI、路径逃逸和畸形 chunk 被拒绝；超时 Worker 被强杀，崩溃不影响 Core | P0 |
 | MODEL-007 | 桌面 GLB 隔离检查 | 仅 Control Center 和非安全模式可选择绝对普通 `.glb`；宿主拒绝链接与 80 MiB 超限文件，复制为固定暂存名后调用 sidecar，成功、拒绝、崩溃和超时均清理暂存目录，报告不含宿主路径 | P0 |
+| MODEL-008 | GLB 规范化安装 | 对同一暂存文件重新执行 Worker 探测后，宿主生成 `nimora.asset/1` Character Manifest、`entrypoints.model` 与 SHA-256 inventory，并通过正式安装器原子激活 | P0 |
+| MODEL-009 | 本地模型命名空间 | Creator Studio 生成的模型只能使用 `character.local.*`，不能覆盖第三方发布者命名空间；无效 ID、名称或许可证不改变资源目录 | P0 |
 
 ## 8. Command 与命令面板
 

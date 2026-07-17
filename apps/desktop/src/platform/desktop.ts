@@ -43,6 +43,12 @@ export interface InspectModelRequest {
   sourcePath: string;
 }
 
+export interface ImportModelRequest extends InspectModelRequest {
+  assetId: string;
+  name: string;
+  license: string;
+}
+
 export interface ModelProbeReport {
   spec: "nimora.model-probe-report/1";
   format: "glb";
@@ -257,6 +263,7 @@ export interface DesktopApi {
   previewAsset(request: InstallAssetRequest): Promise<AssetPreviewReport | null>;
   exportAsset(request: ExportAssetRequest): Promise<AssetPackageSummary | null>;
   inspectModel(request: InspectModelRequest): Promise<ModelProbeReport | null>;
+  importModel(request: ImportModelRequest): Promise<AssetInstallReceipt | null>;
   installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
   rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
   validateUserProgram(manifest: UserProgramManifest): Promise<ProgramPolicyReport | null>;
@@ -358,6 +365,7 @@ export function createDesktopApi(
       async previewAsset() { return null; },
       async exportAsset() { return null; },
       async inspectModel() { return null; },
+      async importModel() { return null; },
       async installAsset() { return null; },
       async rollbackAsset() { return null; },
       async validateUserProgram() { return null; },
@@ -413,6 +421,7 @@ export function createDesktopApi(
     previewAsset: async (request) => await invokeCommand("preview_asset", { request }) as AssetPreviewReport,
     exportAsset: async (request) => await invokeCommand("export_asset", { request }) as AssetPackageSummary,
     inspectModel: async (request) => await invokeCommand("inspect_model", { request }) as ModelProbeReport,
+    importModel: async (request) => await invokeCommand("import_model", { request }) as AssetInstallReceipt,
     installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
     rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,
     validateUserProgram: async (manifest) => await invokeCommand("validate_user_program", { manifest }) as ProgramPolicyReport,

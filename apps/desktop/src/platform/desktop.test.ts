@@ -44,6 +44,13 @@ describe("desktop platform adapter", () => {
       sourcePath: "/tmp/nimora-source",
       destinationPath: "/tmp/mochi.nimora",
     });
+    await api.inspectModel({ sourcePath: "/tmp/character.glb" });
+    await api.importModel({
+      sourcePath: "/tmp/character.glb",
+      assetId: "character.local.aurora",
+      name: "Aurora",
+      license: "CC-BY-4.0",
+    });
     await api.installAsset({
       sourcePath: "/tmp/nimora-import",
     });
@@ -117,6 +124,13 @@ describe("desktop platform adapter", () => {
       ["export_asset", { request: {
         sourcePath: "/tmp/nimora-source",
         destinationPath: "/tmp/mochi.nimora",
+      } }],
+      ["inspect_model", { request: { sourcePath: "/tmp/character.glb" } }],
+      ["import_model", { request: {
+        sourcePath: "/tmp/character.glb",
+        assetId: "character.local.aurora",
+        name: "Aurora",
+        license: "CC-BY-4.0",
       } }],
       ["install_asset", { request: {
         sourcePath: "/tmp/nimora-import",

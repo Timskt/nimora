@@ -30,9 +30,13 @@ export function CreatorStudio() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
-  const [modelReport, setModelReport] = useState<ModelProbeReport | null>(null);
+  const [modelCandidate, setModelCandidate] = useState<{ sourcePath: string; report: ModelProbeReport } | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
   const [checkingModel, setCheckingModel] = useState(false);
+  const [installingModel, setInstallingModel] = useState(false);
+  const [modelAssetId, setModelAssetId] = useState("character.local.custom");
+  const [modelName, setModelName] = useState("My GLB Character");
+  const [modelLicense, setModelLicense] = useState("LicenseRef-Proprietary");
   const completion = useMemo(() => checks.filter((check) => check.status === "通过").length, []);
 
   useEffect(() => {
@@ -135,7 +139,7 @@ export function CreatorStudio() {
   async function inspectModel() {
     setCheckingModel(true);
     setModelError(null);
-    setModelReport(null);
+    setModelCandidate(null);
     try {
       const sourcePath = await open({
         directory: false,
@@ -146,11 +150,33 @@ export function CreatorStudio() {
       if (typeof sourcePath !== "string") return;
       const report = await desktopApi.inspectModel({ sourcePath });
       if (!report) throw new Error("当前环境不支持模型隔离检查");
-      setModelReport(report);
+      setModelCandidate({ sourcePath, report });
     } catch (error) {
       setModelError(error instanceof Error ? error.message : "模型未通过隔离结构检查");
     } finally {
       setCheckingModel(false);
+    }
+  }
+
+  async function installModel() {
+    if (!modelCandidate) return;
+    setInstallingModel(true);
+    setModelError(null);
+    try {
+      const receipt = await desktopApi.importModel({
+        sourcePath: modelCandidate.sourcePath,
+        assetId: modelAssetId.trim(),
+        name: modelName.trim(),
+        license: modelLicense,
+      });
+      if (!receipt) throw new Error("当前环境不支持模型规范化安装");
+      setCatalog(await desktopApi.assetCatalog());
+      setImportNotice(`${receipt.assetId} 已规范化并原子安装`);
+      setModelCandidate(null);
+    } catch (error) {
+      setModelError(error instanceof Error ? error.message : "模型规范化安装失败");
+    } finally {
+      setInstallingModel(false);
     }
   }
 
@@ -245,13 +271,21 @@ export function CreatorStudio() {
       <section className="asset-import model-lab" aria-labelledby="model-lab-heading">
         <div className="section-heading">
           <div><p className="card-label">MODEL LAB · OFFLINE</p><h3 id="model-lab-heading">隔离检查 GLB 模型</h3></div>
-          <button className="secondary-button" type="button" disabled={!desktopApi.native || checkingModel || importing || exporting} onClick={() => void inspectModel()}>
+          <button className="secondary-button" type="button" disabled={!desktopApi.native || checkingModel || installingModel || importing || exporting} onClick={() => void inspectModel()}>
             {checkingModel ? "正在检查…" : desktopApi.native ? "选择 GLB" : "桌面版可用"}
           </button>
         </div>
         <p className="asset-import-intro">模型先复制到一次性暂存目录，再由独立 Worker 在硬限额和截止时间内解析；全程离线，不上传原文件。</p>
         {modelError ? <p className="catalog-empty error" role="alert">{modelError}</p> : null}
-        {modelReport ? <ModelProbeReportCard report={modelReport} /> : null}
+        {modelCandidate ? <>
+          <ModelProbeReportCard report={modelCandidate.report} />
+          <div className="model-package-form">
+            <label>包标识<input value={modelAssetId} onChange={(event) => setModelAssetId(event.target.value)} placeholder="character.local.name" /></label>
+            <label>角色名称<input value={modelName} onChange={(event) => setModelName(event.target.value)} /></label>
+            <label>许可证<select value={modelLicense} onChange={(event) => setModelLicense(event.target.value)}><option value="LicenseRef-Proprietary">保留所有权利</option><option value="CC0-1.0">CC0 1.0</option><option value="CC-BY-4.0">CC BY 4.0</option><option value="MIT">MIT</option></select></label>
+            <button className="primary-button" type="button" disabled={installingModel || !modelAssetId.trim() || !modelName.trim()} onClick={() => void installModel()}>{installingModel ? "正在生成并安装…" : "生成 Character 包并安装"}</button>
+          </div>
+        </> : null}
       </section>
 
       <section className="asset-catalog" aria-labelledby="asset-catalog-heading">
@@ -290,7 +324,7 @@ export function ModelProbeReportCard({ report }: { report: ModelProbeReport }) {
       <div><dt>材质资源</dt><dd>{report.materials} 材质 · {report.textures} 纹理</dd></div>
       <div><dt>动态能力</dt><dd>{report.animations} 动画 · {report.skins} 骨骼蒙皮</dd></div>
     </dl>
-    <p className="asset-preview-warning">当前只验证 GLB 2.0 容器、内嵌资源和复杂度预算；不会安装或渲染模型，也不证明版权、许可证或 OS 级沙箱隔离。</p>
+    <p className="asset-preview-warning">结构验证通过后可生成带 SHA-256 清单的标准 Character 包；当前仍不会真实渲染模型，也不证明版权、许可证或 OS 级沙箱隔离。</p>
   </div>;
 }
 

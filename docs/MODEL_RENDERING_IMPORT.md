@@ -138,5 +138,6 @@ pnpm deskpet pack build ./character-pack
 - 真实进程测试覆盖合法模型、远程 URI、暂存区逃逸、Worker 超时和 Worker 崩溃；这些失败不会进入 Core。
 - Creator Studio 的 Model Lab 只允许 Control Center 在非安全模式通过系统对话框选择绝对普通 `.glb` 文件。宿主拒绝符号链接和超限文件，复制为一次性缓存目录内固定的 `character.glb`，同步写入后才调用 Worker，并通过作用域清理保证成功、拒绝、崩溃和超时均回收暂存目录。
 - 检查完全本地离线运行，不上传原文件；WebView 只收到格式、分区大小和资源计数，不收到源路径或暂存路径。桌面发布构建通过 `pnpm build:sidecars` 同时打包用户代码 Worker 与模型 Importer Worker。
+- Creator Studio 可在结构检查后填写本地包 ID、显示名和许可证。确认安装时宿主重新复制源文件并对同一暂存 GLB 再次运行 Worker，随后生成 `nimora.asset/1` Character 包：模型固定为 `models/character.glb`，Manifest 使用 `entrypoints.model` 和 `gltf` 后端，Integrity 清单覆盖 Manifest 与模型字节，最后复用正式 Asset Installer 的精确目录树、哈希复验、备份和原子激活。生成 ID 仅允许 `character.local.*`，避免覆盖第三方发布者命名空间。
 
-当前未实现 OS 级文件系统/网络/内存沙箱、模型规范化产物、原子安装、许可证扫描、真实预览与 3D Renderer。进程边界只能隔离崩溃、超时和协议输出，不能证明 Worker 无法访问其它 OS 资源。GLTF JSON、VRM、Live2D 和其它格式也尚未实现，不能根据本节宣称格式矩阵已经可用。
+当前规范化只封装已经通过探测的原始 GLB，不进行网格重写、纹理转码、动作语义映射或许可证扫描；用户填写的许可证只是包元数据，不代表平台完成权利认证。OS 级文件系统/网络/内存沙箱、真实模型预览与 3D Renderer 仍未实现。进程边界只能隔离崩溃、超时和协议输出，不能证明 Worker 无法访问其它 OS 资源。GLTF JSON、VRM、Live2D 和其它格式也尚未实现，不能根据本节宣称格式矩阵已经可用。

@@ -70,7 +70,7 @@ Core 包含纯领域逻辑：Pet、Command、Event、Profile、Policy、Permissi
 
 第三方模型必须经过隔离 Importer 探测、校验和规范化，再交给版本化 Renderer Adapter。Pet Runtime 只依赖统一动作与表达语义，不直接依赖 Live2D、VRM 或 glTF 私有结构。
 
-当前首个 Importer 实现是 `nimora-model-importer-worker`：仅探测 GLB 2.0，桌面宿主先把绝对普通源文件复制为一次性暂存目录内的固定文件名，再以清空环境、关闭 stdin、固定工作目录的一次性子进程运行，限制 80 MiB 输入、1 MiB JSON、64 KiB 协议输出、执行截止时间以及节点、网格、材质和纹理数量。Worker 拒绝外部 URI、data URI、路径逃逸、错误 chunk 顺序和长度不一致，宿主在所有返回路径清理暂存目录且不向 WebView 暴露路径。该实现证明格式验证与 Core 的崩溃/超时隔离，不代表操作系统级文件系统、网络或内存沙箱；规范化输出、许可证扫描、GLTF/VRM/Live2D、Renderer Adapter 和安装仍待实现。
+当前首个 Importer 实现是 `nimora-model-importer-worker`：仅探测 GLB 2.0，桌面宿主先把绝对普通源文件复制为一次性暂存目录内的固定文件名，再以清空环境、关闭 stdin、固定工作目录的一次性子进程运行，限制 80 MiB 输入、1 MiB JSON、64 KiB 协议输出、执行截止时间以及节点、网格、材质和纹理数量。Worker 拒绝外部 URI、data URI、路径逃逸、错误 chunk 顺序和长度不一致，宿主在所有返回路径清理暂存目录且不向 WebView 暴露路径。安装确认会对新暂存副本重新探测，再由宿主生成固定 `models/character.glb`、`nimora.asset/1` Manifest 和 SHA-256 inventory，通过 Asset Installer 原子激活；本地生成身份限制在 `character.local.*`。该实现仍不代表操作系统级文件系统、网络或内存沙箱，也未完成网格/纹理重写、许可证扫描、GLTF/VRM/Live2D 多格式支持和真实 Renderer Adapter。
 
 ### 4.4 Extension Supervisor
 

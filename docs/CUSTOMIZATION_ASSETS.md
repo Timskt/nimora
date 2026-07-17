@@ -121,7 +121,9 @@ pet.click pet.happy pet.sad pet.hungry pet.talk
 
 ## 6. 动画图
 
-Sprite 资源的 `entrypoints.clips` 必须指向 `nimora.sprite-clips/1` JSON。该文档使用 `backend` 判别联合，首版只接受：
+Sprite 资源的 `entrypoints.clips` 必须指向 `nimora.sprite-clips/1` JSON。`live2d`、`vrm` 与 `gltf` 后端则必须声明包内 `entrypoints.model`，且 Sprite 后端不得夹带模型入口、模型后端不得夹带 Clips 入口。当前 Creator Studio 生成的 GLB Character 固定使用 `models/character.glb`；宿主从暂存文件生成该路径和完整性清单，WebView 不能提交目标文件路径或 inventory。
+
+Sprite Clips 文档使用 `backend` 判别联合，首版只接受：
 
 - `sprite-sequence`：每个动作声明 `loop` 与 1–1000 个 `{ file, durationMs }` 帧；文件必须是包内安全相对路径。
 - `sprite-atlas`：文档声明单一 `image`，每个动作声明 `loop` 与 1–1000 个 `{ x, y, width, height, durationMs }` 帧。

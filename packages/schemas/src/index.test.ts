@@ -168,6 +168,23 @@ describe("assetManifestSchema", () => {
       render: { ...validAssetManifest.render, backend: "vrm" },
     }).success).toBe(false);
   });
+
+  it("requires model entrypoints exactly for model renderers", () => {
+    expect(assetManifestSchema.safeParse({
+      ...validAssetManifest,
+      render: { ...validAssetManifest.render, backend: "gltf" },
+      entrypoints: { model: "models/character.glb" },
+    }).success).toBe(true);
+    expect(assetManifestSchema.safeParse({
+      ...validAssetManifest,
+      render: { ...validAssetManifest.render, backend: "gltf" },
+      entrypoints: {},
+    }).success).toBe(false);
+    expect(assetManifestSchema.safeParse({
+      ...validAssetManifest,
+      entrypoints: { ...validAssetManifest.entrypoints, model: "models/character.glb" },
+    }).success).toBe(false);
+  });
 });
 
 describe("spriteClipsSchema", () => {

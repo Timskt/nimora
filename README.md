@@ -81,7 +81,7 @@ tests/                     contract、integration、e2e、fixtures
 
 ## 开发基线
 
-项目当前处于 M1 Creator Foundation 开发阶段。M0 已落地 Rust 领域核心、应用用例层、唯一当前 SQLite Schema、可创建与激活的离线 Profile、Command/Event Trace 关联、事务 Outbox 的租约/ACK/重试/死信/清理协议、Online Backup API、控制中心健康计数，以及 Tauri 双窗口、系统托盘和类型化 IPC。M1 已提供 `nimora.asset/1` 严格契约、限额归档导入、确定性导出、静态海报预览、Sprite Sequence/Atlas 真实渲染与回退、GLB 独立 Worker 探测和 Creator Studio Model Lab。具体 Outbox 消费者、模型规范化与真实 3D 渲染、包签名、跨重启崩溃循环恢复仍是后续门禁。其余实现继续以 [`docs/DELIVERY_TESTING.md`](docs/DELIVERY_TESTING.md) 的分阶段验收标准为准。
+项目当前处于 M1 Creator Foundation 开发阶段。M0 已落地 Rust 领域核心、应用用例层、唯一当前 SQLite Schema、可创建与激活的离线 Profile、Command/Event Trace 关联、事务 Outbox 的租约/ACK/重试/死信/清理协议、Online Backup API、控制中心健康计数，以及 Tauri 双窗口、系统托盘和类型化 IPC。M1 已提供 `nimora.asset/1` 严格契约、限额归档导入、确定性导出、静态海报预览、Sprite Sequence/Atlas 真实渲染与回退、GLB 独立 Worker 探测，以及将已探测 GLB 规范化为带 SHA-256 inventory 的本地 Character 包并原子安装。具体 Outbox 消费者、真实 3D 渲染与动作映射、包签名、跨重启崩溃循环恢复仍是后续门禁。其余实现继续以 [`docs/DELIVERY_TESTING.md`](docs/DELIVERY_TESTING.md) 的分阶段验收标准为准。
 
 本地开发使用 `pnpm` 与 Rust stable：
 

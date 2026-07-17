@@ -202,6 +202,7 @@ export const assetManifestSchema = z.object({
   entrypoints: z.object({
     animationGraph: safeAssetPathSchema.optional(),
     clips: safeAssetPathSchema.optional(),
+    model: safeAssetPathSchema.optional(),
     hitboxes: safeAssetPathSchema.optional(),
     previewPoster: safeAssetPathSchema.optional(),
   }).optional(),
@@ -224,6 +225,21 @@ export const assetManifestSchema = z.object({
       code: "custom",
       message: "entrypoints.clips is only valid for sprite renderers",
       path: ["entrypoints", "clips"],
+    });
+  }
+  const modelBackend = backend === "live2d" || backend === "vrm" || backend === "gltf";
+  if (modelBackend && manifest.entrypoints?.model === undefined) {
+    context.addIssue({
+      code: "custom",
+      message: "model renderers require entrypoints.model",
+      path: ["entrypoints", "model"],
+    });
+  }
+  if (manifest.entrypoints?.model !== undefined && !modelBackend) {
+    context.addIssue({
+      code: "custom",
+      message: "entrypoints.model is only valid for model renderers",
+      path: ["entrypoints", "model"],
     });
   }
 });
