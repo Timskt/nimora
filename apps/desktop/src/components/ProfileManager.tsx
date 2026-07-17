@@ -20,7 +20,7 @@ const profileModes: ReadonlyArray<{ value: ProfileMode; label: string }> = [
   { value: "offline", label: "离线优先" },
 ];
 
-function profileModeLabel(mode: ProfileMode | null): string {
+function profileModeLabel(mode: ProfileMode): string {
   return profileModes.find((item) => item.value === mode)?.label ?? "自定义";
 }
 
@@ -136,7 +136,7 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
           <label className="profile-name">
             <span>场景类型</span>
             <select
-              value={policy.mode ?? "companion"}
+              value={policy.mode}
               onChange={(event) => setPolicy({ ...policy, mode: event.target.value as ProfileMode })}
             >
               {profileModes.map((mode) => (

@@ -34,8 +34,7 @@ pub enum ProfileMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfilePolicy {
-    #[serde(default)]
-    pub mode: Option<ProfileMode>,
+    pub mode: ProfileMode,
     pub always_on_top: Option<bool>,
     pub click_through: Option<bool>,
     pub sound_enabled: Option<bool>,
@@ -46,7 +45,7 @@ impl ProfilePolicy {
     #[must_use]
     pub const fn standard() -> Self {
         Self {
-            mode: Some(ProfileMode::Companion),
+            mode: ProfileMode::Companion,
             always_on_top: Some(true),
             click_through: Some(false),
             sound_enabled: Some(true),
@@ -57,7 +56,7 @@ impl ProfilePolicy {
     #[must_use]
     pub fn merge(defaults: &Self, override_policy: &Self) -> Self {
         Self {
-            mode: override_policy.mode.or(defaults.mode),
+            mode: override_policy.mode,
             always_on_top: override_policy.always_on_top.or(defaults.always_on_top),
             click_through: override_policy.click_through.or(defaults.click_through),
             sound_enabled: override_policy.sound_enabled.or(defaults.sound_enabled),
@@ -129,14 +128,14 @@ mod tests {
     #[test]
     fn override_policy_wins_without_copying_defaults() {
         let defaults = ProfilePolicy {
-            mode: Some(ProfileMode::Companion),
+            mode: ProfileMode::Companion,
             always_on_top: Some(true),
             click_through: Some(false),
             sound_enabled: Some(true),
             proactive_frequency: Some(25),
         };
         let overrides = ProfilePolicy {
-            mode: Some(ProfileMode::Work),
+            mode: ProfileMode::Work,
             always_on_top: None,
             click_through: Some(true),
             sound_enabled: None,
@@ -144,7 +143,7 @@ mod tests {
         };
         let merged = ProfilePolicy::merge(&defaults, &overrides);
         assert_eq!(merged.always_on_top, Some(true));
-        assert_eq!(merged.mode, Some(ProfileMode::Work));
+        assert_eq!(merged.mode, ProfileMode::Work);
         assert_eq!(merged.click_through, Some(true));
         assert_eq!(merged.proactive_frequency, Some(100));
     }
@@ -160,22 +159,6 @@ mod tests {
         assert_eq!(
             Profile::new("Work", policy),
             Err(ProfileError::InvalidProactiveFrequency)
-        );
-    }
-
-    #[test]
-    fn restores_profiles_written_before_scene_modes() {
-        let policy = serde_json::from_value::<ProfilePolicy>(serde_json::json!({
-            "alwaysOnTop": true,
-            "clickThrough": false,
-            "soundEnabled": true,
-            "proactiveFrequency": 25
-        }))
-        .expect("legacy policy");
-        assert_eq!(policy.mode, None);
-        assert_eq!(
-            ProfilePolicy::merge(&ProfilePolicy::standard(), &policy).mode,
-            Some(ProfileMode::Companion)
         );
     }
 }

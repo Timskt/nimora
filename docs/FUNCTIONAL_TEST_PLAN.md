@@ -211,7 +211,7 @@ ID / 标题 / 优先级 / 前置条件
 | CFG-005 | Schema 升级 | 迁移幂等，重复启动结果一致 | P0 |
 | CFG-006 | 磁盘写入失败 | 不覆盖有效配置，提示恢复方案 | P0 |
 | CFG-007 | Work 场景能力 | 切换为 `work` 只应用用户配置与默认呈现，不永久隐藏或拒绝已授权能力 | P0 |
-| CFG-008 | 场景类型兼容 | 缺少 `mode` 的旧 Profile 正常恢复为 Companion；未知类型由契约拒绝而不损坏原快照 | P0 |
+| CFG-008 | 场景类型契约 | Profile 必须包含合法 `mode`；缺失或未知类型拒绝且不覆盖当前配置 | P0 |
 | CFG-009 | 场景类型扩展 | Companion、Work、Focus、Creator、Developer、Presentation、Offline 均可保存、恢复和切换 | P1 |
 
 ## 16. UI、设计与可访问性

@@ -84,7 +84,7 @@ export const profileModeSchema = z.enum([
 ]);
 
 export const profilePolicySchema = z.object({
-  mode: profileModeSchema.nullable(),
+  mode: profileModeSchema,
   alwaysOnTop: z.boolean().nullable(),
   clickThrough: z.boolean().nullable(),
   soundEnabled: z.boolean().nullable(),

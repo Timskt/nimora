@@ -105,7 +105,7 @@ describe("profileSnapshotSchema", () => {
         id,
         name: "Focus",
         policy: {
-          mode: null,
+          mode: "work",
           alwaysOnTop: null,
           clickThrough: null,
           soundEnabled: null,

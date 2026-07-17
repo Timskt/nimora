@@ -2068,7 +2068,7 @@ mod tests {
     #[test]
     fn window_policy_resolves_partial_profile_overrides() {
         let policy = ProfilePolicy {
-            mode: None,
+            mode: nimora_runtime_core::ProfileMode::Companion,
             always_on_top: Some(false),
             click_through: None,
             sound_enabled: None,
