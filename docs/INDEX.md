@@ -19,6 +19,8 @@
 
 全量开发进度、证据和真实缺口以 [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) 为入口。优先级只决定施工顺序，不允许从该矩阵静默删除有价值能力。
 
+面向广大用户的持续需求发现、新技术准入、Adapter 替换、稳定版前后兼容和退出演练统一遵循 [`FUTURE_EVOLUTION_GOVERNANCE.md`](FUTURE_EVOLUTION_GOVERNANCE.md)。
+
 ## 2. 规范用词
 
 - **MUST / 必须**：违反即不兼容或不能发布。
@@ -66,4 +68,4 @@
 
 ## 6. 完整性检查维度
 
-任何新功能评审必须覆盖：产品价值、视觉与交互、设计令牌与组件状态、数据模型、权限隐私、离线行为、失败恢复、性能预算、可观测性、跨平台、无障碍、国际化、部署升级、测试和生态影响。首个稳定版前只维护唯一当前契约，不评审假想兼容迁移。UI 质量以 [`UI_DESIGN_SYSTEM.md`](UI_DESIGN_SYSTEM.md) 为强制门禁，功能储备以 [`FEATURE_EVOLUTION.md`](FEATURE_EVOLUTION.md) 管理，未经里程碑决策不构成发布承诺。
+任何新功能评审必须覆盖：产品价值、视觉与交互、设计令牌与组件状态、数据模型、权限隐私、离线行为、失败恢复、性能预算、可观测性、跨平台、无障碍、国际化、部署升级、测试和生态影响。首个稳定版前只维护唯一当前契约，不评审假想兼容迁移。UI 质量以 [`UI_DESIGN_SYSTEM.md`](UI_DESIGN_SYSTEM.md) 为强制门禁，功能储备以 [`FEATURE_EVOLUTION.md`](FEATURE_EVOLUTION.md) 管理，长期需求与技术替换以 [`FUTURE_EVOLUTION_GOVERNANCE.md`](FUTURE_EVOLUTION_GOVERNANCE.md) 管理；施工顺序不构成范围删除或发布完成声明。
