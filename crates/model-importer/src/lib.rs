@@ -18,6 +18,8 @@ const MAX_NODES: usize = 10_000;
 const MAX_MESHES: usize = 2_000;
 const MAX_MATERIALS: usize = 1_000;
 const MAX_TEXTURES: usize = 1_000;
+const MAX_ANIMATIONS: usize = 1_000;
+const MAX_ANIMATION_NAME_BYTES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -40,6 +42,7 @@ pub struct ModelProbeReport {
     pub materials: usize,
     pub textures: usize,
     pub animations: usize,
+    pub animation_names: Vec<String>,
     pub skins: usize,
 }
 
@@ -99,7 +102,7 @@ struct GltfDocument {
     #[serde(default)]
     textures: Vec<serde_json::Value>,
     #[serde(default)]
-    animations: Vec<serde_json::Value>,
+    animations: Vec<GltfAnimation>,
     #[serde(default)]
     skins: Vec<serde_json::Value>,
     #[serde(default)]
@@ -121,6 +124,12 @@ struct GltfBuffer {
 #[derive(Debug, Deserialize)]
 struct GltfImage {
     uri: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GltfAnimation {
+    #[serde(default)]
+    name: Option<String>,
 }
 
 /// Probes one GLB file from an isolated staging directory without producing
@@ -273,9 +282,18 @@ fn probe_glb(bytes: &[u8]) -> Result<ModelProbeReport, ModelImportError> {
         || document.meshes.len() > MAX_MESHES
         || document.materials.len() > MAX_MATERIALS
         || document.textures.len() > MAX_TEXTURES
+        || document.animations.len() > MAX_ANIMATIONS
     {
         return Err(ModelImportError::ResourceBudgetExceeded);
     }
+    let animation_names = document
+        .animations
+        .iter()
+        .filter_map(|animation| animation.name.as_deref())
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && name.len() <= MAX_ANIMATION_NAME_BYTES)
+        .map(str::to_owned)
+        .collect();
     let binary_bytes = parse_optional_binary_chunk(bytes, json_end)?;
     Ok(ModelProbeReport {
         spec: "nimora.model-probe-report/1".to_owned(),
@@ -289,6 +307,7 @@ fn probe_glb(bytes: &[u8]) -> Result<ModelProbeReport, ModelImportError> {
         materials: document.materials.len(),
         textures: document.textures.len(),
         animations: document.animations.len(),
+        animation_names,
         skins: document.skins.len(),
     })
 }

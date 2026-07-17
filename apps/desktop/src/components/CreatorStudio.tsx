@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { ActiveCharacterSnapshot, AssetCatalogSnapshot, AssetPackageSummary, AssetPreviewReport, ModelProbeReport } from "../platform/desktop";
+import type { ActiveCharacterSnapshot, AssetCatalogSnapshot, AssetPackageSummary, AssetPreviewReport, ModelAnimationBinding, ModelProbeReport } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const backends = ["Sprite Atlas", "Live2D Cubism", "VRM", "glTF"] as const;
@@ -12,6 +12,27 @@ const checks = [
   { label: "可访问性声明", detail: "动画、闪烁、音效", status: "待补充" },
   { label: "许可证与署名", detail: "未检测到 NOTICE.md", status: "待补充" },
 ] as const;
+
+const modelActions = [
+  { action: "pet.idle", label: "待机", looped: true, aliases: ["idle", "stand", "breath"] },
+  { action: "pet.walk", label: "行走", looped: true, aliases: ["walk", "locomotion"] },
+  { action: "pet.click", label: "互动", looped: false, aliases: ["click", "wave", "greet", "happy"] },
+  { action: "pet.drag", label: "拖拽", looped: true, aliases: ["drag", "grab", "hold"] },
+  { action: "pet.sleep", label: "睡眠", looped: true, aliases: ["sleep", "rest"] },
+  { action: "pet.work", label: "工作", looped: true, aliases: ["work", "type", "study"] },
+] as const;
+
+export function suggestAnimationMap(names: readonly string[]): Record<string, ModelAnimationBinding> {
+  const result: Record<string, ModelAnimationBinding> = {};
+  for (const definition of modelActions) {
+    const animation = names.find((name) => {
+      const normalized = name.toLocaleLowerCase();
+      return definition.aliases.some((alias) => normalized.includes(alias));
+    });
+    if (animation) result[definition.action] = { animation, looped: definition.looped };
+  }
+  return result;
+}
 
 export function CreatorStudio() {
   const [backend, setBackend] = useState<Backend>("Sprite Atlas");
@@ -37,6 +58,7 @@ export function CreatorStudio() {
   const [modelAssetId, setModelAssetId] = useState("character.local.custom");
   const [modelName, setModelName] = useState("My GLB Character");
   const [modelLicense, setModelLicense] = useState("LicenseRef-Proprietary");
+  const [modelAnimationMap, setModelAnimationMap] = useState<Record<string, ModelAnimationBinding>>({});
   const completion = useMemo(() => checks.filter((check) => check.status === "通过").length, []);
 
   useEffect(() => {
@@ -151,6 +173,7 @@ export function CreatorStudio() {
       const report = await desktopApi.inspectModel({ sourcePath });
       if (!report) throw new Error("当前环境不支持模型隔离检查");
       setModelCandidate({ sourcePath, report });
+      setModelAnimationMap(suggestAnimationMap(report.animationNames));
     } catch (error) {
       setModelError(error instanceof Error ? error.message : "模型未通过隔离结构检查");
     } finally {
@@ -168,6 +191,7 @@ export function CreatorStudio() {
         assetId: modelAssetId.trim(),
         name: modelName.trim(),
         license: modelLicense,
+        animationMap: modelAnimationMap,
       });
       if (!receipt) throw new Error("当前环境不支持模型规范化安装");
       setCatalog(await desktopApi.assetCatalog());
@@ -283,7 +307,17 @@ export function CreatorStudio() {
             <label>包标识<input value={modelAssetId} onChange={(event) => setModelAssetId(event.target.value)} placeholder="character.local.name" /></label>
             <label>角色名称<input value={modelName} onChange={(event) => setModelName(event.target.value)} /></label>
             <label>许可证<select value={modelLicense} onChange={(event) => setModelLicense(event.target.value)}><option value="LicenseRef-Proprietary">保留所有权利</option><option value="CC0-1.0">CC0 1.0</option><option value="CC-BY-4.0">CC BY 4.0</option><option value="MIT">MIT</option></select></label>
-            <button className="primary-button" type="button" disabled={installingModel || !modelAssetId.trim() || !modelName.trim()} onClick={() => void installModel()}>{installingModel ? "正在生成并安装…" : "生成 Character 包并安装"}</button>
+            <div className="model-animation-map" aria-label="标准动作动画映射">
+              <strong>标准动作映射</strong>
+              <p>{modelCandidate.report.animationNames.length > 0 ? "已按名称给出建议，可逐项修正。" : "模型没有可识别的命名动画，将作为静态角色安装。"}</p>
+              {modelActions.map((definition) => <label key={definition.action}>{definition.label}<select value={modelAnimationMap[definition.action]?.animation ?? ""} onChange={(event) => setModelAnimationMap((current) => {
+                const next = { ...current };
+                if (event.target.value) next[definition.action] = { animation: event.target.value, looped: definition.looped };
+                else delete next[definition.action];
+                return next;
+              })}><option value="">不映射</option>{modelCandidate.report.animationNames.map((name) => <option value={name} key={name}>{name}</option>)}</select></label>)}
+            </div>
+            <button className="primary-button" type="button" disabled={installingModel || !modelAssetId.trim() || !modelName.trim() || (modelCandidate.report.animationNames.length > 0 && !modelAnimationMap["pet.idle"])} onClick={() => void installModel()}>{installingModel ? "正在生成并安装…" : "生成 Character 包并安装"}</button>
           </div>
         </> : null}
       </section>

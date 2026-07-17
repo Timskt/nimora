@@ -17,6 +17,8 @@
 
 原始需求统一保存在 `archive/original-docs/`，只用于追溯。新开发只能以本目录文档和已接受 ADR 为依据。
 
+全量开发进度、证据和真实缺口以 [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) 为入口。优先级只决定施工顺序，不允许从该矩阵静默删除有价值能力。
+
 ## 2. 规范用词
 
 - **MUST / 必须**：违反即不兼容或不能发布。

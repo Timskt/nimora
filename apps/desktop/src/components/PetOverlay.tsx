@@ -107,7 +107,7 @@ export function PetOverlay() {
           renderer.backend === "gltf" ? (
             <RendererErrorBoundary resetKey={renderer.assetId} onFailure={handleRendererFailure}>
               <Suspense fallback={<GltfLoadingPlaceholder descriptor={renderer} />}>
-                <GltfRenderer descriptor={renderer} onFailure={handleRendererFailure} />
+                <GltfRenderer descriptor={renderer} action={petStateAction(snapshot?.pet.state ?? "idle")} onFailure={handleRendererFailure} />
               </Suspense>
             </RendererErrorBoundary>
           ) : (

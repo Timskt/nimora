@@ -132,7 +132,7 @@ Sprite Clips 文档使用 `backend` 判别联合，首版只接受：
 - 宿主 Rust 安装器对同一契约进行独立严格解析：Sprite Manifest 必须声明 `entrypoints.clips`，Clips 后端必须与 Manifest 一致，所有 JSON 与图片引用必须存在于已验证 inventory，图片仅接受受控 MIME。`active_character_renderer` 返回不含安装目录的 `nimora.renderer/1` 描述符；安全模式、损坏包、非 Character 或尚未实现的 Live2D/VRM/glTF Adapter 都明确回退内置角色。
 - `nimora-asset://localhost/<asset-id>/<relative-path>` 是专用只读图片协议（Windows 映射为 `http://nimora-asset.localhost/...`）。协议只接受 Pet WebView 的 `GET`，只读取当前活动第三方角色、每次复验完整包、inventory、hash、路径、MIME 与扩展名，并返回 `nosniff` 与 `no-store`；安全模式、非活动包、查询参数、编码穿越和其它窗口全部拒绝。
 - 当前 Pet Overlay 已消费可信 Renderer Descriptor：Sequence 使用受控 `<img>` 逐帧切换，Atlas 使用 Canvas 裁切绘制；动作缺失按 Manifest fallback 链解析并检测循环，最终回退 `pet.idle`。资源 URL 对每个路径段编码，图片加载、解码上下文或 Atlas 实际尺寸越界失败时立即显示内置 Aster。`prefers-reduced-motion` 下固定首帧，角色激活与安全模式切换通过定向 Tauri Event 刷新描述符，监听器、Timer 和 Image handler 在卸载或切换时清理。
-- Live2D、VRM 与 glTF/GLB 当前仅完成 Catalog 契约识别和显式回退，尚无可执行 Renderer Adapter，不得宣称这些模型已经真实渲染。
+- glTF/GLB 已有可执行 Three.js Renderer Adapter；Live2D 与 VRM 仍只完成 Catalog 契约识别和显式回退，不得宣称已经真实渲染。
 
 Sequence 示例：
 
@@ -231,7 +231,7 @@ Character 基础
 - 激活第三方角色前，宿主重新验证 Manifest、完整性清单、精确目录树、身份和 `type=character`；Renderer 不能直接修改选择记录。
 - 选择记录采用临时文件与原子替换写入，同一进程内的激活请求串行执行；验证或持久化失败时保持原选择。
 - 每次读取活动角色都重新检查已安装包。包缺失、损坏、身份不一致、记录损坏或进入安全模式时，立即使用内置 `builtin.aster`，并返回可展示的回退原因。
-- 当前激活会为通过完整性复验的 Sprite Sequence/Atlas 或 GLB 2.0 创建 Renderer Descriptor，并由 Pet Overlay 真实绘制。GLB 只能经 Pet 专用资源协议读取唯一 `entrypoints.model`，不暴露文件系统路径；Three.js Adapter 自动 framing、播放首动画回退并在卸载时释放 GPU 资源。选择记录本身仍不等于渲染成功，任何协议、图片、Canvas、模型加载或 WebGL context 失败都会显式回退内置角色。VRM、Live2D 与标准动作映射必须等对应 Adapter 完成后才能标记为“已渲染”。
+- 当前激活会为通过完整性复验的 Sprite Sequence/Atlas 或 GLB 2.0 创建 Renderer Descriptor，并由 Pet Overlay 真实绘制。GLB 只能经 Pet 专用资源协议读取唯一 `entrypoints.model`，不暴露文件系统路径；Three.js Adapter 自动 framing，通过验证后的 `nimora.animation-map/1` 将标准动作 cross-fade 到精确 GLB 动画，并在卸载时释放 GPU 资源。选择记录本身仍不等于渲染成功，任何协议、图片、Canvas、模型加载或 WebGL context 失败都会显式回退内置角色。VRM 与 Live2D 必须等对应 Adapter 完成后才能标记为“已渲染”。
 
 ## 13. 创作者工具
 

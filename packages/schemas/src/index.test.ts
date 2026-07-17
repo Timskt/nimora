@@ -3,6 +3,7 @@ import {
   assetPackageSchema,
   assetManifestSchema,
   eventSchema,
+  modelAnimationMapSchema,
   petSchema,
   pointerButtonSchema,
   profileSnapshotSchema,
@@ -62,6 +63,25 @@ describe("eventSchema", () => {
       data: null,
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("modelAnimationMapSchema", () => {
+  it("accepts named loop and one-shot model animations", () => {
+    expect(modelAnimationMapSchema.safeParse({
+      spec: "nimora.animation-map/1",
+      clips: {
+        "pet.idle": { animation: "Idle", looped: true },
+        "pet.click": { animation: "Wave", looped: false },
+      },
+    }).success).toBe(true);
+  });
+
+  it("rejects missing idle and invalid action identifiers", () => {
+    expect(modelAnimationMapSchema.safeParse({
+      spec: "nimora.animation-map/1",
+      clips: { click: { animation: "Wave", looped: false } },
+    }).success).toBe(false);
   });
 });
 

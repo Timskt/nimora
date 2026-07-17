@@ -47,6 +47,7 @@ export interface ImportModelRequest extends InspectModelRequest {
   assetId: string;
   name: string;
   license: string;
+  animationMap: Record<string, ModelAnimationBinding>;
 }
 
 export interface ModelProbeReport {
@@ -61,7 +62,18 @@ export interface ModelProbeReport {
   materials: number;
   textures: number;
   animations: number;
+  animationNames: string[];
   skins: number;
+}
+
+export interface ModelAnimationBinding {
+  animation: string;
+  looped: boolean;
+}
+
+export interface ModelAnimationMap {
+  spec: "nimora.animation-map/1";
+  clips: Record<string, ModelAnimationBinding>;
 }
 
 export interface InstallPackageFile {
@@ -127,6 +139,7 @@ export interface CharacterRendererSnapshot {
   fallbacks: Record<string, string>;
   clips: SpriteClips | null;
   model: string | null;
+  animationMap: ModelAnimationMap | null;
   fallbackReason: string | null;
 }
 
@@ -360,6 +373,7 @@ export function createDesktopApi(
           fallbacks: {},
           clips: null,
           model: null,
+          animationMap: null,
           fallbackReason: null,
         };
       },

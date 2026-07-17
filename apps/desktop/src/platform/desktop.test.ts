@@ -50,6 +50,7 @@ describe("desktop platform adapter", () => {
       assetId: "character.local.aurora",
       name: "Aurora",
       license: "CC-BY-4.0",
+      animationMap: {},
     });
     await api.installAsset({
       sourcePath: "/tmp/nimora-import",
@@ -131,6 +132,7 @@ describe("desktop platform adapter", () => {
         assetId: "character.local.aurora",
         name: "Aurora",
         license: "CC-BY-4.0",
+        animationMap: {},
       } }],
       ["install_asset", { request: {
         sourcePath: "/tmp/nimora-import",

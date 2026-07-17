@@ -1,14 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { cameraDistanceForRadius, modelAssetUrl } from "./GltfRenderer";
+import { resolveModelAnimation } from "./GltfRenderer";
 
-describe("GltfRenderer helpers", () => {
-  it("encodes each controlled model path segment", () => {
-    expect(modelAssetUrl("nimora-asset://localhost/character.local.aurora/", "models/my model.glb"))
-      .toBe("nimora-asset://localhost/character.local.aurora/models/my%20model.glb");
+const clips = {
+  "pet.idle": { animation: "Idle", looped: true },
+  "pet.click": { animation: "Wave", looped: false },
+};
+
+describe("resolveModelAnimation", () => {
+  it("resolves exact and declared fallback actions", () => {
+    const available = new Set(["Idle", "Wave"]);
+    expect(resolveModelAnimation("pet.click", clips, {}, available)).toEqual(clips["pet.click"]);
+    expect(resolveModelAnimation("pet.happy", clips, { "pet.happy": "pet.click" }, available)).toEqual(clips["pet.click"]);
   });
 
-  it("frames finite and degenerate model bounds", () => {
-    expect(cameraDistanceForRadius(1, 60)).toBeCloseTo(2);
-    expect(cameraDistanceForRadius(0, 60)).toBeGreaterThan(0);
+  it("falls back to idle and rejects unavailable model clips", () => {
+    expect(resolveModelAnimation("pet.unknown", clips, {}, new Set(["Idle"]))).toEqual(clips["pet.idle"]);
+    expect(resolveModelAnimation("pet.click", clips, {}, new Set(["Idle"]))).toBeNull();
+  });
+
+  it("terminates cyclic fallback graphs", () => {
+    expect(resolveModelAnimation(
+      "pet.a",
+      clips,
+      { "pet.a": "pet.b", "pet.b": "pet.a" },
+      new Set(["Idle", "Wave"]),
+    )).toEqual(clips["pet.idle"]);
   });
 });

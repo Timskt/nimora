@@ -148,6 +148,13 @@ export const rendererBackendSchema = z.enum([
   "gltf",
 ]);
 const spriteActionSchema = z.string().regex(/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/);
+export const modelAnimationMapSchema = z.object({
+  spec: z.literal("nimora.animation-map/1"),
+  clips: z.record(spriteActionSchema, z.object({
+    animation: z.string().trim().min(1).max(256),
+    looped: z.boolean(),
+  })).refine((clips) => "pet.idle" in clips, "model animation map must define pet.idle"),
+});
 const spriteDurationSchema = z.number().int().min(16).max(60_000);
 const spriteSequenceClipSchema = z.object({
   loop: z.boolean(),

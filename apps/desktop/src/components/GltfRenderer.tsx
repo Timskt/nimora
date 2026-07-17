@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import type { CharacterRendererSnapshot } from "../platform/desktop";
+import type { CharacterRendererSnapshot, ModelAnimationBinding } from "../platform/desktop";
 
 export function modelAssetUrl(baseUrl: string, relativePath: string): string {
   const encoded = relativePath.split("/").map(encodeURIComponent).join("/");
@@ -30,11 +30,35 @@ export function disposeObjectTree(root: THREE.Object3D): void {
 
 interface GltfRendererProps {
   descriptor: CharacterRendererSnapshot;
+  action: string;
   onFailure(): void;
 }
 
-export function GltfRenderer({ descriptor, onFailure }: GltfRendererProps) {
+export function resolveModelAnimation(
+  action: string,
+  clips: Record<string, ModelAnimationBinding>,
+  fallbacks: Record<string, string>,
+  available: ReadonlySet<string>,
+): ModelAnimationBinding | null {
+  let candidate = action;
+  const visited = new Set<string>();
+  while (!(candidate in clips) && !visited.has(candidate)) {
+    visited.add(candidate);
+    candidate = fallbacks[candidate] ?? "pet.idle";
+  }
+  const binding = clips[candidate] ?? clips["pet.idle"];
+  return binding && available.has(binding.animation) ? binding : null;
+}
+
+export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const playActionRef = useRef<(action: string) => void>(() => undefined);
+  const latestActionRef = useRef(action);
+
+  useEffect(() => {
+    latestActionRef.current = action;
+    playActionRef.current(action);
+  }, [action]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -122,9 +146,32 @@ export function GltfRenderer({ descriptor, onFailure }: GltfRendererProps) {
         camera.lookAt(0, 0, 0);
         camera.updateProjectionMatrix();
         const firstAnimation = gltf.animations[0];
-        if (firstAnimation) {
+        const animationMap = descriptor.animationMap;
+        if (firstAnimation && animationMap) {
           mixer = new THREE.AnimationMixer(loadedRoot);
-          mixer.clipAction(firstAnimation).play();
+          const available = new Set(gltf.animations.map((clip) => clip.name));
+          let current: THREE.AnimationAction | null = null;
+          playActionRef.current = (nextAction) => {
+            if (reducedMotion.matches || !mixer) return;
+            const binding = resolveModelAnimation(
+              nextAction,
+              animationMap.clips,
+              descriptor.fallbacks,
+              available,
+            );
+            if (!binding) return;
+            const clip = THREE.AnimationClip.findByName(gltf.animations, binding.animation);
+            if (!clip) return;
+            const next = mixer.clipAction(clip);
+            if (next === current) return;
+            next.reset();
+            next.setLoop(binding.looped ? THREE.LoopRepeat : THREE.LoopOnce, binding.looped ? Infinity : 1);
+            next.clampWhenFinished = !binding.looped;
+            next.fadeIn(0.18).play();
+            current?.fadeOut(0.18);
+            current = next;
+          };
+          playActionRef.current(latestActionRef.current);
         }
       },
       undefined,
@@ -137,6 +184,7 @@ export function GltfRenderer({ descriptor, onFailure }: GltfRendererProps) {
       resizeObserver.disconnect();
       canvas.removeEventListener("webglcontextlost", handleContextLost);
       mixer?.stopAllAction();
+      playActionRef.current = () => undefined;
       if (loadedRoot) {
         scene.remove(loadedRoot);
         disposeObjectTree(loadedRoot);

@@ -30,6 +30,7 @@ pub struct GltfCharacterMetadata {
     pub name: String,
     pub publisher: String,
     pub license: String,
+    pub animation_map: BTreeMap<String, ModelAnimationBinding>,
 }
 
 const MAX_FILES: usize = 10_000;
@@ -216,6 +217,21 @@ pub struct AssetRendererDescriptor {
     pub fallbacks: BTreeMap<String, String>,
     pub clips: Option<SpriteClips>,
     pub model: Option<PathBuf>,
+    pub animation_map: Option<ModelAnimationMap>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelAnimationMap {
+    pub spec: String,
+    pub clips: BTreeMap<String, ModelAnimationBinding>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelAnimationBinding {
+    pub animation: String,
+    pub looped: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -347,6 +363,7 @@ pub fn install_gltf_character(
             "locally generated characters require the character.local namespace".to_owned(),
         ));
     }
+    validate_model_animation_bindings(&metadata.animation_map)?;
     let source_metadata = fs::symlink_metadata(staged_glb)?;
     if !source_metadata.file_type().is_file()
         || staged_glb.extension().and_then(|value| value.to_str()) != Some("glb")
@@ -373,6 +390,25 @@ pub fn install_gltf_character(
     }
     fs::File::open(&model_path)?.sync_all()?;
 
+    write_gltf_character_package_files(&package.root, &model_path, metadata)?;
+    install_asset_package(&package.root, asset_store)
+}
+
+fn write_gltf_character_package_files(
+    package_root: &Path,
+    model_path: &Path,
+    metadata: &GltfCharacterMetadata,
+) -> Result<(), InstallError> {
+    let mut entrypoints = serde_json::Map::from_iter([(
+        "model".to_owned(),
+        serde_json::Value::String("models/character.glb".to_owned()),
+    )]);
+    if !metadata.animation_map.is_empty() {
+        entrypoints.insert(
+            "animationGraph".to_owned(),
+            serde_json::Value::String("animations/actions.json".to_owned()),
+        );
+    }
     let manifest = serde_json::to_vec_pretty(&serde_json::json!({
         "spec": "nimora.asset/1",
         "id": metadata.id,
@@ -389,35 +425,87 @@ pub fn install_gltf_character(
             "defaultScale": 1.0,
             "pixelArt": false
         },
-        "entrypoints": { "model": "models/character.glb" },
+        "entrypoints": entrypoints,
         "capabilities": [],
         "fallbacks": {},
         "locales": ["en"],
         "integrity": { "algorithm": "sha256", "files": "integrity.json" }
     }))
     .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
-    fs::write(package.root.join(MANIFEST_FILE), &manifest)?;
-    let model_bytes = fs::read(&model_path)?;
+    fs::write(package_root.join(MANIFEST_FILE), &manifest)?;
+    let model_bytes = fs::read(model_path)?;
+    let animation_graph = (!metadata.animation_map.is_empty())
+        .then(|| {
+            serde_json::to_vec_pretty(&ModelAnimationMap {
+                spec: "nimora.animation-map/1".to_owned(),
+                clips: metadata.animation_map.clone(),
+            })
+        })
+        .transpose()
+        .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    if let Some(bytes) = &animation_graph {
+        fs::create_dir_all(package_root.join("animations"))?;
+        fs::write(package_root.join("animations/actions.json"), bytes)?;
+    }
+    let mut files = vec![
+        serde_json::json!({
+            "path": MANIFEST_FILE,
+            "sha256": format!("{:x}", Sha256::digest(&manifest)),
+            "bytes": manifest.len(),
+            "mediaType": "application/json"
+        }),
+        serde_json::json!({
+            "path": "models/character.glb",
+            "sha256": format!("{:x}", Sha256::digest(&model_bytes)),
+            "bytes": model_bytes.len(),
+            "mediaType": "model/gltf-binary"
+        }),
+    ];
+    if let Some(bytes) = &animation_graph {
+        files.push(serde_json::json!({
+            "path": "animations/actions.json",
+            "sha256": format!("{:x}", Sha256::digest(bytes)),
+            "bytes": bytes.len(),
+            "mediaType": "application/json"
+        }));
+    }
+    let total_bytes =
+        manifest.len() + model_bytes.len() + animation_graph.as_ref().map_or(0, Vec::len);
     let integrity = serde_json::to_vec_pretty(&serde_json::json!({
-        "files": [
-            {
-                "path": MANIFEST_FILE,
-                "sha256": format!("{:x}", Sha256::digest(&manifest)),
-                "bytes": manifest.len(),
-                "mediaType": "application/json"
-            },
-            {
-                "path": "models/character.glb",
-                "sha256": format!("{:x}", Sha256::digest(&model_bytes)),
-                "bytes": model_bytes.len(),
-                "mediaType": "model/gltf-binary"
-            }
-        ],
-        "totalBytes": manifest.len() + model_bytes.len()
+        "files": files,
+        "totalBytes": total_bytes
     }))
     .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
-    fs::write(package.root.join("integrity.json"), integrity)?;
-    install_asset_package(&package.root, asset_store)
+    fs::write(package_root.join("integrity.json"), integrity)?;
+    Ok(())
+}
+
+/// Validates the renderer-independent action-to-animation contract.
+///
+/// # Errors
+///
+/// Returns an error when a non-empty map omits `pet.idle`, exceeds its budget,
+/// or contains an invalid action identifier or animation name.
+pub fn validate_model_animation_bindings(
+    animation_map: &BTreeMap<String, ModelAnimationBinding>,
+) -> Result<(), InstallError> {
+    if animation_map.is_empty() {
+        return Ok(());
+    }
+    if !animation_map.contains_key("pet.idle")
+        || animation_map.len() > 64
+        || animation_map.iter().any(|(action, clip)| {
+            !valid_action_id(action)
+                || clip.animation.trim().is_empty()
+                || clip.animation.len() > 256
+                || clip.animation.contains(['\0', '\r', '\n'])
+        })
+    {
+        return Err(InstallError::InvalidMetadata(
+            "model animation map is invalid".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Verifies an expanded package without changing the filesystem.
@@ -1026,6 +1114,7 @@ fn load_asset_renderer(
             fallbacks: manifest.fallbacks.clone(),
             clips: None,
             model: Some(model.to_path_buf()),
+            animation_map: load_model_animation_map(source_root, manifest, inventory)?,
         }));
     }
     if !["sprite-sequence", "sprite-atlas"].contains(&render.backend.as_str()) {
@@ -1064,7 +1153,44 @@ fn load_asset_renderer(
         fallbacks: manifest.fallbacks.clone(),
         clips: Some(clips),
         model: None,
+        animation_map: None,
     }))
+}
+
+fn load_model_animation_map(
+    source_root: &Path,
+    manifest: &AssetManifestHeader,
+    inventory: &[AssetIntegrityFile],
+) -> Result<Option<ModelAnimationMap>, InstallError> {
+    let Some(path) = manifest
+        .entrypoints
+        .as_ref()
+        .and_then(|entrypoints| entrypoints.animation_graph.as_ref())
+    else {
+        return Ok(None);
+    };
+    let path = safe_relative_path(path)?;
+    require_inventory_media(inventory, path, &["application/json"])?;
+    let animation_map: ModelAnimationMap =
+        serde_json::from_slice(&read_metadata(source_root, path)?)
+            .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    if animation_map.spec != "nimora.animation-map/1" {
+        return Err(InstallError::InvalidMetadata(
+            "model animation map is invalid".to_owned(),
+        ));
+    }
+    validate_model_animation_bindings(&animation_map.clips)?;
+    Ok(Some(animation_map))
+}
+
+fn valid_action_id(value: &str) -> bool {
+    value.split('.').count() >= 2
+        && value.split('.').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
 }
 
 fn validate_sprite_clips(
@@ -2235,6 +2361,22 @@ mod tests {
                 name: "Aurora".to_owned(),
                 publisher: "publisher.local".to_owned(),
                 license: "LicenseRef-Proprietary".to_owned(),
+                animation_map: BTreeMap::from([
+                    (
+                        "pet.idle".to_owned(),
+                        ModelAnimationBinding {
+                            animation: "Idle".to_owned(),
+                            looped: true,
+                        },
+                    ),
+                    (
+                        "pet.walk".to_owned(),
+                        ModelAnimationBinding {
+                            animation: "Walk".to_owned(),
+                            looped: true,
+                        },
+                    ),
+                ]),
             },
         )
         .unwrap();
@@ -2247,13 +2389,21 @@ mod tests {
         );
         let summary = inspect_asset_package(&active).unwrap();
         assert_eq!(summary.renderer_backend.as_deref(), Some("gltf"));
-        assert_eq!(summary.file_count, 2);
+        assert_eq!(summary.file_count, 3);
         let renderer = inspect_asset_renderer(&active).unwrap();
         assert_eq!(renderer.backend, "gltf");
         assert!(renderer.clips.is_none());
         assert_eq!(
             renderer.model.as_deref(),
             Some(Path::new("models/character.glb"))
+        );
+        assert_eq!(
+            renderer
+                .animation_map
+                .as_ref()
+                .and_then(|map| map.clips.get("pet.walk"))
+                .map(|binding| binding.animation.as_str()),
+            Some("Walk")
         );
         assert_eq!(
             read_verified_asset_model(&active, Path::new("models/character.glb")).unwrap(),
@@ -2295,11 +2445,68 @@ mod tests {
                 name: "Aurora".to_owned(),
                 publisher: "publisher.local".to_owned(),
                 license: "LicenseRef-Proprietary".to_owned(),
+                animation_map: BTreeMap::new(),
             },
         )
         .unwrap_err();
         assert!(matches!(error, InstallError::InvalidMetadata(_)));
         assert!(!root.join("assets/character.publisher.aurora").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generated_model_rejects_invalid_animation_maps() {
+        let valid_binding = || ModelAnimationBinding {
+            animation: "Idle".to_owned(),
+            looped: true,
+        };
+        for animation_map in [
+            BTreeMap::from([("pet.walk".to_owned(), valid_binding())]),
+            BTreeMap::from([("Pet.Idle".to_owned(), valid_binding())]),
+            BTreeMap::from([(
+                "pet.idle".to_owned(),
+                ModelAnimationBinding {
+                    animation: " \n".to_owned(),
+                    looped: true,
+                },
+            )]),
+            BTreeMap::from([(
+                "pet.idle".to_owned(),
+                ModelAnimationBinding {
+                    animation: "a".repeat(257),
+                    looped: true,
+                },
+            )]),
+        ] {
+            assert!(validate_model_animation_bindings(&animation_map).is_err());
+        }
+    }
+
+    #[test]
+    fn static_generated_model_omits_animation_graph_entrypoint() {
+        let root = std::env::temp_dir().join("nimora-installer-static-gltf");
+        let staged = root.join("character.glb");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&staged, b"glTF-probed-model").unwrap();
+        install_gltf_character(
+            &staged,
+            &root.join("assets"),
+            &GltfCharacterMetadata {
+                id: "character.local.static".to_owned(),
+                version: "1.0.0".to_owned(),
+                name: "Static".to_owned(),
+                publisher: "publisher.local".to_owned(),
+                license: "LicenseRef-Proprietary".to_owned(),
+                animation_map: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(root.join("assets/character.local.static/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(manifest.pointer("/entrypoints/animationGraph").is_none());
         fs::remove_dir_all(root).unwrap();
     }
 

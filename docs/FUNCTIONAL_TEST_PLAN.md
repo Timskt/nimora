@@ -110,7 +110,8 @@ ID / 标题 / 优先级 / 前置条件
 | MODEL-010 | 受控 GLB 资源协议 | 仅 Pet WebView 可用 GET 从受控 Host 读取当前活动 Asset 的唯一 `entrypoints.model`；拒绝 query、错误 Host、非活动 Asset、Manifest、Integrity 和其它 inventory 路径 | P0 |
 | MODEL-011 | GLB 实际渲染与自动 framing | Three.js 加载验证后的 GLB，按包围盒居中缩放、设置相机和灯光，透明画布适配尺寸与高 DPI；加载失败回退内置角色 | P0 |
 | MODEL-012 | GLB context 丢失和完整资源释放 | context 丢失时阻止默认行为并回退；切换或卸载后取消帧循环、停止 Mixer、断开观察器并释放几何体、材质、纹理和 WebGL context | P0 |
-| MODEL-013 | GLB 动画与减少动画 | 有动画时播放首段回退；系统启用减少动画后暂停 Mixer 但保留静态模型；标准动作语义未映射时不得宣称动作兼容 | P1 |
+| MODEL-013 | GLB 动画映射与减少动画 | Worker 只返回有界命名动画；Creator 可编辑标准动作绑定且有命名动画时必须提供 `pet.idle`；Renderer 精确匹配、fallback、循环/一次性语义和 180 ms cross-fade，减少动画时暂停 Mixer | P0 |
+| MODEL-014 | 动画映射完整性与缺失片段 | `nimora.animation-map/1` 必须在 inventory 内并要求合法 `pet.idle`；篡改、未知动画、fallback 环或缺失动作不得导致任意首动画播放或 Renderer 崩溃 | P0 |
 
 ## 8. Command 与命令面板
 

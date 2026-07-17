@@ -50,7 +50,7 @@ fn real_worker_probes_a_staged_glb() {
                 "nodes": [{ "mesh": 0 }],
                 "meshes": [{ "primitives": [] }],
                 "materials": [{}],
-                "animations": [{}],
+                "animations": [{ "name": "Idle" }, { "name": "Wave" }],
                 "skins": [{}],
                 "buffers": [{ "byteLength": 4 }]
             }),
@@ -69,6 +69,7 @@ fn real_worker_probes_a_staged_glb() {
     assert_eq!(report.nodes, 1);
     assert_eq!(report.meshes, 1);
     assert_eq!(report.binary_bytes, 4);
+    assert_eq!(report.animation_names, ["Idle", "Wave"]);
     fs::remove_dir_all(root).unwrap();
 }
 

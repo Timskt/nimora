@@ -1,9 +1,9 @@
 use nimora_asset_installer::{
     AssetPackageSummary, AssetPreviewReport, AssetRendererDescriptor, GltfCharacterMetadata,
-    InstallError, InstallFile, RenderAnchor, RenderCanvas, SpriteClips, export_asset_package,
-    inspect_asset_package, inspect_asset_renderer, inspect_asset_source_preview,
-    install_asset_source, install_gltf_character, read_verified_asset_image,
-    read_verified_asset_model, rollback_latest,
+    InstallError, InstallFile, ModelAnimationBinding, RenderAnchor, RenderCanvas, SpriteClips,
+    export_asset_package, inspect_asset_package, inspect_asset_renderer,
+    inspect_asset_source_preview, install_asset_source, install_gltf_character,
+    read_verified_asset_image, read_verified_asset_model, rollback_latest,
 };
 use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
@@ -35,7 +35,7 @@ use nimora_user_code_policy::{
 use nimora_user_code_storage::ProgramDataStore;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs, io,
     path::{Path, PathBuf},
     sync::{
@@ -244,6 +244,7 @@ struct ImportModelRequest {
     asset_id: String,
     name: String,
     license: String,
+    animation_map: BTreeMap<String, ModelAnimationBinding>,
 }
 
 #[derive(Debug)]
@@ -886,7 +887,7 @@ fn import_model(
     ensure_normal_mode(&state)?;
     validate_model_source(&request.source_path)?;
     let staging = stage_model(&app, &request.source_path)?;
-    probe_model_in_worker(
+    let report = probe_model_in_worker(
         &model_importer_worker_path(&app),
         &staging.root,
         &ModelProbeRequest {
@@ -895,6 +896,7 @@ fn import_model(
         },
         MODEL_PROBE_TIMEOUT,
     )?;
+    validate_requested_animation_map(&request.animation_map, &report.animation_names)?;
     let result = install_gltf_character(
         &staging.root.join("character.glb"),
         &state.asset_store,
@@ -904,12 +906,36 @@ fn import_model(
             name: request.name,
             publisher: "publisher.local".to_owned(),
             license: request.license,
+            animation_map: request.animation_map,
         },
     )?;
     Ok(AssetInstallReceipt {
         asset_id: result.asset_id,
         replaced_previous: result.install.backup_path.is_some(),
     })
+}
+
+fn validate_requested_animation_map(
+    animation_map: &BTreeMap<String, ModelAnimationBinding>,
+    animation_names: &[String],
+) -> Result<(), DesktopError> {
+    nimora_asset_installer::validate_model_animation_bindings(animation_map)?;
+    if !animation_names.is_empty() && animation_map.is_empty() {
+        return Err(nimora_asset_installer::InstallError::InvalidMetadata(
+            "models with named animations must map pet.idle".to_owned(),
+        )
+        .into());
+    }
+    if animation_map
+        .values()
+        .any(|binding| !animation_names.contains(&binding.animation))
+    {
+        return Err(nimora_asset_installer::InstallError::InvalidMetadata(
+            "model animation map references an animation absent from the latest probe".to_owned(),
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn validate_model_source(source_path: &Path) -> Result<(), DesktopError> {
@@ -2764,9 +2790,9 @@ mod tests {
         parse_asset_protocol_path, parse_user_program_plan, permission_grant,
         persist_active_character, resolve_active_character, resolve_character_renderer,
         screen_coordinate, serve_asset_protocol, user_program_input, valid_asset_identifier,
-        validate_model_source, validate_package_source,
+        validate_model_source, validate_package_source, validate_requested_animation_map,
     };
-    use nimora_asset_installer::GltfCharacterMetadata;
+    use nimora_asset_installer::{GltfCharacterMetadata, ModelAnimationBinding};
     use nimora_persistence_sqlite::SqliteProgramPermissionRepository;
     use nimora_runtime_core::{Event, EventSource, RuntimeMode};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
@@ -2777,6 +2803,25 @@ mod tests {
     fn accepts_finite_screen_coordinates() {
         assert_eq!(screen_coordinate(42.6).expect("valid coordinate"), 43);
         assert_eq!(screen_coordinate(-12.4).expect("valid coordinate"), -12);
+    }
+
+    #[test]
+    fn validates_animation_map_against_latest_probe() {
+        let idle = ModelAnimationBinding {
+            animation: "Idle".to_owned(),
+            looped: true,
+        };
+        let animation_map = std::collections::BTreeMap::from([("pet.idle".to_owned(), idle)]);
+        validate_requested_animation_map(&animation_map, &["Idle".to_owned()]).unwrap();
+        assert!(validate_requested_animation_map(&animation_map, &["Walk".to_owned()]).is_err());
+        assert!(
+            validate_requested_animation_map(
+                &std::collections::BTreeMap::new(),
+                &["Idle".to_owned()]
+            )
+            .is_err()
+        );
+        validate_requested_animation_map(&std::collections::BTreeMap::new(), &[]).unwrap();
     }
 
     #[test]
@@ -2870,6 +2915,7 @@ mod tests {
                 name: "Aurora".to_owned(),
                 publisher: "publisher.local".to_owned(),
                 license: "LicenseRef-Proprietary".to_owned(),
+                animation_map: std::collections::BTreeMap::new(),
             },
         )
         .unwrap();
