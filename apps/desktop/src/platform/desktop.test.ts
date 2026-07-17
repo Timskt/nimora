@@ -17,6 +17,8 @@ describe("desktop platform adapter", () => {
     });
     expect((await api.previewDiagnosticReport()).sources).toEqual({ eventCount: 2, eventRetentionDays: 14 });
     expect((await api.profiles()).profiles[0]?.name).toBe("Default");
+    expect((await api.agentCatalog()).tools).toHaveLength(4);
+    expect((await api.runLocalAgent("离线检查")).usage.costMicrounits).toBe(0);
     await expect(api.playAction("celebrate")).resolves.toBeNull();
   });
 
@@ -24,6 +26,8 @@ describe("desktop platform adapter", () => {
     const invoke = vi.fn(async () => null);
     const startDragging = vi.fn(async () => undefined);
     const api = createDesktopApi(true, invoke, startDragging);
+    await api.agentCatalog();
+    await api.runLocalAgent("检查本地能力");
     await api.drainEvents();
     await api.outboxSnapshot();
     await api.backupHealth();
@@ -117,6 +121,8 @@ describe("desktop platform adapter", () => {
     });
     await api.stopUserProgram(envelope.executionId);
     expect(invoke.mock.calls).toEqual([
+      ["agent_catalog"],
+      ["run_local_agent", { request: { prompt: "检查本地能力" } }],
       ["drain_runtime_events"],
       ["outbox_snapshot"],
       ["backup_health"],

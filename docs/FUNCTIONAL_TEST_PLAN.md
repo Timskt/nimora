@@ -235,6 +235,8 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-029 | 生产 Tool Catalog | CLI 与 Provider 请求获得相同四项模块工具；Descriptor 的 Schema、风险和副作用稳定且不暴露内部对象或任意命令入口 | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
+| AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |
+| AGT-033 | 桌面 Agent 输入边界 | 空 Prompt 与超过 32768 bytes 的 Prompt 在 Provider 前拒绝，且不触发模块 Backend | P0 |
 
 ## 14. 信任中心与安全模式
 

@@ -1,3 +1,9 @@
+use nimora_agent_runtime::{
+    AgentBudget, AgentCoordinator, AgentTask, AgentTaskOrigin, CancellationFlag,
+    DataClassification, DeterministicLocalProvider, ProviderExecutionContext, ProviderMessage,
+    ProviderMessageRole, ProviderRegistry, ProviderStepInput, ProviderStepOutcome,
+};
+use nimora_agent_tools::production_tool_registry;
 use nimora_asset_installer::{
     AssetPackageSummary, AssetPreviewReport, AssetRendererDescriptor, GltfCharacterMetadata,
     InstallError, InstallFile, ModelAnimationBinding, RenderAnchor, RenderCanvas, SpriteClips,
@@ -592,6 +598,8 @@ enum DesktopError {
     RecoveryModeActive,
     #[error("desktop window is unavailable: {0}")]
     WindowUnavailable(String),
+    #[error("Agent runtime failed: {0}")]
+    Agent(String),
     #[error("operation is unavailable from this window")]
     WindowForbidden,
     #[error("pet position must be a finite 32-bit screen coordinate")]
@@ -650,6 +658,30 @@ enum DesktopError {
     Tauri(#[from] tauri::Error),
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LocalAgentRequest {
+    prompt: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentCatalog {
+    spec: &'static str,
+    providers: Vec<nimora_agent_runtime::ProviderDescriptor>,
+    tools: Vec<nimora_agent_runtime::ToolDescriptor>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalAgentResult {
+    spec: &'static str,
+    task: AgentTask,
+    content: String,
+    finish_reason: nimora_agent_runtime::ProviderFinishReason,
+    usage: nimora_agent_runtime::ProviderUsage,
+}
+
 impl Serialize for DesktopError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -674,6 +706,86 @@ fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, D
         safety,
         startup: state.startup.clone(),
     })
+}
+
+#[tauri::command]
+fn agent_catalog() -> Result<AgentCatalog, DesktopError> {
+    let mut providers = ProviderRegistry::default();
+    providers
+        .register(
+            DeterministicLocalProvider::new()
+                .map_err(|error| DesktopError::Agent(error.to_string()))?,
+        )
+        .map_err(|error| DesktopError::Agent(error.to_string()))?;
+    let tools =
+        production_tool_registry().map_err(|error| DesktopError::Agent(error.to_string()))?;
+    Ok(AgentCatalog {
+        spec: "nimora.desktop-agent-catalog/1",
+        providers: providers.descriptors().into_iter().cloned().collect(),
+        tools: tools.descriptors().into_iter().cloned().collect(),
+    })
+}
+
+#[tauri::command]
+fn run_local_agent(request: LocalAgentRequest) -> Result<LocalAgentResult, DesktopError> {
+    if request.prompt.trim().is_empty() || request.prompt.len() > 32 * 1024 {
+        return Err(DesktopError::Agent(
+            "prompt must contain 1 to 32768 bytes".to_owned(),
+        ));
+    }
+    let mut providers = ProviderRegistry::default();
+    providers
+        .register(
+            DeterministicLocalProvider::new()
+                .map_err(|error| DesktopError::Agent(error.to_string()))?,
+        )
+        .map_err(|error| DesktopError::Agent(error.to_string()))?;
+    let tools =
+        production_tool_registry().map_err(|error| DesktopError::Agent(error.to_string()))?;
+    let now_ms = current_time_ms()?;
+    let mut task = AgentTask::new(
+        AgentTaskOrigin::Desktop,
+        "desktop:local-user",
+        "provider:deterministic-local",
+        AgentBudget::default(),
+        now_ms,
+    )
+    .map_err(|error| DesktopError::Agent(error.to_string()))?;
+    let coordinator = AgentCoordinator::new(&providers, &tools);
+    let outcome = coordinator
+        .provider_step(
+            &mut task,
+            ProviderStepInput {
+                model: "model:echo-v1".to_owned(),
+                messages: vec![ProviderMessage {
+                    role: ProviderMessageRole::User,
+                    content: request.prompt,
+                    classification: DataClassification::Personal,
+                    trusted: true,
+                }],
+                max_output_tokens: 512,
+                context: ProviderExecutionContext {
+                    timeout: Duration::from_secs(30),
+                    cancellation: CancellationFlag::default(),
+                    credential_reference: None,
+                },
+                offline: true,
+                now_ms,
+            },
+        )
+        .map_err(|error| DesktopError::Agent(error.to_string()))?;
+    match outcome {
+        ProviderStepOutcome::Completed { response } => Ok(LocalAgentResult {
+            spec: "nimora.desktop-agent-result/1",
+            task,
+            content: response.content,
+            finish_reason: response.finish_reason,
+            usage: response.usage,
+        }),
+        ProviderStepOutcome::ToolCalls { .. } => Err(DesktopError::Agent(
+            "local diagnostic provider returned an unexpected tool call".to_owned(),
+        )),
+    }
 }
 
 #[tauri::command]
@@ -3042,6 +3154,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             desktop_snapshot,
+            agent_catalog,
+            run_local_agent,
             drain_runtime_events,
             outbox_snapshot,
             backup_health,
@@ -3178,15 +3292,16 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
 mod tests {
     use super::{
         ACTIVE_CHARACTER_FILE, AssetInstallReceipt, BUILTIN_CHARACTER_ID, DesktopError,
-        DesktopState, PetAction, ProfilePolicy, StartupMode, TrayAction,
-        UserProgramRollbackReceipt, WindowPolicy, diagnostic_report, ensure_normal_mode,
-        ensure_program_permissions, inspect_asset_catalog, install_gltf_character,
-        open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
-        permission_grant, persist_active_character, resolve_active_character,
-        resolve_character_renderer, screen_coordinate, serve_asset_protocol, user_program_input,
-        valid_asset_identifier, validate_model_source, validate_package_source,
-        validate_requested_animation_map,
+        DesktopState, LocalAgentRequest, PetAction, ProfilePolicy, StartupMode, TrayAction,
+        UserProgramRollbackReceipt, WindowPolicy, agent_catalog, diagnostic_report,
+        ensure_normal_mode, ensure_program_permissions, inspect_asset_catalog,
+        install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
+        parse_user_program_plan, permission_grant, persist_active_character,
+        resolve_active_character, resolve_character_renderer, run_local_agent, screen_coordinate,
+        serve_asset_protocol, user_program_input, valid_asset_identifier, validate_model_source,
+        validate_package_source, validate_requested_animation_map,
     };
+    use nimora_agent_runtime::{AgentTaskOrigin, AgentTaskStatus};
     use nimora_asset_installer::{GltfCharacterMetadata, ModelAnimationBinding};
     use nimora_diagnostics_bundle::{
         DiagnosticComponent, DiagnosticEventCode, DiagnosticSeverity, PersistentDiagnosticJournal,
@@ -3198,6 +3313,56 @@ mod tests {
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
     use std::path::Path;
+
+    #[test]
+    fn desktop_agent_catalog_exposes_only_production_capabilities() {
+        let catalog = agent_catalog().expect("agent catalog");
+        assert_eq!(catalog.spec, "nimora.desktop-agent-catalog/1");
+        assert_eq!(catalog.providers.len(), 1);
+        assert_eq!(catalog.providers[0].id, "provider:deterministic-local");
+        let tool_ids = catalog
+            .tools
+            .iter()
+            .map(|tool| tool.id.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tool_ids,
+            [
+                "pet.animation.play".to_owned(),
+                "pet.position.move".to_owned(),
+                "pet.state.read".to_owned(),
+                "profile.state.read".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn desktop_local_agent_runs_offline_without_cost_or_side_effects() {
+        let result = run_local_agent(LocalAgentRequest {
+            prompt: "检查本地能力".to_owned(),
+        })
+        .expect("local agent result");
+        assert_eq!(result.content, "检查本地能力");
+        assert_eq!(result.task.origin, AgentTaskOrigin::Desktop);
+        assert_eq!(result.task.status, AgentTaskStatus::Succeeded);
+        assert_eq!(result.usage.cost_microunits, 0);
+    }
+
+    #[test]
+    fn desktop_local_agent_rejects_empty_and_oversized_prompts() {
+        assert!(
+            run_local_agent(LocalAgentRequest {
+                prompt: "  ".to_owned()
+            })
+            .is_err()
+        );
+        assert!(
+            run_local_agent(LocalAgentRequest {
+                prompt: "a".repeat(32 * 1024 + 1),
+            })
+            .is_err()
+        );
+    }
 
     #[test]
     fn recovery_state_is_isolated_and_rejects_normal_writes() {

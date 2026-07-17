@@ -2199,6 +2199,8 @@ dependencies = [
 name = "nimora-desktop"
 version = "0.1.0"
 dependencies = [
+ "nimora-agent-runtime",
+ "nimora-agent-tools",
  "nimora-asset-installer",
  "nimora-diagnostics-bundle",
  "nimora-model-importer",

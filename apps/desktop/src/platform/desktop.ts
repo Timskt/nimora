@@ -34,6 +34,28 @@ export interface OutboxSnapshot {
   deadLetter: number;
 }
 
+export interface AgentToolDescriptor {
+  id: string;
+  title: string;
+  description: string;
+  baseRisk: "safe" | "low" | "medium" | "high" | "critical";
+  effect: "read_only" | "reversible_write" | "irreversible_write" | "external_side_effect";
+}
+
+export interface AgentCatalog {
+  spec: "nimora.desktop-agent-catalog/1";
+  providers: Array<{ id: string; name: string; locality: "local" | "network" }>;
+  tools: AgentToolDescriptor[];
+}
+
+export interface LocalAgentResult {
+  spec: "nimora.desktop-agent-result/1";
+  task: { id: string; status: string; providerId: string };
+  content: string;
+  finishReason: string;
+  usage: { inputTokens: number; outputTokens: number; costMicrounits: number };
+}
+
 export interface BackupRecord {
   id: string;
   createdAtMs: number;
@@ -313,6 +335,8 @@ export interface DesktopApi {
   snapshot(): Promise<DesktopSnapshot>;
   drainEvents(): Promise<NimoraEvent[]>;
   outboxSnapshot(): Promise<OutboxSnapshot>;
+  agentCatalog(): Promise<AgentCatalog>;
+  runLocalAgent(prompt: string): Promise<LocalAgentResult>;
   backupHealth(): Promise<BackupHealth>;
   createBackup(): Promise<BackupRecord | null>;
   requestDatabaseRestore(backupId: string): Promise<void>;
@@ -412,6 +436,21 @@ export function createDesktopApi(
       async snapshot() { return structuredClone(previewSnapshot); },
       async drainEvents() { return []; },
       async outboxSnapshot() { return { pending: 0, leased: 0, delivered: 0, deadLetter: 0 }; },
+      async agentCatalog() {
+        return {
+          spec: "nimora.desktop-agent-catalog/1",
+          providers: [{ id: "provider:deterministic-local", name: "Deterministic local diagnostic", locality: "local" }],
+          tools: [
+            { id: "pet.animation.play", title: "Play pet animation", description: "Plays one validated pet action through the Capability Gateway.", baseRisk: "low", effect: "reversible_write" },
+            { id: "pet.position.move", title: "Move pet", description: "Moves the pet through the Capability Gateway.", baseRisk: "low", effect: "reversible_write" },
+            { id: "pet.state.read", title: "Read pet state", description: "Reads current pet state.", baseRisk: "safe", effect: "read_only" },
+            { id: "profile.state.read", title: "Read profile state", description: "Reads active profile state.", baseRisk: "safe", effect: "read_only" },
+          ],
+        } as AgentCatalog;
+      },
+      async runLocalAgent(prompt) {
+        return { spec: "nimora.desktop-agent-result/1", task: { id: crypto.randomUUID(), status: "succeeded", providerId: "provider:deterministic-local" }, content: prompt, finishReason: "stop", usage: { inputTokens: Math.max(1, Math.ceil(prompt.length / 4)), outputTokens: Math.max(1, Math.ceil(prompt.length / 4)), costMicrounits: 0 } };
+      },
       async backupHealth() {
         const previewBackup = { id: "runtime-1784294125392.sqlite3", createdAtMs: 1_784_294_125_392, bytes: 2_621_440 };
         return previewRecoveryMode
@@ -494,6 +533,8 @@ export function createDesktopApi(
     snapshot: async () => await invokeCommand("desktop_snapshot") as DesktopSnapshot,
     drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],
     outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,
+    agentCatalog: async () => await invokeCommand("agent_catalog") as AgentCatalog,
+    runLocalAgent: async (prompt) => await invokeCommand("run_local_agent", { request: { prompt } }) as LocalAgentResult,
     backupHealth: async () => await invokeCommand("backup_health") as BackupHealth,
     createBackup: async () => await invokeCommand("create_backup") as BackupRecord,
     requestDatabaseRestore: async (backupId) => { await invokeCommand("request_database_restore", { backupId }); },

@@ -13,6 +13,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.5", features = [] }
 
 [dependencies]
+nimora-agent-runtime = { path = "../../../crates/agent-runtime" }
+nimora-agent-tools = { path = "../../../crates/agent-tools" }
 nimora-asset-installer = { path = "../../../crates/asset-installer" }
 nimora-model-importer = { path = "../../../crates/model-importer" }
 nimora-diagnostics-bundle = { path = "../../../crates/diagnostics-bundle" }

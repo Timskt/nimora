@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { navItemClassName, runtimeActivities } from "./App";
+import { navigation, navItemClassName, runtimeActivities } from "./App";
 
 describe("navItemClassName", () => {
   it("adds the active state only to the selected destination", () => {
     expect(navItemClassName(true)).toBe("nav-item active");
     expect(navItemClassName(false)).toBe("nav-item");
+  });
+});
+
+describe("navigation", () => {
+  it("exposes the local Agent workspace as a first-class destination", () => {
+    expect(navigation).toContain("Agent");
   });
 });
 

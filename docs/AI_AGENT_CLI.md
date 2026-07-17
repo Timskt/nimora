@@ -131,3 +131,9 @@ nimora ai history export|delete
 ## 8. 完成标准
 
 完整实现至少证明：桌面与 CLI 任务等价、多 Provider 可替换、本地离线运行、模块双向调用、实际参数风险确认、批准失效、预算终止、Prompt Injection 防护、Safe Mode 强停、历史与记忆删除、Provider 数据预览、故障恢复、跨平台桌面验证和真实 UI 截图。
+
+## 14. 桌面工作台当前纵切
+
+桌面 Control Center 已提供 Agent 一级入口。工作台从宿主读取与 CLI、Provider 请求相同的四项生产 Tool Catalog，明确区分只读能力与必须确认的可逆写能力，并显示本地、无凭据、零费用边界。当前可执行路径仅为 `provider:deterministic-local` 的确定性离线诊断单步，返回真实 Task、Finish Reason 与 Usage；它不伪装成通用对话模型，也不会执行 Tool Call。
+
+桌面侧后续 Provider、计划和模块动作仍必须复用 `AgentCoordinator`、Tool Registry、参数绑定批准与 Capability Gateway。禁止在 React、Tauri Command 或 Provider Adapter 中新增直连模块的捷径。桌面 Ollama 自动发现、Tool Call 确认执行、历史持久化和任务恢复尚未实现。
