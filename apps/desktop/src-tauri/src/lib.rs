@@ -1,7 +1,7 @@
 use nimora_asset_installer::{
     AssetPackageSummary, AssetRendererDescriptor, InstallError, InstallFile, RenderAnchor,
-    RenderCanvas, SpriteClips, inspect_asset_package, inspect_asset_renderer, inspect_asset_source,
-    install_asset_source, read_verified_asset_image, rollback_latest,
+    RenderCanvas, SpriteClips, export_asset_package, inspect_asset_package, inspect_asset_renderer,
+    inspect_asset_source, install_asset_source, read_verified_asset_image, rollback_latest,
 };
 use nimora_persistence_sqlite::{
     ProgramPermissionGrant, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
@@ -205,6 +205,13 @@ struct ClickPetRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct InstallAssetRequest {
     source_path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExportAssetRequest {
+    source_path: PathBuf,
+    destination_path: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -770,6 +777,22 @@ fn preview_asset(
     ensure_normal_mode(&state)?;
     validate_package_source(&request.source_path)?;
     Ok(inspect_asset_source(&request.source_path)?)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn export_asset(
+    state: State<'_, DesktopState>,
+    request: ExportAssetRequest,
+) -> Result<AssetPackageSummary, DesktopError> {
+    ensure_normal_mode(&state)?;
+    if !request.source_path.is_absolute() || !request.source_path.is_dir() {
+        return Err(DesktopError::InvalidPackageSource);
+    }
+    Ok(export_asset_package(
+        &request.source_path,
+        &request.destination_path,
+    )?)
 }
 
 fn validate_package_source(source_path: &Path) -> Result<(), DesktopError> {
@@ -2283,6 +2306,7 @@ pub fn run() {
             active_character_renderer,
             activate_character,
             preview_asset,
+            export_asset,
             install_asset,
             rollback_asset,
             install_user_program,

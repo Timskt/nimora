@@ -3,5 +3,5 @@
   "identifier": "control-center-dialog",
   "description": "Allows only the Nimora control center to choose a local asset package",
   "windows": ["control-center"],
-  "permissions": ["dialog:allow-open"]
+  "permissions": ["dialog:allow-open", "dialog:allow-save"]
 }

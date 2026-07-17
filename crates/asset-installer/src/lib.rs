@@ -8,7 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
-use zip::ZipArchive;
+use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallFile {
@@ -37,6 +37,8 @@ pub enum InstallError {
     UnsupportedSource,
     #[error("asset archive is invalid: {0}")]
     InvalidArchive(String),
+    #[error("asset export destination must be an absolute .nimora file outside the source")]
+    InvalidExportDestination,
     #[error("asset path escapes package root: {0}")]
     UnsafePath(PathBuf),
     #[error("asset file is missing: {0}")]
@@ -315,6 +317,108 @@ pub fn inspect_asset_package(source_root: &Path) -> Result<AssetPackageSummary, 
 pub fn inspect_asset_source(source: &Path) -> Result<AssetPackageSummary, InstallError> {
     let prepared = prepare_asset_source(source)?;
     inspect_asset_package(&prepared.root)
+}
+
+/// Verifies an expanded package directory and writes a deterministic `.nimora`
+/// archive using only files owned by the authoritative inventory.
+///
+/// # Errors
+///
+/// Returns an error without replacing the destination when the source package
+/// is invalid, the destination is unsafe, or archive creation fails.
+pub fn export_asset_package(
+    source_root: &Path,
+    destination: &Path,
+) -> Result<AssetPackageSummary, InstallError> {
+    let package = load_asset_package(source_root)?;
+    validate_export_destination(source_root, destination)?;
+    let staging = unique_sibling(destination, "staging");
+    let result = write_asset_archive(source_root, &package, &staging)
+        .and_then(|()| replace_export_atomically(&staging, destination));
+    if result.is_err() {
+        let _ = fs::remove_file(&staging);
+    }
+    result?;
+    Ok(package.summary)
+}
+
+fn validate_export_destination(source_root: &Path, destination: &Path) -> Result<(), InstallError> {
+    if !destination.is_absolute()
+        || destination
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_none_or(|extension| !extension.eq_ignore_ascii_case("nimora"))
+    {
+        return Err(InstallError::InvalidExportDestination);
+    }
+    let source_root = source_root.canonicalize()?;
+    let parent = destination
+        .parent()
+        .ok_or(InstallError::InvalidExportDestination)?
+        .canonicalize()?;
+    if !parent.is_dir() || parent.starts_with(source_root) {
+        return Err(InstallError::InvalidExportDestination);
+    }
+    Ok(())
+}
+
+fn write_asset_archive(
+    source_root: &Path,
+    package: &ValidatedAssetPackage,
+    destination: &Path,
+) -> Result<(), InstallError> {
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    let mut archive = ZipWriter::new(file);
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .last_modified_time(DateTime::default())
+        .unix_permissions(0o644);
+    let mut paths = package
+        .files
+        .iter()
+        .map(|file| file.relative_path.clone())
+        .collect::<Vec<_>>();
+    paths.push(package.integrity_path.clone());
+    paths.sort_unstable();
+    for relative_path in paths {
+        let relative_path = safe_relative_path(&relative_path)?;
+        let archive_name = relative_path
+            .to_str()
+            .ok_or_else(|| InstallError::UnsafePath(relative_path.to_path_buf()))?
+            .replace('\\', "/");
+        archive
+            .start_file(archive_name, options)
+            .map_err(|error| InstallError::InvalidArchive(error.to_string()))?;
+        let mut source = fs::File::open(source_root.join(relative_path))?;
+        io::copy(&mut source, &mut archive)?;
+    }
+    let output = archive
+        .finish()
+        .map_err(|error| InstallError::InvalidArchive(error.to_string()))?;
+    output.sync_all()?;
+    Ok(())
+}
+
+fn replace_export_atomically(staging: &Path, destination: &Path) -> Result<(), InstallError> {
+    if !destination.exists() {
+        fs::rename(staging, destination)?;
+        return Ok(());
+    }
+    let metadata = fs::symlink_metadata(destination)?;
+    if !metadata.file_type().is_file() {
+        return Err(InstallError::InvalidExportDestination);
+    }
+    let backup = unique_sibling(destination, "backup");
+    fs::rename(destination, &backup)?;
+    if let Err(error) = fs::rename(staging, destination) {
+        let _ = fs::rename(&backup, destination);
+        return Err(InstallError::Io(error));
+    }
+    let _ = fs::remove_file(backup);
+    Ok(())
 }
 
 fn prepare_asset_source(source: &Path) -> Result<PreparedAssetSource, InstallError> {
@@ -1175,7 +1279,6 @@ fn unique_sibling(active_path: &Path, suffix: &str) -> PathBuf {
 mod tests {
     use super::*;
     use std::io::Write;
-    use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
     fn sha256(contents: &[u8]) -> String {
         format!("{:x}", Sha256::digest(contents))
@@ -1368,6 +1471,57 @@ mod tests {
                 .join("character.example.mochi/manifest.json")
                 .is_file()
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn exports_deterministic_archives_that_round_trip() {
+        let root = std::env::temp_dir().join("nimora-archive-export");
+        let source = root.join("source");
+        let output = root.join("output");
+        let first = output.join("first.nimora");
+        let second = output.join("second.nimora");
+        let store = root.join("store");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&output).unwrap();
+        write_asset_package(&source, "character.example.mochi");
+        let summary = export_asset_package(&source, &first).unwrap();
+        export_asset_package(&source, &second).unwrap();
+        assert_eq!(fs::read(&first).unwrap(), fs::read(&second).unwrap());
+        assert_eq!(inspect_asset_source(&first).unwrap(), summary);
+        let installed = install_asset_source(&first, &store).unwrap();
+        assert_eq!(installed.asset_id, summary.id);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_export_never_replaces_an_existing_package() {
+        let root = std::env::temp_dir().join("nimora-invalid-export");
+        let source = root.join("source");
+        let output = root.join("output");
+        let destination = output.join("asset.nimora");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&output).unwrap();
+        write_asset_package(&source, "character.example.mochi");
+        fs::write(&destination, b"existing package").unwrap();
+        fs::write(source.join("untracked.txt"), b"invalid").unwrap();
+        assert!(export_asset_package(&source, &destination).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"existing package");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn export_destination_must_be_outside_the_source_tree() {
+        let root = std::env::temp_dir().join("nimora-export-destination");
+        let source = root.join("source");
+        let _ = fs::remove_dir_all(&root);
+        write_asset_package(&source, "character.example.mochi");
+        let destination = source.join("asset.nimora");
+        assert!(matches!(
+            export_asset_package(&source, &destination),
+            Err(InstallError::InvalidExportDestination)
+        ));
+        assert!(!destination.exists());
         fs::remove_dir_all(root).unwrap();
     }
 

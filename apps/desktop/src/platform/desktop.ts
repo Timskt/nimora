@@ -27,6 +27,11 @@ export interface InstallAssetRequest {
   sourcePath: string;
 }
 
+export interface ExportAssetRequest {
+  sourcePath: string;
+  destinationPath: string;
+}
+
 export interface InstallPackageFile {
   relativePath: string;
   bytes: number;
@@ -211,6 +216,7 @@ export interface DesktopApi {
   activeCharacterRenderer(): Promise<CharacterRendererSnapshot>;
   activateCharacter(assetId: string): Promise<ActiveCharacterSnapshot>;
   previewAsset(request: InstallAssetRequest): Promise<AssetPackageSummary | null>;
+  exportAsset(request: ExportAssetRequest): Promise<AssetPackageSummary | null>;
   installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
   rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
   validateUserProgram(manifest: UserProgramManifest): Promise<ProgramPolicyReport | null>;
@@ -309,6 +315,7 @@ export function createDesktopApi(
       },
       async activateCharacter(assetId) { return { assetId, source: assetId === "builtin.aster" ? "built-in" : "installed", fallbackReason: null }; },
       async previewAsset() { return null; },
+      async exportAsset() { return null; },
       async installAsset() { return null; },
       async rollbackAsset() { return null; },
       async validateUserProgram() { return null; },
@@ -361,6 +368,7 @@ export function createDesktopApi(
     activeCharacterRenderer: async () => await invokeCommand("active_character_renderer") as CharacterRendererSnapshot,
     activateCharacter: async (assetId) => await invokeCommand("activate_character", { assetId }) as ActiveCharacterSnapshot,
     previewAsset: async (request) => await invokeCommand("preview_asset", { request }) as AssetPackageSummary,
+    exportAsset: async (request) => await invokeCommand("export_asset", { request }) as AssetPackageSummary,
     installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
     rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,
     validateUserProgram: async (manifest) => await invokeCommand("validate_user_program", { manifest }) as ProgramPolicyReport,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type { ActiveCharacterSnapshot, AssetCatalogSnapshot, AssetPackageSummary } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
@@ -26,6 +26,9 @@ export function CreatorStudio() {
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
   const completion = useMemo(() => checks.filter((check) => check.status === "通过").length, []);
 
   useEffect(() => {
@@ -89,6 +92,31 @@ export function CreatorStudio() {
     }
   }
 
+  async function exportPackage() {
+    setExporting(true);
+    setExportError(null);
+    setExportNotice(null);
+    try {
+      const sourcePath = await open({ directory: true, multiple: false, title: "选择已展开的 Nimora 资源目录" });
+      if (typeof sourcePath !== "string") return;
+      const preview = await desktopApi.previewAsset({ sourcePath });
+      if (!preview) throw new Error("当前环境不支持资源包导出");
+      const destinationPath = await save({
+        title: "导出 Nimora 资源包",
+        defaultPath: `${preview.id}-${preview.version}.nimora`,
+        filters: [{ name: "Nimora 资源包", extensions: ["nimora"] }],
+      });
+      if (typeof destinationPath !== "string") return;
+      const exported = await desktopApi.exportAsset({ sourcePath, destinationPath });
+      if (!exported) throw new Error("当前环境不支持资源包导出");
+      setExportNotice(`${exported.id} 已复验并确定性打包`);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "资源包导出失败");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   function saveDraft() {
     setDraftSaved(true);
     window.setTimeout(() => setDraftSaved(false), 1800);
@@ -143,7 +171,7 @@ export function CreatorStudio() {
       <section className="asset-import" aria-labelledby="asset-import-heading">
         <div className="section-heading">
           <div><p className="card-label">SAFE IMPORT</p><h3 id="asset-import-heading">验证后再安装</h3></div>
-          <button className="secondary-button" type="button" disabled={!desktopApi.native || importing} onClick={() => void selectPackage()}>
+          <button className="secondary-button" type="button" disabled={!desktopApi.native || importing || exporting} onClick={() => void selectPackage()}>
             {importing && !pendingImport ? "正在验证…" : desktopApi.native ? "选择资源包" : "桌面版可用"}
           </button>
         </div>
@@ -161,6 +189,18 @@ export function CreatorStudio() {
           {pendingImport.summary.rendererBackend && !["sprite-sequence", "sprite-atlas"].includes(pendingImport.summary.rendererBackend) ? <p className="asset-preview-warning">该后端当前只能验证和安装，Pet Overlay 尚不能真实渲染，将使用内置角色。</p> : null}
           <div className="asset-preview-actions"><button className="text-button" type="button" disabled={importing} onClick={() => setPendingImport(null)}>取消</button><button className="primary-button" type="button" disabled={importing} onClick={() => void confirmInstall()}>{importing ? "正在复验…" : "确认并安装"}</button></div>
         </div> : null}
+      </section>
+
+      <section className="asset-import" aria-labelledby="asset-export-heading">
+        <div className="section-heading">
+          <div><p className="card-label">VERIFIED EXPORT</p><h3 id="asset-export-heading">生成可分发资源包</h3></div>
+          <button className="secondary-button" type="button" disabled={!desktopApi.native || exporting || importing} onClick={() => void exportPackage()}>
+            {exporting ? "正在打包…" : desktopApi.native ? "导出 .nimora" : "桌面版可用"}
+          </button>
+        </div>
+        <p className="asset-import-intro">选择展开目录后，宿主先验证完整资产契约，再以稳定顺序和固定元数据原子写出可重复构建的 .nimora 包。</p>
+        {exportError ? <p className="catalog-empty error" role="alert">{exportError}</p> : null}
+        {exportNotice ? <p className="catalog-empty success" role="status">{exportNotice}</p> : null}
       </section>
 
       <section className="asset-catalog" aria-labelledby="asset-catalog-heading">
