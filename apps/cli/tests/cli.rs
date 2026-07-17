@@ -89,6 +89,45 @@ fn provider_probe_executes_a_real_local_request() {
 }
 
 #[test]
+fn tool_catalog_exposes_gateway_backed_module_capabilities() {
+    let output = nimora()
+        .args(["ai", "tool", "list"])
+        .output()
+        .expect("run nimora");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let document: Value = serde_json::from_slice(&output.stdout).expect("json output");
+    let tool_ids = document["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .map(|tool| tool["id"].as_str().expect("tool id"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tool_ids,
+        vec![
+            "pet.animation.play",
+            "pet.position.move",
+            "pet.state.read",
+            "profile.state.read"
+        ]
+    );
+
+    let described = nimora()
+        .args(["ai", "tool", "describe", "pet.position.move"])
+        .output()
+        .expect("describe tool");
+    assert!(described.status.success());
+    let description: Value = serde_json::from_slice(&described.stdout).expect("json output");
+    assert_eq!(description["tool"]["effect"], "reversible_write");
+    assert_eq!(description["tool"]["baseRisk"], "low");
+    assert_eq!(
+        description["tool"]["inputSchema"]["additionalProperties"],
+        false
+    );
+}
+
+#[test]
 fn ollama_run_requires_verified_sidecar() {
     let mut child = nimora()
         .args(["ai", "run", "--input", "-", "--output", "json"])

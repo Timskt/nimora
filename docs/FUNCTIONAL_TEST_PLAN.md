@@ -232,6 +232,9 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-026 | Ollama Tool Call | Function name/arguments 转为 Runtime Tool Call，后续仍经过 Tool Registry 和 Capability Gateway | P0 |
 | AGT-027 | Provider Sidecar 信任 | Manifest 名称、可信摘要、Provider ID、协议、普通文件、根目录约束、文件大小和 Worker 摘要任一不符均在启动前 fail-closed | P0 |
 | AGT-028 | CLI Ollama 发现 | Sidecar root 与可信 Manifest 摘要必须成对提供；缺少 Sidecar、摘要无效和完整性失败分别返回稳定机器错误且 stdout 为空 | P0 |
+| AGT-029 | 生产 Tool Catalog | CLI 与 Provider 请求获得相同四项模块工具；Descriptor 的 Schema、风险和副作用稳定且不暴露内部对象或任意命令入口 | P0 |
+| AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
+| AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 
 ## 14. 信任中心与安全模式
 

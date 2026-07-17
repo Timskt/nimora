@@ -59,6 +59,8 @@ flowchart LR
 - `AgentCoordinator` 把模型推进与工具执行拆成独立的确定性单步：Provider 返回的 Tool Call 先转换为新的 `ToolInvocation`，再经过 Registry admission；模型响应不能直接触发 Backend。
 - 工具执行单步必须校验 Task/Trace 归属，在真正调用模块 Capability Gateway Backend 前扣减工具预算，并重新验证批准指纹。
 
+首个生产工具目录位于 `crates/agent-tools`，当前公开 `pet.state.read`、`profile.state.read`、`pet.animation.play` 与 `pet.position.move`。目录只包含 Tool Descriptor 和固定模块 Adapter，不暴露 `DesktopState`、Repository、Tauri Command、任意命令字符串或文件路径。两个写工具固定映射到 `safe.pet.animate` 和 `safe.pet.move`，模型无法把参数中的字符串提升为 Gateway 命令；Invocation ID 作为幂等键、Task/Trace 作为关联上下文进入共享 Capability Gateway。只读工具允许 Safe 自动执行，两个写工具即使基础风险为 Low 也必须绑定实际参数批准。
+
 ## 4. 任务生命周期与预算
 
 ```text
@@ -108,7 +110,7 @@ nimora ai tool list|describe
 nimora ai history export|delete
 ```
 
-当前首个可运行 CLI 基线位于 `apps/cli`，已实现 `provider list|probe`、`tool list|describe` 与非交互 `run`。内置 `provider:deterministic-local` 是无网络、无凭据、零费用的确定性诊断 Provider，用于证明 CLI、任务状态、预算、Provider Registry 和离线策略的真实端到端路径；它不是通用语言模型。Ollama 已通过受验证 Worker 接入非交互运行，OpenAI-compatible 尚未实现。
+当前首个可运行 CLI 基线位于 `apps/cli`，已实现 `provider list|probe`、`tool list|describe` 与非交互 `run`。`tool list|describe` 返回生产 Tool Registry，Provider 请求获得同一目录。内置 `provider:deterministic-local` 是无网络、无凭据、零费用的确定性诊断 Provider，用于证明 CLI、任务状态、预算、Provider Registry 和离线策略的真实端到端路径；它不是通用语言模型。Ollama 已通过受验证 Worker 接入非交互运行，OpenAI-compatible 尚未实现。CLI 当前没有持有桌面模块 Backend，因此 Tool Call 只进入待确认/不可执行结果，不会在桌面进程外伪造模块副作用。
 
 - 交互终端显示计划、实际 Tool 参数、风险、Provider 数据预览和实时预算。
 - 非交互模式遇到需确认操作必须退出并返回结构化 `confirmation-required`，禁止默认同意。

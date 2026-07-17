@@ -2163,6 +2163,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nimora-agent-tools"
+version = "0.1.0"
+dependencies = [
+ "nimora-agent-runtime",
+ "nimora-runtime-core",
+ "nimora-user-code-gateway",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "nimora-asset-installer"
 version = "0.1.0"
 dependencies = [
@@ -2179,6 +2190,7 @@ version = "0.1.0"
 dependencies = [
  "nimora-agent-provider-worker",
  "nimora-agent-runtime",
+ "nimora-agent-tools",
  "serde",
  "serde_json",
 ]

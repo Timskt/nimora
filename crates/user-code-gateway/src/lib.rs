@@ -1,6 +1,7 @@
 use nimora_user_code_policy::{ExecutionHandle, ExecutionPolicy, WorkerError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -11,6 +12,15 @@ pub struct GatewayEnvelope {
     pub trace_id: String,
     pub idempotency_key: Option<String>,
     pub request: CapabilityRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentGatewayPolicy {
+    pub task_id: Uuid,
+    pub trace_id: Uuid,
+    pub can_read_pet_state: bool,
+    pub can_read_profile_state: bool,
+    pub commands: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -196,6 +206,61 @@ impl<B: CapabilityBackend> CapabilityGateway<B> {
                     .map(|value| CapabilityResponse::CommandAccepted { value })
                     .map_err(GatewayError::Backend)
             }
+        }
+    }
+
+    /// Authorizes and dispatches one Agent tool request through the shared capability backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for mismatched task correlation, missing capabilities, undeclared
+    /// commands, unsupported Agent-local storage requests, or backend failures.
+    pub fn dispatch_agent(
+        &self,
+        policy: &AgentGatewayPolicy,
+        envelope: GatewayEnvelope,
+    ) -> Result<CapabilityResponse, GatewayError> {
+        if envelope.execution_id != policy.task_id.to_string()
+            || envelope.trace_id != policy.trace_id.to_string()
+        {
+            return Err(GatewayError::ExecutionMismatch);
+        }
+        match envelope.request {
+            CapabilityRequest::ReadPetState => {
+                if !policy.can_read_pet_state {
+                    return Err(GatewayError::CapabilityDenied);
+                }
+                self.backend
+                    .read_pet_state()
+                    .map(|value| CapabilityResponse::PetState { value })
+                    .map_err(GatewayError::Backend)
+            }
+            CapabilityRequest::ReadProfileState => {
+                if !policy.can_read_profile_state {
+                    return Err(GatewayError::CapabilityDenied);
+                }
+                self.backend
+                    .read_profile_state()
+                    .map(|value| CapabilityResponse::ProfileState { value })
+                    .map_err(GatewayError::Backend)
+            }
+            CapabilityRequest::InvokeCommand { command, arguments } => {
+                if !policy.commands.contains(&command) {
+                    return Err(GatewayError::CommandNotDeclared(command));
+                }
+                self.backend
+                    .invoke_command(
+                        &command,
+                        arguments,
+                        &envelope.trace_id,
+                        envelope.idempotency_key.as_deref(),
+                    )
+                    .map(|value| CapabilityResponse::CommandAccepted { value })
+                    .map_err(GatewayError::Backend)
+            }
+            CapabilityRequest::ReadLocalData { .. }
+            | CapabilityRequest::WriteLocalData { .. }
+            | CapabilityRequest::DeleteLocalData { .. } => Err(GatewayError::CapabilityDenied),
         }
     }
 }
@@ -410,5 +475,65 @@ mod tests {
             envelope(&execution, CapabilityRequest::ReadProfileState),
         );
         assert_eq!(result, Err(GatewayError::CapabilityDenied));
+    }
+
+    #[test]
+    fn agent_dispatch_requires_exact_task_trace_and_declared_command() {
+        let task_id = Uuid::now_v7();
+        let trace_id = Uuid::now_v7();
+        let policy = AgentGatewayPolicy {
+            task_id,
+            trace_id,
+            can_read_pet_state: true,
+            can_read_profile_state: false,
+            commands: BTreeSet::from(["safe.pet.animate".to_owned()]),
+        };
+        let gateway = CapabilityGateway::new(Backend);
+        let response = gateway
+            .dispatch_agent(
+                &policy,
+                GatewayEnvelope {
+                    execution_id: task_id.to_string(),
+                    trace_id: trace_id.to_string(),
+                    idempotency_key: Some("invocation:1".to_owned()),
+                    request: CapabilityRequest::InvokeCommand {
+                        command: "safe.pet.animate".to_owned(),
+                        arguments: json!({"action": "wave"}),
+                    },
+                },
+            )
+            .expect("agent command");
+        assert!(matches!(
+            response,
+            CapabilityResponse::CommandAccepted { .. }
+        ));
+
+        assert_eq!(
+            gateway.dispatch_agent(
+                &policy,
+                GatewayEnvelope {
+                    execution_id: Uuid::now_v7().to_string(),
+                    trace_id: trace_id.to_string(),
+                    idempotency_key: None,
+                    request: CapabilityRequest::ReadPetState,
+                },
+            ),
+            Err(GatewayError::ExecutionMismatch)
+        );
+        assert_eq!(
+            gateway.dispatch_agent(
+                &policy,
+                GatewayEnvelope {
+                    execution_id: task_id.to_string(),
+                    trace_id: trace_id.to_string(),
+                    idempotency_key: None,
+                    request: CapabilityRequest::InvokeCommand {
+                        command: "safe.pet.move".to_owned(),
+                        arguments: json!({"x": 1, "y": 2}),
+                    },
+                },
+            ),
+            Err(GatewayError::CommandNotDeclared("safe.pet.move".to_owned()))
+        );
     }
 }

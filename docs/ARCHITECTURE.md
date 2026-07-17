@@ -56,6 +56,8 @@ flowchart TB
 
 ## 4. 模块边界
 
+AI 模块能力不建立旁路。`crates/agent-tools` 负责生产 Tool Catalog 和固定 Adapter，`crates/agent-runtime` 负责 Tool admission、参数风险、批准指纹、任务预算与单步协调，`crates/user-code-gateway` 当前承载用户代码与 Agent 共用的 Capability Gateway。Agent Policy 与用户代码 Execution Policy 相互独立：Agent 使用 Task/Trace 关联和固定命令 allowlist，不继承程序私有存储命名空间；两者最终调用同一个 `CapabilityBackend`。桌面内部对象、Repository、Tauri 状态和任意命令字符串均不得进入 Provider 数据视图。
+
 ### 4.1 Runtime Core
 
 Core 包含纯领域逻辑：Pet、Command、Event、Profile、Policy、Permission、Package Identity。Core 不依赖 Tauri、PixiJS、HTTP 框架或具体数据库驱动。

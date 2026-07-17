@@ -2,8 +2,9 @@ use nimora_agent_provider_worker::{OllamaEndpoint, WorkerOllamaProvider, verify_
 use nimora_agent_runtime::{
     AgentBudget, AgentCoordinator, AgentTask, AgentTaskOrigin, CancellationFlag,
     DataClassification, DeterministicLocalProvider, ProviderExecutionContext, ProviderMessage,
-    ProviderMessageRole, ProviderRegistry, ProviderStepInput, ProviderStepOutcome, ToolRegistry,
+    ProviderMessageRole, ProviderRegistry, ProviderStepInput, ProviderStepOutcome,
 };
+use nimora_agent_tools::production_tool_registry;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -92,7 +93,7 @@ pub fn run(arguments: &[String]) -> Result<String, CliError> {
         }
         ["ai", "provider", "list"] => provider_list()?,
         ["ai", "provider", "probe"] => provider_probe()?,
-        ["ai", "tool", "list"] => tool_list(),
+        ["ai", "tool", "list"] => tool_list()?,
         ["ai", "tool", "describe", tool_id] => tool_describe(tool_id)?,
         ["ai", "run", rest @ ..] => run_task(rest)?,
         _ => return Err(CliError::new("usage", "unsupported command; use --help", 2)),
@@ -171,16 +172,25 @@ fn provider_probe() -> Result<Value, CliError> {
     )
 }
 
-fn tool_list() -> Value {
-    json!({"spec": "nimora.ai-tool-list/1", "tools": []})
+fn tool_list() -> Result<Value, CliError> {
+    let tools = production_tool_registry().map_err(runtime_error)?;
+    Ok(json!({"spec": "nimora.ai-tool-list/1", "tools": tools.descriptors()}))
 }
 
 fn tool_describe(tool_id: &str) -> Result<Value, CliError> {
-    Err(CliError::new(
-        "tool-not-found",
-        format!("tool is not registered: {tool_id}"),
-        4,
-    ))
+    let tools = production_tool_registry().map_err(runtime_error)?;
+    tools
+        .descriptors()
+        .into_iter()
+        .find(|descriptor| descriptor.id.to_string() == tool_id)
+        .map(|descriptor| json!({"spec": "nimora.ai-tool-description/1", "tool": descriptor}))
+        .ok_or_else(|| {
+            CliError::new(
+                "tool-not-found",
+                format!("tool is not registered: {tool_id}"),
+                4,
+            )
+        })
 }
 
 fn run_task(arguments: &[&str]) -> Result<Value, CliError> {
@@ -286,7 +296,7 @@ fn execute_with_sidecar(
         ));
     }
     let providers = registry(sidecar, input.ollama_port)?;
-    let tools = ToolRegistry::default();
+    let tools = production_tool_registry().map_err(runtime_error)?;
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| CliError::new("clock", "system clock is before Unix epoch", 10))?

@@ -1,0 +1,193 @@
+use nimora_agent_runtime::{
+    AgentBudget, AgentCoordinator, AgentTask, AgentTaskOrigin, AgentTaskStatus, ProviderRegistry,
+    ToolAdmission, ToolApproval, ToolInvocation, ToolStepOutcome,
+};
+use nimora_agent_tools::{GatewayToolBackend, production_tool_registry};
+use nimora_runtime_core::CommandRisk;
+use nimora_user_code_gateway::CapabilityBackend;
+use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, PartialEq)]
+struct CommandRecord {
+    command: String,
+    arguments: Value,
+    trace_id: String,
+    idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct Backend {
+    commands: Arc<Mutex<Vec<CommandRecord>>>,
+}
+
+impl CapabilityBackend for Backend {
+    fn read_pet_state(&self) -> Result<Value, String> {
+        Ok(json!({"state": "idle"}))
+    }
+
+    fn read_profile_state(&self) -> Result<Value, String> {
+        Ok(json!({"activeProfileId": "profile:default"}))
+    }
+
+    fn read_local_data(&self, _program_id: &str, _key: &str) -> Result<Option<Value>, String> {
+        Err("Agent tools cannot access program storage".to_owned())
+    }
+
+    fn write_local_data(
+        &self,
+        _program_id: &str,
+        _key: &str,
+        _value: &Value,
+    ) -> Result<(), String> {
+        Err("Agent tools cannot access program storage".to_owned())
+    }
+
+    fn delete_local_data(&self, _program_id: &str, _key: &str) -> Result<bool, String> {
+        Err("Agent tools cannot access program storage".to_owned())
+    }
+
+    fn invoke_command(
+        &self,
+        command: &str,
+        arguments: Value,
+        trace_id: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<Value, String> {
+        self.commands
+            .lock()
+            .map_err(|_| "command log poisoned".to_owned())?
+            .push(CommandRecord {
+                command: command.to_owned(),
+                arguments: arguments.clone(),
+                trace_id: trace_id.to_owned(),
+                idempotency_key: idempotency_key.map(ToOwned::to_owned),
+            });
+        Ok(json!({"accepted": true, "arguments": arguments}))
+    }
+}
+
+fn task() -> AgentTask {
+    let mut task = AgentTask::new(
+        AgentTaskOrigin::Desktop,
+        "desktop:user",
+        "provider:local",
+        AgentBudget::default(),
+        1_000,
+    )
+    .expect("task");
+    task.transition(AgentTaskStatus::Planning, 1_000)
+        .expect("planning");
+    task
+}
+
+#[test]
+fn read_tool_executes_through_the_shared_gateway_without_confirmation() {
+    let tools = production_tool_registry().expect("registry");
+    let providers = ProviderRegistry::default();
+    let coordinator = AgentCoordinator::new(&providers, &tools);
+    let mut task = task();
+    let backend = GatewayToolBackend::new(
+        Backend::default(),
+        GatewayToolBackend::<Backend>::standard_policy(task.id, task.trace_id),
+    );
+    let invocation = ToolInvocation::new(task.id, task.trace_id, "pet.state.read", json!({}))
+        .expect("invocation");
+    let outcome = coordinator
+        .tool_step(&mut task, &backend, invocation, None, 1_001)
+        .expect("tool step");
+    assert!(matches!(
+        outcome,
+        ToolStepOutcome::Completed { output, .. } if output == json!({"state": "idle"})
+    ));
+    assert_eq!(task.usage.tool_calls, 1);
+}
+
+#[test]
+fn write_tool_requires_bound_approval_before_fixed_gateway_command() {
+    let tools = production_tool_registry().expect("registry");
+    let providers = ProviderRegistry::default();
+    let coordinator = AgentCoordinator::new(&providers, &tools);
+    let mut task = task();
+    let capability_backend = Backend::default();
+    let command_log = Arc::clone(&capability_backend.commands);
+    let backend = GatewayToolBackend::new(
+        capability_backend,
+        GatewayToolBackend::<Backend>::standard_policy(task.id, task.trace_id),
+    );
+    let invocation = ToolInvocation::new(
+        task.id,
+        task.trace_id,
+        "pet.animation.play",
+        json!({"action": "wave"}),
+    )
+    .expect("invocation");
+    let waiting = coordinator
+        .tool_step(&mut task, &backend, invocation.clone(), None, 1_001)
+        .expect("admission");
+    assert!(matches!(
+        waiting,
+        ToolStepOutcome::ConfirmationRequired { .. }
+    ));
+    assert_eq!(task.status, AgentTaskStatus::WaitingForConfirmation);
+    assert_eq!(task.usage.tool_calls, 0);
+    assert!(command_log.lock().expect("command log").is_empty());
+
+    let ToolAdmission::ConfirmationRequired { effective_risk, .. } =
+        tools.admit(&invocation).expect("admit")
+    else {
+        panic!("write tool must require confirmation");
+    };
+    assert_eq!(effective_risk, CommandRisk::Low);
+    let approval = ToolApproval::bind(&invocation, effective_risk);
+    let completed = coordinator
+        .tool_step(
+            &mut task,
+            &backend,
+            invocation.clone(),
+            Some(&approval),
+            1_002,
+        )
+        .expect("approved tool step");
+    assert!(matches!(completed, ToolStepOutcome::Completed { .. }));
+    let commands = command_log.lock().expect("command log");
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].command, "safe.pet.animate");
+    assert_eq!(commands[0].trace_id, task.trace_id.to_string());
+    assert_eq!(
+        commands[0].idempotency_key.as_deref(),
+        Some(invocation.invocation_id.to_string().as_str())
+    );
+}
+
+#[test]
+fn gateway_rejects_policy_correlation_mismatch_before_dispatch() {
+    let tools = production_tool_registry().expect("registry");
+    let task = task();
+    let capability_backend = Backend::default();
+    let command_log = Arc::clone(&capability_backend.commands);
+    let backend = GatewayToolBackend::new(
+        capability_backend,
+        GatewayToolBackend::<Backend>::standard_policy(Uuid::now_v7(), task.trace_id),
+    );
+    let invocation = ToolInvocation::new(
+        task.id,
+        task.trace_id,
+        "pet.animation.play",
+        json!({"action": "wave"}),
+    )
+    .expect("invocation");
+    let ToolAdmission::ConfirmationRequired { effective_risk, .. } =
+        tools.admit(&invocation).expect("admit")
+    else {
+        panic!("write tool must require confirmation");
+    };
+    let approval = ToolApproval::bind(&invocation, effective_risk);
+    assert!(
+        tools
+            .dispatch(&backend, &invocation, Some(&approval))
+            .is_err()
+    );
+    assert!(command_log.lock().expect("command log").is_empty());
+}

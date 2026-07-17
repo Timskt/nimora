@@ -3,6 +3,7 @@ members = [
   "apps/cli",
   "crates/agent-runtime",
   "crates/agent-provider-worker",
+  "crates/agent-tools",
   "crates/diagnostics-bundle",
   "crates/asset-installer",
   "crates/model-importer",
