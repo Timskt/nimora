@@ -19,6 +19,8 @@
 
 全量开发进度、证据和真实缺口以 [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) 为入口。优先级只决定施工顺序，不允许从该矩阵静默删除有价值能力。
 
+AI 与其它模块的双向调用以 [`AI_MODULE_INTERACTIONS.md`](AI_MODULE_INTERACTIONS.md) 为开发约束；Desktop、Automation、Skill、Connector 和用户代码不得直接调用 Provider 或建立绕过 Capability Gateway 的执行旁路。
+
 面向广大用户的持续需求发现、新技术准入、Adapter 替换、稳定版前后兼容和退出演练统一遵循 [`FUTURE_EVOLUTION_GOVERNANCE.md`](FUTURE_EVOLUTION_GOVERNANCE.md)。
 
 ## 2. 规范用词

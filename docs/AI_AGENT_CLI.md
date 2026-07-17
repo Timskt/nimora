@@ -12,6 +12,8 @@ Agent 能力包括对话、计划、工具调用、任务暂停/继续/取消、
 
 ## 2. 跨模块交互
 
+完整的双向调用契约、模块能力矩阵、递归控制、离线降级和测试门禁见 [`AI_MODULE_INTERACTIONS.md`](AI_MODULE_INTERACTIONS.md)。本文继续定义 Agent Runtime、Provider 与 CLI 的实现细节。
+
 ```mermaid
 flowchart LR
   UI[Desktop UI] --> TASK[Agent Task Service]
@@ -50,6 +52,7 @@ flowchart LR
 
 当前 Rust 基线位于 `crates/agent-runtime`：
 
+- `nimora.agent-task-request/1` 与 `nimora.agent-task-admission/1`：模块创建任务的统一准入契约；`AgentTaskGateway` 对调用方、来源、Provider、Tool allowlist、数据等级、主动性、调用深度和层级预算执行交集授权。
 - `nimora.agent-tool/1`：模块工具描述。
 - `nimora.agent-tool-invocation/1`：单次具体参数调用。
 - `nimora.agent-tool-approval/1`：与调用及风险绑定的批准证明。

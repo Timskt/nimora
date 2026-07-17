@@ -9,6 +9,7 @@ use uuid::Uuid;
 mod coordinator;
 mod deterministic;
 mod provider;
+mod task_gateway;
 
 pub use coordinator::{
     AgentCoordinator, CoordinatorError, PlannedToolCall, ProviderStepInput, ProviderStepOutcome,
@@ -22,12 +23,16 @@ pub use provider::{
     ProviderMessageRole, ProviderRegistry, ProviderRequest, ProviderResponse, ProviderToolCall,
     ProviderUsage,
 };
+pub use task_gateway::{
+    AgentAutonomy, AgentTaskAdmission, AgentTaskGateway, AgentTaskGatewayPolicy, AgentTaskParent,
+    AgentTaskRequest,
+};
 
 const MAX_TOOLS: usize = 512;
 const MAX_TOOL_ID_BYTES: usize = 128;
 const MAX_SCHEMA_BYTES: usize = 64 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentTaskOrigin {
     Desktop,
@@ -660,6 +665,12 @@ pub enum AgentRuntimeError {
     InvalidTaskIdentity,
     #[error("task budget is invalid")]
     InvalidTaskBudget,
+    #[error("agent task request is not authorized by the caller policy")]
+    TaskRequestNotAuthorized,
+    #[error("agent task call depth is exhausted")]
+    TaskCallDepthExceeded,
+    #[error("agent task tool allowlist is invalid")]
+    InvalidTaskToolAllowlist,
     #[error("task lifecycle transition is invalid")]
     InvalidTaskTransition,
     #[error("task is not active")]

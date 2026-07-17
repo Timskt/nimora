@@ -39,6 +39,8 @@
 
 ## 执行规则
 
+AI 双向模块交互的当前审计与完整实施蓝图见 [`AI_MODULE_INTERACTIONS.md`](AI_MODULE_INTERACTIONS.md)。现阶段 AI 到 Pet、Profile、Character、Asset、Program、Diagnostics 和 Automation Validation 已形成生产工具链；宿主无关的 `AgentTaskGateway` 已完成调用方、Provider、Tool、数据等级、主动性、递归深度和父级剩余预算交集准入，但 Desktop/CLI 尚未迁移，Automation、Skill、Connector 与 User Program 也尚未接入生产执行入口，不能把准入核心视为反向链路已经全部贯通。
+
 1. 每次开发从本矩阵选择一个或多个可形成真实纵切的缺口，但不得删除其余缺口。
 2. 新发现的有价值能力必须加入矩阵或对应权威规格，不依赖聊天记忆。
 3. 只有证据满足状态定义时才能改为“已验证”；单元测试不能替代真实 UI、平台或安全边界验证。
