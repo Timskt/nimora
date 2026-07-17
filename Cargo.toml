@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/asset-installer",
   "crates/persistence-sqlite",
   "crates/runtime-app",
   "crates/runtime-core",

@@ -91,6 +91,8 @@ character.example.mochi/
 
 共享包 `@nimora/asset-kit` 的 `createImportPlan` 只接收已经隔离的文件清单，执行无副作用的 Schema 校验并返回安装计划；它不会解包、复制或激活文件。桌面/Tauri 适配器必须在独立暂存目录完成解包、符号链接与 URI 检查、哈希计算和资源预算限制后，才能调用该计划接口，最终通过原子目录切换安装。
 
+Rust 侧 `nimora-asset-installer` 提供最小原子安装边界：它只复制计划中列出的相对文件到独立暂存目录，拒绝绝对路径、父目录和缺失文件；已有版本先移动为备份，暂存目录切换失败时恢复旧版本。上层适配器仍必须在调用前完成压缩包解包限制、符号链接检查、SHA-256 校验、签名验证和资源预算检查。
+
 ## 5. 渲染后端
 
 第一阶段必须支持 `sprite-sequence` 和 `sprite-atlas`。版本化 Renderer Adapter 进一步支持 Lottie、Spine、Live2D Cubism、glTF/GLB 与 VRM；OBJ/FBX 仅作为隔离转换输入。任何格式不得改变 Pet Runtime 的动作语义，完整规则见 [`MODEL_RENDERING_IMPORT.md`](MODEL_RENDERING_IMPORT.md)。
