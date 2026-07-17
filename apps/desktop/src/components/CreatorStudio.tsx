@@ -54,7 +54,12 @@ export function CreatorStudio() {
     setImportNotice(null);
     setImporting(true);
     try {
-      const selected = await open({ directory: true, multiple: false, title: "选择 Nimora 资源包目录" });
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        title: "选择 Nimora 资源包",
+        filters: [{ name: "Nimora 资源包", extensions: ["nimora"] }],
+      });
       if (typeof selected !== "string") return;
       const summary = await desktopApi.previewAsset({ sourcePath: selected });
       if (!summary) throw new Error("当前环境不支持资源包预览");
@@ -142,7 +147,7 @@ export function CreatorStudio() {
             {importing && !pendingImport ? "正在验证…" : desktopApi.native ? "选择资源包" : "桌面版可用"}
           </button>
         </div>
-        <p className="asset-import-intro">系统目录选择器只提交来源目录；宿主验证 Manifest、精确文件树、大小和 SHA-256，确认安装时再次完整复验。</p>
+        <p className="asset-import-intro">系统文件选择器只接受 .nimora 包；宿主限额展开并验证 Manifest、精确文件树、大小和 SHA-256，确认安装时再次完整复验。</p>
         {importError ? <p className="catalog-empty error" role="alert">{importError}</p> : null}
         {importNotice ? <p className="catalog-empty success" role="status">{importNotice}</p> : null}
         {pendingImport ? <div className="asset-preview-report">

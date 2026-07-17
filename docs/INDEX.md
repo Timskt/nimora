@@ -39,17 +39,17 @@
 ## 3. 契约版本规则
 
 - 每个公开契约使用独立版本：`nimora.event/1`、`nimora.skill/1`、`nimora.asset/1`。
-- 同一主版本只能增加可选字段，不能删除字段或改变既有语义。
-- 破坏性修改创建新主版本，并至少保留一个稳定发布周期的适配层。
+- 首个稳定版前，契约变更直接修改唯一当前 Schema、实现、夹具和文档，不保留开发快照适配层。
+- 首个稳定版真实发布后，才以已发布契约和真实生态为依据制定版本演进规则。
 - Schema 文件是机器事实来源，Markdown 负责说明语义和示例。
-- 所有持久化配置必须包含 `schemaVersion`，并提供可重复执行的迁移。
+- 所有持久化配置必须包含 `schemaVersion`；首版前未知版本直接拒绝，开发数据按当前 Schema 重建。
 
 ## 4. 变更流程
 
 1. 修改需求或公开契约前创建 ADR 或 RFC。
-2. 同时更新 Schema、示例、测试夹具和迁移说明。
+2. 同时更新 Schema、示例和测试夹具；首版前不得为开发快照编写迁移。
 3. 运行文档链接检查、Schema 校验和契约测试。
-4. 在变更日志中标记 Added、Changed、Deprecated、Removed 或 Security。
+4. 首版前在变更日志中标记 Added、Changed 或 Security；真实稳定版发布后才启用 Deprecated 与 Removed 生命周期。
 5. 安全红线只能通过新的 Accepted ADR 调整。
 6. 所有规范变更按 [`GIT_WORKFLOW.md`](GIT_WORKFLOW.md) 经受保护分支、评审和可追溯提交进入主干。
 

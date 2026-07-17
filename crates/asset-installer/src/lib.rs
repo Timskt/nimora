@@ -8,6 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
+use zip::ZipArchive;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallFile {
@@ -25,12 +26,17 @@ pub struct GeneratedInstallFile {
 const MAX_FILES: usize = 10_000;
 const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
+const MAX_ARCHIVE_COMPRESSION_RATIO: u64 = 200;
 const MANIFEST_FILE: &str = "manifest.json";
 
 #[derive(Debug, Error)]
 pub enum InstallError {
     #[error("asset source is not a directory")]
     SourceNotDirectory,
+    #[error("asset source must be an expanded directory or a .nimora package")]
+    UnsupportedSource,
+    #[error("asset archive is invalid: {0}")]
+    InvalidArchive(String),
     #[error("asset path escapes package root: {0}")]
     UnsafePath(PathBuf),
     #[error("asset file is missing: {0}")]
@@ -84,6 +90,20 @@ pub struct AssetPackageSummary {
     pub renderer_backend: Option<String>,
     pub file_count: usize,
     pub total_bytes: u64,
+}
+
+#[derive(Debug)]
+struct PreparedAssetSource {
+    root: PathBuf,
+    temporary: bool,
+}
+
+impl Drop for PreparedAssetSource {
+    fn drop(&mut self) {
+        if self.temporary {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -262,6 +282,21 @@ pub fn install_asset_package(
     })
 }
 
+/// Opens either an expanded package directory or a `.nimora` archive, fully
+/// verifies it, and atomically activates the package.
+///
+/// # Errors
+///
+/// Returns an error before activation when the source, archive, metadata, or
+/// declared inventory violates any package safety constraint.
+pub fn install_asset_source(
+    source: &Path,
+    asset_store: &Path,
+) -> Result<AssetPackageInstallResult, InstallError> {
+    let prepared = prepare_asset_source(source)?;
+    install_asset_package(&prepared.root, asset_store)
+}
+
 /// Verifies an expanded package without changing the filesystem.
 ///
 /// # Errors
@@ -269,6 +304,149 @@ pub fn install_asset_package(
 /// Returns an error when metadata or any declared file violates the package contract.
 pub fn inspect_asset_package(source_root: &Path) -> Result<AssetPackageSummary, InstallError> {
     Ok(load_asset_package(source_root)?.summary)
+}
+
+/// Opens and verifies an expanded package directory or a `.nimora` archive
+/// without changing the asset store.
+///
+/// # Errors
+///
+/// Returns an error when the source or package violates the archive and asset contracts.
+pub fn inspect_asset_source(source: &Path) -> Result<AssetPackageSummary, InstallError> {
+    let prepared = prepare_asset_source(source)?;
+    inspect_asset_package(&prepared.root)
+}
+
+fn prepare_asset_source(source: &Path) -> Result<PreparedAssetSource, InstallError> {
+    if source.is_dir() {
+        return Ok(PreparedAssetSource {
+            root: source.to_path_buf(),
+            temporary: false,
+        });
+    }
+    if !source.is_file()
+        || source
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_none_or(|extension| !extension.eq_ignore_ascii_case("nimora"))
+    {
+        return Err(InstallError::UnsupportedSource);
+    }
+    extract_asset_archive(source)
+}
+
+fn extract_asset_archive(source: &Path) -> Result<PreparedAssetSource, InstallError> {
+    let archive_file = fs::File::open(source)?;
+    let mut archive = ZipArchive::new(archive_file)
+        .map_err(|error| InstallError::InvalidArchive(error.to_string()))?;
+    if archive.len() > MAX_FILES {
+        return Err(InstallError::BudgetExceeded);
+    }
+    let root = unique_sibling(&std::env::temp_dir().join("nimora-asset-import"), "extract");
+    fs::create_dir(&root)?;
+    let prepared = PreparedAssetSource {
+        root,
+        temporary: true,
+    };
+    let mut extracted_files = std::collections::HashSet::with_capacity(archive.len());
+    let mut total_bytes = 0_u64;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| InstallError::InvalidArchive(error.to_string()))?;
+        let raw_name = entry.name();
+        if raw_name.contains(['\\', '\0']) {
+            return Err(InstallError::InvalidArchive(
+                "entry name contains a forbidden character".to_owned(),
+            ));
+        }
+        let relative_path = entry
+            .enclosed_name()
+            .ok_or_else(|| {
+                InstallError::InvalidArchive("entry path escapes package root".to_owned())
+            })?
+            .clone();
+        safe_relative_path(&relative_path)?;
+        validate_archive_entry_type(entry.unix_mode(), entry.is_dir())?;
+        let output = prepared.root.join(&relative_path);
+        if entry.is_dir() {
+            fs::create_dir_all(output)?;
+            continue;
+        }
+        if is_nested_archive(&relative_path) {
+            return Err(InstallError::InvalidArchive(format!(
+                "nested archive is forbidden: {}",
+                relative_path.display()
+            )));
+        }
+        if !extracted_files.insert(relative_path.clone()) {
+            return Err(InstallError::InvalidArchive(format!(
+                "duplicate file entry: {}",
+                relative_path.display()
+            )));
+        }
+        let declared_size = entry.size();
+        total_bytes = total_bytes
+            .checked_add(declared_size)
+            .ok_or(InstallError::BudgetExceeded)?;
+        if total_bytes > MAX_TOTAL_BYTES
+            || archive_ratio_exceeded(declared_size, entry.compressed_size())
+        {
+            return Err(InstallError::BudgetExceeded);
+        }
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut destination = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output)?;
+        let copied = io::copy(
+            &mut entry.by_ref().take(declared_size.saturating_add(1)),
+            &mut destination,
+        )?;
+        if copied != declared_size {
+            return Err(InstallError::InvalidArchive(format!(
+                "entry size changed while extracting: {}",
+                relative_path.display()
+            )));
+        }
+        destination.sync_all()?;
+    }
+    Ok(prepared)
+}
+
+fn validate_archive_entry_type(mode: Option<u32>, directory: bool) -> Result<(), InstallError> {
+    let Some(mode) = mode else {
+        return Ok(());
+    };
+    let file_type = mode & 0o170_000;
+    if file_type == 0
+        || (directory && file_type == 0o040_000)
+        || (!directory && file_type == 0o100_000)
+    {
+        return Ok(());
+    }
+    Err(InstallError::InvalidArchive(
+        "links and special filesystem entries are forbidden".to_owned(),
+    ))
+}
+
+fn archive_ratio_exceeded(uncompressed: u64, compressed: u64) -> bool {
+    uncompressed
+        > compressed
+            .max(1)
+            .saturating_mul(MAX_ARCHIVE_COMPRESSION_RATIO)
+}
+
+fn is_nested_archive(path: &Path) -> bool {
+    path.extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| {
+            ["zip", "nimora", "7z", "rar", "tar", "gz", "bz2", "xz"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
 }
 
 /// Verifies a package and returns its host-authoritative sprite renderer contract.
@@ -996,6 +1174,8 @@ fn unique_sibling(active_path: &Path, suffix: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
     fn sha256(contents: &[u8]) -> String {
         format!("{:x}", Sha256::digest(contents))
@@ -1070,6 +1250,46 @@ mod tests {
         fs::write(root.join("integrity.json"), integrity).unwrap();
     }
 
+    fn write_asset_archive(source: &Path, archive_path: &Path) {
+        let archive_file = fs::File::create(archive_path).unwrap();
+        let mut archive = ZipWriter::new(archive_file);
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .unix_permissions(0o100_644);
+        let mut directories = vec![source.to_path_buf()];
+        while let Some(directory) = directories.pop() {
+            for entry in fs::read_dir(directory).unwrap() {
+                let entry = entry.unwrap();
+                if entry.file_type().unwrap().is_dir() {
+                    directories.push(entry.path());
+                    continue;
+                }
+                let relative = entry.path().strip_prefix(source).unwrap().to_path_buf();
+                archive
+                    .start_file(relative.to_string_lossy().replace('\\', "/"), options)
+                    .unwrap();
+                archive.write_all(&fs::read(entry.path()).unwrap()).unwrap();
+            }
+        }
+        archive.finish().unwrap();
+    }
+
+    fn write_single_entry_archive(
+        archive_path: &Path,
+        name: &str,
+        contents: &[u8],
+        permissions: u32,
+    ) {
+        let archive_file = fs::File::create(archive_path).unwrap();
+        let mut archive = ZipWriter::new(archive_file);
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .unix_permissions(permissions);
+        archive.start_file(name, options).unwrap();
+        archive.write_all(contents).unwrap();
+        archive.finish().unwrap();
+    }
+
     #[test]
     fn installs_package_using_manifest_owned_identity_and_inventory() {
         let root = std::env::temp_dir().join("nimora-package-authority");
@@ -1126,6 +1346,120 @@ mod tests {
         assert_eq!(summary.renderer_backend.as_deref(), Some("sprite-atlas"));
         assert_eq!(summary.file_count, 3);
         assert!(summary.total_bytes > 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn previews_and_installs_a_bounded_nimora_archive() {
+        let root = std::env::temp_dir().join("nimora-archive-install");
+        let source = root.join("source");
+        let archive = root.join("mochi.nimora");
+        let store = root.join("store");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        write_asset_package(&source, "character.example.mochi");
+        write_asset_archive(&source, &archive);
+        let summary = inspect_asset_source(&archive).unwrap();
+        assert_eq!(summary.id, "character.example.mochi");
+        let result = install_asset_source(&archive, &store).unwrap();
+        assert_eq!(result.asset_id, summary.id);
+        assert!(
+            store
+                .join("character.example.mochi/manifest.json")
+                .is_file()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_nested_archives_and_symbolic_link_entries() {
+        let root = std::env::temp_dir().join("nimora-archive-entry-policy");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let nested = root.join("nested.nimora");
+        write_single_entry_archive(&nested, "payload.zip", b"not-a-zip", 0o100_644);
+        assert!(matches!(
+            inspect_asset_source(&nested),
+            Err(InstallError::InvalidArchive(_))
+        ));
+        let link = root.join("link.nimora");
+        let archive_file = fs::File::create(&link).unwrap();
+        let mut archive = ZipWriter::new(archive_file);
+        archive
+            .add_symlink(
+                "manifest.json",
+                "target",
+                SimpleFileOptions::default().unix_permissions(0o777),
+            )
+            .unwrap();
+        archive.finish().unwrap();
+        assert!(matches!(
+            inspect_asset_source(&link),
+            Err(InstallError::InvalidArchive(_))
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_archive_path_escape_and_duplicate_files() {
+        let root = std::env::temp_dir().join("nimora-archive-path-policy");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let escape = root.join("escape.nimora");
+        write_single_entry_archive(&escape, "../outside.json", b"escape", 0o100_644);
+        assert!(inspect_asset_source(&escape).is_err());
+
+        let duplicate = root.join("duplicate.nimora");
+        let archive_file = fs::File::create(&duplicate).unwrap();
+        let mut archive = ZipWriter::new(archive_file);
+        let options = SimpleFileOptions::default().unix_permissions(0o100_644);
+        archive.start_file("manifest1.json", options).unwrap();
+        archive.write_all(b"first").unwrap();
+        archive.start_file("manifest2.json", options).unwrap();
+        archive.write_all(b"second").unwrap();
+        archive.finish().unwrap();
+        let mut bytes = fs::read(&duplicate).unwrap();
+        for offset in 0..=bytes.len() - b"manifest2.json".len() {
+            if &bytes[offset..offset + b"manifest2.json".len()] == b"manifest2.json" {
+                bytes[offset..offset + b"manifest1.json".len()].copy_from_slice(b"manifest1.json");
+            }
+        }
+        fs::write(&duplicate, bytes).unwrap();
+        assert!(inspect_asset_source(&duplicate).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_archive_bombs_before_package_validation() {
+        let root = std::env::temp_dir().join("nimora-archive-ratio-budget");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("bomb.nimora");
+        write_single_entry_archive(&archive, "manifest.json", &vec![0; 1024 * 1024], 0o100_644);
+        assert!(matches!(
+            inspect_asset_source(&archive),
+            Err(InstallError::BudgetExceeded)
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn install_reopens_archive_and_preserves_active_asset_after_tampering() {
+        let root = std::env::temp_dir().join("nimora-archive-tamper");
+        let source = root.join("source");
+        let archive = root.join("mochi.nimora");
+        let store = root.join("store");
+        let active = store.join("character.example.mochi");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        write_asset_package(&source, "character.example.mochi");
+        write_asset_archive(&source, &archive);
+        inspect_asset_source(&archive).unwrap();
+        fs::create_dir_all(&active).unwrap();
+        fs::write(active.join("sentinel.txt"), b"current").unwrap();
+        fs::write(&archive, b"replaced after preview").unwrap();
+        assert!(install_asset_source(&archive, &store).is_err());
+        assert_eq!(fs::read(active.join("sentinel.txt")).unwrap(), b"current");
         fs::remove_dir_all(root).unwrap();
     }
 

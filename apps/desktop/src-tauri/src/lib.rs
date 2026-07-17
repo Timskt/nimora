@@ -1,7 +1,7 @@
 use nimora_asset_installer::{
     AssetPackageSummary, AssetRendererDescriptor, InstallError, InstallFile, RenderAnchor,
-    RenderCanvas, SpriteClips, inspect_asset_package, inspect_asset_renderer,
-    install_asset_package, read_verified_asset_image, rollback_latest,
+    RenderCanvas, SpriteClips, inspect_asset_package, inspect_asset_renderer, inspect_asset_source,
+    install_asset_source, read_verified_asset_image, rollback_latest,
 };
 use nimora_persistence_sqlite::{
     ProgramPermissionGrant, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
@@ -455,7 +455,7 @@ enum DesktopError {
     InvalidAssetIdentifier,
     #[error("only installed character assets can be activated")]
     AssetIsNotCharacter,
-    #[error("package source must be an absolute directory")]
+    #[error("package source must be an absolute existing directory or file")]
     InvalidPackageSource,
     #[error(transparent)]
     UserCodePolicy(#[from] PolicyError),
@@ -754,7 +754,7 @@ fn install_asset(
 ) -> Result<AssetInstallReceipt, DesktopError> {
     ensure_normal_mode(&state)?;
     validate_package_source(&request.source_path)?;
-    let result = install_asset_package(&request.source_path, &state.asset_store)?;
+    let result = install_asset_source(&request.source_path, &state.asset_store)?;
     Ok(AssetInstallReceipt {
         asset_id: result.asset_id,
         replaced_previous: result.install.backup_path.is_some(),
@@ -769,11 +769,11 @@ fn preview_asset(
 ) -> Result<AssetPackageSummary, DesktopError> {
     ensure_normal_mode(&state)?;
     validate_package_source(&request.source_path)?;
-    Ok(inspect_asset_package(&request.source_path)?)
+    Ok(inspect_asset_source(&request.source_path)?)
 }
 
 fn validate_package_source(source_path: &Path) -> Result<(), DesktopError> {
-    if !source_path.is_absolute() || !source_path.is_dir() {
+    if !source_path.is_absolute() || (!source_path.is_dir() && !source_path.is_file()) {
         return Err(DesktopError::InvalidPackageSource);
     }
     Ok(())
@@ -2464,7 +2464,7 @@ mod tests {
     }
 
     #[test]
-    fn package_source_requires_an_absolute_directory() {
+    fn package_source_requires_an_absolute_existing_path() {
         assert!(matches!(
             validate_package_source(Path::new("relative/package")),
             Err(DesktopError::InvalidPackageSource)
@@ -2478,6 +2478,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         validate_package_source(&root).unwrap();
+        let archive = root.join("package.nimora");
+        std::fs::write(&archive, b"archive").unwrap();
+        validate_package_source(&archive).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 
