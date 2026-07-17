@@ -202,7 +202,7 @@ struct ClickPetRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct InstallAssetRequest {
     source_path: PathBuf,
 }
@@ -219,7 +219,6 @@ struct InstallAssetFile {
 #[serde(rename_all = "camelCase")]
 struct AssetInstallReceipt {
     asset_id: String,
-    active_path: PathBuf,
     replaced_previous: bool,
 }
 
@@ -227,7 +226,6 @@ struct AssetInstallReceipt {
 #[serde(rename_all = "camelCase")]
 struct AssetRollbackReceipt {
     asset_id: String,
-    active_path: PathBuf,
     quarantined_failed_version: bool,
 }
 
@@ -303,7 +301,6 @@ struct InstallUserProgramRequest {
 struct UserProgramInstallReceipt {
     program_id: String,
     version: String,
-    active_path: PathBuf,
     replaced_previous: bool,
 }
 
@@ -311,7 +308,6 @@ struct UserProgramInstallReceipt {
 #[serde(rename_all = "camelCase")]
 struct UserProgramRollbackReceipt {
     program_id: String,
-    active_path: PathBuf,
     quarantined_failed_version: bool,
 }
 
@@ -459,6 +455,8 @@ enum DesktopError {
     InvalidAssetIdentifier,
     #[error("only installed character assets can be activated")]
     AssetIsNotCharacter,
+    #[error("package source must be an absolute directory")]
+    InvalidPackageSource,
     #[error(transparent)]
     UserCodePolicy(#[from] PolicyError),
     #[error(transparent)]
@@ -755,12 +753,30 @@ fn install_asset(
     request: InstallAssetRequest,
 ) -> Result<AssetInstallReceipt, DesktopError> {
     ensure_normal_mode(&state)?;
+    validate_package_source(&request.source_path)?;
     let result = install_asset_package(&request.source_path, &state.asset_store)?;
     Ok(AssetInstallReceipt {
         asset_id: result.asset_id,
-        active_path: result.install.active_path,
         replaced_previous: result.install.backup_path.is_some(),
     })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn preview_asset(
+    state: State<'_, DesktopState>,
+    request: InstallAssetRequest,
+) -> Result<AssetPackageSummary, DesktopError> {
+    ensure_normal_mode(&state)?;
+    validate_package_source(&request.source_path)?;
+    Ok(inspect_asset_package(&request.source_path)?)
+}
+
+fn validate_package_source(source_path: &Path) -> Result<(), DesktopError> {
+    if !source_path.is_absolute() || !source_path.is_dir() {
+        return Err(DesktopError::InvalidPackageSource);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1106,7 +1122,6 @@ fn rollback_asset(
     let result = rollback_latest(&state.asset_store.join(&asset_id))?;
     Ok(AssetRollbackReceipt {
         asset_id,
-        active_path: result.active_path,
         quarantined_failed_version: result.quarantined_path.is_some(),
     })
 }
@@ -1138,7 +1153,6 @@ fn install_user_program(
     Ok(UserProgramInstallReceipt {
         program_id: result.program_id,
         version: result.version,
-        active_path: result.active_path,
         replaced_previous: result.backup_path.is_some(),
     })
 }
@@ -1155,7 +1169,6 @@ fn rollback_user_program(
     let result = rollback_program(&state.program_store, &program_id)?;
     Ok(UserProgramRollbackReceipt {
         program_id,
-        active_path: result.active_path,
         quarantined_failed_version: result.quarantined_path.is_some(),
     })
 }
@@ -2204,6 +2217,7 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
 /// before application state and diagnostics are available.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol(ASSET_PROTOCOL, |context, request| {
             let state = context.app_handle().state::<DesktopState>();
             let runtime_mode = state
@@ -2268,6 +2282,7 @@ pub fn run() {
             active_character,
             active_character_renderer,
             activate_character,
+            preview_asset,
             install_asset,
             rollback_asset,
             install_user_program,
@@ -2295,16 +2310,18 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVE_CHARACTER_FILE, BUILTIN_CHARACTER_ID, DesktopError, PetAction, ProfilePolicy,
-        TrayAction, WindowPolicy, ensure_program_permissions, inspect_asset_catalog,
-        parse_asset_protocol_path, parse_user_program_plan, permission_grant,
-        persist_active_character, resolve_active_character, resolve_character_renderer,
-        screen_coordinate, serve_asset_protocol, user_program_input, valid_asset_identifier,
+        ACTIVE_CHARACTER_FILE, AssetInstallReceipt, BUILTIN_CHARACTER_ID, DesktopError, PetAction,
+        ProfilePolicy, TrayAction, UserProgramRollbackReceipt, WindowPolicy,
+        ensure_program_permissions, inspect_asset_catalog, parse_asset_protocol_path,
+        parse_user_program_plan, permission_grant, persist_active_character,
+        resolve_active_character, resolve_character_renderer, screen_coordinate,
+        serve_asset_protocol, user_program_input, valid_asset_identifier, validate_package_source,
     };
     use nimora_persistence_sqlite::SqliteProgramPermissionRepository;
     use nimora_runtime_core::{Event, EventSource, RuntimeMode};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
+    use std::path::Path;
 
     #[test]
     fn accepts_finite_screen_coordinates() {
@@ -2444,6 +2461,44 @@ mod tests {
         assert_eq!(safe.backend, "built-in");
         assert!(safe.fallback_reason.is_some());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn package_source_requires_an_absolute_directory() {
+        assert!(matches!(
+            validate_package_source(Path::new("relative/package")),
+            Err(DesktopError::InvalidPackageSource)
+        ));
+        let missing = std::env::temp_dir().join("nimora-missing-package-source");
+        assert!(matches!(
+            validate_package_source(&missing),
+            Err(DesktopError::InvalidPackageSource)
+        ));
+        let root = std::env::temp_dir().join("nimora-valid-package-source");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        validate_package_source(&root).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn package_operation_receipts_do_not_expose_host_paths() {
+        let install = serde_json::to_value(AssetInstallReceipt {
+            asset_id: "character.example.mochi".to_owned(),
+            replaced_previous: false,
+        })
+        .unwrap();
+        let rollback = serde_json::to_value(UserProgramRollbackReceipt {
+            program_id: "program.example.focus".to_owned(),
+            quarantined_failed_version: true,
+        })
+        .unwrap();
+        assert_eq!(
+            install.get("assetId").and_then(serde_json::Value::as_str),
+            Some("character.example.mochi")
+        );
+        assert!(install.get("activePath").is_none());
+        assert!(rollback.get("activePath").is_none());
     }
 
     #[test]

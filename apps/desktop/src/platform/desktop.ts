@@ -35,13 +35,11 @@ export interface InstallPackageFile {
 
 export interface AssetInstallReceipt {
   assetId: string;
-  activePath: string;
   replacedPrevious: boolean;
 }
 
 export interface AssetRollbackReceipt {
   assetId: string;
-  activePath: string;
   quarantinedFailedVersion: boolean;
 }
 
@@ -50,7 +48,11 @@ export interface AssetPackageSummary {
   assetType: "character" | "skin" | "theme" | "behavior" | "voice" | "interaction" | "bundle";
   version: string;
   name: Record<string, string>;
+  publisher: string;
+  license: string;
   rendererBackend: "sprite-sequence" | "sprite-atlas" | "live2d" | "vrm" | "gltf" | null;
+  fileCount: number;
+  totalBytes: number;
 }
 
 export interface AssetCatalogSnapshot {
@@ -125,13 +127,11 @@ export interface InstallUserProgramRequest {
 export interface UserProgramInstallReceipt {
   programId: string;
   version: string;
-  activePath: string;
   replacedPrevious: boolean;
 }
 
 export interface UserProgramRollbackReceipt {
   programId: string;
-  activePath: string;
   quarantinedFailedVersion: boolean;
 }
 
@@ -210,6 +210,7 @@ export interface DesktopApi {
   activeCharacter(): Promise<ActiveCharacterSnapshot>;
   activeCharacterRenderer(): Promise<CharacterRendererSnapshot>;
   activateCharacter(assetId: string): Promise<ActiveCharacterSnapshot>;
+  previewAsset(request: InstallAssetRequest): Promise<AssetPackageSummary | null>;
   installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
   rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
   validateUserProgram(manifest: UserProgramManifest): Promise<ProgramPolicyReport | null>;
@@ -307,6 +308,7 @@ export function createDesktopApi(
         };
       },
       async activateCharacter(assetId) { return { assetId, source: assetId === "builtin.aster" ? "built-in" : "installed", fallbackReason: null }; },
+      async previewAsset() { return null; },
       async installAsset() { return null; },
       async rollbackAsset() { return null; },
       async validateUserProgram() { return null; },
@@ -358,6 +360,7 @@ export function createDesktopApi(
     activeCharacter: async () => await invokeCommand("active_character") as ActiveCharacterSnapshot,
     activeCharacterRenderer: async () => await invokeCommand("active_character_renderer") as CharacterRendererSnapshot,
     activateCharacter: async (assetId) => await invokeCommand("activate_character", { assetId }) as ActiveCharacterSnapshot,
+    previewAsset: async (request) => await invokeCommand("preview_asset", { request }) as AssetPackageSummary,
     installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
     rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,
     validateUserProgram: async (manifest) => await invokeCommand("validate_user_program", { manifest }) as ProgramPolicyReport,

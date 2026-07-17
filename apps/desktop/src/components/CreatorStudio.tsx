@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import type { ActiveCharacterSnapshot, AssetCatalogSnapshot, AssetPackageSummary } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
@@ -21,6 +22,10 @@ export function CreatorStudio() {
   const [activeCharacter, setActiveCharacter] = useState<ActiveCharacterSnapshot | null>(null);
   const [activationError, setActivationError] = useState<string | null>(null);
   const [activating, setActivating] = useState<string | null>(null);
+  const [pendingImport, setPendingImport] = useState<{ sourcePath: string; summary: AssetPackageSummary } | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
   const completion = useMemo(() => checks.filter((check) => check.status === "通过").length, []);
 
   useEffect(() => {
@@ -41,6 +46,41 @@ export function CreatorStudio() {
       setActivationError(error instanceof Error ? error.message : "角色激活失败");
     } finally {
       setActivating(null);
+    }
+  }
+
+  async function selectPackage() {
+    setImportError(null);
+    setImportNotice(null);
+    setImporting(true);
+    try {
+      const selected = await open({ directory: true, multiple: false, title: "选择 Nimora 资源包目录" });
+      if (typeof selected !== "string") return;
+      const summary = await desktopApi.previewAsset({ sourcePath: selected });
+      if (!summary) throw new Error("当前环境不支持资源包预览");
+      setPendingImport({ sourcePath: selected, summary });
+    } catch (error) {
+      setPendingImport(null);
+      setImportError(error instanceof Error ? error.message : "资源包未通过安全检查");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function confirmInstall() {
+    if (!pendingImport) return;
+    setImporting(true);
+    setImportError(null);
+    try {
+      const receipt = await desktopApi.installAsset({ sourcePath: pendingImport.sourcePath });
+      if (!receipt) throw new Error("当前环境不支持资源包安装");
+      setCatalog(await desktopApi.assetCatalog());
+      setPendingImport(null);
+      setImportNotice(`${pendingImport.summary.id} 已完成复验并原子安装`);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "资源包安装失败");
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -95,6 +135,29 @@ export function CreatorStudio() {
         </div>
       </div>
 
+      <section className="asset-import" aria-labelledby="asset-import-heading">
+        <div className="section-heading">
+          <div><p className="card-label">SAFE IMPORT</p><h3 id="asset-import-heading">验证后再安装</h3></div>
+          <button className="secondary-button" type="button" disabled={!desktopApi.native || importing} onClick={() => void selectPackage()}>
+            {importing && !pendingImport ? "正在验证…" : desktopApi.native ? "选择资源包" : "桌面版可用"}
+          </button>
+        </div>
+        <p className="asset-import-intro">系统目录选择器只提交来源目录；宿主验证 Manifest、精确文件树、大小和 SHA-256，确认安装时再次完整复验。</p>
+        {importError ? <p className="catalog-empty error" role="alert">{importError}</p> : null}
+        {importNotice ? <p className="catalog-empty success" role="status">{importNotice}</p> : null}
+        {pendingImport ? <div className="asset-preview-report">
+          <div className="asset-preview-title"><span className="asset-kind">{pendingImport.summary.assetType.slice(0, 1).toUpperCase()}</span><div><strong>{assetDisplayName(pendingImport.summary)}</strong><p>{pendingImport.summary.id} · {pendingImport.summary.version}</p></div></div>
+          <dl>
+            <div><dt>发布者</dt><dd>{pendingImport.summary.publisher}</dd></div>
+            <div><dt>许可证</dt><dd>{pendingImport.summary.license}</dd></div>
+            <div><dt>渲染后端</dt><dd>{pendingImport.summary.rendererBackend ?? "无"}</dd></div>
+            <div><dt>包内容</dt><dd>{pendingImport.summary.fileCount} 个文件 · {formatBytes(pendingImport.summary.totalBytes)}</dd></div>
+          </dl>
+          {pendingImport.summary.rendererBackend && !["sprite-sequence", "sprite-atlas"].includes(pendingImport.summary.rendererBackend) ? <p className="asset-preview-warning">该后端当前只能验证和安装，Pet Overlay 尚不能真实渲染，将使用内置角色。</p> : null}
+          <div className="asset-preview-actions"><button className="text-button" type="button" disabled={importing} onClick={() => setPendingImport(null)}>取消</button><button className="primary-button" type="button" disabled={importing} onClick={() => void confirmInstall()}>{importing ? "正在复验…" : "确认并安装"}</button></div>
+        </div> : null}
+      </section>
+
       <section className="asset-catalog" aria-labelledby="asset-catalog-heading">
         <div className="section-heading">
           <div><p className="card-label">INSTALLED ASSETS</p><h3 id="asset-catalog-heading">本机资源目录</h3></div>
@@ -133,4 +196,10 @@ function AssetCatalogItem({ asset, active, activating, onActivate }: { asset: As
 
 export function assetDisplayName(asset: AssetPackageSummary): string {
   return asset.name["zh-CN"] ?? asset.name.en ?? Object.values(asset.name)[0] ?? asset.id;
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1_024) return `${bytes} B`;
+  if (bytes < 1_048_576) return `${(bytes / 1_024).toFixed(1)} KiB`;
+  return `${(bytes / 1_048_576).toFixed(1)} MiB`;
 }

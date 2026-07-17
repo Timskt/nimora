@@ -37,6 +37,7 @@ describe("desktop platform adapter", () => {
     await api.activeCharacter();
     await api.activeCharacterRenderer();
     await api.activateCharacter("character.example.mochi");
+    await api.previewAsset({ sourcePath: "/tmp/nimora-import" });
     await api.installAsset({
       sourcePath: "/tmp/nimora-import",
     });
@@ -105,6 +106,7 @@ describe("desktop platform adapter", () => {
       ["active_character"],
       ["active_character_renderer"],
       ["activate_character", { assetId: "character.example.mochi" }],
+      ["preview_asset", { request: { sourcePath: "/tmp/nimora-import" } }],
       ["install_asset", { request: {
         sourcePath: "/tmp/nimora-import",
       } }],

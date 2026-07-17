@@ -25,6 +25,7 @@ nimora-user-code-storage = { path = "../../../crates/user-code-storage" }
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.11", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-dialog = "2.6"
 thiserror.workspace = true
 uuid.workspace = true
 

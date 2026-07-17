@@ -79,7 +79,11 @@ pub struct AssetPackageSummary {
     pub asset_type: String,
     pub version: String,
     pub name: BTreeMap<String, String>,
+    pub publisher: String,
+    pub license: String,
     pub renderer_backend: Option<String>,
+    pub file_count: usize,
+    pub total_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -331,6 +335,8 @@ fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, Insta
         .iter()
         .map(|file| (file.path.clone(), file.media_type.clone()))
         .collect();
+    let file_count = integrity.files.len();
+    let total_bytes = integrity.total_bytes;
     let files = integrity
         .files
         .into_iter()
@@ -361,7 +367,11 @@ fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, Insta
             asset_type: manifest.asset_type,
             version: manifest.version,
             name: manifest.name,
+            publisher: manifest.publisher,
+            license: manifest.license,
             renderer_backend: manifest.render.map(|render| render.backend),
+            file_count,
+            total_bytes,
         },
         renderer,
         files,
@@ -1102,6 +1112,20 @@ mod tests {
             }
             SpriteClips::SpriteSequence { .. } => panic!("expected atlas"),
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inspection_reports_verified_package_identity_and_budget() {
+        let root = std::env::temp_dir().join("nimora-package-preview");
+        let _ = fs::remove_dir_all(&root);
+        write_asset_package(&root, "character.example.mochi");
+        let summary = inspect_asset_package(&root).unwrap();
+        assert_eq!(summary.publisher, "publisher.example");
+        assert_eq!(summary.license, "MIT");
+        assert_eq!(summary.renderer_backend.as_deref(), Some("sprite-atlas"));
+        assert_eq!(summary.file_count, 3);
+        assert!(summary.total_bytes > 0);
         fs::remove_dir_all(root).unwrap();
     }
 
