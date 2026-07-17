@@ -64,7 +64,7 @@
 
 正式程序权限保存在 SQLite 的 `user_program_permission_grant` 中，授权键由程序 ID、精确版本和完整 Capability 集合共同组成。无 Capability 的纯计算程序不需要授权；有 Capability 的程序在首次运行前必须显式授予。版本变化、能力增加、能力删除或能力名称变化均不会匹配旧授权，`execute_installed_user_program` 会在创建 Worker 前拒绝执行。`user_program_permission_status`、`grant_user_program_permissions` 和 `revoke_user_program_permissions` 只针对完整性校验通过的已安装版本；撤销按程序身份删除所有版本授权。草稿预览不创建正式授权，也不能借用已安装版本的授权身份。
 
-运行时事件总线为 UI 主缓冲和每个程序订阅维护独立队列，任何消费者都不能通过 drain 抢走其他消费者的事件。程序订阅必须来自完整性校验通过、精确授权且声明 `subscribe-events` 的已安装 Manifest；Rust 根据 Manifest 创建过滤器，Renderer 不能提交事件正文或扩大事件类型。每个会话最多缓存 64 条、全局最多 32 个会话；慢消费者只丢弃自身最旧事件并获得累计 `dropped` 计数，不阻塞 Core。关闭、Drop、撤权、程序升级、回滚或进入安全模式都会注销会话并释放队列。当前 IPC 提供可信订阅会话的管理与观测底座；后续事件驱动 Worker 必须在 Rust 侧直接消费该会话并构造只读 `nimora.input.event`，禁止把 Renderer 回传的 JSON 当作可信运行时事件。
+运行时事件总线为 UI 主缓冲和每个程序订阅维护独立队列，任何消费者都不能通过 drain 抢走其他消费者的事件。程序订阅必须来自完整性校验通过、精确授权且声明 `subscribe-events` 的已安装 Manifest；Rust 根据 Manifest 创建过滤器，Renderer 不能提交事件正文或扩大事件类型。每个会话最多缓存 64 条、全局最多 32 个会话；慢消费者只丢弃自身最旧事件并获得累计 `dropped` 计数，不阻塞 Core。关闭、Drop、撤权、程序升级、回滚或进入安全模式都会注销会话并释放队列。`execute_next_user_program_event` 只从 Rust 订阅中弹出一条可信事件，随后重新加载 active 安装版本、复验完整性和精确权限，并构造深度只读的 `nimora.input.trigger = { type: "event", event }`；IPC 不接受事件正文。当前入口仍由宿主请求推进，后台自动调度循环与失败诊断将在下一阶段接入。
 
 事件触发并发策略属于已签名 Manifest 身份的一部分。`serial`（默认）按顺序执行并使用有界队列，`drop` 在已有运行时丢弃新触发，`cancel-previous` 在新触发到达时取消旧执行；`eventQueueCapacity` 默认 16、最大 64。策略或容量变化会改变 Manifest 内容并要求重新安装与精确授权，Renderer 不得在运行时覆盖这些值。
 

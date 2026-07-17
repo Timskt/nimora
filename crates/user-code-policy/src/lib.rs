@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -26,6 +27,116 @@ pub enum EventConcurrencyPolicy {
     Serial,
     Drop,
     CancelPrevious,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduledEvent<T> {
+    pub execution_id: Uuid,
+    pub event: T,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventAdmission<T> {
+    Start(ScheduledEvent<T>),
+    Queued,
+    Dropped,
+    CancelAndStart {
+        cancelled_execution_id: Uuid,
+        next: ScheduledEvent<T>,
+    },
+}
+
+#[derive(Debug)]
+pub struct EventTriggerScheduler<T> {
+    policy: EventConcurrencyPolicy,
+    capacity: usize,
+    active_execution_id: Option<Uuid>,
+    queue: VecDeque<T>,
+    dropped: u64,
+    generation: u64,
+}
+
+impl<T> EventTriggerScheduler<T> {
+    #[must_use]
+    pub fn new(policy: EventConcurrencyPolicy, capacity: usize) -> Self {
+        Self {
+            policy,
+            capacity: capacity.clamp(1, MAX_EVENT_QUEUE_CAPACITY),
+            active_execution_id: None,
+            queue: VecDeque::new(),
+            dropped: 0,
+            generation: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn admit(&mut self, event: T) -> EventAdmission<T> {
+        let Some(active_execution_id) = self.active_execution_id else {
+            let scheduled = self.start(event);
+            return EventAdmission::Start(scheduled);
+        };
+        match self.policy {
+            EventConcurrencyPolicy::Serial => {
+                if self.queue.len() == self.capacity {
+                    self.queue.pop_front();
+                    self.dropped = self.dropped.saturating_add(1);
+                }
+                self.queue.push_back(event);
+                EventAdmission::Queued
+            }
+            EventConcurrencyPolicy::Drop => {
+                self.dropped = self.dropped.saturating_add(1);
+                EventAdmission::Dropped
+            }
+            EventConcurrencyPolicy::CancelPrevious => {
+                self.queue.clear();
+                let next = self.start(event);
+                EventAdmission::CancelAndStart {
+                    cancelled_execution_id: active_execution_id,
+                    next,
+                }
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn finish(&mut self, execution_id: Uuid) -> Option<ScheduledEvent<T>> {
+        if self.active_execution_id != Some(execution_id) {
+            return None;
+        }
+        self.active_execution_id = None;
+        self.queue.pop_front().map(|event| self.start(event))
+    }
+
+    pub fn cancel_all(&mut self) -> Option<Uuid> {
+        self.queue.clear();
+        self.generation = self.generation.saturating_add(1);
+        self.active_execution_id.take()
+    }
+
+    #[must_use]
+    pub const fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
+    #[must_use]
+    pub fn queued(&self) -> usize {
+        self.queue.len()
+    }
+
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn start(&mut self, event: T) -> ScheduledEvent<T> {
+        let execution_id = Uuid::now_v7();
+        self.active_execution_id = Some(execution_id);
+        ScheduledEvent {
+            execution_id,
+            event,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -372,6 +483,67 @@ mod tests {
         let manifest: ProgramManifest = serde_json::from_value(value).unwrap();
         assert_eq!(manifest.event_concurrency, EventConcurrencyPolicy::Serial);
         assert_eq!(manifest.event_queue_capacity, 16);
+    }
+
+    #[test]
+    fn serial_event_scheduler_bounds_queue_and_keeps_latest_events() {
+        let mut scheduler = EventTriggerScheduler::new(EventConcurrencyPolicy::Serial, 2);
+        let EventAdmission::Start(first) = scheduler.admit(1) else {
+            panic!("first event should start");
+        };
+        assert_eq!(scheduler.admit(2), EventAdmission::Queued);
+        assert_eq!(scheduler.admit(3), EventAdmission::Queued);
+        assert_eq!(scheduler.admit(4), EventAdmission::Queued);
+        assert_eq!(scheduler.queued(), 2);
+        assert_eq!(scheduler.dropped(), 1);
+        let second = scheduler.finish(first.execution_id).unwrap();
+        assert_eq!(second.event, 3);
+        let third = scheduler.finish(second.execution_id).unwrap();
+        assert_eq!(third.event, 4);
+        assert!(scheduler.finish(third.execution_id).is_none());
+    }
+
+    #[test]
+    fn drop_event_scheduler_rejects_events_while_active() {
+        let mut scheduler = EventTriggerScheduler::new(EventConcurrencyPolicy::Drop, 16);
+        let EventAdmission::Start(first) = scheduler.admit("first") else {
+            panic!("first event should start");
+        };
+        assert_eq!(scheduler.admit("second"), EventAdmission::Dropped);
+        assert_eq!(scheduler.dropped(), 1);
+        assert!(scheduler.finish(first.execution_id).is_none());
+    }
+
+    #[test]
+    fn cancel_previous_scheduler_ignores_stale_completion() {
+        let mut scheduler = EventTriggerScheduler::new(EventConcurrencyPolicy::CancelPrevious, 16);
+        let EventAdmission::Start(first) = scheduler.admit("first") else {
+            panic!("first event should start");
+        };
+        let EventAdmission::CancelAndStart {
+            cancelled_execution_id,
+            next,
+        } = scheduler.admit("second")
+        else {
+            panic!("second event should replace active execution");
+        };
+        assert_eq!(cancelled_execution_id, first.execution_id);
+        assert_eq!(next.event, "second");
+        assert!(scheduler.finish(first.execution_id).is_none());
+        assert!(scheduler.finish(next.execution_id).is_none());
+    }
+
+    #[test]
+    fn cancelling_scheduler_clears_queue_and_advances_generation() {
+        let mut scheduler = EventTriggerScheduler::new(EventConcurrencyPolicy::Serial, 16);
+        let EventAdmission::Start(first) = scheduler.admit(1) else {
+            panic!("first event should start");
+        };
+        assert_eq!(scheduler.admit(2), EventAdmission::Queued);
+        assert_eq!(scheduler.cancel_all(), Some(first.execution_id));
+        assert_eq!(scheduler.queued(), 0);
+        assert_eq!(scheduler.generation(), 1);
+        assert!(scheduler.finish(first.execution_id).is_none());
     }
 
     #[test]

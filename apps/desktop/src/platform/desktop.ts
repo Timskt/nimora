@@ -116,6 +116,11 @@ export interface UserProgramEventBatch {
   dropped: number;
 }
 
+export interface UserProgramEventExecutionReceipt {
+  execution: UserProgramExecutionReceipt | null;
+  dropped: number;
+}
+
 export type UserProgramCapabilityRequest =
   | { type: "readPetState" }
   | { type: "invokeCommand"; command: string; arguments: unknown };
@@ -155,6 +160,7 @@ export interface DesktopApi {
   revokeUserProgramPermissions(programId: string): Promise<void>;
   openUserProgramEventSession(programId: string): Promise<UserProgramEventSessionReceipt | null>;
   drainUserProgramEvents(subscriptionId: string): Promise<UserProgramEventBatch>;
+  executeNextUserProgramEvent(subscriptionId: string): Promise<UserProgramEventExecutionReceipt | null>;
   closeUserProgramEventSession(subscriptionId: string): Promise<void>;
   startUserProgram(manifest: UserProgramManifest): Promise<UserProgramSessionReceipt | null>;
   executeUserProgram(manifest: UserProgramManifest, source: string): Promise<UserProgramExecutionReceipt | null>;
@@ -230,6 +236,7 @@ export function createDesktopApi(
       async revokeUserProgramPermissions() {},
       async openUserProgramEventSession() { return null; },
       async drainUserProgramEvents() { return { events: [], dropped: 0 }; },
+      async executeNextUserProgramEvent() { return { execution: null, dropped: 0 }; },
       async closeUserProgramEventSession() {},
       async startUserProgram() { return null; },
       async executeUserProgram() { return null; },
@@ -274,6 +281,7 @@ export function createDesktopApi(
     revokeUserProgramPermissions: async (programId) => { await invokeCommand("revoke_user_program_permissions", { programId }); },
     openUserProgramEventSession: async (programId) => await invokeCommand("open_user_program_event_session", { programId }) as UserProgramEventSessionReceipt,
     drainUserProgramEvents: async (subscriptionId) => await invokeCommand("drain_user_program_events", { subscriptionId }) as UserProgramEventBatch,
+    executeNextUserProgramEvent: async (subscriptionId) => await invokeCommand("execute_next_user_program_event", { subscriptionId }) as UserProgramEventExecutionReceipt,
     closeUserProgramEventSession: async (subscriptionId) => { await invokeCommand("close_user_program_event_session", { subscriptionId }); },
     startUserProgram: async (manifest) => await invokeCommand("start_user_program", { manifest }) as UserProgramSessionReceipt,
     executeUserProgram: async (manifest, source) => await invokeCommand("execute_user_program", { manifest, source }) as UserProgramExecutionReceipt,

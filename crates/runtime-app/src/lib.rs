@@ -237,6 +237,22 @@ impl RuntimeEventSubscription {
         Ok(RuntimeEventBatch { events, dropped })
     }
 
+    /// Removes at most one oldest event while preserving the remaining queue.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after cancellation or when the runtime state is poisoned.
+    pub fn pop(&self) -> Result<RuntimeEventBatch, RuntimeError> {
+        let mut state = self.bus.lock().map_err(|_| RuntimeError::StatePoisoned)?;
+        let subscription = state
+            .subscriptions
+            .get_mut(&self.id)
+            .ok_or(RuntimeError::EventSubscriptionCancelled)?;
+        let events = subscription.events.pop_front().into_iter().collect();
+        let dropped = std::mem::take(&mut subscription.dropped);
+        Ok(RuntimeEventBatch { events, dropped })
+    }
+
     /// Cancels this subscription and releases its buffered events.
     ///
     /// # Errors
@@ -1174,6 +1190,30 @@ mod tests {
         assert_eq!(batch.events[0].data["sequence"], 3);
         assert_eq!(batch.events[1].data["sequence"], 4);
         assert_eq!(subscription.drain().expect("empty batch").dropped, 0);
+    }
+
+    #[test]
+    fn popping_one_subscription_event_preserves_the_remaining_queue() {
+        let bus = RuntimeEventBus::default();
+        let subscription = bus
+            .subscribe(["pet.example.clicked".to_owned()], 4)
+            .expect("subscribe");
+        for sequence in 1..=2 {
+            bus.publish(
+                Event::new(
+                    "pet.example.clicked",
+                    EventSource::Core,
+                    serde_json::json!({"sequence": sequence}),
+                )
+                .expect("event"),
+            )
+            .expect("publish");
+        }
+        let first = subscription.pop().expect("first event");
+        assert_eq!(first.events[0].data["sequence"], 1);
+        let second = subscription.pop().expect("second event");
+        assert_eq!(second.events[0].data["sequence"], 2);
+        assert!(subscription.pop().expect("empty").events.is_empty());
     }
 
     #[test]

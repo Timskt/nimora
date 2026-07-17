@@ -67,6 +67,7 @@ describe("desktop platform adapter", () => {
     const subscriptionId = "018f0000-0000-7000-8000-000000000003";
     await api.openUserProgramEventSession(manifest.id);
     await api.drainUserProgramEvents(subscriptionId);
+    await api.executeNextUserProgramEvent(subscriptionId);
     await api.closeUserProgramEventSession(subscriptionId);
     await api.startUserProgram(manifest);
     await api.executeUserProgram(manifest, "({ commands: [] })");
@@ -109,6 +110,7 @@ describe("desktop platform adapter", () => {
       ["revoke_user_program_permissions", { programId: manifest.id }],
       ["open_user_program_event_session", { programId: manifest.id }],
       ["drain_user_program_events", { subscriptionId }],
+      ["execute_next_user_program_event", { subscriptionId }],
       ["close_user_program_event_session", { subscriptionId }],
       ["start_user_program", { manifest }],
       ["execute_user_program", { manifest, source: "({ commands: [] })" }],

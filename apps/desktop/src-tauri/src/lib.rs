@@ -261,6 +261,13 @@ struct UserProgramExecutionReceipt {
     responses: Vec<CapabilityResponse>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProgramEventExecutionReceipt {
+    execution: Option<UserProgramExecutionReceipt>,
+    dropped: u64,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UserProgramPlan {
@@ -798,6 +805,45 @@ fn drain_user_program_events(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn execute_next_user_program_event(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    subscription_id: Uuid,
+) -> Result<UserProgramEventExecutionReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let (program_id, batch) = {
+        let sessions = state
+            .user_program_event_sessions
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?;
+        let session = sessions
+            .get(&subscription_id)
+            .ok_or(DesktopError::UserProgramEventSessionNotFound)?;
+        (session.program_id.clone(), session.subscription.pop()?)
+    };
+    let Some(event) = batch.events.into_iter().next() else {
+        return Ok(UserProgramEventExecutionReceipt {
+            execution: None,
+            dropped: batch.dropped,
+        });
+    };
+    let installed = load_installed_program(&state.program_store, &program_id)?;
+    ensure_program_permissions(&state.program_permissions, &installed.manifest)?;
+    let execution = execute_user_program_source(
+        &app,
+        &state,
+        installed.manifest,
+        installed.source,
+        Some(event),
+    )?;
+    Ok(UserProgramEventExecutionReceipt {
+        execution: Some(execution),
+        dropped: batch.dropped,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn close_user_program_event_session(
     state: State<'_, DesktopState>,
     subscription_id: Uuid,
@@ -906,7 +952,7 @@ fn execute_user_program(
     source: String,
 ) -> Result<UserProgramExecutionReceipt, DesktopError> {
     ensure_normal_mode(&state)?;
-    execute_user_program_source(&app, &state, manifest, source)
+    execute_user_program_source(&app, &state, manifest, source, None)
 }
 
 #[tauri::command]
@@ -919,7 +965,7 @@ fn execute_installed_user_program(
     ensure_normal_mode(&state)?;
     let installed = load_installed_program(&state.program_store, &program_id)?;
     ensure_program_permissions(&state.program_permissions, &installed.manifest)?;
-    execute_user_program_source(&app, &state, installed.manifest, installed.source)
+    execute_user_program_source(&app, &state, installed.manifest, installed.source, None)
 }
 
 fn execute_user_program_source(
@@ -927,6 +973,7 @@ fn execute_user_program_source(
     state: &DesktopState,
     manifest: ProgramManifest,
     source: String,
+    event: Option<Event>,
 ) -> Result<UserProgramExecutionReceipt, DesktopError> {
     let policy = evaluate(manifest.clone())?;
     let execution = state.execution_controller.admit(&policy)?;
@@ -936,7 +983,7 @@ fn execute_user_program_source(
     } else {
         None
     };
-    let input = user_program_input(&policy, pet);
+    let input = user_program_input(&policy, pet, event);
     let request = WorkerMessage::Run {
         manifest: serde_json::to_value(manifest)?,
         source,
@@ -1001,6 +1048,7 @@ fn parse_user_program_plan(value: serde_json::Value) -> Result<UserProgramPlan, 
 fn user_program_input(
     policy: &ExecutionPolicy,
     pet: Option<serde_json::Value>,
+    event: Option<Event>,
 ) -> serde_json::Value {
     let mut input =
         serde_json::Map::from_iter([("schemaVersion".to_owned(), serde_json::Value::from(1))]);
@@ -1008,6 +1056,12 @@ fn user_program_input(
         && let Some(pet) = pet
     {
         input.insert("pet".to_owned(), pet);
+    }
+    if let Some(event) = event {
+        input.insert(
+            "trigger".to_owned(),
+            serde_json::json!({ "type": "event", "event": event }),
+        );
     }
     serde_json::Value::Object(input)
 }
@@ -1486,6 +1540,7 @@ pub fn run() {
             revoke_user_program_permissions,
             open_user_program_event_session,
             drain_user_program_events,
+            execute_next_user_program_event,
             close_user_program_event_session,
             validate_user_program,
             start_user_program,
@@ -1506,6 +1561,7 @@ mod tests {
         user_program_input, valid_asset_identifier,
     };
     use nimora_persistence_sqlite::SqliteProgramPermissionRepository;
+    use nimora_runtime_core::{Event, EventSource};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
 
@@ -1559,7 +1615,7 @@ mod tests {
         })
         .expect("valid policy");
         assert_eq!(
-            user_program_input(&policy, Some(json!({"name": "private"}))),
+            user_program_input(&policy, Some(json!({"name": "private"})), None),
             json!({"schemaVersion": 1})
         );
     }
@@ -1579,9 +1635,39 @@ mod tests {
         })
         .expect("valid policy");
         assert_eq!(
-            user_program_input(&policy, Some(json!({"name": "Aster"}))),
+            user_program_input(&policy, Some(json!({"name": "Aster"})), None),
             json!({"schemaVersion": 1, "pet": {"name": "Aster"}})
         );
+    }
+
+    #[test]
+    fn includes_a_trusted_event_trigger_without_renderer_fields() {
+        let policy = evaluate(ProgramManifest {
+            id: "studio.example.events".to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities: vec![Capability::SubscribeEvents],
+            subscriptions: vec!["pet.example.clicked".to_owned()],
+            event_concurrency: nimora_user_code_policy::EventConcurrencyPolicy::default(),
+            event_queue_capacity: 16,
+            commands: vec![],
+            timeout_ms: 1_000,
+            memory_bytes: 1024 * 1024,
+        })
+        .expect("valid policy");
+        let event = Event::new(
+            "pet.example.clicked",
+            EventSource::Core,
+            json!({"button": "left"}),
+        )
+        .expect("valid event");
+        let input = user_program_input(&policy, None, Some(event));
+        assert_eq!(input["schemaVersion"], 1);
+        assert_eq!(input["trigger"]["type"], "event");
+        assert_eq!(
+            input["trigger"]["event"]["eventType"],
+            "pet.example.clicked"
+        );
+        assert_eq!(input["trigger"]["event"]["source"], "core");
     }
 
     #[test]
