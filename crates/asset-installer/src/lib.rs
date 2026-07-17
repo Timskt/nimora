@@ -1,5 +1,7 @@
+use sha2::{Digest, Sha256};
 use std::{
-    fs, io,
+    fs,
+    io::{self, Read},
     path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -8,7 +10,12 @@ use thiserror::Error;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallFile {
     pub relative_path: PathBuf,
+    pub bytes: u64,
+    pub sha256: String,
 }
+
+const MAX_FILES: usize = 10_000;
+const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum InstallError {
@@ -20,6 +27,14 @@ pub enum InstallError {
     MissingFile(PathBuf),
     #[error("asset file resolves outside package root: {0}")]
     EscapedSource(PathBuf),
+    #[error("asset inventory exceeds installation budget")]
+    BudgetExceeded,
+    #[error("asset SHA-256 is malformed: {0}")]
+    InvalidHash(PathBuf),
+    #[error("asset size does not match inventory: {0}")]
+    SizeMismatch(PathBuf),
+    #[error("asset SHA-256 does not match inventory: {0}")]
+    HashMismatch(PathBuf),
     #[error("filesystem operation failed: {0}")]
     Io(#[from] io::Error),
 }
@@ -44,6 +59,7 @@ pub fn install_atomically(
     if !source_root.is_dir() {
         return Err(InstallError::SourceNotDirectory);
     }
+    validate_budget(files)?;
     let canonical_source_root = source_root.canonicalize()?;
     let parent = active_path
         .parent()
@@ -62,6 +78,7 @@ pub fn install_atomically(
             if !canonical_source.starts_with(&canonical_source_root) {
                 return Err(InstallError::EscapedSource(file.relative_path.clone()));
             }
+            validate_file(&canonical_source, file)?;
             let destination = staging.join(relative);
             if let Some(destination_parent) = destination.parent() {
                 fs::create_dir_all(destination_parent)?;
@@ -90,6 +107,47 @@ pub fn install_atomically(
         fs::remove_dir_all(&staging)?;
     }
     result
+}
+
+fn validate_budget(files: &[InstallFile]) -> Result<(), InstallError> {
+    if files.is_empty() || files.len() > MAX_FILES {
+        return Err(InstallError::BudgetExceeded);
+    }
+    let total = files
+        .iter()
+        .try_fold(0_u64, |total, file| total.checked_add(file.bytes));
+    if total.is_none_or(|total| total > MAX_TOTAL_BYTES) {
+        return Err(InstallError::BudgetExceeded);
+    }
+    Ok(())
+}
+
+fn validate_file(path: &Path, expected: &InstallFile) -> Result<(), InstallError> {
+    if expected.sha256.len() != 64
+        || !expected
+            .sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(InstallError::InvalidHash(expected.relative_path.clone()));
+    }
+    if fs::metadata(path)?.len() != expected.bytes {
+        return Err(InstallError::SizeMismatch(expected.relative_path.clone()));
+    }
+    let mut source = fs::File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
+    loop {
+        let read = source.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    if format!("{:x}", digest.finalize()) != expected.sha256 {
+        return Err(InstallError::HashMismatch(expected.relative_path.clone()));
+    }
+    Ok(())
 }
 
 fn safe_relative_path(path: &Path) -> Result<&Path, InstallError> {
@@ -144,6 +202,8 @@ mod tests {
             &active,
             &[InstallFile {
                 relative_path: "manifest.json".into(),
+                bytes: 3,
+                sha256: "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437".into(),
             }],
         )
         .unwrap();
@@ -164,6 +224,8 @@ mod tests {
             &root.join("active"),
             &[InstallFile {
                 relative_path: "../secret".into(),
+                bytes: 0,
+                sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
             }],
         )
         .unwrap_err();
@@ -186,10 +248,36 @@ mod tests {
             &root.join("active"),
             &[InstallFile {
                 relative_path: "linked".into(),
+                bytes: 6,
+                sha256: "2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b".into(),
             }],
         )
         .unwrap_err();
         assert!(matches!(error, InstallError::EscapedSource(_)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_inventory_hash_mismatch_without_replacing_active() {
+        let root = std::env::temp_dir().join("nimora-installer-hash");
+        let source = root.join("source");
+        let active = root.join("active");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&active).unwrap();
+        fs::write(source.join("manifest.json"), b"new").unwrap();
+        fs::write(active.join("old.txt"), b"old").unwrap();
+        let error = install_atomically(
+            &source,
+            &active,
+            &[InstallFile {
+                relative_path: "manifest.json".into(),
+                bytes: 3,
+                sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
+            }],
+        )
+        .unwrap_err();
+        assert!(matches!(error, InstallError::HashMismatch(_)));
+        assert_eq!(fs::read(active.join("old.txt")).unwrap(), b"old");
         fs::remove_dir_all(root).unwrap();
     }
 }

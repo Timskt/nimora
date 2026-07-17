@@ -25,7 +25,7 @@ export interface DesktopSnapshot {
 export interface InstallAssetRequest {
   assetId: string;
   sourcePath: string;
-  files: string[];
+  files: Array<{ relativePath: string; bytes: number; sha256: string }>;
 }
 
 export interface AssetInstallReceipt {

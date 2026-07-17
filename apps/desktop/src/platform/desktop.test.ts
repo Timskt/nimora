@@ -35,7 +35,10 @@ describe("desktop platform adapter", () => {
     await api.installAsset({
       assetId: "character.example.mochi",
       sourcePath: "/tmp/nimora-import",
-      files: ["manifest.json", "sprites/idle.webp"],
+      files: [
+        { relativePath: "manifest.json", bytes: 12, sha256: "a".repeat(64) },
+        { relativePath: "sprites/idle.webp", bytes: 42, sha256: "b".repeat(64) },
+      ],
     });
     expect(invoke.mock.calls).toEqual([
       ["drain_runtime_events"],
@@ -53,7 +56,10 @@ describe("desktop platform adapter", () => {
       ["install_asset", { request: {
         assetId: "character.example.mochi",
         sourcePath: "/tmp/nimora-import",
-        files: ["manifest.json", "sprites/idle.webp"],
+        files: [
+          { relativePath: "manifest.json", bytes: 12, sha256: "a".repeat(64) },
+          { relativePath: "sprites/idle.webp", bytes: 42, sha256: "b".repeat(64) },
+        ],
       } }],
     ]);
     expect(startDragging).toHaveBeenCalledOnce();

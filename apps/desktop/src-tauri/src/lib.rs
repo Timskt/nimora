@@ -122,7 +122,15 @@ struct ClickPetRequest {
 struct InstallAssetRequest {
     asset_id: String,
     source_path: PathBuf,
-    files: Vec<PathBuf>,
+    files: Vec<InstallAssetFile>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallAssetFile {
+    relative_path: PathBuf,
+    bytes: u64,
+    sha256: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -455,7 +463,11 @@ fn install_asset(
     let files = request
         .files
         .into_iter()
-        .map(|relative_path| InstallFile { relative_path })
+        .map(|file| InstallFile {
+            relative_path: file.relative_path,
+            bytes: file.bytes,
+            sha256: file.sha256,
+        })
         .collect::<Vec<_>>();
     let result = install_atomically(&request.source_path, &active_path, &files)?;
     Ok(AssetInstallReceipt {
