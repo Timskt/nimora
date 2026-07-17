@@ -24,7 +24,7 @@ use nimora_automation_agent_bridge::{
 use nimora_automation_capability_bridge::{AutomationCapabilityBridge, AutomationCapabilityPolicy};
 use nimora_automation_runtime::{
     ActionFailure, AutomationBackend, AutomationDefinition, AutomationEngine, AutomationError,
-    AutomationExecutionContext, AutomationRun, RunMode, Uncancelled,
+    AutomationExecutionContext, AutomationRun, RunControl, RunMode, Uncancelled,
 };
 use nimora_diagnostics_bundle::{
     ApplicationSummary, DataProtectionSummary, DiagnosticBundleError, DiagnosticBundleReceipt,
@@ -134,6 +134,7 @@ struct DesktopState {
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
     pending_agent_tools: Mutex<HashMap<Uuid, PendingAgentTool>>,
     active_agent_tasks: Mutex<HashMap<Uuid, CancellationFlag>>,
+    active_automation_runs: Mutex<HashMap<Uuid, CancellationFlag>>,
     execution_controller: ExecutionController,
     ollama_worker: Option<PathBuf>,
     startup: StartupStatus,
@@ -347,6 +348,7 @@ impl DesktopState {
             user_programs: Mutex::new(HashMap::new()),
             pending_agent_tools: Mutex::new(HashMap::new()),
             active_agent_tasks: Mutex::new(HashMap::new()),
+            active_automation_runs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
             ollama_worker,
             startup: StartupStatus {
@@ -409,6 +411,7 @@ impl DesktopState {
             user_programs: Mutex::new(HashMap::new()),
             pending_agent_tools: Mutex::new(HashMap::new()),
             active_agent_tasks: Mutex::new(HashMap::new()),
+            active_automation_runs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
             ollama_worker,
             startup: StartupStatus {
@@ -861,6 +864,12 @@ fn run_live_automation(
         event_id: event.id.to_string(),
         started_at_ms: current_time_ms()?,
     })?;
+    let cancellation = CancellationFlag::default();
+    state
+        .active_automation_runs
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .insert(run_id, cancellation.clone());
     let backend = AutomationAgentBridge::new(
         AutomationCapabilityBridge::new(
             DesktopCapabilityBackend { state },
@@ -870,18 +879,50 @@ fn run_live_automation(
         DesktopAutomationAgentContext,
         agent_policy,
     );
-    let run = AutomationEngine::run_with_id(
+    let control = DesktopAutomationRunControl::new(cancellation);
+    let result = AutomationEngine::run_with_id(
         run_id,
         &request.definition,
         &event,
         RunMode::Live,
         &backend,
-        &Uncancelled,
-    )?;
+        &control,
+    );
+    state
+        .active_automation_runs
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .remove(&run_id);
+    let run = result?;
     state
         .automation_journal
         .complete(&run, current_time_ms()?)?;
     Ok(run)
+}
+
+#[derive(Debug)]
+struct DesktopAutomationRunControl {
+    cancellation: CancellationFlag,
+    started_at: std::time::Instant,
+}
+
+impl DesktopAutomationRunControl {
+    fn new(cancellation: CancellationFlag) -> Self {
+        Self {
+            cancellation,
+            started_at: std::time::Instant::now(),
+        }
+    }
+}
+
+impl RunControl for DesktopAutomationRunControl {
+    fn cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
+    }
+
+    fn elapsed(&self) -> Duration {
+        self.started_at.elapsed()
+    }
 }
 
 #[derive(Debug)]
@@ -1106,6 +1147,46 @@ fn cancel_agent_task(task_id: &str, state: State<'_, DesktopState>) -> Result<bo
     let task_id = Uuid::parse_str(task_id)
         .map_err(|_| SqlitePersistenceError::InvalidAutomationAgentJournal)?;
     cancel_agent_task_inner(&state, task_id)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri managed state command arguments are owned extractors"
+)]
+fn cancel_automation_run(
+    run_id: &str,
+    state: State<'_, DesktopState>,
+) -> Result<bool, DesktopError> {
+    let run_id = Uuid::parse_str(run_id)
+        .map_err(|_| SqlitePersistenceError::InvalidAutomationJournal)?;
+    cancel_automation_run_inner(&state, run_id)
+}
+
+fn cancel_automation_run_inner(
+    state: &DesktopState,
+    run_id: Uuid,
+) -> Result<bool, DesktopError> {
+    let cancellation = state
+        .active_automation_runs
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .get(&run_id)
+        .cloned();
+    let Some(cancellation) = cancellation else {
+        return Ok(false);
+    };
+    cancellation.cancel();
+    for child in state.automation_agent_journal.list_by_run(run_id)? {
+        if matches!(
+            child.status,
+            AutomationAgentJournalStatus::Submitted
+                | AutomationAgentJournalStatus::WaitingForConfirmation
+        ) {
+            cancel_automation_agent_task(state, child.admission.task.id)?;
+        }
+    }
+    Ok(true)
 }
 
 fn cancel_agent_task_inner(state: &DesktopState, task_id: Uuid) -> Result<bool, DesktopError> {
@@ -5000,6 +5081,7 @@ pub fn run() {
             automation_run_status,
             automation_agent_task_status,
             automation_run_agent_tasks,
+            cancel_automation_run,
             cancel_agent_task,
             agent_provider_status,
             agent_history_list,
@@ -5179,8 +5261,9 @@ mod tests {
         CapabilityBackend, DesktopCapabilityBackend, DesktopError, DesktopState, LocalAgentRequest,
         PetAction, PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest, StartupMode,
         TrayAction, UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
-        cancel_agent_task_inner, cancel_all_pending_agent_tools, confirm_agent_tool_inner,
-        confirm_agent_tool_with_registry, default_agent_model, default_agent_provider_id,
+        cancel_agent_task_inner, cancel_all_pending_agent_tools, cancel_automation_run_inner,
+        confirm_agent_tool_inner, confirm_agent_tool_with_registry, default_agent_model,
+        default_agent_provider_id,
         diagnostic_report, ensure_normal_mode, ensure_program_permissions, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
         parse_user_program_plan, permission_grant, persist_active_character,
@@ -5791,6 +5874,69 @@ mod tests {
             state.agent_history.list(None, 10).expect("history").len(),
             1
         );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn cancelling_automation_run_cascades_to_active_agent_child() {
+        let (root, state) = normal_desktop_state();
+        let run_id = Uuid::now_v7();
+        let task = AgentTask::new(
+            AgentTaskOrigin::Automation,
+            "automation:desktop",
+            "provider:deterministic-local",
+            AgentBudget::default(),
+            1,
+        )
+        .expect("Agent task");
+        let admission = nimora_agent_runtime::AgentTaskAdmission {
+            spec: "nimora.agent-task-admission/1".to_owned(),
+            task: task.clone(),
+            root_task_id: run_id,
+            parent_task_id: None,
+            call_depth: 1,
+            tool_allowlist: std::collections::BTreeSet::new(),
+            classification: nimora_agent_runtime::DataClassification::Personal,
+            autonomy: nimora_agent_runtime::AgentAutonomy::Draft,
+        };
+        let child = AutomationAgentJournalEntry::new(
+            run_id,
+            "cancel-key",
+            admission,
+            "model:echo-v1",
+            1,
+        )
+        .expect("child journal");
+        state
+            .automation_agent_journal
+            .submit(&child)
+            .expect("submit child");
+        let run_cancellation = CancellationFlag::default();
+        let child_cancellation = CancellationFlag::default();
+        state
+            .active_automation_runs
+            .lock()
+            .expect("run registry")
+            .insert(run_id, run_cancellation.clone());
+        state
+            .active_agent_tasks
+            .lock()
+            .expect("task registry")
+            .insert(task.id, child_cancellation.clone());
+
+        assert!(cancel_automation_run_inner(&state, run_id).expect("cancel run"));
+        assert!(run_cancellation.is_cancelled());
+        assert!(child_cancellation.is_cancelled());
+        assert_eq!(
+            state
+                .automation_agent_journal
+                .get_by_task_id(task.id)
+                .expect("child query")
+                .expect("child")
+                .status,
+            AutomationAgentJournalStatus::Cancelled
+        );
+        assert!(!cancel_automation_run_inner(&state, Uuid::now_v7()).expect("unknown run"));
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 

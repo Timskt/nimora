@@ -446,6 +446,7 @@ export interface DesktopApi {
   automationRunStatus(runId: string): Promise<AutomationJournalEntry | null>;
   automationAgentTaskStatus(taskId: string): Promise<AutomationAgentJournalEntry | null>;
   automationRunAgentTasks(runId: string): Promise<AutomationAgentJournalEntry[]>;
+  cancelAutomationRun(runId: string): Promise<boolean>;
   cancelAgentTask(taskId: string): Promise<boolean>;
   agentCatalog(): Promise<AgentCatalog>;
   agentProviderStatus(providerId: string): Promise<AgentProviderStatus>;
@@ -610,6 +611,7 @@ export function createDesktopApi(
       async automationAgentTaskStatus() { return null; },
       async automationRunAgentTasks() { return []; },
       async cancelAgentTask() { return false; },
+      async cancelAutomationRun() { return false; },
       async agentCatalog() {
         return {
           spec: "nimora.desktop-agent-catalog/1",
@@ -786,6 +788,7 @@ export function createDesktopApi(
     automationRunStatus: async (runId) => await invokeCommand("automation_run_status", { runId }) as AutomationJournalEntry | null,
     automationAgentTaskStatus: async (taskId) => await invokeCommand("automation_agent_task_status", { taskId }) as AutomationAgentJournalEntry | null,
     automationRunAgentTasks: async (runId) => await invokeCommand("automation_run_agent_tasks", { runId }) as AutomationAgentJournalEntry[],
+    cancelAutomationRun: async (runId) => await invokeCommand("cancel_automation_run", { runId }) as boolean,
     cancelAgentTask: async (taskId) => await invokeCommand("cancel_agent_task", { taskId }) as boolean,
     agentCatalog: async () => await invokeCommand("agent_catalog") as AgentCatalog,
     agentProviderStatus: async (providerId) => await invokeCommand("agent_provider_status", { request: { providerId } }) as AgentProviderStatus,

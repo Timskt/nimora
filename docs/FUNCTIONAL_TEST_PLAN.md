@@ -366,6 +366,7 @@ ID / 标题 / 优先级 / 前置条件
 | AAG-010 | Safe Mode 遇到尚未请求工具的 Provider | 活跃注册表中的任务全部收到取消，不依赖待批准队列是否已有项目 | P0 |
 | AAG-011 | 递归与批准后续跑取消 | 每一轮复用原 Task 的取消令牌，取消后不得创建下一 Provider step 或模块副作用 | P0 |
 | AAG-012 | Bridge 错误分类 | 永久提交错误只尝试一次；明确瞬态宿主错误按 Action 策略重试，错误字符串不参与分类判断 | P0 |
+| AAG-013 | 用户取消根 Automation Run | 父 Run 取消令牌置位；submitted/waiting Agent 子任务转为 cancelled，运行中 Provider/Worker 收到同一任务取消且未知或终态 Run 返回 false | P0 |
 
 - 每次提交：Unit、Schema、核心 Contract。
 - 每次合并：核心 Integration、Pet/Asset/Permission P0。
