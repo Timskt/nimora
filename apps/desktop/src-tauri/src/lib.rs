@@ -1183,15 +1183,12 @@ fn cancel_automation_run(
     run_id: &str,
     state: State<'_, DesktopState>,
 ) -> Result<bool, DesktopError> {
-    let run_id = Uuid::parse_str(run_id)
-        .map_err(|_| SqlitePersistenceError::InvalidAutomationJournal)?;
+    let run_id =
+        Uuid::parse_str(run_id).map_err(|_| SqlitePersistenceError::InvalidAutomationJournal)?;
     cancel_automation_run_inner(&state, run_id)
 }
 
-fn cancel_automation_run_inner(
-    state: &DesktopState,
-    run_id: Uuid,
-) -> Result<bool, DesktopError> {
+fn cancel_automation_run_inner(state: &DesktopState, run_id: Uuid) -> Result<bool, DesktopError> {
     let cancellation = state
         .active_automation_runs
         .lock()
@@ -5286,17 +5283,16 @@ mod tests {
         CapabilityBackend, DesktopCapabilityBackend, DesktopError, DesktopState, LocalAgentRequest,
         PetAction, PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest, StartupMode,
         TrayAction, UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
-        cancel_agent_task_inner, cancel_all_pending_agent_tools, cancel_automation_run_inner,
-        confirm_agent_tool_inner, confirm_agent_tool_with_registry, default_agent_model,
-        default_agent_provider_id,
-        automation_agent_messages, diagnostic_report, ensure_normal_mode,
-        ensure_program_permissions, inspect_asset_catalog,
-        install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
-        parse_user_program_plan, permission_grant, persist_active_character,
-        prepare_agent_tool_inner, reject_agent_tool_inner, resolve_active_character,
-        resolve_character_renderer, run_live_automation, run_local_agent_inner, screen_coordinate,
-        serve_asset_protocol, test_automation, user_program_input, valid_asset_identifier,
-        validate_model_source, validate_package_source, validate_requested_animation_map,
+        automation_agent_messages, cancel_agent_task_inner, cancel_all_pending_agent_tools,
+        cancel_automation_run_inner, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
+        default_agent_model, default_agent_provider_id, diagnostic_report, ensure_normal_mode,
+        ensure_program_permissions, inspect_asset_catalog, install_gltf_character,
+        open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
+        permission_grant, persist_active_character, prepare_agent_tool_inner,
+        reject_agent_tool_inner, resolve_active_character, resolve_character_renderer,
+        run_live_automation, run_local_agent_inner, screen_coordinate, serve_asset_protocol,
+        test_automation, user_program_input, valid_asset_identifier, validate_model_source,
+        validate_package_source, validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentTask, AgentTaskOrigin, AgentTaskStatus, CancellationFlag,
@@ -5305,8 +5301,8 @@ mod tests {
         ProviderFinishReason, ProviderLocality, ProviderMessage, ProviderMessageRole,
         ProviderRegistry, ProviderRequest, ProviderResponse, ProviderToolCall, ProviderUsage,
     };
-    use nimora_automation_agent_bridge::AdmittedContextSegment;
     use nimora_asset_installer::{GltfCharacterMetadata, ModelAnimationBinding};
+    use nimora_automation_agent_bridge::AdmittedContextSegment;
     use nimora_automation_agent_bridge::{
         AgentTaskSubmissionOutcome, AgentTaskSubmitter, AutomationAgentTask,
     };
@@ -5929,14 +5925,9 @@ mod tests {
             classification: nimora_agent_runtime::DataClassification::Personal,
             autonomy: nimora_agent_runtime::AgentAutonomy::Draft,
         };
-        let child = AutomationAgentJournalEntry::new(
-            run_id,
-            "cancel-key",
-            admission,
-            "model:echo-v1",
-            1,
-        )
-        .expect("child journal");
+        let child =
+            AutomationAgentJournalEntry::new(run_id, "cancel-key", admission, "model:echo-v1", 1)
+                .expect("child journal");
         state
             .automation_agent_journal
             .submit(&child)
