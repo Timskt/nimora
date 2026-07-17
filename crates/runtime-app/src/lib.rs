@@ -7,7 +7,7 @@ use nimora_runtime_core::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex},
 };
 use thiserror::Error;
@@ -85,16 +85,49 @@ pub struct RuntimeService<R> {
 }
 
 const EVENT_BUFFER_CAPACITY: usize = 256;
+const MAX_EVENT_SUBSCRIPTION_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeEventBus {
-    events: Arc<Mutex<VecDeque<Event>>>,
+    state: Arc<Mutex<RuntimeEventBusState>>,
+}
+
+#[derive(Debug)]
+struct RuntimeEventBusState {
+    events: VecDeque<Event>,
+    subscriptions: HashMap<u64, EventSubscriptionState>,
+    next_subscription_id: u64,
+}
+
+#[derive(Debug)]
+struct EventSubscriptionState {
+    event_types: HashSet<String>,
+    events: VecDeque<Event>,
+    capacity: usize,
+    dropped: u64,
+}
+
+#[derive(Debug)]
+pub struct RuntimeEventSubscription {
+    id: u64,
+    bus: Arc<Mutex<RuntimeEventBusState>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeEventBatch {
+    pub events: Vec<Event>,
+    pub dropped: u64,
 }
 
 impl Default for RuntimeEventBus {
     fn default() -> Self {
         Self {
-            events: Arc::new(Mutex::new(VecDeque::with_capacity(EVENT_BUFFER_CAPACITY))),
+            state: Arc::new(Mutex::new(RuntimeEventBusState {
+                events: VecDeque::with_capacity(EVENT_BUFFER_CAPACITY),
+                subscriptions: HashMap::new(),
+                next_subscription_id: 1,
+            })),
         }
     }
 }
@@ -107,11 +140,51 @@ impl RuntimeEventBus {
     /// Returns an error if another thread panicked while holding the buffer.
     pub fn drain(&self) -> Result<Vec<Event>, RuntimeError> {
         Ok(self
-            .events
+            .state
             .lock()
             .map_err(|_| RuntimeError::StatePoisoned)?
+            .events
             .drain(..)
             .collect())
+    }
+
+    /// Creates an independent bounded subscription for trusted runtime events.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty filter, an invalid capacity, identifier
+    /// exhaustion, or a poisoned runtime state.
+    pub fn subscribe(
+        &self,
+        event_types: impl IntoIterator<Item = String>,
+        capacity: usize,
+    ) -> Result<RuntimeEventSubscription, RuntimeError> {
+        let event_types = event_types.into_iter().collect::<HashSet<_>>();
+        if event_types.is_empty() {
+            return Err(RuntimeError::EmptyEventSubscription);
+        }
+        if capacity == 0 || capacity > MAX_EVENT_SUBSCRIPTION_CAPACITY {
+            return Err(RuntimeError::InvalidEventSubscriptionCapacity);
+        }
+        let mut state = self.lock()?;
+        let id = state.next_subscription_id;
+        state.next_subscription_id = state
+            .next_subscription_id
+            .checked_add(1)
+            .ok_or(RuntimeError::EventSubscriptionExhausted)?;
+        state.subscriptions.insert(
+            id,
+            EventSubscriptionState {
+                event_types,
+                events: VecDeque::with_capacity(capacity),
+                capacity,
+                dropped: 0,
+            },
+        );
+        Ok(RuntimeEventSubscription {
+            id,
+            bus: Arc::clone(&self.state),
+        })
     }
 
     /// Publishes one event using the shared bounded runtime buffer.
@@ -120,16 +193,70 @@ impl RuntimeEventBus {
     ///
     /// Returns an error if another thread panicked while holding the buffer.
     pub fn publish(&self, event: Event) -> Result<(), RuntimeError> {
-        let mut events = self.lock()?;
-        if events.len() == EVENT_BUFFER_CAPACITY {
-            events.pop_front();
-        }
-        events.push_back(event);
+        let mut state = self.lock()?;
+        Self::publish_locked(&mut state, event);
         Ok(())
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, VecDeque<Event>>, RuntimeError> {
-        self.events.lock().map_err(|_| RuntimeError::StatePoisoned)
+    fn publish_locked(state: &mut RuntimeEventBusState, event: Event) {
+        if state.events.len() == EVENT_BUFFER_CAPACITY {
+            state.events.pop_front();
+        }
+        for subscription in state.subscriptions.values_mut() {
+            if !subscription.event_types.contains(&event.event_type) {
+                continue;
+            }
+            if subscription.events.len() == subscription.capacity {
+                subscription.events.pop_front();
+                subscription.dropped = subscription.dropped.saturating_add(1);
+            }
+            subscription.events.push_back(event.clone());
+        }
+        state.events.push_back(event);
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, RuntimeEventBusState>, RuntimeError> {
+        self.state.lock().map_err(|_| RuntimeError::StatePoisoned)
+    }
+}
+
+impl RuntimeEventSubscription {
+    /// Drains this subscription without consuming the bus or other subscribers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after cancellation or when the runtime state is poisoned.
+    pub fn drain(&self) -> Result<RuntimeEventBatch, RuntimeError> {
+        let mut state = self.bus.lock().map_err(|_| RuntimeError::StatePoisoned)?;
+        let subscription = state
+            .subscriptions
+            .get_mut(&self.id)
+            .ok_or(RuntimeError::EventSubscriptionCancelled)?;
+        let events = subscription.events.drain(..).collect();
+        let dropped = std::mem::take(&mut subscription.dropped);
+        Ok(RuntimeEventBatch { events, dropped })
+    }
+
+    /// Cancels this subscription and releases its buffered events.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the runtime state is poisoned.
+    pub fn cancel(&self) -> Result<(), RuntimeError> {
+        self.bus
+            .lock()
+            .map_err(|_| RuntimeError::StatePoisoned)?
+            .subscriptions
+            .remove(&self.id);
+        Ok(())
+    }
+}
+
+impl Drop for RuntimeEventSubscription {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.bus.lock() {
+            state.subscriptions.remove(&self.id);
+        }
     }
 }
 
@@ -488,10 +615,7 @@ impl<R: PetRepository> RuntimeService<R> {
         let mut events = self.events.lock()?;
         self.repository.save_with_event(&candidate, &event)?;
         *current = candidate;
-        if events.len() == EVENT_BUFFER_CAPACITY {
-            events.pop_front();
-        }
-        events.push_back(event);
+        RuntimeEventBus::publish_locked(&mut events, event);
         Ok(command)
     }
 }
@@ -623,10 +747,7 @@ impl<R: ProfileRepository> ProfileService<R> {
         let mut events = self.events.lock().map_err(ProfileServiceError::Runtime)?;
         self.repository.save_with_event(&candidate, &event)?;
         *current = candidate;
-        if events.len() == EVENT_BUFFER_CAPACITY {
-            events.pop_front();
-        }
-        events.push_back(event);
+        RuntimeEventBus::publish_locked(&mut events, event);
         Ok(command)
     }
 
@@ -673,10 +794,7 @@ impl<R: ProfileRepository> ProfileService<R> {
         let mut events = self.events.lock().map_err(ProfileServiceError::Runtime)?;
         self.repository.save_with_event(&candidate, &event)?;
         *current = candidate;
-        if events.len() == EVENT_BUFFER_CAPACITY {
-            events.pop_front();
-        }
-        events.push_back(event);
+        RuntimeEventBus::publish_locked(&mut events, event);
         Ok(command)
     }
 }
@@ -713,6 +831,14 @@ pub enum ProfileServiceError {
 pub enum RuntimeError {
     #[error("runtime state is unavailable")]
     StatePoisoned,
+    #[error("event subscriptions require at least one event type")]
+    EmptyEventSubscription,
+    #[error("event subscription capacity must be between 1 and 256")]
+    InvalidEventSubscriptionCapacity,
+    #[error("event subscription identifiers are exhausted")]
+    EventSubscriptionExhausted,
+    #[error("event subscription was cancelled")]
+    EventSubscriptionCancelled,
     #[error(transparent)]
     Repository(#[from] RepositoryError),
     #[error(transparent)]
@@ -992,5 +1118,74 @@ mod tests {
             Err(SafetyServiceError::AlreadyNormal)
         ));
         assert_eq!(bus.drain().expect("events").len(), 1);
+    }
+
+    #[test]
+    fn event_subscriptions_are_filtered_and_do_not_consume_the_main_buffer() {
+        let bus = RuntimeEventBus::default();
+        let subscription = bus
+            .subscribe(["pet.example.clicked".to_owned()], 4)
+            .expect("subscribe");
+        bus.publish(
+            Event::new(
+                "pet.example.clicked",
+                EventSource::Core,
+                serde_json::json!({"sequence": 1}),
+            )
+            .expect("event"),
+        )
+        .expect("publish");
+        bus.publish(
+            Event::new(
+                "profile.example.changed",
+                EventSource::Core,
+                serde_json::json!({"sequence": 2}),
+            )
+            .expect("event"),
+        )
+        .expect("publish");
+        let batch = subscription.drain().expect("subscription events");
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(batch.events[0].event_type, "pet.example.clicked");
+        assert_eq!(batch.dropped, 0);
+        assert_eq!(bus.drain().expect("main events").len(), 2);
+    }
+
+    #[test]
+    fn slow_event_subscriptions_drop_oldest_events_with_accounting() {
+        let bus = RuntimeEventBus::default();
+        let subscription = bus
+            .subscribe(["pet.example.clicked".to_owned()], 2)
+            .expect("subscribe");
+        for sequence in 1..=4 {
+            bus.publish(
+                Event::new(
+                    "pet.example.clicked",
+                    EventSource::Core,
+                    serde_json::json!({"sequence": sequence}),
+                )
+                .expect("event"),
+            )
+            .expect("publish");
+        }
+        let batch = subscription.drain().expect("subscription events");
+        assert_eq!(batch.dropped, 2);
+        assert_eq!(batch.events.len(), 2);
+        assert_eq!(batch.events[0].data["sequence"], 3);
+        assert_eq!(batch.events[1].data["sequence"], 4);
+        assert_eq!(subscription.drain().expect("empty batch").dropped, 0);
+    }
+
+    #[test]
+    fn cancelled_event_subscriptions_release_their_queue() {
+        let bus = RuntimeEventBus::default();
+        let subscription = bus
+            .subscribe(["pet.example.clicked".to_owned()], 2)
+            .expect("subscribe");
+        subscription.cancel().expect("cancel");
+        assert!(matches!(
+            subscription.drain(),
+            Err(RuntimeError::EventSubscriptionCancelled)
+        ));
     }
 }

@@ -4,8 +4,8 @@ use nimora_persistence_sqlite::{
     SqliteProgramPermissionRepository,
 };
 use nimora_runtime_app::{
-    ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBus,
-    RuntimeService, SafetyService, SafetyServiceError,
+    ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBatch,
+    RuntimeEventBus, RuntimeEventSubscription, RuntimeService, SafetyService, SafetyServiceError,
 };
 use nimora_runtime_core::{
     Command, CommandRisk, Event, EventSource, Pet, PetAction, PointerButton, Position, ProfileId,
@@ -46,6 +46,8 @@ const PET_WINDOW_LABEL: &str = "pet";
 const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
 const MAX_USER_PROGRAM_COMMANDS: usize = 32;
+const MAX_USER_PROGRAM_EVENT_SESSIONS: usize = 32;
+const USER_PROGRAM_EVENT_QUEUE_CAPACITY: usize = 64;
 
 #[derive(Debug)]
 struct DesktopState {
@@ -60,6 +62,7 @@ struct DesktopState {
     asset_store: PathBuf,
     program_store: PathBuf,
     program_permissions: SqliteProgramPermissionRepository,
+    user_program_event_sessions: Mutex<HashMap<Uuid, UserProgramEventSession>>,
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
     execution_controller: ExecutionController,
 }
@@ -68,6 +71,12 @@ struct DesktopState {
 struct UserProgramSession {
     policy: ExecutionPolicy,
     execution: ExecutionHandle,
+}
+
+#[derive(Debug)]
+struct UserProgramEventSession {
+    program_id: String,
+    subscription: RuntimeEventSubscription,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -121,6 +130,7 @@ impl DesktopState {
             asset_store,
             program_store,
             program_permissions: SqliteProgramPermissionRepository::open(database_path)?,
+            user_program_event_sessions: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
         })
@@ -214,6 +224,16 @@ struct UserProgramPermissionStatus {
     version: String,
     capabilities: Vec<Capability>,
     granted: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProgramEventSessionReceipt {
+    subscription_id: Uuid,
+    program_id: String,
+    version: String,
+    event_types: Vec<String>,
+    queue_capacity: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -318,6 +338,12 @@ enum DesktopError {
     UserProgramNotFound,
     #[error("user program permissions must be granted for this exact installed version")]
     UserProgramPermissionRequired,
+    #[error("user program does not declare event subscriptions")]
+    UserProgramSubscriptionsMissing,
+    #[error("maximum user program event subscriptions reached")]
+    UserProgramEventSessionLimit,
+    #[error("user program event subscription was not found")]
+    UserProgramEventSessionNotFound,
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -416,6 +442,7 @@ fn enter_safe_mode(
     match state.safety.enter(SafeModeReason::Manual) {
         Ok(command) => {
             cancel_all_user_programs(&state)?;
+            cancel_all_user_program_event_sessions(&state)?;
             *state
                 .policy_before_safe_mode
                 .lock()
@@ -650,6 +677,7 @@ fn install_user_program(
         request.manifest,
         &files,
     )?;
+    cancel_user_program_event_sessions(&state, &result.program_id)?;
     Ok(UserProgramInstallReceipt {
         program_id: result.program_id,
         version: result.version,
@@ -665,6 +693,7 @@ fn rollback_user_program(
     program_id: String,
 ) -> Result<UserProgramRollbackReceipt, DesktopError> {
     ensure_normal_mode(&state)?;
+    cancel_user_program_event_sessions(&state, &program_id)?;
     let result = rollback_program(&state.program_store, &program_id)?;
     Ok(UserProgramRollbackReceipt {
         program_id,
@@ -705,6 +734,81 @@ fn revoke_user_program_permissions(
 ) -> Result<(), DesktopError> {
     ensure_normal_mode(&state)?;
     state.program_permissions.revoke_program(&program_id)?;
+    cancel_user_program_event_sessions(&state, &program_id)?;
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn open_user_program_event_session(
+    state: State<'_, DesktopState>,
+    program_id: String,
+) -> Result<UserProgramEventSessionReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let installed = load_installed_program(&state.program_store, &program_id)?;
+    let policy = evaluate(installed.manifest.clone())?;
+    ensure_program_permissions(&state.program_permissions, &installed.manifest)?;
+    if !policy.can_subscribe_events || policy.manifest.subscriptions.is_empty() {
+        return Err(DesktopError::UserProgramSubscriptionsMissing);
+    }
+    let mut sessions = state
+        .user_program_event_sessions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    if sessions.len() >= MAX_USER_PROGRAM_EVENT_SESSIONS {
+        return Err(DesktopError::UserProgramEventSessionLimit);
+    }
+    let subscription = state.events.subscribe(
+        policy.manifest.subscriptions.clone(),
+        USER_PROGRAM_EVENT_QUEUE_CAPACITY,
+    )?;
+    let subscription_id = Uuid::now_v7();
+    sessions.insert(
+        subscription_id,
+        UserProgramEventSession {
+            program_id: policy.manifest.id.clone(),
+            subscription,
+        },
+    );
+    Ok(UserProgramEventSessionReceipt {
+        subscription_id,
+        program_id: policy.manifest.id,
+        version: policy.manifest.version,
+        event_types: policy.manifest.subscriptions,
+        queue_capacity: USER_PROGRAM_EVENT_QUEUE_CAPACITY,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn drain_user_program_events(
+    state: State<'_, DesktopState>,
+    subscription_id: Uuid,
+) -> Result<RuntimeEventBatch, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let sessions = state
+        .user_program_event_sessions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    let session = sessions
+        .get(&subscription_id)
+        .ok_or(DesktopError::UserProgramEventSessionNotFound)?;
+    Ok(session.subscription.drain()?)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn close_user_program_event_session(
+    state: State<'_, DesktopState>,
+    subscription_id: Uuid,
+) -> Result<(), DesktopError> {
+    let session = state
+        .user_program_event_sessions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .remove(&subscription_id)
+        .ok_or(DesktopError::UserProgramEventSessionNotFound)?;
+    session.subscription.cancel()?;
     Ok(())
 }
 
@@ -1002,6 +1106,27 @@ fn cancel_all_user_programs(state: &DesktopState) -> Result<(), DesktopError> {
         session.execution.cancel();
     }
     sessions.clear();
+    Ok(())
+}
+
+fn cancel_all_user_program_event_sessions(state: &DesktopState) -> Result<(), DesktopError> {
+    state
+        .user_program_event_sessions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .clear();
+    Ok(())
+}
+
+fn cancel_user_program_event_sessions(
+    state: &DesktopState,
+    program_id: &str,
+) -> Result<(), DesktopError> {
+    state
+        .user_program_event_sessions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .retain(|_, session| session.program_id != program_id);
     Ok(())
 }
 
@@ -1359,6 +1484,9 @@ pub fn run() {
             user_program_permission_status,
             grant_user_program_permissions,
             revoke_user_program_permissions,
+            open_user_program_event_session,
+            drain_user_program_events,
+            close_user_program_event_session,
             validate_user_program,
             start_user_program,
             execute_user_program,

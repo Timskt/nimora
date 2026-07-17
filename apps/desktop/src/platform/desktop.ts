@@ -101,6 +101,19 @@ export interface UserProgramPermissionStatus {
   granted: boolean;
 }
 
+export interface UserProgramEventSessionReceipt {
+  subscriptionId: string;
+  programId: string;
+  version: string;
+  eventTypes: string[];
+  queueCapacity: number;
+}
+
+export interface UserProgramEventBatch {
+  events: NimoraEvent[];
+  dropped: number;
+}
+
 export type UserProgramCapabilityRequest =
   | { type: "readPetState" }
   | { type: "invokeCommand"; command: string; arguments: unknown };
@@ -138,6 +151,9 @@ export interface DesktopApi {
   userProgramPermissionStatus(programId: string): Promise<UserProgramPermissionStatus | null>;
   grantUserProgramPermissions(programId: string): Promise<UserProgramPermissionStatus | null>;
   revokeUserProgramPermissions(programId: string): Promise<void>;
+  openUserProgramEventSession(programId: string): Promise<UserProgramEventSessionReceipt | null>;
+  drainUserProgramEvents(subscriptionId: string): Promise<UserProgramEventBatch>;
+  closeUserProgramEventSession(subscriptionId: string): Promise<void>;
   startUserProgram(manifest: UserProgramManifest): Promise<UserProgramSessionReceipt | null>;
   executeUserProgram(manifest: UserProgramManifest, source: string): Promise<UserProgramExecutionReceipt | null>;
   executeInstalledUserProgram(programId: string): Promise<UserProgramExecutionReceipt | null>;
@@ -210,6 +226,9 @@ export function createDesktopApi(
       async userProgramPermissionStatus() { return null; },
       async grantUserProgramPermissions() { return null; },
       async revokeUserProgramPermissions() {},
+      async openUserProgramEventSession() { return null; },
+      async drainUserProgramEvents() { return { events: [], dropped: 0 }; },
+      async closeUserProgramEventSession() {},
       async startUserProgram() { return null; },
       async executeUserProgram() { return null; },
       async executeInstalledUserProgram() { return null; },
@@ -251,6 +270,9 @@ export function createDesktopApi(
     userProgramPermissionStatus: async (programId) => await invokeCommand("user_program_permission_status", { programId }) as UserProgramPermissionStatus,
     grantUserProgramPermissions: async (programId) => await invokeCommand("grant_user_program_permissions", { programId }) as UserProgramPermissionStatus,
     revokeUserProgramPermissions: async (programId) => { await invokeCommand("revoke_user_program_permissions", { programId }); },
+    openUserProgramEventSession: async (programId) => await invokeCommand("open_user_program_event_session", { programId }) as UserProgramEventSessionReceipt,
+    drainUserProgramEvents: async (subscriptionId) => await invokeCommand("drain_user_program_events", { subscriptionId }) as UserProgramEventBatch,
+    closeUserProgramEventSession: async (subscriptionId) => { await invokeCommand("close_user_program_event_session", { subscriptionId }); },
     startUserProgram: async (manifest) => await invokeCommand("start_user_program", { manifest }) as UserProgramSessionReceipt,
     executeUserProgram: async (manifest, source) => await invokeCommand("execute_user_program", { manifest, source }) as UserProgramExecutionReceipt,
     executeInstalledUserProgram: async (programId) => await invokeCommand("execute_installed_user_program", { programId }) as UserProgramExecutionReceipt,

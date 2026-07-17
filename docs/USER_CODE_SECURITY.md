@@ -62,6 +62,8 @@
 
 正式程序权限保存在 SQLite 的 `user_program_permission_grant` 中，授权键由程序 ID、精确版本和完整 Capability 集合共同组成。无 Capability 的纯计算程序不需要授权；有 Capability 的程序在首次运行前必须显式授予。版本变化、能力增加、能力删除或能力名称变化均不会匹配旧授权，`execute_installed_user_program` 会在创建 Worker 前拒绝执行。`user_program_permission_status`、`grant_user_program_permissions` 和 `revoke_user_program_permissions` 只针对完整性校验通过的已安装版本；撤销按程序身份删除所有版本授权。草稿预览不创建正式授权，也不能借用已安装版本的授权身份。
 
+运行时事件总线为 UI 主缓冲和每个程序订阅维护独立队列，任何消费者都不能通过 drain 抢走其他消费者的事件。程序订阅必须来自完整性校验通过、精确授权且声明 `subscribe-events` 的已安装 Manifest；Rust 根据 Manifest 创建过滤器，Renderer 不能提交事件正文或扩大事件类型。每个会话最多缓存 64 条、全局最多 32 个会话；慢消费者只丢弃自身最旧事件并获得累计 `dropped` 计数，不阻塞 Core。关闭、Drop、撤权、程序升级、回滚或进入安全模式都会注销会话并释放队列。当前 IPC 提供可信订阅会话的管理与观测底座；后续事件驱动 Worker 必须在 Rust 侧直接消费该会话并构造只读 `nimora.input.event`，禁止把 Renderer 回传的 JSON 当作可信运行时事件。
+
 ## 模块调用模型
 
 ```text
@@ -85,4 +87,4 @@ User Code
 - 审计日志、失败重试上限和安全模式联动。
 - 离线环境中仍可运行已安装代码，但不能绕过本地策略。
 
-当前仓库已完成 Manifest 策略评估、Tauri 会话入口、Worker 准入边界、独立进程 Supervisor、基础 JavaScript Worker、只读输入快照、一次性结构化调用计划、逐请求 Capability Gateway、首个桌面 Runtime 后端、取消/截止时间/输出预算、sidecar 构建配置、原子程序安装与回滚、执行前完整性复验、版本化权限持久化和契约测试；跨平台 sidecar 发布验证、事件型 SDK、操作系统级强制内存限制、WASM 引擎及授权型文件/网络/自动化后端尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。
+当前仓库已完成 Manifest 策略评估、Tauri 会话入口、Worker 准入边界、独立进程 Supervisor、基础 JavaScript Worker、只读输入快照、一次性结构化调用计划、逐请求 Capability Gateway、首个桌面 Runtime 后端、取消/截止时间/输出预算、sidecar 构建配置、原子程序安装与回滚、执行前完整性复验、版本化权限持久化、可信有界事件订阅底座和契约测试；事件自动触发 Worker、跨平台 sidecar 发布验证、操作系统级强制内存限制、WASM 引擎及授权型文件/网络/自动化后端尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。

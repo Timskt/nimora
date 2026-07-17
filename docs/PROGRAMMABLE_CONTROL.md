@@ -74,6 +74,7 @@ any → disabled → deleted
 - 当前程序包格式固定包含 `manifest.json` 与 `main.js`；安装采用清单哈希校验、暂存、原子激活和最近版本回滚，离线环境不依赖 Registry 即可启动已安装版本。
 - 正式运行使用 `execute_installed_user_program(programId)` 从激活版本加载源码；执行前根据安装器生成的 `.nimora-integrity.json` 复验程序身份、版本、完整 inventory、文件大小和 SHA-256，缺失、篡改、额外文件或符号链接都会阻止 Worker 启动，升级与回滚版本携带各自的锁文件。直接提交源码的入口仅用于 Creator Studio 草稿预览，不能替代安装版本身份。
 - 休眠恢复、时钟跳变和离线期间按声明的 missed-run policy 处理。
+- 事件订阅使用独立有界队列，不消费 UI 或其他程序的事件；当前每会话 64 条、全局 32 个会话，满载时丢弃该会话最旧事件并报告 `dropped`，安全模式、撤权、升级与回滚会取消会话。事件过滤器只能来自已安装 Manifest，Renderer 不能注入事件正文。
 
 ## 6. 权限与信任
 
