@@ -1,6 +1,6 @@
 # Nimora 用户代码安全边界
 
-> 状态：策略层与独立 Worker Supervisor 已实现，具体 JS/WASM 引擎仍在开发中
+> 状态：策略层、独立 Worker Supervisor 与基础 JavaScript 引擎已实现，桌面打包接入仍在开发中
 
 ## 目标
 
@@ -38,6 +38,8 @@
 
 桌面端已提供 `start_user_program`、`invoke_user_program_capability` 和 `stop_user_program` 会话入口，并注册首个 Runtime 后端：读取宠物快照、`safe.pet.animate` 和 `safe.pet.move`。进入安全模式会取消并移除全部活动会话；Gateway 传入的 Trace ID 与幂等键会写入实际 Runtime Command。未注册命令即使名称位于 `safe.*` 且出现在 Manifest 中，也会被后端拒绝。
 
+`nimora-user-code-worker` 使用嵌入式 Boa ECMAScript 引擎在独立二进制中执行 JavaScript。每次运行创建全新 Context，默认不存在 Node.js `process`、`require`、文件系统、网络或 Tauri 全局；源代码上限为 256 KiB，结果必须可转换为 JSON。集成测试会由 Supervisor 启动真实 Worker，并验证普通结果返回和 `while (true) {}` 死循环在截止时间后被操作系统终止。当前 Worker 尚未注入异步 Gateway SDK，也尚未作为 Tauri sidecar 打包，因此 UI 仍不能宣称脚本执行已可用。
+
 ## 模块调用模型
 
 ```text
@@ -61,4 +63,4 @@ User Code
 - 审计日志、失败重试上限和安全模式联动。
 - 离线环境中仍可运行已安装代码，但不能绕过本地策略。
 
-当前仓库已完成 Manifest 策略评估、Tauri 会话入口、Worker 准入边界、独立进程 Supervisor、逐请求 Capability Gateway、首个桌面 Runtime 后端、取消/截止时间/输出预算和契约测试；JS/WASM 引擎适配、强制内存限制、更多模块后端和用户代码安装生命周期尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。
+当前仓库已完成 Manifest 策略评估、Tauri 会话入口、Worker 准入边界、独立进程 Supervisor、基础 JavaScript Worker、逐请求 Capability Gateway、首个桌面 Runtime 后端、取消/截止时间/输出预算和契约测试；Worker 与桌面 sidecar/SDK 的连接、强制内存限制、WASM 引擎、更多模块后端和用户代码安装生命周期尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。
