@@ -12,6 +12,7 @@ use std::{collections::BTreeSet, time::Duration};
 const PET_STATE_READ: &str = "pet.state.read";
 const PET_ACTION_CATALOG_READ: &str = "pet.action.catalog.read";
 const PROFILE_STATE_READ: &str = "profile.state.read";
+const PROFILE_ACTIVE_SWITCH: &str = "profile.active.switch";
 const CHARACTER_STATE_READ: &str = "character.state.read";
 const ASSET_CATALOG_READ: &str = "asset.catalog.read";
 const RUNTIME_HEALTH_READ: &str = "runtime.health.read";
@@ -19,6 +20,7 @@ const PET_ANIMATION_PLAY: &str = "pet.animation.play";
 const PET_POSITION_MOVE: &str = "pet.position.move";
 const SAFE_PET_ANIMATE: &str = "safe.pet.animate";
 const SAFE_PET_MOVE: &str = "safe.pet.move";
+const SAFE_PROFILE_SWITCH: &str = "safe.profile.switch";
 
 /// Builds the bounded production Tool Registry exposed to Agent providers.
 ///
@@ -63,6 +65,21 @@ pub fn production_tool_descriptors() -> Result<Vec<ToolDescriptor>, AgentRuntime
             empty_object_schema(),
             CommandRisk::Safe,
             ToolEffect::ReadOnly,
+        )?,
+        descriptor(
+            PROFILE_ACTIVE_SWITCH,
+            "Switch active profile",
+            "Switches to one existing Profile and applies its native window policy through the Capability Gateway.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["profileId"],
+                "properties": {
+                    "profileId": {"type": "string", "format": "uuid"}
+                }
+            }),
+            CommandRisk::Low,
+            ToolEffect::ReversibleWrite,
         )?,
         descriptor(
             CHARACTER_STATE_READ,
@@ -148,7 +165,11 @@ impl<B: CapabilityBackend> GatewayToolBackend<B> {
                 "profile.state".to_owned(),
                 "runtime.health".to_owned(),
             ]),
-            commands: BTreeSet::from([SAFE_PET_ANIMATE.to_owned(), SAFE_PET_MOVE.to_owned()]),
+            commands: BTreeSet::from([
+                SAFE_PET_ANIMATE.to_owned(),
+                SAFE_PET_MOVE.to_owned(),
+                SAFE_PROFILE_SWITCH.to_owned(),
+            ]),
         }
     }
 }
@@ -174,6 +195,10 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
                 require_empty_arguments(&invocation.arguments)?;
                 CapabilityRequest::ReadProfileState
             }
+            PROFILE_ACTIVE_SWITCH => CapabilityRequest::InvokeCommand {
+                command: SAFE_PROFILE_SWITCH.to_owned(),
+                arguments: invocation.arguments.clone(),
+            },
             CHARACTER_STATE_READ => {
                 require_empty_arguments(&invocation.arguments)?;
                 CapabilityRequest::ReadCharacterState

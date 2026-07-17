@@ -94,6 +94,7 @@ const AGENT_TOOL_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
 
 #[derive(Debug)]
 struct DesktopState {
+    native_app: Option<AppHandle>,
     runtime: RuntimeService<SqlitePetRepository>,
     profiles: ProfileService<SqliteProfileRepository>,
     safety: SafetyService,
@@ -253,6 +254,7 @@ impl WindowPolicy {
 
 impl DesktopState {
     fn open(
+        native_app: Option<AppHandle>,
         database_path: &Path,
         asset_store: PathBuf,
         program_store: PathBuf,
@@ -279,6 +281,7 @@ impl DesktopState {
             DiagnosticEventCode::ApplicationStarted,
         )?);
         Ok(Self {
+            native_app,
             runtime,
             profiles,
             safety: SafetyService::new(events.clone()),
@@ -312,6 +315,7 @@ impl DesktopState {
     }
 
     fn open_recovery(
+        native_app: Option<AppHandle>,
         asset_store: PathBuf,
         program_store: PathBuf,
         backups: BackupCoordinator,
@@ -336,6 +340,7 @@ impl DesktopState {
             DiagnosticEventCode::RecoveryModeStarted,
         )?);
         Ok(Self {
+            native_app,
             runtime,
             profiles,
             safety: SafetyService::new(events.clone()),
@@ -1992,7 +1997,15 @@ fn switch_profile(
     state: State<'_, DesktopState>,
     profile_id: ProfileId,
 ) -> Result<Command, DesktopError> {
-    ensure_normal_mode(&state)?;
+    switch_profile_inner(&app, &state, profile_id)
+}
+
+fn switch_profile_inner(
+    app: &AppHandle,
+    state: &DesktopState,
+    profile_id: ProfileId,
+) -> Result<Command, DesktopError> {
+    ensure_normal_mode(state)?;
     let snapshot = state.profiles.snapshot()?;
     let target = snapshot
         .profiles
@@ -2000,14 +2013,14 @@ fn switch_profile(
         .find(|profile| profile.id == profile_id)
         .ok_or(ProfileServiceError::ProfileNotFound)?;
     let next_policy = WindowPolicy::from_profile(&target.policy);
-    let previous_policy = current_window_policy(&state)?;
-    apply_window_policy(&app, previous_policy, next_policy)?;
+    let previous_policy = current_window_policy(state)?;
+    apply_window_policy(app, previous_policy, next_policy)?;
     match state.profiles.switch_active(profile_id) {
         Ok(command) => {
-            set_current_window_policy(&state, next_policy)?;
+            set_current_window_policy(state, next_policy)?;
             Ok(command)
         }
-        Err(primary) => match apply_window_policy(&app, next_policy, previous_policy) {
+        Err(primary) => match apply_window_policy(app, next_policy, previous_policy) {
             Ok(()) => Err(primary.into()),
             Err(rollback) => Err(DesktopError::NativePolicyRollback {
                 primary: primary.to_string(),
@@ -3884,16 +3897,36 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
                         .unwrap_or(serde_json::Value::Null),
                 )
                 .map_err(|error| error.to_string())?;
-                self.state.runtime.play_action(action)
+                self.state
+                    .runtime
+                    .play_action(action)
+                    .map_err(|error| error.to_string())
             }
             "safe.pet.move" => {
                 let position = serde_json::from_value::<Position>(arguments)
                     .map_err(|error| error.to_string())?;
-                self.state.runtime.move_pet(position)
+                self.state
+                    .runtime
+                    .move_pet(position)
+                    .map_err(|error| error.to_string())
+            }
+            "safe.profile.switch" => {
+                let profile_id = serde_json::from_value::<ProfileId>(
+                    arguments
+                        .get("profileId")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
+                .map_err(|error| error.to_string())?;
+                let app = self
+                    .state
+                    .native_app
+                    .as_ref()
+                    .ok_or_else(|| "native desktop context is unavailable".to_owned())?;
+                switch_profile_inner(app, self.state, profile_id).map_err(|error| error.to_string())
             }
             _ => return Err("command has no registered desktop backend".to_owned()),
-        }
-        .map_err(|error| error.to_string())?;
+        }?;
         result.trace_id = trace_id
             .parse::<Uuid>()
             .map_err(|error| error.to_string())?;
@@ -4291,6 +4324,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
     });
     let state = match startup_result {
         Ok(()) => DesktopState::open(
+            Some(app.handle().clone()),
             &database_path,
             asset_store,
             program_store,
@@ -4299,6 +4333,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
             ollama_worker,
         )?,
         Err(_) => DesktopState::open_recovery(
+            Some(app.handle().clone()),
             asset_store,
             program_store,
             backups,
@@ -4417,6 +4452,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("fixture directory");
         let database = root.join("runtime.sqlite3");
         let state = DesktopState::open(
+            None,
             &database,
             root.join("assets"),
             root.join("programs"),
@@ -4582,6 +4618,7 @@ mod tests {
                 "pet.animation.play".to_owned(),
                 "pet.position.move".to_owned(),
                 "pet.state.read".to_owned(),
+                "profile.active.switch".to_owned(),
                 "profile.state.read".to_owned(),
                 "runtime.health.read".to_owned(),
             ]
@@ -4617,6 +4654,35 @@ mod tests {
             json!(["idle", "walk", "sleep", "work", "celebrate"])
         );
         assert_eq!(value["commandTool"], "pet.animation.play");
+    }
+
+    #[test]
+    fn profile_switch_backend_fails_closed_without_native_context() {
+        let (root, state) = normal_desktop_state();
+        state
+            .profiles
+            .create_profile("Focus", ProfilePolicy::standard())
+            .expect("create profile");
+        let before = state.profiles.snapshot().expect("before snapshot");
+        let target = before.profiles[1].id;
+        let error = DesktopCapabilityBackend { state: &state }
+            .invoke_command(
+                "safe.profile.switch",
+                json!({"profileId": target}),
+                &Uuid::now_v7().to_string(),
+                Some("profile-switch-1"),
+            )
+            .expect_err("native context must be required");
+        assert_eq!(error, "native desktop context is unavailable");
+        assert_eq!(
+            state
+                .profiles
+                .snapshot()
+                .expect("after snapshot")
+                .active_profile_id,
+            before.active_profile_id
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]
@@ -4931,6 +4997,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("fixture directory");
         std::fs::write(&database, corrupt_bytes).expect("corrupt fixture");
         let state = DesktopState::open_recovery(
+            None,
             root.join("assets"),
             root.join("programs"),
             BackupCoordinator::new(&database, root.join("backups"), BackupPolicy::default()),

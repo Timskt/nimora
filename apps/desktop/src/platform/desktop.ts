@@ -521,6 +521,7 @@ export function createDesktopApi(
             { id: "pet.animation.play", title: "Play pet animation", description: "Plays one validated pet action through the Capability Gateway.", baseRisk: "low", effect: "reversible_write" },
             { id: "pet.position.move", title: "Move pet", description: "Moves the pet through the Capability Gateway.", baseRisk: "low", effect: "reversible_write" },
             { id: "pet.state.read", title: "Read pet state", description: "Reads current pet state.", baseRisk: "safe", effect: "read_only" },
+            { id: "profile.active.switch", title: "Switch active profile", description: "Switches Profile and applies its native window policy.", baseRisk: "low", effect: "reversible_write" },
             { id: "profile.state.read", title: "Read profile state", description: "Reads active profile state.", baseRisk: "safe", effect: "read_only" },
             { id: "runtime.health.read", title: "Read runtime health", description: "Reads safety, startup, event delivery, and backup health.", baseRisk: "safe", effect: "read_only" },
           ],

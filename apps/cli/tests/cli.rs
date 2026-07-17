@@ -123,6 +123,7 @@ fn tool_catalog_exposes_gateway_backed_module_capabilities() {
             "pet.animation.play",
             "pet.position.move",
             "pet.state.read",
+            "profile.active.switch",
             "profile.state.read",
             "runtime.health.read"
         ]
