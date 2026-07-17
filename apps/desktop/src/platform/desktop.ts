@@ -67,6 +67,7 @@ export interface ActiveCharacterSnapshot {
 export interface CharacterRendererSnapshot {
   spec: "nimora.renderer/1";
   assetId: string;
+  assetBaseUrl: string | null;
   backend: "built-in" | "sprite-sequence" | "sprite-atlas";
   canvas: { width: number; height: number };
   anchor: { x: number; y: number };
@@ -293,6 +294,7 @@ export function createDesktopApi(
         return {
           spec: "nimora.renderer/1",
           assetId: "builtin.aster",
+          assetBaseUrl: null,
           backend: "built-in",
           canvas: { width: 320, height: 360 },
           anchor: { x: 0.5, y: 1 },

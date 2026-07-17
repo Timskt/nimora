@@ -87,6 +87,7 @@ struct ValidatedAssetPackage {
     summary: AssetPackageSummary,
     renderer: Option<AssetRendererDescriptor>,
     files: Vec<InstallFile>,
+    media_types: BTreeMap<PathBuf, String>,
     integrity_path: PathBuf,
     integrity_bytes: Vec<u8>,
 }
@@ -276,6 +277,39 @@ pub fn inspect_asset_renderer(source_root: &Path) -> Result<AssetRendererDescrip
     })
 }
 
+/// Revalidates an installed package and reads one inventory-owned image.
+///
+/// # Errors
+///
+/// Returns an error when the package changed, the path is unsafe or absent,
+/// or the inventory media type is not an allowed image type.
+pub fn read_verified_asset_image(
+    source_root: &Path,
+    relative_path: &Path,
+) -> Result<(Vec<u8>, String), InstallError> {
+    let package = load_asset_package(source_root)?;
+    let relative_path = safe_relative_path(relative_path)?;
+    let media_type = package
+        .media_types
+        .get(relative_path)
+        .ok_or_else(|| invalid_sprite("resource is outside the verified inventory"))?;
+    if !["image/png", "image/webp", "image/jpeg", "image/gif"].contains(&media_type.as_str()) {
+        return Err(invalid_sprite("resource is not an allowed image"));
+    }
+    require_image_extension(relative_path, media_type)?;
+    let root = source_root.canonicalize()?;
+    let path = root.join(relative_path);
+    let metadata = fs::symlink_metadata(&path)?;
+    if !metadata.file_type().is_file() {
+        return Err(InstallError::MissingFile(relative_path.to_path_buf()));
+    }
+    let canonical = path.canonicalize()?;
+    if !canonical.starts_with(&root) {
+        return Err(InstallError::EscapedSource(relative_path.to_path_buf()));
+    }
+    Ok((fs::read(canonical)?, media_type.clone()))
+}
+
 fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, InstallError> {
     let manifest_bytes = read_metadata(source_root, Path::new(MANIFEST_FILE))?;
     let manifest: AssetManifestHeader = serde_json::from_slice(&manifest_bytes)
@@ -291,6 +325,11 @@ fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, Insta
     let integrity: AssetIntegrityDocument = serde_json::from_slice(&integrity_bytes)
         .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
     let renderer = load_sprite_renderer(source_root, &manifest, &integrity.files)?;
+    let media_types = integrity
+        .files
+        .iter()
+        .map(|file| (file.path.clone(), file.media_type.clone()))
+        .collect();
     let files = integrity
         .files
         .into_iter()
@@ -325,6 +364,7 @@ fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, Insta
         },
         renderer,
         files,
+        media_types,
         integrity_path: integrity_path.to_path_buf(),
         integrity_bytes,
     })
@@ -535,7 +575,11 @@ fn require_inventory_media(
     if !allowed.contains(&file.media_type.as_str()) {
         return Err(invalid_sprite("renderer file has a disallowed media type"));
     }
-    let expected_extension = match file.media_type.as_str() {
+    require_image_extension(path, &file.media_type)
+}
+
+fn require_image_extension(path: &Path, media_type: &str) -> Result<(), InstallError> {
+    let expected_extension = match media_type {
         "application/json" => &["json"][..],
         "image/png" => &["png"][..],
         "image/webp" => &["webp"][..],
@@ -1054,6 +1098,21 @@ mod tests {
             }
             SpriteClips::SpriteSequence { .. } => panic!("expected atlas"),
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reads_only_verified_inventory_images() {
+        let root = std::env::temp_dir().join("nimora-package-image-reader");
+        let _ = fs::remove_dir_all(&root);
+        write_asset_package(&root, "character.example.mochi");
+        let (image, media_type) =
+            read_verified_asset_image(&root, Path::new("sprites/atlas.webp")).unwrap();
+        assert_eq!(image, b"test-webp");
+        assert_eq!(media_type, "image/webp");
+        assert!(read_verified_asset_image(&root, Path::new("manifest.json")).is_err());
+        assert!(read_verified_asset_image(&root, Path::new("sprites/missing.webp")).is_err());
+        assert!(read_verified_asset_image(&root, Path::new("../outside.webp")).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

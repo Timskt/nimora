@@ -1,7 +1,7 @@
 use nimora_asset_installer::{
     AssetPackageSummary, AssetRendererDescriptor, InstallError, InstallFile, RenderAnchor,
     RenderCanvas, SpriteClips, inspect_asset_package, inspect_asset_renderer,
-    install_asset_package, rollback_latest,
+    install_asset_package, read_verified_asset_image, rollback_latest,
 };
 use nimora_persistence_sqlite::{
     ProgramPermissionGrant, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
@@ -51,6 +51,7 @@ const BUILTIN_CHARACTER_ID: &str = "builtin.aster";
 const ACTIVE_CHARACTER_SPEC: &str = "nimora.active-character/1";
 const ACTIVE_CHARACTER_FILE: &str = ".active-character.json";
 const PET_WINDOW_LABEL: &str = "pet";
+const ASSET_PROTOCOL: &str = "nimora-asset";
 const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
 const MAX_USER_PROGRAM_OPERATIONS: usize = 32;
@@ -249,6 +250,7 @@ struct ActiveCharacterSnapshot {
 struct CharacterRendererSnapshot {
     spec: &'static str,
     asset_id: String,
+    asset_base_url: Option<String>,
     backend: String,
     canvas: RenderCanvas,
     anchor: RenderAnchor,
@@ -277,6 +279,13 @@ struct StoredActiveCharacter {
 struct RejectedAssetPackage {
     directory: String,
     reason: String,
+}
+
+#[derive(Debug)]
+struct AssetProtocolResponse {
+    status: tauri::http::StatusCode,
+    media_type: &'static str,
+    body: Vec<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -880,6 +889,7 @@ fn installed_renderer(
 ) -> CharacterRendererSnapshot {
     CharacterRendererSnapshot {
         spec: "nimora.renderer/1",
+        asset_base_url: Some(asset_base_url(&asset_id)),
         asset_id,
         backend: renderer.backend,
         canvas: renderer.canvas,
@@ -895,6 +905,7 @@ fn builtin_renderer(fallback_reason: Option<String>) -> CharacterRendererSnapsho
     CharacterRendererSnapshot {
         spec: "nimora.renderer/1",
         asset_id: BUILTIN_CHARACTER_ID.to_owned(),
+        asset_base_url: None,
         backend: "built-in".to_owned(),
         canvas: RenderCanvas {
             width: 320,
@@ -905,6 +916,14 @@ fn builtin_renderer(fallback_reason: Option<String>) -> CharacterRendererSnapsho
         pixel_art: false,
         clips: None,
         fallback_reason,
+    }
+}
+
+fn asset_base_url(asset_id: &str) -> String {
+    if cfg!(any(target_os = "windows", target_os = "android")) {
+        format!("http://{ASSET_PROTOCOL}.localhost/{asset_id}/")
+    } else {
+        format!("{ASSET_PROTOCOL}://localhost/{asset_id}/")
     }
 }
 
@@ -958,6 +977,111 @@ fn inspect_asset_catalog(asset_store: &Path) -> Result<AssetCatalogSnapshot, Des
     assets.sort_by(|left, right| left.id.cmp(&right.id));
     rejected.sort_by(|left, right| left.directory.cmp(&right.directory));
     Ok(AssetCatalogSnapshot { assets, rejected })
+}
+
+fn serve_asset_protocol(
+    asset_store: &Path,
+    runtime_mode: RuntimeMode,
+    webview_label: &str,
+    method: &tauri::http::Method,
+    uri: &tauri::http::Uri,
+) -> AssetProtocolResponse {
+    if webview_label != PET_WINDOW_LABEL {
+        return asset_protocol_error(tauri::http::StatusCode::FORBIDDEN);
+    }
+    if method != tauri::http::Method::GET || uri.query().is_some() {
+        return asset_protocol_error(tauri::http::StatusCode::BAD_REQUEST);
+    }
+    if !matches!(uri.host(), Some("localhost" | "nimora-asset.localhost")) {
+        return asset_protocol_error(tauri::http::StatusCode::BAD_REQUEST);
+    }
+    let Some((asset_id, relative_path)) = parse_asset_protocol_path(uri.path()) else {
+        return asset_protocol_error(tauri::http::StatusCode::BAD_REQUEST);
+    };
+    let Ok(active) = resolve_active_character(asset_store, runtime_mode) else {
+        return asset_protocol_error(tauri::http::StatusCode::SERVICE_UNAVAILABLE);
+    };
+    if !matches!(active.source, ActiveCharacterSource::Installed) || active.asset_id != asset_id {
+        return asset_protocol_error(tauri::http::StatusCode::FORBIDDEN);
+    }
+    match read_verified_asset_image(&asset_store.join(&asset_id), &relative_path) {
+        Ok((body, media_type)) => AssetProtocolResponse {
+            status: tauri::http::StatusCode::OK,
+            media_type: match media_type.as_str() {
+                "image/png" => "image/png",
+                "image/webp" => "image/webp",
+                "image/jpeg" => "image/jpeg",
+                "image/gif" => "image/gif",
+                _ => return asset_protocol_error(tauri::http::StatusCode::UNSUPPORTED_MEDIA_TYPE),
+            },
+            body,
+        },
+        Err(_) => asset_protocol_error(tauri::http::StatusCode::NOT_FOUND),
+    }
+}
+
+fn parse_asset_protocol_path(path: &str) -> Option<(String, PathBuf)> {
+    let decoded = percent_decode_path(path.as_bytes())?;
+    let decoded = std::str::from_utf8(&decoded).ok()?;
+    let mut segments = decoded.strip_prefix('/')?.split('/');
+    let asset_id = segments.next()?;
+    if !valid_asset_identifier(asset_id) {
+        return None;
+    }
+    let remaining = segments.collect::<Vec<_>>();
+    if remaining.is_empty()
+        || remaining.iter().any(|segment| {
+            segment.is_empty() || *segment == "." || *segment == ".." || segment.contains('\\')
+        })
+    {
+        return None;
+    }
+    let relative_path = PathBuf::from(remaining.join("/"));
+    Some((asset_id.to_owned(), relative_path))
+}
+
+fn percent_decode_path(input: &[u8]) -> Option<Vec<u8>> {
+    let mut decoded = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] == b'%' {
+            let high = *input.get(index + 1)?;
+            let low = *input.get(index + 2)?;
+            let byte = hex_value(high)?
+                .checked_mul(16)?
+                .checked_add(hex_value(low)?)?;
+            if byte == 0 {
+                return None;
+            }
+            decoded.push(byte);
+            index += 3;
+        } else {
+            decoded.push(input[index]);
+            index += 1;
+        }
+    }
+    Some(decoded)
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn asset_protocol_error(status: tauri::http::StatusCode) -> AssetProtocolResponse {
+    AssetProtocolResponse {
+        status,
+        media_type: "text/plain; charset=utf-8",
+        body: status
+            .canonical_reason()
+            .unwrap_or("asset request failed")
+            .as_bytes()
+            .to_vec(),
+    }
 }
 
 #[tauri::command]
@@ -2071,6 +2195,27 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
 /// before application state and diagnostics are available.
 pub fn run() {
     tauri::Builder::default()
+        .register_uri_scheme_protocol(ASSET_PROTOCOL, |context, request| {
+            let state = context.app_handle().state::<DesktopState>();
+            let runtime_mode = state
+                .safety
+                .snapshot()
+                .map_or(RuntimeMode::Safe, |snapshot| snapshot.mode);
+            let response = serve_asset_protocol(
+                &state.asset_store,
+                runtime_mode,
+                context.webview_label(),
+                request.method(),
+                request.uri(),
+            );
+            tauri::http::Response::builder()
+                .status(response.status)
+                .header(tauri::http::header::CONTENT_TYPE, response.media_type)
+                .header("X-Content-Type-Options", "nosniff")
+                .header(tauri::http::header::CACHE_CONTROL, "no-store")
+                .body(response.body)
+                .expect("static asset protocol response is valid")
+        })
         .setup(|app| {
             let data_directory = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_directory)?;
@@ -2143,9 +2288,9 @@ mod tests {
     use super::{
         ACTIVE_CHARACTER_FILE, BUILTIN_CHARACTER_ID, DesktopError, PetAction, ProfilePolicy,
         TrayAction, WindowPolicy, ensure_program_permissions, inspect_asset_catalog,
-        parse_user_program_plan, permission_grant, persist_active_character,
-        resolve_active_character, resolve_character_renderer, screen_coordinate,
-        user_program_input, valid_asset_identifier,
+        parse_asset_protocol_path, parse_user_program_plan, permission_grant,
+        persist_active_character, resolve_active_character, resolve_character_renderer,
+        screen_coordinate, serve_asset_protocol, user_program_input, valid_asset_identifier,
     };
     use nimora_persistence_sqlite::SqliteProgramPermissionRepository;
     use nimora_runtime_core::{Event, EventSource, RuntimeMode};
@@ -2156,6 +2301,80 @@ mod tests {
     fn accepts_finite_screen_coordinates() {
         assert_eq!(screen_coordinate(42.6).expect("valid coordinate"), 43);
         assert_eq!(screen_coordinate(-12.4).expect("valid coordinate"), -12);
+    }
+
+    #[test]
+    fn asset_protocol_paths_reject_encoded_escape_and_ambiguity() {
+        assert_eq!(
+            parse_asset_protocol_path("/character.example.mochi/sprites/idle.webp"),
+            Some((
+                "character.example.mochi".to_owned(),
+                std::path::PathBuf::from("sprites/idle.webp")
+            ))
+        );
+        for path in [
+            "/character.example.mochi/../secret",
+            "/character.example.mochi/%2e%2e/secret",
+            "/character.example.mochi/sprites%5catlas.webp",
+            "/character.example.mochi//atlas.webp",
+            "/character.example.mochi/%00atlas.webp",
+            "/invalid/atlas.webp",
+        ] {
+            assert!(parse_asset_protocol_path(path).is_none(), "accepted {path}");
+        }
+    }
+
+    #[test]
+    fn asset_protocol_restricts_window_host_method_and_active_asset() {
+        let root = std::env::temp_dir().join("nimora-asset-protocol-policy");
+        let _ = std::fs::remove_dir_all(&root);
+        let uri: tauri::http::Uri =
+            "nimora-asset://localhost/character.example.mochi/sprites/idle.webp"
+                .parse()
+                .unwrap();
+        let request =
+            |label, mode, method, uri| serve_asset_protocol(&root, mode, label, method, uri).status;
+        assert_eq!(
+            request(
+                "control-center",
+                RuntimeMode::Normal,
+                &tauri::http::Method::GET,
+                &uri
+            ),
+            tauri::http::StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            request(
+                super::PET_WINDOW_LABEL,
+                RuntimeMode::Safe,
+                &tauri::http::Method::GET,
+                &uri
+            ),
+            tauri::http::StatusCode::FORBIDDEN
+        );
+        let foreign_host: tauri::http::Uri =
+            "nimora-asset://evil.invalid/character.example.mochi/sprites/idle.webp"
+                .parse()
+                .unwrap();
+        assert_eq!(
+            request(
+                super::PET_WINDOW_LABEL,
+                RuntimeMode::Normal,
+                &tauri::http::Method::GET,
+                &foreign_host
+            ),
+            tauri::http::StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            request(
+                super::PET_WINDOW_LABEL,
+                RuntimeMode::Normal,
+                &tauri::http::Method::POST,
+                &uri
+            ),
+            tauri::http::StatusCode::BAD_REQUEST
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
