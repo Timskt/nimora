@@ -110,7 +110,7 @@ flowchart LR
 
 可信 Event Admission → 字段分类与注入扫描 → 模板生成受界定上下文 → 创建 `AgentTaskRequest` → 获取结构化结果 → Condition 校验 → 需要动作时进入 Automation Action Gateway。必须设置每规则并发、冷却时间、每日次数、Token 和费用预算。
 
-当前 `crates/automation-agent-bridge` 已实现独立 Adapter：只拦截固定 `agent.task.run` Command，其余动作继续进入原 Automation Backend；Automation Engine 为每次 Backend 调用提供不可由规则覆盖的 `run_id/automation_id/action_id/event_id/trace_id` 执行上下文，重试与补偿保持同一 Run 因果链。AI 动作要求 Medium 以上风险、幂等键、受信静态 instruction、显式 Provider、模型、Tool Allowlist、Data、Autonomy 和预算，并通过 `AgentTaskGateway` 创建以 Automation Run 为根、继承 Trace 和根剩余预算的子任务。准入时钟与根剩余预算由宿主 `AutomationAgentContext` 提供，不接受规则作者声明；规则尝试注入 `nowMs` 或 `rootRemainingBudget` 会被严格参数反序列化拒绝。标记为 `untrusted` 的动态上下文在专用 Context Admission 落地前 fail-closed。
+当前 `crates/automation-agent-bridge` 已实现独立 Adapter：只拦截固定 `agent.task.run` Command，其余动作继续进入原 Automation Backend；Automation Engine 为每次 Backend 调用提供不可由规则覆盖的 `run_id/automation_id/action_id/event_id/trace_id` 执行上下文，重试与补偿保持同一 Run 因果链。AI 动作要求 Medium 以上风险、幂等键、受信静态 instruction、显式 Provider、模型、Tool Allowlist、Data、Autonomy 和预算，并通过 `AgentTaskGateway` 创建以 Automation Run 为根、继承 Trace 和根剩余预算的子任务。准入时钟与根剩余预算由宿主 `AutomationAgentContext` 提供，不接受规则作者声明；规则尝试注入 `nowMs` 或 `rootRemainingBudget` 会被严格参数反序列化拒绝。动态上下文使用独立 `context[]` 数据段，限制来源标识、8 段、单段 8 KiB 和总计 24 KiB；高置信中英文 Prompt Injection 在 Provider 前永久拒绝。首个安全契约只允许 `untrusted + draft + 空 Tool Allowlist`，桌面将静态目标作为 trusted User Message、每个数据段作为带明确边界的 untrusted User Message，外部正文不能被洗白成系统指令。
 
 桌面 Live Automation 已组合 `AutomationAgentBridge<AutomationCapabilityBridge<DesktopCapabilityBackend>, DesktopAutomationAgentSubmitter, DesktopAutomationAgentContext>`。提交器复用桌面 `ProviderRegistry`、`AgentCoordinator`、Tool Registry、Capability Gateway、确认队列和历史仓储；任务级 Tool Allowlist 贯穿 Provider 首轮、等待确认和批准后续跑，Provider 请求越权工具会在登记确认或模块副作用前拒绝。根 Automation Run ID 与幂等键共同去重同一次运行的重试提交。同步完成结果写入 Agent History；等待用户确认的任务进入既有确认队列。每个 Live Run 使用宿主注册的取消令牌；`cancel_automation_run` 会取消父 Run，并按持久 Run Journal 级联取消 submitted/waiting Agent 子任务及其 Provider Worker。持久异步结果回填、跨进程运行中恢复和已提交副作用补偿仍需继续实现。
 
@@ -175,7 +175,7 @@ flowchart LR
 
 1. 在 Gateway 外层接入调用方 Capability、结果 Schema、持久 Task Tree 和共享根预算账本。
 2. 为已接入桌面 Agent Service 的 Automation 子任务增加持久异步结果回填、跨进程运行中恢复、并发、冷却和费用门禁，并扩展不可取消副作用的补偿状态。
-3. 实现 Context Admission 与 Prompt Injection 检测，使经字段 allowlist 的不可信事件内容可受控进入任务。
+3. 将已用于 Automation 的 Context Admission 抽成共享策略，扩展来源 Schema、字段 allowlist、Unicode 规范化、编码混淆检测和安全事件审计，再接入 Connector、Clipboard、Files 与 Vision。
 4. 将后续 Skill、Connector 和 User Program 任务创建接入同一 Gateway。
 4. 扩展 Automation 保存/启停/运行工具，形成“AI 生成并安全保存规则”闭环。
 5. 接入 Skill 与 Connector Contribution Manifest，动态汇入 Tool Registry。

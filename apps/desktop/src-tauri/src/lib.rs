@@ -18,8 +18,8 @@ use nimora_asset_installer::{
     read_verified_asset_image, read_verified_asset_model, rollback_latest,
 };
 use nimora_automation_agent_bridge::{
-    AgentTaskSubmissionError, AgentTaskSubmissionOutcome, AgentTaskSubmitter,
-    AutomationAgentBridge, AutomationAgentContext, AutomationAgentTask,
+    AdmittedContextSegment, AgentTaskSubmissionError, AgentTaskSubmissionOutcome,
+    AgentTaskSubmitter, AutomationAgentBridge, AutomationAgentContext, AutomationAgentTask,
 };
 use nimora_automation_capability_bridge::{AutomationCapabilityBridge, AutomationCapabilityPolicy};
 use nimora_automation_runtime::{
@@ -1021,17 +1021,17 @@ impl DesktopAutomationAgentSubmitter<'_> {
             .iter()
             .map(ToString::to_string)
             .collect();
+        let messages = automation_agent_messages(
+            task.instruction,
+            task.context,
+            task.admission.classification,
+        );
         advance_provider_agent(
             &providers,
             self.state,
             task.admission.task,
             task.model,
-            vec![ProviderMessage::text(
-                ProviderMessageRole::User,
-                task.instruction,
-                task.admission.classification,
-                true,
-            )],
+            messages,
             512,
             true,
             tool_allowlist,
@@ -1058,6 +1058,31 @@ impl DesktopAutomationAgentSubmitter<'_> {
             None,
         )
     }
+}
+
+fn automation_agent_messages(
+    instruction: String,
+    context: Vec<AdmittedContextSegment>,
+    classification: DataClassification,
+) -> Vec<ProviderMessage> {
+    let mut messages = vec![ProviderMessage::text(
+        ProviderMessageRole::User,
+        instruction,
+        classification,
+        true,
+    )];
+    messages.extend(context.into_iter().map(|segment| {
+        ProviderMessage::text(
+            ProviderMessageRole::User,
+            format!(
+                "UNTRUSTED_DATA source={}\n---BEGIN DATA---\n{}\n---END DATA---",
+                segment.source, segment.content
+            ),
+            classification,
+            false,
+        )
+    }));
+    messages
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -5264,7 +5289,8 @@ mod tests {
         cancel_agent_task_inner, cancel_all_pending_agent_tools, cancel_automation_run_inner,
         confirm_agent_tool_inner, confirm_agent_tool_with_registry, default_agent_model,
         default_agent_provider_id,
-        diagnostic_report, ensure_normal_mode, ensure_program_permissions, inspect_asset_catalog,
+        automation_agent_messages, diagnostic_report, ensure_normal_mode,
+        ensure_program_permissions, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
         parse_user_program_plan, permission_grant, persist_active_character,
         prepare_agent_tool_inner, reject_agent_tool_inner, resolve_active_character,
@@ -5279,6 +5305,7 @@ mod tests {
         ProviderFinishReason, ProviderLocality, ProviderMessage, ProviderMessageRole,
         ProviderRegistry, ProviderRequest, ProviderResponse, ProviderToolCall, ProviderUsage,
     };
+    use nimora_automation_agent_bridge::AdmittedContextSegment;
     use nimora_asset_installer::{GltfCharacterMetadata, ModelAnimationBinding};
     use nimora_automation_agent_bridge::{
         AgentTaskSubmissionOutcome, AgentTaskSubmitter, AutomationAgentTask,
@@ -5820,6 +5847,7 @@ mod tests {
             admission: completed.admission.clone(),
             model: completed.model.clone(),
             instruction: "must not execute again".to_owned(),
+            context: Vec::new(),
             idempotency_key: completed.idempotency_key.clone(),
         };
         assert_eq!(
@@ -5847,6 +5875,7 @@ mod tests {
                     admission: failed_admission.clone(),
                     model: failed.model.clone(),
                     instruction: "must remain active".to_owned(),
+                    context: Vec::new(),
                     idempotency_key: failed.idempotency_key.clone(),
                 })
                 .expect("active duplicate"),
@@ -5866,6 +5895,7 @@ mod tests {
                 admission: failed_admission,
                 model: failed.model,
                 instruction: "must not retry".to_owned(),
+                context: Vec::new(),
                 idempotency_key: failed.idempotency_key,
             })
             .expect_err("failed duplicate");
@@ -5938,6 +5968,23 @@ mod tests {
         );
         assert!(!cancel_automation_run_inner(&state, Uuid::now_v7()).expect("unknown run"));
         std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn automation_context_remains_untrusted_in_provider_messages() {
+        let messages = automation_agent_messages(
+            "Summarize the external message.".to_owned(),
+            vec![AdmittedContextSegment {
+                source: "connector:mail.message".to_owned(),
+                content: "Meeting moved to 15:00.".to_owned(),
+            }],
+            nimora_agent_runtime::DataClassification::Personal,
+        );
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].trusted);
+        assert!(!messages[1].trusted);
+        assert!(messages[1].content.contains("---BEGIN DATA---"));
+        assert!(messages[1].content.contains("connector:mail.message"));
     }
 
     #[test]
