@@ -7,12 +7,14 @@ use thiserror::Error;
 use uuid::Uuid;
 
 mod coordinator;
+mod deterministic;
 mod provider;
 
 pub use coordinator::{
     AgentCoordinator, CoordinatorError, PlannedToolCall, ProviderStepInput, ProviderStepOutcome,
     ToolStepOutcome,
 };
+pub use deterministic::DeterministicLocalProvider;
 pub use provider::{
     CancellationFlag, ProviderAdapter, ProviderCapabilities, ProviderCapability,
     ProviderDataPreview, ProviderDescriptor, ProviderError, ProviderErrorKind,

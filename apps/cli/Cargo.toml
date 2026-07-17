@@ -1,0 +1,18 @@
+[package]
+name = "nimora-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "nimora"
+path = "src/main.rs"
+
+[dependencies]
+nimora-agent-runtime = { path = "../../crates/agent-runtime" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

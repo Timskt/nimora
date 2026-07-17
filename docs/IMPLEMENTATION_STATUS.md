@@ -30,7 +30,7 @@
 | 扩展与 Skill 生态 | 未实现 | 规格、Manifest/Gateway 设计及用户代码基础设施 | Extension Host、贡献点、安装停用卸载、崩溃隔离、官方番茄钟与提醒 |
 | 自动化引擎 | 未实现 | Command/Event、结构化用户程序计划基础 | Trigger/Condition/Action/Policy、事务执行历史、重试补偿、测试运行和事件回放 |
 | 开放 Gateway 与 Connector | 未实现 | Capability Gateway 为进程内用户代码提供窄能力边界 | 配对、Token/Scope、REST/WS/SSE、HTTP/UDP Sink、Source Connector、2 秒安全停机 |
-| AI Agent 与 CLI | 部分实现 | Tool Registry、参数风险提升、批准指纹、任务硬预算；Provider Adapter 契约、能力集合、离线网络拒绝、有界数据预览与响应校验；Provider/Tool 确定性单步协调、跨 Task/Trace 隔离、写操作确认和模块 Backend 边界及 Rust 测试 | 真实 OpenAI-compatible/Ollama Adapter、Capability Gateway 生产接线、持久计划恢复、桌面/CLI、历史、Safe Mode 强停与完整 Prompt Injection 防护 |
+| AI Agent 与 CLI | 部分实现 | Tool Registry、风险与批准、任务硬预算；Provider 契约、离线拒绝、有界校验；Provider/Tool 单步协调与跨任务隔离；`nimora` Rust CLI 的 Provider/Tool 查询、离线 JSON Run、稳定退出码、确定性本地诊断 Provider 和二进制集成测试 | 真实 OpenAI-compatible/Ollama Adapter、Capability Gateway 生产工具目录、持久计划恢复、交互 Chat/任务/历史命令、桌面 Agent UI、Safe Mode 强停与完整 Prompt Injection 防护 |
 | 包签名与 Registry | 未实现 | SHA-256 本地完整性锁和原子回滚 | 发布者签名、信任根、撤销、Registry、兼容检测、更新策略、离线 CLI 验证 |
 | 安全与隐私 | 部分实现 | 安全模式、精确授权、路径/符号链接防护、Worker 隔离、审计边界文档 | OS 沙箱、系统密钥存储、网络目标策略、隐私面板、威胁模型自动门禁 |
 | 稳定性与可观测性 | 部分实现 | 结构化错误、Trace、Outbox 健康、故障回退、版本化脱敏诊断摘要包、14 天/1 MiB/64 段有界固定事件日志、跨重启恢复、损坏尾行跳过、存储失败内存降级、用户可取消事件导出及单元/集成测试 | 自由文本日志与筛选、用户选择 Trace、指标、崩溃循环恢复、资源预算监控、soak/chaos 和 SLO 门禁 |

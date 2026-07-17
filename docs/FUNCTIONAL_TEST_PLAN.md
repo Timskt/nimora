@@ -224,6 +224,8 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-018 | AI 调用模块 | Provider Tool Call 只生成待门禁 Invocation；未确认写操作不扣工具执行预算且不进入 Backend | P0 |
 | AGT-019 | 跨任务调用隔离 | Task ID 或 Trace ID 不匹配的 Invocation 在 Capability Gateway 前拒绝 | P0 |
 | AGT-020 | 单步协调恢复 | Provider 与 Tool 每次仅推进一个确定性步骤，暂停或崩溃后不会隐式重放副作用 | P0 |
+| AGT-021 | CLI stdout/stderr | 成功时 stdout 仅一个 JSON 文档且 stderr 为空；失败时 stdout 为空且 stderr 为稳定 JSON 错误 | P0 |
+| AGT-022 | CLI 离线 stdin | 256 KiB 内任务可由 stdin 离线执行；超限、未知字段和缺失 `--output json` 被稳定拒绝 | P0 |
 
 ## 14. 信任中心与安全模式
 

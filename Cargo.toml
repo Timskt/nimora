@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "apps/cli",
   "crates/agent-runtime",
   "crates/diagnostics-bundle",
   "crates/asset-installer",

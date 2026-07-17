@@ -94,6 +94,8 @@ pnpm check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 pnpm --dir apps/desktop tauri dev
+cargo run -p nimora-cli --bin nimora -- ai provider probe
+printf '%s' '{"prompt":"offline check"}' | cargo run -q -p nimora-cli --bin nimora -- ai run --input - --output json --offline
 ```
 
 所有 JavaScript/TypeScript 命令仅使用 `pnpm`，禁止使用 npm、Yarn 或 Bun。普通浏览器执行 `pnpm --dir apps/desktop dev` 时自动进入离线预览适配器，不调用伪造的原生能力。

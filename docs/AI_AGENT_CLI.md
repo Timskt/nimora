@@ -104,11 +104,14 @@ nimora ai tool list|describe
 nimora ai history export|delete
 ```
 
+当前首个可运行 CLI 基线位于 `apps/cli`，已实现 `provider list|probe`、`tool list|describe` 与非交互 `run`。内置 `provider:deterministic-local` 是无网络、无凭据、零费用的确定性诊断 Provider，用于证明 CLI、任务状态、预算、Provider Registry 和离线策略的真实端到端路径；它不是通用语言模型，也不代表 OpenAI-compatible 或 Ollama 已接通。
+
 - 交互终端显示计划、实际 Tool 参数、风险、Provider 数据预览和实时预算。
 - 非交互模式遇到需确认操作必须退出并返回结构化 `confirmation-required`，禁止默认同意。
 - `--yes` 只能覆盖明确允许自动批准的 Safe read-only Tool，不能覆盖写入、外部副作用或 Medium 以上风险。
 - `--offline` 禁止网络 Provider，并只选择已验证本地 Provider。
 - JSON 输出保持 stdout 机器可读，进度和诊断写 stderr；退出码稳定且有文档。
+- `run` 输入文件或 stdin 最大 256 KiB，拒绝未知字段；当前稳定退出码为 `2` 用法错误、`3` 输入错误、`4` 资源不存在、`5` 需要确认、`10` 运行时错误。
 
 ## 7. 安全不变量
 
