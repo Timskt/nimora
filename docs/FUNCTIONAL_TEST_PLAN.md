@@ -160,6 +160,10 @@ ID / 标题 / 优先级 / 前置条件
 | EXT-014 | Skill Worker 失控 | 无限循环、取消或输出超限时 Supervisor 强制回收进程 | P0 |
 | EXT-015 | Worker 故障撤销 | 超时、崩溃或协议违规进入 crash window，Contribution 与 AI requester 立即撤销 | P0 |
 | EXT-016 | Worker Active 租约 | 未安装、未授权、暂停或伪造不同版本 Manifest 均在进程启动前拒绝 | P0 |
+| EXT-017 | Skill 原子升级与回滚 | v2 激活前备份 v1；加载 v2 后回滚恢复 v1 的 Manifest 与源码，不出现半安装目录 | P0 |
+| EXT-018 | Skill 安装后完整性复验 | 修改源码、Manifest 或完整性锁，新增未跟踪文件、符号链接或路径逃逸时 fail-closed，Worker 不启动 | P0 |
+| EXT-019 | Package 到 Runtime 精确租约 | 只有复验返回的 `ValidatedSkillManifest` 可安装进 Host；授权与激活后 `active_manifest` 必须逐字段一致 | P0 |
+| EXT-020 | Skill 包库存边界 | 缺少动态 entrypoint、重复/保留/非 UTF-8 路径、超过 256 文件或 16 MiB 均在切换 active 前拒绝 | P0 |
 | SCRIPT-001 | 用户脚本调用已授权 Command | 正常执行并产生 Run、Trace 和审计记录 | P0 |
 | SCRIPT-002 | 脚本访问未授权文件、网络、进程 | Host 拒绝，不能绕过 Capability Broker | P0 |
 | SCRIPT-003 | 死循环、内存泄漏、事件递归 | 对应实例被限流或终止，Core 继续运行 | P0 |

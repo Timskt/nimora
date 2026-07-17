@@ -35,6 +35,8 @@ flowchart LR
 7. `AgentTaskSubmitter` 返回类型化幂等结果：首次为 `Accepted`，已提交/等待为 `DuplicateActive`，已完成为 `DuplicateCompleted`；历史 `failed`、`cancelled`、`interrupted` 返回永久失败。Bridge 只对明确瞬态的宿主故障重试，不把任一失败终态当作成功。
 5. 双向调用共享 Trace，但 Trace ID 不是权限凭证；权限由调用方身份、Capability、预算和批准证明共同决定。
 
+Skill 的两种方向必须保持分离：Skill 请求 AI 时，由复验并激活的精确 Manifest 租约签发 `skill:<id>`，再进入 `module-agent-adapter`；AI 请求 Skill 能力时，只能调用宿主审查后汇入 Tool Registry 的 Contribution，经批准与 Capability Gateway 到达 Skill Command Adapter。Skill JavaScript、安装包、Worker 输出和 Agent 文本都不能自行注册生产工具、扩大 allowlist、直连 Provider 或绕过 Gateway。
+
 ## 3. 模块调用 AI 契约
 
 统一请求采用 `nimora.agent-task-request/1`，至少包含：

@@ -39,7 +39,7 @@
 
 ## 执行规则
 
-AI 双向模块交互的当前审计与完整实施蓝图见 [`AI_MODULE_INTERACTIONS.md`](AI_MODULE_INTERACTIONS.md)。现阶段 AI 到 Pet、Profile、Character、Asset、Program、Diagnostics 和 Automation Validation 已形成生产工具链；宿主无关的 `AgentTaskGateway` 已完成调用方、Provider、Tool、数据等级、主动性、递归深度和父级剩余预算交集准入，Desktop 对话、Desktop 独立 Tool、CLI 与 Live Automation 入口均已迁移。统一 `module-agent-adapter` 已封装可信模块身份、Provider allowlist、固定 Draft/无工具策略、Context Admission、相关 Trace 和 Provider 消息边界；用户程序作为首个生产调用方，显式 `invoke-agent-tasks` 精确版本授权后可提交宿主限额任务，结果进入执行回执与 Agent History。Live Automation 子 Agent 已具备持久生命周期与取消传播。Skill 与 Connector Runtime 尚未实现，因此反向模块链路仍不算全部贯通。
+AI 双向模块交互的当前审计与完整实施蓝图见 [`AI_MODULE_INTERACTIONS.md`](AI_MODULE_INTERACTIONS.md)。现阶段 AI 到 Pet、Profile、Character、Asset、Program、Diagnostics 和 Automation Validation 已形成生产工具链；宿主无关的 `AgentTaskGateway` 已完成调用方、Provider、Tool、数据等级、主动性、递归深度和父级剩余预算交集准入，Desktop 对话、Desktop 独立 Tool、CLI 与 Live Automation 入口均已迁移。统一 `module-agent-adapter` 已封装可信模块身份、Provider allowlist、固定 Draft/无工具策略、Context Admission、相关 Trace 和 Provider 消息边界；用户程序作为首个生产调用方，显式 `invoke-agent-tasks` 精确版本授权后可提交宿主限额任务，结果进入执行回执与 Agent History。Live Automation 子 Agent 已具备持久生命周期与取消传播。Skill Runtime、独立 Worker 和 Package Core 已实现 Manifest、精确授权、贡献租约、崩溃隔离、原子安装、完整性复验与回滚；Desktop Skill Submitter、持久权限/状态和 Connector Runtime 尚未贯通，因此反向模块链路仍不算全部完成。
 
 Automation 与 User Program 已复用共享 Context Admission，具备来源专属硬上限、Unicode 混淆检测、稳定拒绝原因和无正文结构化审计。Desktop 仅持久化脱敏来源类别、计数及 Run/Trace/Automation/Action/Command Execution 或 Module/Module Execution 关联 ID；Prompt Injection 原文不进入 Provider、History、序列化或 Journal，审计写入故障保持 fail-closed。Connector、Clipboard、Files、Vision 与 Skill 接入同一生产准入和审计通路仍是明确缺口。
 

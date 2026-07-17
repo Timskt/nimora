@@ -1,0 +1,17 @@
+[package]
+name = "nimora-skill-package"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nimora-asset-installer = { path = "../asset-installer" }
+nimora-skill-runtime = { path = "../skill-runtime" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

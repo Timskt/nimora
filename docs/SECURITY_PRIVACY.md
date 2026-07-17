@@ -49,6 +49,7 @@
 - 模型与资源导入器在受限进程中处理不可信文件，限制解包、解析、转换、外部 URI、CPU、内存、时间和输出大小。
 - 连续崩溃、超额或异常网络行为触发 quarantine。
 - Skill Contribution 与 AI requester 都是租约式激活结果，不是永久授权；暂停、崩溃、quarantine、版本变化或卸载必须同步撤销。只有精确版本授权且已激活的 Agent Task Contribution 能获得 `skill:<id>`，并且仍只能进入固定 `Module + draft + no-tools` Adapter，不能直接访问 Provider 或继承 Agent 工具权限。
+- Skill 安装器必须原子切换 active 并生成宿主拥有的完整性锁；每次加载重新校验 Manifest 身份/版本、完整库存、大小和 SHA-256，拒绝额外文件、符号链接、非 UTF-8 库存路径及 canonical path 逃逸。只有该复验结果能成为 Runtime 与 Worker 的精确 Manifest 租约。
 
 ## 7. 数据分类
 
