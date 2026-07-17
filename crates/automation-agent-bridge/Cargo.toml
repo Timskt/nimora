@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+nimora-agent-context-admission = { path = "../agent-context-admission" }
 nimora-agent-runtime = { path = "../agent-runtime" }
 nimora-automation-runtime = { path = "../automation-runtime" }
 nimora-runtime-core = { path = "../runtime-core" }

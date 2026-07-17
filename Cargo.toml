@@ -2,6 +2,7 @@
 members = [
   "apps/cli",
   "crates/agent-runtime",
+  "crates/agent-context-admission",
   "crates/agent-provider-worker",
   "crates/agent-tools",
   "crates/automation-runtime",
