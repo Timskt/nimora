@@ -32,6 +32,25 @@ export interface ExportAssetRequest {
   destinationPath: string;
 }
 
+export interface InspectModelRequest {
+  sourcePath: string;
+}
+
+export interface ModelProbeReport {
+  spec: "nimora.model-probe-report/1";
+  format: "glb";
+  formatVersion: "2.0";
+  bytes: number;
+  jsonBytes: number;
+  binaryBytes: number;
+  nodes: number;
+  meshes: number;
+  materials: number;
+  textures: number;
+  animations: number;
+  skins: number;
+}
+
 export interface InstallPackageFile {
   relativePath: string;
   bytes: number;
@@ -229,6 +248,7 @@ export interface DesktopApi {
   activateCharacter(assetId: string): Promise<ActiveCharacterSnapshot>;
   previewAsset(request: InstallAssetRequest): Promise<AssetPreviewReport | null>;
   exportAsset(request: ExportAssetRequest): Promise<AssetPackageSummary | null>;
+  inspectModel(request: InspectModelRequest): Promise<ModelProbeReport | null>;
   installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
   rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
   validateUserProgram(manifest: UserProgramManifest): Promise<ProgramPolicyReport | null>;
@@ -328,6 +348,7 @@ export function createDesktopApi(
       async activateCharacter(assetId) { return { assetId, source: assetId === "builtin.aster" ? "built-in" : "installed", fallbackReason: null }; },
       async previewAsset() { return null; },
       async exportAsset() { return null; },
+      async inspectModel() { return null; },
       async installAsset() { return null; },
       async rollbackAsset() { return null; },
       async validateUserProgram() { return null; },
@@ -381,6 +402,7 @@ export function createDesktopApi(
     activateCharacter: async (assetId) => await invokeCommand("activate_character", { assetId }) as ActiveCharacterSnapshot,
     previewAsset: async (request) => await invokeCommand("preview_asset", { request }) as AssetPreviewReport,
     exportAsset: async (request) => await invokeCommand("export_asset", { request }) as AssetPackageSummary,
+    inspectModel: async (request) => await invokeCommand("inspect_model", { request }) as ModelProbeReport,
     installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
     rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,
     validateUserProgram: async (manifest) => await invokeCommand("validate_user_program", { manifest }) as ProgramPolicyReport,

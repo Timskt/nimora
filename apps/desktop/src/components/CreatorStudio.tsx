@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { ActiveCharacterSnapshot, AssetCatalogSnapshot, AssetPackageSummary, AssetPreviewReport } from "../platform/desktop";
+import type { ActiveCharacterSnapshot, AssetCatalogSnapshot, AssetPackageSummary, AssetPreviewReport, ModelProbeReport } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const backends = ["Sprite Atlas", "Live2D Cubism", "VRM", "glTF"] as const;
@@ -30,6 +30,9 @@ export function CreatorStudio() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [modelReport, setModelReport] = useState<ModelProbeReport | null>(null);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [checkingModel, setCheckingModel] = useState(false);
   const completion = useMemo(() => checks.filter((check) => check.status === "通过").length, []);
 
   useEffect(() => {
@@ -129,6 +132,28 @@ export function CreatorStudio() {
     }
   }
 
+  async function inspectModel() {
+    setCheckingModel(true);
+    setModelError(null);
+    setModelReport(null);
+    try {
+      const sourcePath = await open({
+        directory: false,
+        multiple: false,
+        title: "选择 GLB 2.0 模型",
+        filters: [{ name: "GLB 2.0 模型", extensions: ["glb"] }],
+      });
+      if (typeof sourcePath !== "string") return;
+      const report = await desktopApi.inspectModel({ sourcePath });
+      if (!report) throw new Error("当前环境不支持模型隔离检查");
+      setModelReport(report);
+    } catch (error) {
+      setModelError(error instanceof Error ? error.message : "模型未通过隔离结构检查");
+    } finally {
+      setCheckingModel(false);
+    }
+  }
+
   function saveDraft() {
     setDraftSaved(true);
     window.setTimeout(() => setDraftSaved(false), 1800);
@@ -217,6 +242,18 @@ export function CreatorStudio() {
         {exportNotice ? <p className="catalog-empty success" role="status">{exportNotice}</p> : null}
       </section>
 
+      <section className="asset-import model-lab" aria-labelledby="model-lab-heading">
+        <div className="section-heading">
+          <div><p className="card-label">MODEL LAB · OFFLINE</p><h3 id="model-lab-heading">隔离检查 GLB 模型</h3></div>
+          <button className="secondary-button" type="button" disabled={!desktopApi.native || checkingModel || importing || exporting} onClick={() => void inspectModel()}>
+            {checkingModel ? "正在检查…" : desktopApi.native ? "选择 GLB" : "桌面版可用"}
+          </button>
+        </div>
+        <p className="asset-import-intro">模型先复制到一次性暂存目录，再由独立 Worker 在硬限额和截止时间内解析；全程离线，不上传原文件。</p>
+        {modelError ? <p className="catalog-empty error" role="alert">{modelError}</p> : null}
+        {modelReport ? <ModelProbeReportCard report={modelReport} /> : null}
+      </section>
+
       <section className="asset-catalog" aria-labelledby="asset-catalog-heading">
         <div className="section-heading">
           <div><p className="card-label">INSTALLED ASSETS</p><h3 id="asset-catalog-heading">本机资源目录</h3></div>
@@ -242,6 +279,19 @@ export function CreatorStudio() {
       </div>
     </section>
   );
+}
+
+export function ModelProbeReportCard({ report }: { report: ModelProbeReport }) {
+  return <div className="asset-preview-report model-probe-report" role="status">
+    <div className="asset-preview-title"><span className="asset-kind">3D</span><div><strong>{report.format.toUpperCase()} {report.formatVersion}</strong><p>{formatBytes(report.bytes)} · 已完成隔离结构检查</p></div></div>
+    <dl>
+      <div><dt>容器分区</dt><dd>JSON {formatBytes(report.jsonBytes)} · BIN {formatBytes(report.binaryBytes)}</dd></div>
+      <div><dt>场景复杂度</dt><dd>{report.nodes} 节点 · {report.meshes} 网格</dd></div>
+      <div><dt>材质资源</dt><dd>{report.materials} 材质 · {report.textures} 纹理</dd></div>
+      <div><dt>动态能力</dt><dd>{report.animations} 动画 · {report.skins} 骨骼蒙皮</dd></div>
+    </dl>
+    <p className="asset-preview-warning">当前只验证 GLB 2.0 容器、内嵌资源和复杂度预算；不会安装或渲染模型，也不证明版权、许可证或 OS 级沙箱隔离。</p>
+  </div>;
 }
 
 function AssetCatalogItem({ asset, active, activating, onActivate }: { asset: AssetPackageSummary; active: boolean; activating: boolean; onActivate(assetId: string): Promise<void> }) {

@@ -130,11 +130,13 @@ pnpm deskpet pack build ./character-pack
 
 ## 12. 当前实现状态
 
-当前仓库已实现第一个真实 Importer Worker，而不是多格式占位 Adapter：
+当前仓库已实现第一个真实 Importer Worker 及桌面检查入口，而不是多格式占位 Adapter：
 
 - `nimora-model-importer-worker` 只接受暂存目录根部的相对 GLB 文件和 `nimora.model-probe/1` 请求。
 - GLB 2.0 探测验证魔数、容器长度、JSON/BIN chunk 顺序和边界、`asset.version`、外部 URI 以及节点、网格、材质和纹理预算。
 - 宿主 Supervisor 清空 Worker 环境、关闭 stdin、固定工作目录，限制 80 MiB 输入、1 MiB JSON、64 KiB 输出并在截止时间后强制终止。
 - 真实进程测试覆盖合法模型、远程 URI、暂存区逃逸、Worker 超时和 Worker 崩溃；这些失败不会进入 Core。
+- Creator Studio 的 Model Lab 只允许 Control Center 在非安全模式通过系统对话框选择绝对普通 `.glb` 文件。宿主拒绝符号链接和超限文件，复制为一次性缓存目录内固定的 `character.glb`，同步写入后才调用 Worker，并通过作用域清理保证成功、拒绝、崩溃和超时均回收暂存目录。
+- 检查完全本地离线运行，不上传原文件；WebView 只收到格式、分区大小和资源计数，不收到源路径或暂存路径。桌面发布构建通过 `pnpm build:sidecars` 同时打包用户代码 Worker 与模型 Importer Worker。
 
-当前未实现桌面文件选择与暂存复制、OS 级文件系统/网络/内存沙箱、模型规范化产物、原子安装、许可证扫描、真实预览与 3D Renderer。GLTF JSON、VRM、Live2D 和其它格式也尚未实现，不能根据本节宣称格式矩阵已经可用。
+当前未实现 OS 级文件系统/网络/内存沙箱、模型规范化产物、原子安装、许可证扫描、真实预览与 3D Renderer。进程边界只能隔离崩溃、超时和协议输出，不能证明 Worker 无法访问其它 OS 资源。GLTF JSON、VRM、Live2D 和其它格式也尚未实现，不能根据本节宣称格式矩阵已经可用。

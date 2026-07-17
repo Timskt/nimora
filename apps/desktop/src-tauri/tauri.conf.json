@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build && pnpm --dir ../.. build:user-code-sidecar",
+    "beforeBuildCommand": "pnpm build && pnpm --dir ../.. build:sidecars",
     "frontendDist": "../dist"
   },
   "app": {
@@ -33,6 +33,6 @@
     "category": "Productivity",
     "shortDescription": "Local-first extensible desktop companion",
     "longDescription": "Nimora is a local-first desktop companion, automation runtime and creator platform.",
-    "externalBin": ["binaries/nimora-user-code-worker"]
+    "externalBin": ["binaries/nimora-user-code-worker", "binaries/nimora-model-importer-worker"]
   }
 }

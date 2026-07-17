@@ -33,6 +33,8 @@ format/lint
 
 发布流水线必须可复现并锁定依赖。签名密钥只存在于受保护的 CI 环境。
 
+桌面构建前必须运行 `pnpm build:sidecars`，按 `TAURI_ENV_TARGET_TRIPLE` 为当前目标编译并放置 `nimora-user-code-worker` 与 `nimora-model-importer-worker`。每个平台发布任务必须验证两个 external binary 均存在、架构匹配、可启动并被最终安装包包含；本机产物不能代替 Windows、macOS Intel 或其它目标的 CI 验证。
+
 ## 4. Windows 交付
 
 - 支持 Windows 10 22H2 和 Windows 11。

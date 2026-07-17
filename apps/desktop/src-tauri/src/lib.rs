@@ -4,6 +4,9 @@ use nimora_asset_installer::{
     inspect_asset_renderer, inspect_asset_source_preview, install_asset_source,
     read_verified_asset_image, rollback_latest,
 };
+use nimora_model_importer::{
+    ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
+};
 use nimora_persistence_sqlite::{
     ProgramPermissionGrant, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
     SqliteProgramPermissionRepository,
@@ -59,6 +62,8 @@ const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
 const MAX_USER_PROGRAM_OPERATIONS: usize = 32;
 const MAX_USER_PROGRAM_EVENT_SESSIONS: usize = 32;
+const MAX_MODEL_BYTES: u64 = 80 * 1024 * 1024;
+const MODEL_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 struct DesktopState {
@@ -214,6 +219,23 @@ struct InstallAssetRequest {
 struct ExportAssetRequest {
     source_path: PathBuf,
     destination_path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InspectModelRequest {
+    source_path: PathBuf,
+}
+
+#[derive(Debug)]
+struct ModelStagingDirectory {
+    root: PathBuf,
+}
+
+impl Drop for ModelStagingDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -468,6 +490,12 @@ enum DesktopError {
     AssetIsNotCharacter,
     #[error("package source must be an absolute existing directory or file")]
     InvalidPackageSource,
+    #[error("model source must be an absolute regular .glb file and must not be a symbolic link")]
+    InvalidModelSource,
+    #[error("model exceeds the 80 MiB inspection budget")]
+    ModelInputBudgetExceeded,
+    #[error("model importer worker failed: {0}")]
+    ModelWorker(#[from] ModelWorkerError),
     #[error(transparent)]
     UserCodePolicy(#[from] PolicyError),
     #[error(transparent)]
@@ -785,6 +813,101 @@ fn preview_asset(
     ensure_normal_mode(&state)?;
     validate_package_source(&request.source_path)?;
     Ok(inspect_asset_source_preview(&request.source_path)?)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn inspect_model(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+    request: InspectModelRequest,
+) -> Result<ModelProbeReport, DesktopError> {
+    if window.label() != CONTROL_CENTER_LABEL {
+        return Err(DesktopError::WindowForbidden);
+    }
+    ensure_normal_mode(&state)?;
+    validate_model_source(&request.source_path)?;
+
+    let staging = stage_model(&app, &request.source_path)?;
+    let request = ModelProbeRequest {
+        spec: "nimora.model-probe/1".to_owned(),
+        source: PathBuf::from("character.glb"),
+    };
+    Ok(probe_model_in_worker(
+        &model_importer_worker_path(&app),
+        &staging.root,
+        &request,
+        MODEL_PROBE_TIMEOUT,
+    )?)
+}
+
+fn validate_model_source(source_path: &Path) -> Result<(), DesktopError> {
+    if !source_path.is_absolute()
+        || source_path.extension().and_then(|value| value.to_str()) != Some("glb")
+    {
+        return Err(DesktopError::InvalidModelSource);
+    }
+    let metadata =
+        fs::symlink_metadata(source_path).map_err(|_| DesktopError::InvalidModelSource)?;
+    if !metadata.file_type().is_file() {
+        return Err(DesktopError::InvalidModelSource);
+    }
+    if metadata.len() > MAX_MODEL_BYTES {
+        return Err(DesktopError::ModelInputBudgetExceeded);
+    }
+    Ok(())
+}
+
+fn stage_model(app: &AppHandle, source_path: &Path) -> Result<ModelStagingDirectory, DesktopError> {
+    let root = app
+        .path()
+        .app_cache_dir()?
+        .join("model-probes")
+        .join(Uuid::now_v7().to_string());
+    fs::create_dir_all(&root)?;
+    let staging = ModelStagingDirectory { root };
+    let destination = staging.root.join("character.glb");
+    let copied = fs::copy(source_path, &destination)?;
+    if copied > MAX_MODEL_BYTES || copied != fs::metadata(source_path)?.len() {
+        return Err(DesktopError::ModelInputBudgetExceeded);
+    }
+    fs::File::open(destination)?.sync_all()?;
+    Ok(staging)
+}
+
+fn model_importer_worker_path(app: &AppHandle) -> PathBuf {
+    std::env::var_os("NIMORA_MODEL_IMPORTER_WORKER_PATH")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let executable_candidates = app
+                .path()
+                .executable_dir()
+                .ok()
+                .into_iter()
+                .map(|directory| directory.join("nimora-model-importer-worker"));
+            let resource_candidates =
+                app.path()
+                    .resource_dir()
+                    .ok()
+                    .into_iter()
+                    .flat_map(|directory| {
+                        [
+                            directory.join("binaries/nimora-model-importer-worker"),
+                            directory.join("nimora-model-importer-worker"),
+                        ]
+                    });
+            executable_candidates
+                .chain(resource_candidates)
+                .find(|path| path.is_file())
+        })
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(Path::to_path_buf))
+                .map(|directory| directory.join("nimora-model-importer-worker"))
+        })
+        .unwrap_or_else(|| PathBuf::from("nimora-model-importer-worker"))
 }
 
 #[tauri::command]
@@ -2314,6 +2437,7 @@ pub fn run() {
             active_character_renderer,
             activate_character,
             preview_asset,
+            inspect_model,
             export_asset,
             install_asset,
             rollback_asset,
@@ -2347,7 +2471,8 @@ mod tests {
         ensure_program_permissions, inspect_asset_catalog, parse_asset_protocol_path,
         parse_user_program_plan, permission_grant, persist_active_character,
         resolve_active_character, resolve_character_renderer, screen_coordinate,
-        serve_asset_protocol, user_program_input, valid_asset_identifier, validate_package_source,
+        serve_asset_protocol, user_program_input, valid_asset_identifier, validate_model_source,
+        validate_package_source,
     };
     use nimora_persistence_sqlite::SqliteProgramPermissionRepository;
     use nimora_runtime_core::{Event, EventSource, RuntimeMode};
@@ -2513,6 +2638,49 @@ mod tests {
         let archive = root.join("package.nimora");
         std::fs::write(&archive, b"archive").unwrap();
         validate_package_source(&archive).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn model_source_requires_an_absolute_regular_glb_within_budget() {
+        assert!(matches!(
+            validate_model_source(Path::new("relative.glb")),
+            Err(DesktopError::InvalidModelSource)
+        ));
+        let root =
+            std::env::temp_dir().join(format!("nimora-model-source-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(matches!(
+            validate_model_source(&root),
+            Err(DesktopError::InvalidModelSource)
+        ));
+        let wrong_extension = root.join("character.gltf");
+        std::fs::write(&wrong_extension, b"glTF").unwrap();
+        assert!(matches!(
+            validate_model_source(&wrong_extension),
+            Err(DesktopError::InvalidModelSource)
+        ));
+        let model = root.join("character.glb");
+        std::fs::write(&model, b"glTF").unwrap();
+        validate_model_source(&model).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn model_source_rejects_symbolic_links() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!("nimora-model-link-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&root).unwrap();
+        let target = root.join("target.glb");
+        let link = root.join("linked.glb");
+        std::fs::write(&target, b"glTF").unwrap();
+        symlink(&target, &link).unwrap();
+        assert!(matches!(
+            validate_model_source(&link),
+            Err(DesktopError::InvalidModelSource)
+        ));
         std::fs::remove_dir_all(root).unwrap();
     }
 

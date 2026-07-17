@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "build:user-code-sidecar": "node scripts/build-user-code-sidecar.mjs",
+    "build:sidecars": "node scripts/build-sidecars.mjs",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
