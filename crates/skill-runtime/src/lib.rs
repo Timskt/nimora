@@ -391,6 +391,19 @@ impl SkillHost {
         Ok(format!("skill:{skill_id}"))
     }
 
+    /// Returns the exact Manifest leased to an active Worker execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the Skill is currently activated.
+    pub fn active_manifest(&self, skill_id: &str) -> Result<&SkillManifest, SkillError> {
+        let record = self.records.get(skill_id).ok_or(SkillError::NotInstalled)?;
+        if record.status != SkillStatus::Activated {
+            return Err(SkillError::InvalidLifecycle);
+        }
+        Ok(record.manifest.manifest())
+    }
+
     #[must_use]
     pub fn status(&self, skill_id: &str) -> Option<SkillStatus> {
         self.records.get(skill_id).map(|record| record.status)

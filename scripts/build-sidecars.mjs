@@ -11,6 +11,7 @@ const outputDirectory = join(root, "apps/desktop/src-tauri/binaries");
 const target = process.env.TAURI_ENV_TARGET_TRIPLE ?? (await rustHostTriple());
 const sidecars = [
   { packageName: "nimora-user-code-worker", binaryName: "nimora-user-code-worker" },
+  { packageName: "nimora-skill-worker", binaryName: "nimora-skill-worker" },
   { packageName: "nimora-model-importer", binaryName: "nimora-model-importer-worker" },
   {
     packageName: "nimora-agent-provider-worker",

@@ -2340,11 +2340,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "nimora-skill-host"
+version = "0.1.0"
+dependencies = [
+ "nimora-skill-runtime",
+ "nimora-user-code-policy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "nimora-skill-runtime"
 version = "0.1.0"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "nimora-skill-worker"
+version = "0.1.0"
+dependencies = [
+ "boa_engine",
+ "nimora-skill-host",
+ "nimora-skill-runtime",
+ "serde_json",
 ]
 
 [[package]]

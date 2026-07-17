@@ -1,0 +1,15 @@
+[package]
+name = "nimora-skill-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+boa_engine.workspace = true
+nimora-skill-host = { path = "../skill-host" }
+nimora-skill-runtime = { path = "../skill-runtime" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -156,6 +156,10 @@ ID / 标题 / 优先级 / 前置条件
 | EXT-010 | Contribution 租约撤销 | 暂停、崩溃或 quarantine 后 Command 快照与 AI requester 同步消失 | P0 |
 | EXT-011 | Skill 请求 AI | 仅已激活且声明 Agent Task Contribution 的 Skill 获得 `skill:<id>`，随后进入统一 Module Adapter | P0 |
 | EXT-012 | Skill 绕过 AI 网关 | 未激活、未声明或尝试直连 Provider 时在 Provider 前拒绝且无副作用 | P0 |
+| EXT-013 | 独立 Skill Worker | JavaScript 在真实子进程执行且无 Node、Tauri、文件、网络原生对象 | P0 |
+| EXT-014 | Skill Worker 失控 | 无限循环、取消或输出超限时 Supervisor 强制回收进程 | P0 |
+| EXT-015 | Worker 故障撤销 | 超时、崩溃或协议违规进入 crash window，Contribution 与 AI requester 立即撤销 | P0 |
+| EXT-016 | Worker Active 租约 | 未安装、未授权、暂停或伪造不同版本 Manifest 均在进程启动前拒绝 | P0 |
 | SCRIPT-001 | 用户脚本调用已授权 Command | 正常执行并产生 Run、Trace 和审计记录 | P0 |
 | SCRIPT-002 | 脚本访问未授权文件、网络、进程 | Host 拒绝，不能绕过 Capability Broker | P0 |
 | SCRIPT-003 | 死循环、内存泄漏、事件递归 | 对应实例被限流或终止，Core 继续运行 | P0 |
