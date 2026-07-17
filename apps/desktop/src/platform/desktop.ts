@@ -94,6 +94,13 @@ export interface UserProgramRollbackReceipt {
   quarantinedFailedVersion: boolean;
 }
 
+export interface UserProgramPermissionStatus {
+  programId: string;
+  version: string;
+  capabilities: UserCodeCapability[];
+  granted: boolean;
+}
+
 export type UserProgramCapabilityRequest =
   | { type: "readPetState" }
   | { type: "invokeCommand"; command: string; arguments: unknown };
@@ -128,6 +135,9 @@ export interface DesktopApi {
   validateUserProgram(manifest: UserProgramManifest): Promise<ProgramPolicyReport | null>;
   installUserProgram(request: InstallUserProgramRequest): Promise<UserProgramInstallReceipt | null>;
   rollbackUserProgram(programId: string): Promise<UserProgramRollbackReceipt | null>;
+  userProgramPermissionStatus(programId: string): Promise<UserProgramPermissionStatus | null>;
+  grantUserProgramPermissions(programId: string): Promise<UserProgramPermissionStatus | null>;
+  revokeUserProgramPermissions(programId: string): Promise<void>;
   startUserProgram(manifest: UserProgramManifest): Promise<UserProgramSessionReceipt | null>;
   executeUserProgram(manifest: UserProgramManifest, source: string): Promise<UserProgramExecutionReceipt | null>;
   executeInstalledUserProgram(programId: string): Promise<UserProgramExecutionReceipt | null>;
@@ -197,6 +207,9 @@ export function createDesktopApi(
       async validateUserProgram() { return null; },
       async installUserProgram() { return null; },
       async rollbackUserProgram() { return null; },
+      async userProgramPermissionStatus() { return null; },
+      async grantUserProgramPermissions() { return null; },
+      async revokeUserProgramPermissions() {},
       async startUserProgram() { return null; },
       async executeUserProgram() { return null; },
       async executeInstalledUserProgram() { return null; },
@@ -235,6 +248,9 @@ export function createDesktopApi(
     validateUserProgram: async (manifest) => await invokeCommand("validate_user_program", { manifest }) as ProgramPolicyReport,
     installUserProgram: async (request) => await invokeCommand("install_user_program", { request }) as UserProgramInstallReceipt,
     rollbackUserProgram: async (programId) => await invokeCommand("rollback_user_program", { programId }) as UserProgramRollbackReceipt,
+    userProgramPermissionStatus: async (programId) => await invokeCommand("user_program_permission_status", { programId }) as UserProgramPermissionStatus,
+    grantUserProgramPermissions: async (programId) => await invokeCommand("grant_user_program_permissions", { programId }) as UserProgramPermissionStatus,
+    revokeUserProgramPermissions: async (programId) => { await invokeCommand("revoke_user_program_permissions", { programId }); },
     startUserProgram: async (manifest) => await invokeCommand("start_user_program", { manifest }) as UserProgramSessionReceipt,
     executeUserProgram: async (manifest, source) => await invokeCommand("execute_user_program", { manifest, source }) as UserProgramExecutionReceipt,
     executeInstalledUserProgram: async (programId) => await invokeCommand("execute_installed_user_program", { programId }) as UserProgramExecutionReceipt,

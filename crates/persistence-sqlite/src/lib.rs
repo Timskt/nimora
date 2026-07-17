@@ -9,13 +9,150 @@ use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Mutex, time::Duration};
 use thiserror::Error;
 
-const DATABASE_VERSION: i64 = 3;
+const DATABASE_VERSION: i64 = 4;
 const PET_SNAPSHOT_VERSION: u32 = 1;
 const PROFILE_SNAPSHOT_VERSION: u32 = 1;
 
 #[derive(Debug)]
 pub struct SqlitePetRepository {
     connection: Mutex<Connection>,
+}
+
+#[derive(Debug)]
+pub struct SqliteProgramPermissionRepository {
+    connection: Mutex<Connection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramPermissionGrant {
+    pub program_id: String,
+    pub version: String,
+    pub capabilities: Vec<String>,
+}
+
+impl SqliteProgramPermissionRepository {
+    /// Opens the shared application database and applies pending migrations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `SQLite` cannot open, configure, or migrate the database.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, SqlitePersistenceError> {
+        Self::from_connection(Connection::open(path)?)
+    }
+
+    /// Creates an isolated permission store for tests and ephemeral tools.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `SQLite` cannot configure or migrate the database.
+    pub fn in_memory() -> Result<Self, SqlitePersistenceError> {
+        Self::from_connection(Connection::open_in_memory()?)
+    }
+
+    fn from_connection(mut connection: Connection) -> Result<Self, SqlitePersistenceError> {
+        prepare_connection(&mut connection)?;
+        Ok(Self {
+            connection: Mutex::new(connection),
+        })
+    }
+
+    /// Replaces the exact capability grant for one installed program version.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid identities, duplicate capabilities, or persistence failures.
+    pub fn grant(&self, grant: &ProgramPermissionGrant) -> Result<(), SqlitePersistenceError> {
+        let capabilities = canonical_capabilities(grant)?;
+        let payload = serde_json::to_string(&capabilities)?;
+        self.connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?
+            .execute(
+                "INSERT INTO user_program_permission_grant
+                    (program_id, program_version, capabilities)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(program_id, program_version) DO UPDATE SET
+                    capabilities = excluded.capabilities,
+                    granted_at = CURRENT_TIMESTAMP",
+                params![grant.program_id, grant.version, payload],
+            )?;
+        Ok(())
+    }
+
+    /// Returns whether one version has an exact grant for its full capability set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid requests, malformed stored data, or persistence failures.
+    pub fn is_granted(
+        &self,
+        grant: &ProgramPermissionGrant,
+    ) -> Result<bool, SqlitePersistenceError> {
+        let requested = canonical_capabilities(grant)?;
+        if requested.is_empty() {
+            return Ok(true);
+        }
+        let payload = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?
+            .query_row(
+                "SELECT capabilities FROM user_program_permission_grant
+                 WHERE program_id = ?1 AND program_version = ?2",
+                params![grant.program_id, grant.version],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(payload) = payload else {
+            return Ok(false);
+        };
+        let mut stored = serde_json::from_str::<Vec<String>>(&payload)?;
+        stored.sort_unstable();
+        stored.dedup();
+        Ok(stored == requested)
+    }
+
+    /// Revokes every persisted grant for a program identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the identity is invalid or persistence fails.
+    pub fn revoke_program(&self, program_id: &str) -> Result<(), SqlitePersistenceError> {
+        if program_id.trim().is_empty() {
+            return Err(SqlitePersistenceError::InvalidPermissionGrant);
+        }
+        self.connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?
+            .execute(
+                "DELETE FROM user_program_permission_grant WHERE program_id = ?1",
+                params![program_id],
+            )?;
+        Ok(())
+    }
+}
+
+fn canonical_capabilities(
+    grant: &ProgramPermissionGrant,
+) -> Result<Vec<String>, SqlitePersistenceError> {
+    if grant.program_id.trim().is_empty() || grant.version.trim().is_empty() {
+        return Err(SqlitePersistenceError::InvalidPermissionGrant);
+    }
+    let mut capabilities = grant.capabilities.clone();
+    if capabilities
+        .iter()
+        .any(|capability| capability.trim().is_empty())
+    {
+        return Err(SqlitePersistenceError::InvalidPermissionGrant);
+    }
+    capabilities.sort_unstable();
+    let original_len = capabilities.len();
+    capabilities.dedup();
+    if capabilities.len() != original_len {
+        return Err(SqlitePersistenceError::InvalidPermissionGrant);
+    }
+    Ok(capabilities)
 }
 
 impl SqlitePetRepository {
@@ -166,6 +303,20 @@ fn prepare_connection(connection: &mut Connection) -> Result<(), SqlitePersisten
                 CREATE INDEX event_outbox_created_at_idx
                     ON event_outbox(created_at, event_id);
                 PRAGMA user_version = 3;",
+        )?;
+        transaction.commit()?;
+    }
+    if version < 4 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "CREATE TABLE user_program_permission_grant (
+                    program_id TEXT NOT NULL,
+                    program_version TEXT NOT NULL,
+                    capabilities TEXT NOT NULL,
+                    granted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (program_id, program_version)
+                );
+                PRAGMA user_version = 4;",
         )?;
         transaction.commit()?;
     }
@@ -370,6 +521,8 @@ pub enum SqlitePersistenceError {
     UnsupportedPetSnapshotVersion(u32),
     #[error("profile snapshot version {0} is unsupported")]
     UnsupportedProfileSnapshotVersion(u32),
+    #[error("user program permission grant is invalid")]
+    InvalidPermissionGrant,
     #[error("pet snapshot metadata and payload versions do not match")]
     SnapshotVersionMismatch,
     #[error(transparent)]
@@ -423,6 +576,64 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("version");
         assert_eq!(version, DATABASE_VERSION);
+    }
+
+    #[test]
+    fn permission_grants_are_bound_to_program_version_and_exact_capabilities() {
+        let repository = SqliteProgramPermissionRepository::in_memory().expect("database");
+        let grant = ProgramPermissionGrant {
+            program_id: "studio.example.focus".to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities: vec![
+                "invoke-safe-commands".to_owned(),
+                "read-pet-state".to_owned(),
+            ],
+        };
+        assert!(!repository.is_granted(&grant).expect("check"));
+        repository.grant(&grant).expect("grant");
+        assert!(repository.is_granted(&grant).expect("check"));
+        assert!(
+            !repository
+                .is_granted(&ProgramPermissionGrant {
+                    version: "2.0.0".to_owned(),
+                    ..grant.clone()
+                })
+                .expect("version check")
+        );
+        assert!(
+            !repository
+                .is_granted(&ProgramPermissionGrant {
+                    capabilities: vec!["read-pet-state".to_owned()],
+                    ..grant
+                })
+                .expect("capability check")
+        );
+    }
+
+    #[test]
+    fn revoking_a_program_removes_all_version_grants() {
+        let repository = SqliteProgramPermissionRepository::in_memory().expect("database");
+        for version in ["1.0.0", "2.0.0"] {
+            repository
+                .grant(&ProgramPermissionGrant {
+                    program_id: "studio.example.focus".to_owned(),
+                    version: version.to_owned(),
+                    capabilities: vec!["read-pet-state".to_owned()],
+                })
+                .expect("grant");
+        }
+        repository
+            .revoke_program("studio.example.focus")
+            .expect("revoke");
+        assert!(
+            !repository
+                .is_granted(&ProgramPermissionGrant {
+                    program_id: "studio.example.focus".to_owned(),
+                    version: "1.0.0".to_owned(),
+                    capabilities: vec!["read-pet-state".to_owned()],
+                })
+                .expect("check")
+        );
     }
 
     #[test]
@@ -780,6 +991,62 @@ mod tests {
         assert_eq!(outbox_exists, 1);
         drop(connection);
         drop(profile_repository);
+        std::fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn migrates_v3_and_creates_program_permission_storage() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "nimora-v3-migration-{}-{unique}.sqlite3",
+            std::process::id()
+        ));
+        {
+            let connection = Connection::open(&path).expect("database");
+            connection
+                .execute_batch(
+                    "CREATE TABLE pet_snapshot (
+                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                        schema_version INTEGER NOT NULL,
+                        payload TEXT NOT NULL,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE TABLE profile_snapshot (
+                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                        schema_version INTEGER NOT NULL,
+                        payload TEXT NOT NULL,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE TABLE event_outbox (
+                        event_id TEXT PRIMARY KEY,
+                        event_type TEXT NOT NULL,
+                        trace_id TEXT NOT NULL,
+                        payload TEXT NOT NULL,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    );
+                    PRAGMA user_version = 3;",
+                )
+                .expect("v3 schema");
+        }
+        let repository = SqliteProgramPermissionRepository::open(&path).expect("migration");
+        let grant = ProgramPermissionGrant {
+            program_id: "studio.example.focus".to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities: vec!["read-pet-state".to_owned()],
+        };
+        repository.grant(&grant).expect("grant");
+        assert!(repository.is_granted(&grant).expect("check"));
+        let version = repository
+            .connection
+            .lock()
+            .expect("lock")
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .expect("version");
+        assert_eq!(version, DATABASE_VERSION);
+        drop(repository);
         std::fs::remove_file(path).expect("remove fixture");
     }
 }

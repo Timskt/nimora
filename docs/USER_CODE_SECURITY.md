@@ -60,6 +60,8 @@
 
 `execute_installed_user_program` 只接受 namespaced 程序 ID，从当前 `active` 目录重新加载并校验 Manifest 与固定入口，不允许 Renderer 再次提交或替换源码。每次执行前必须复验锁文件身份与版本，并递归验证所有已锁定文件的大小和 SHA-256；缺失文件、额外文件、重复锁项、损坏锁文件和任意符号链接都会在 Worker 启动前被拒绝。该路径不依赖 Registry 或网络，已安装且不请求远程能力的程序可以完全离线运行。此机制用于发现安装后的损坏、不同步修改和低权限注入；若攻击者已经控制运行 Nimora 的同一 OS 账户并能同时重写程序和锁文件，则必须结合后续的发行者签名、系统密钥存储与平台代码签名建立更强信任根，不能把本地 SHA-256 锁文件描述为抗主机接管边界。
 
+正式程序权限保存在 SQLite 的 `user_program_permission_grant` 中，授权键由程序 ID、精确版本和完整 Capability 集合共同组成。无 Capability 的纯计算程序不需要授权；有 Capability 的程序在首次运行前必须显式授予。版本变化、能力增加、能力删除或能力名称变化均不会匹配旧授权，`execute_installed_user_program` 会在创建 Worker 前拒绝执行。`user_program_permission_status`、`grant_user_program_permissions` 和 `revoke_user_program_permissions` 只针对完整性校验通过的已安装版本；撤销按程序身份删除所有版本授权。草稿预览不创建正式授权，也不能借用已安装版本的授权身份。
+
 ## 模块调用模型
 
 ```text
@@ -83,4 +85,4 @@ User Code
 - 审计日志、失败重试上限和安全模式联动。
 - 离线环境中仍可运行已安装代码，但不能绕过本地策略。
 
-当前仓库已完成 Manifest 策略评估、Tauri 会话入口、Worker 准入边界、独立进程 Supervisor、基础 JavaScript Worker、只读输入快照、一次性结构化调用计划、逐请求 Capability Gateway、首个桌面 Runtime 后端、取消/截止时间/输出预算、sidecar 构建配置和契约测试；跨平台 sidecar 发布验证、事件型 SDK、操作系统级强制内存限制、WASM 引擎、授权型文件/网络/自动化后端和用户代码安装生命周期尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。
+当前仓库已完成 Manifest 策略评估、Tauri 会话入口、Worker 准入边界、独立进程 Supervisor、基础 JavaScript Worker、只读输入快照、一次性结构化调用计划、逐请求 Capability Gateway、首个桌面 Runtime 后端、取消/截止时间/输出预算、sidecar 构建配置、原子程序安装与回滚、执行前完整性复验、版本化权限持久化和契约测试；跨平台 sidecar 发布验证、事件型 SDK、操作系统级强制内存限制、WASM 引擎及授权型文件/网络/自动化后端尚未完成，未完成部分不得被 UI 宣称为“可执行任意用户代码”。

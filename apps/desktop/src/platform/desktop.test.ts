@@ -61,6 +61,9 @@ describe("desktop platform adapter", () => {
     };
     await api.installUserProgram(programRequest);
     await api.rollbackUserProgram(manifest.id);
+    await api.userProgramPermissionStatus(manifest.id);
+    await api.grantUserProgramPermissions(manifest.id);
+    await api.revokeUserProgramPermissions(manifest.id);
     await api.startUserProgram(manifest);
     await api.executeUserProgram(manifest, "({ commands: [] })");
     await api.executeInstalledUserProgram(manifest.id);
@@ -97,6 +100,9 @@ describe("desktop platform adapter", () => {
       ["validate_user_program", { manifest }],
       ["install_user_program", { request: programRequest }],
       ["rollback_user_program", { programId: manifest.id }],
+      ["user_program_permission_status", { programId: manifest.id }],
+      ["grant_user_program_permissions", { programId: manifest.id }],
+      ["revoke_user_program_permissions", { programId: manifest.id }],
       ["start_user_program", { manifest }],
       ["execute_user_program", { manifest, source: "({ commands: [] })" }],
       ["execute_installed_user_program", { programId: manifest.id }],

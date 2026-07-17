@@ -1,6 +1,7 @@
 use nimora_asset_installer::{InstallError, InstallFile, install_atomically, rollback_latest};
 use nimora_persistence_sqlite::{
-    SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
+    ProgramPermissionGrant, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
+    SqliteProgramPermissionRepository,
 };
 use nimora_runtime_app::{
     ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBus,
@@ -58,6 +59,7 @@ struct DesktopState {
     dragging: AtomicBool,
     asset_store: PathBuf,
     program_store: PathBuf,
+    program_permissions: SqliteProgramPermissionRepository,
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
     execution_controller: ExecutionController,
 }
@@ -118,6 +120,7 @@ impl DesktopState {
             dragging: AtomicBool::new(false),
             asset_store,
             program_store,
+            program_permissions: SqliteProgramPermissionRepository::open(database_path)?,
             user_programs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
         })
@@ -202,6 +205,15 @@ struct UserProgramRollbackReceipt {
     program_id: String,
     active_path: PathBuf,
     quarantined_failed_version: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProgramPermissionStatus {
+    program_id: String,
+    version: String,
+    capabilities: Vec<Capability>,
+    granted: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -304,6 +316,8 @@ enum DesktopError {
     UserCodePackage(#[from] ProgramPackageError),
     #[error("user program execution was not found")]
     UserProgramNotFound,
+    #[error("user program permissions must be granted for this exact installed version")]
+    UserProgramPermissionRequired,
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -661,6 +675,85 @@ fn rollback_user_program(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn user_program_permission_status(
+    state: State<'_, DesktopState>,
+    program_id: String,
+) -> Result<UserProgramPermissionStatus, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let installed = load_installed_program(&state.program_store, &program_id)?;
+    permission_status(&state.program_permissions, installed.manifest)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn grant_user_program_permissions(
+    state: State<'_, DesktopState>,
+    program_id: String,
+) -> Result<UserProgramPermissionStatus, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let installed = load_installed_program(&state.program_store, &program_id)?;
+    let grant = permission_grant(&installed.manifest);
+    state.program_permissions.grant(&grant)?;
+    permission_status(&state.program_permissions, installed.manifest)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn revoke_user_program_permissions(
+    state: State<'_, DesktopState>,
+    program_id: String,
+) -> Result<(), DesktopError> {
+    ensure_normal_mode(&state)?;
+    state.program_permissions.revoke_program(&program_id)?;
+    Ok(())
+}
+
+fn permission_status(
+    repository: &SqliteProgramPermissionRepository,
+    manifest: ProgramManifest,
+) -> Result<UserProgramPermissionStatus, DesktopError> {
+    let grant = permission_grant(&manifest);
+    let granted = repository.is_granted(&grant)?;
+    Ok(UserProgramPermissionStatus {
+        program_id: manifest.id,
+        version: manifest.version,
+        capabilities: manifest.capabilities,
+        granted,
+    })
+}
+
+fn permission_grant(manifest: &ProgramManifest) -> ProgramPermissionGrant {
+    let capabilities = manifest
+        .capabilities
+        .iter()
+        .map(|capability| match capability {
+            Capability::ReadPetState => "read-pet-state",
+            Capability::SubscribeEvents => "subscribe-events",
+            Capability::InvokeSafeCommands => "invoke-safe-commands",
+            Capability::StoreLocalData => "store-local-data",
+        })
+        .map(ToOwned::to_owned)
+        .collect();
+    ProgramPermissionGrant {
+        program_id: manifest.id.clone(),
+        version: manifest.version.clone(),
+        capabilities,
+    }
+}
+
+fn ensure_program_permissions(
+    repository: &SqliteProgramPermissionRepository,
+    manifest: &ProgramManifest,
+) -> Result<(), DesktopError> {
+    if repository.is_granted(&permission_grant(manifest))? {
+        Ok(())
+    } else {
+        Err(DesktopError::UserProgramPermissionRequired)
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn validate_user_program(
     state: State<'_, DesktopState>,
     manifest: ProgramManifest,
@@ -721,6 +814,7 @@ fn execute_installed_user_program(
 ) -> Result<UserProgramExecutionReceipt, DesktopError> {
     ensure_normal_mode(&state)?;
     let installed = load_installed_program(&state.program_store, &program_id)?;
+    ensure_program_permissions(&state.program_permissions, &installed.manifest)?;
     execute_user_program_source(&app, &state, installed.manifest, installed.source)
 }
 
@@ -1262,6 +1356,9 @@ pub fn run() {
             rollback_asset,
             install_user_program,
             rollback_user_program,
+            user_program_permission_status,
+            grant_user_program_permissions,
+            revoke_user_program_permissions,
             validate_user_program,
             start_user_program,
             execute_user_program,
@@ -1276,9 +1373,11 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        DesktopError, PetAction, ProfilePolicy, TrayAction, WindowPolicy, parse_user_program_plan,
-        screen_coordinate, user_program_input, valid_asset_identifier,
+        DesktopError, PetAction, ProfilePolicy, TrayAction, WindowPolicy,
+        ensure_program_permissions, parse_user_program_plan, permission_grant, screen_coordinate,
+        user_program_input, valid_asset_identifier,
     };
+    use nimora_persistence_sqlite::SqliteProgramPermissionRepository;
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
 
@@ -1351,6 +1450,62 @@ mod tests {
             user_program_input(&policy, Some(json!({"name": "Aster"}))),
             json!({"schemaVersion": 1, "pet": {"name": "Aster"}})
         );
+    }
+
+    #[test]
+    fn permission_grants_use_stable_exhaustive_capability_names() {
+        let grant = permission_grant(&ProgramManifest {
+            id: "studio.example.permissions".to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities: vec![
+                Capability::ReadPetState,
+                Capability::SubscribeEvents,
+                Capability::InvokeSafeCommands,
+                Capability::StoreLocalData,
+            ],
+            subscriptions: vec![],
+            commands: vec![],
+            timeout_ms: 1_000,
+            memory_bytes: 1024 * 1024,
+        });
+        assert_eq!(
+            grant.capabilities,
+            [
+                "read-pet-state",
+                "subscribe-events",
+                "invoke-safe-commands",
+                "store-local-data",
+            ]
+        );
+    }
+
+    #[test]
+    fn installed_program_admission_requires_an_exact_persisted_grant() {
+        let repository = SqliteProgramPermissionRepository::in_memory().expect("database");
+        let mut manifest = ProgramManifest {
+            id: "studio.example.permissions".to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities: vec![],
+            subscriptions: vec![],
+            commands: vec![],
+            timeout_ms: 1_000,
+            memory_bytes: 1024 * 1024,
+        };
+        ensure_program_permissions(&repository, &manifest).expect("capability-free program");
+        manifest.capabilities.push(Capability::ReadPetState);
+        assert!(matches!(
+            ensure_program_permissions(&repository, &manifest),
+            Err(DesktopError::UserProgramPermissionRequired)
+        ));
+        repository
+            .grant(&permission_grant(&manifest))
+            .expect("grant");
+        ensure_program_permissions(&repository, &manifest).expect("granted program");
+        manifest.version = "2.0.0".to_owned();
+        assert!(matches!(
+            ensure_program_permissions(&repository, &manifest),
+            Err(DesktopError::UserProgramPermissionRequired)
+        ));
     }
 
     #[test]
