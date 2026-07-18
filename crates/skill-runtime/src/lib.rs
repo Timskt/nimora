@@ -199,6 +199,13 @@ pub fn validate_manifest(manifest: SkillManifest) -> Result<ValidatedSkillManife
             && !manifest
                 .capabilities
                 .contains(&SkillCapability::InvokeAgentTasks))
+        || (manifest
+            .activation_events
+            .iter()
+            .any(|event| event.starts_with("onEvent:"))
+            && !manifest
+                .capabilities
+                .contains(&SkillCapability::SubscribeEvents))
     {
         return Err(SkillError::MissingCapability);
     }
@@ -518,6 +525,22 @@ mod tests {
             validate_manifest(invalid),
             Err(SkillError::MissingCapability)
         );
+    }
+
+    #[test]
+    fn event_activation_requires_explicit_subscription_capability() {
+        let mut event_skill = manifest();
+        event_skill
+            .activation_events
+            .insert("onEvent:runtime.pet.changed".to_owned());
+        assert_eq!(
+            validate_manifest(event_skill.clone()),
+            Err(SkillError::MissingCapability)
+        );
+        event_skill
+            .capabilities
+            .insert(SkillCapability::SubscribeEvents);
+        assert!(validate_manifest(event_skill).is_ok());
     }
 
     #[test]

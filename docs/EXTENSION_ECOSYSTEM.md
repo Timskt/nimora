@@ -43,7 +43,7 @@ activated → crashed → quarantined
 any → upgrading → activated | rolled-back
 ```
 
-- 激活由 `onStartup`、`onCommand:*`、`onEvent:*` 等声明触发。
+- 激活由 `onStartup`、`onCommand:*`、`onEvent:*` 等声明触发；声明任一 `onEvent:*` 必须同时申请并获得精确版本的 `subscribe-events` Capability，Host 不得从源码、Worker 输出或运行参数临时扩大订阅集合。
 - 扩展停用时平台自动撤销所有 Contribution 和订阅。
 - `onTick` 不是通用能力；高频行为必须使用专用行为 API。
 - 扩展升级前先迁移配置；迁移必须幂等并支持回滚备份。
