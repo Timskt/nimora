@@ -1020,6 +1020,7 @@ export interface DesktopApi {
   playAction(action: PetAction): Promise<NimoraCommand | null>;
   carePet(action: PetCareAction): Promise<NimoraCommand | null>;
   usePetItem(itemId: PetItemId): Promise<NimoraCommand | null>;
+  renamePet(name: string): Promise<NimoraCommand | null>;
   clickPet(x: number, y: number, button: PointerButton): Promise<NimoraCommand | null>;
   strokePet(distancePx: number, durationMs: number, reversals: number): Promise<NimoraCommand | null>;
   dragPet(): Promise<NimoraCommand | null>;
@@ -1446,6 +1447,12 @@ export function createDesktopApi(
         if (stack.quantity === 0) previewSnapshot.pet.inventory.splice(index, 1);
         return null;
       },
+      async renamePet(name) {
+        const normalized = name.trim();
+        if (!normalized || [...normalized].length > 64) throw new Error("invalid pet name");
+        previewSnapshot.pet.name = normalized;
+        return null;
+      },
       async clickPet() {
         previewSnapshot.pet.mood = Math.min(100, previewSnapshot.pet.mood + 2);
         previewSnapshot.pet.affinity = Math.min(100, previewSnapshot.pet.affinity + 1);
@@ -1633,6 +1640,7 @@ export function createDesktopApi(
     playAction: async (action) => await invokeCommand("play_pet_action", { action }) as NimoraCommand,
     carePet: async (action) => await invokeCommand("care_pet", { action }) as NimoraCommand,
     usePetItem: async (itemId) => await invokeCommand("use_pet_item", { itemId }) as NimoraCommand,
+    renamePet: async (name) => await invokeCommand("rename_pet", { name }) as NimoraCommand,
     clickPet: async (x, y, button) => await invokeCommand("click_pet", {
       request: { x, y, button },
     }) as NimoraCommand,

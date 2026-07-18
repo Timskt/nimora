@@ -648,6 +648,22 @@ impl<R: PetRepository> RuntimeService<R> {
         )
     }
 
+    /// Renames the companion and publishes the durable identity change atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the name is invalid or the snapshot and event cannot be
+    /// persisted atomically.
+    pub fn rename_pet(&self, name: impl Into<String>) -> Result<Command, RuntimeError> {
+        let name = name.into();
+        self.update(
+            |pet| pet.rename(name.clone()),
+            || Command::new("pet.identity.rename", serde_json::json!({ "name": name }), CommandRisk::Safe),
+            "pet.identity.renamed",
+            |before, after| serde_json::json!({ "before": { "name": before.name }, "after": { "name": after.name } }),
+        )
+    }
+
     /// Records a semantic pointer interaction with the pet.
     ///
     /// # Errors
@@ -1385,6 +1401,34 @@ mod tests {
             (before.energy, before.satiety, before.mood)
         );
         assert_eq!(after.last_item_use_ms, 0);
+        assert!(service.drain_events().expect("events").is_empty());
+    }
+
+    #[test]
+    fn rename_is_atomic_and_correlated() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let command = service.rename_pet(" Mochi ").expect("rename");
+        assert_eq!(service.snapshot().expect("snapshot").name, "Mochi");
+        let event = service
+            .drain_events()
+            .expect("events")
+            .pop()
+            .expect("event");
+        assert_eq!(command.command_id.to_string(), "pet.identity.rename");
+        assert_eq!(event.event_type, "pet.identity.renamed");
+        assert_eq!(event.trace_id, command.trace_id);
+        assert_eq!(event.data["before"]["name"], "Aster");
+        assert_eq!(event.data["after"]["name"], "Mochi");
+    }
+
+    #[test]
+    fn failed_rename_persistence_preserves_name_and_events() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        service.repository.fail_save.store(true, Ordering::Relaxed);
+        assert!(service.rename_pet("Mochi").is_err());
+        assert_eq!(service.snapshot().expect("snapshot").name, "Aster");
         assert!(service.drain_events().expect("events").is_empty());
     }
 

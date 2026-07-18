@@ -37,6 +37,11 @@ export function itemPresentation(id: PetItemId) {
   return petItemPresentation(id);
 }
 
+export function normalizedPetName(value: string): string | null {
+  const name = value.trim();
+  return name.length > 0 && [...name].length <= 64 ? name : null;
+}
+
 async function playVoiceCue(cue: "pet.celebrate" | "pet.work", quiet: boolean): Promise<void> {
   if (quiet) return;
   const clip = await desktopApi.activeVoiceClip(cue);
@@ -68,6 +73,7 @@ export function App() {
   const [desktopSnapshot, setDesktopSnapshot] = useState<DesktopSnapshot | null>(null);
   const [activeTheme, setActiveTheme] = useState<ActiveThemeSnapshot | null>(null);
   const [notice, setNotice] = useState(desktopApi.native ? "原生运行时已连接" : "浏览器预览模式");
+  const [petNameDraft, setPetNameDraft] = useState("");
   const updateNotice = useCallback((message: string) => setNotice(message), []);
   const relationship = petGrowth(desktopSnapshot?.pet.bondPoints, desktopSnapshot?.pet.affinity ?? 0);
 
@@ -75,6 +81,7 @@ export function App() {
     void Promise.all([desktopApi.snapshot(), desktopApi.outboxSnapshot(), desktopApi.activeTheme()]).then(([snapshot, nextOutbox, nextTheme]) => {
       setSafeMode(snapshot.safety.mode === "safe");
       setDesktopSnapshot(snapshot);
+      setPetNameDraft(snapshot.pet.name);
       const recovering = snapshot.startup.mode === "recovery";
       setRecoveryMode(recovering);
       if (recovering) {
@@ -88,13 +95,33 @@ export function App() {
     });
   }, []);
 
+  async function renamePet() {
+    const name = normalizedPetName(petNameDraft);
+    if (!name) {
+      setNotice("宠物名称需要 1–64 个字符");
+      return;
+    }
+    try {
+      await desktopApi.renamePet(name);
+      const snapshot = await desktopApi.snapshot();
+      setDesktopSnapshot(snapshot);
+      setPetNameDraft(snapshot.pet.name);
+      setNotice(`以后就叫我「${snapshot.pet.name}」吧`);
+    } catch {
+      setNotice(recoveryMode ? "恢复模式下不能改名" : "改名失败，原名称保持不变");
+    }
+  }
+
   useEffect(() => {
     if (!desktopApi.native) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void desktopApi.onPetVitalsChanged(() => {
       void desktopApi.snapshot().then((snapshot) => {
-        if (!disposed) setDesktopSnapshot(snapshot);
+        if (!disposed) {
+          setDesktopSnapshot(snapshot);
+          setPetNameDraft(snapshot.pet.name);
+        }
       });
     }).then((value) => {
       if (disposed) value();
@@ -113,7 +140,7 @@ export function App() {
     }
     await desktopApi.playAction(action);
     void playVoiceCue(action === "celebrate" ? "pet.celebrate" : "pet.work", quiet).catch(() => undefined);
-    setNotice(action === "celebrate" ? "Aster 正在回应你" : "专注场景已启动");
+    setNotice(action === "celebrate" ? `${desktopSnapshot?.pet.name ?? "Aster"} 正在回应你` : "专注场景已启动");
   }
 
   async function runCare(action: PetCareAction) {
@@ -122,9 +149,9 @@ export function App() {
       return;
     }
     const labels: Record<PetCareAction, string> = {
-      feed: "已为 Aster 补充能量",
-      play: "Aster 玩得很开心",
-      groom: "Aster 已经整理好啦",
+      feed: `已为 ${desktopSnapshot?.pet.name ?? "Aster"} 补充能量`,
+      play: `${desktopSnapshot?.pet.name ?? "Aster"} 玩得很开心`,
+      groom: `${desktopSnapshot?.pet.name ?? "Aster"} 已经整理好啦`,
     };
     try {
       await desktopApi.carePet(action);
@@ -239,7 +266,7 @@ export function App() {
             <div className="stage-copy">
               <span className="pill">{notice}</span>
               <h2 id="pet-heading">晚上好，我一直在这里。</h2>
-              <p>所有核心能力都在本机运行。你可以先和 Aster 打个招呼，或者开启一个安静的专注场景。</p>
+              <p>所有核心能力都在本机运行。你可以先和 {desktopSnapshot?.pet.name ?? "Aster"} 打个招呼，或者开启一个安静的专注场景。</p>
               <div className="stage-actions">
                 <button className="primary-button" type="button" disabled={recoveryMode} onClick={() => void runAction("celebrate")}>开始互动</button>
                 <button className="secondary-button" type="button" disabled={recoveryMode} onClick={() => void runAction("work")}>进入专注</button>
@@ -248,7 +275,7 @@ export function App() {
                 <button className="secondary-button" type="button" disabled={recoveryMode} onClick={() => void runCare("groom")}>梳理</button>
               </div>
             </div>
-            <div className="pet-visual" aria-label="默认角色 Aster，当前状态平静">
+            <div className="pet-visual" aria-label={`桌面伙伴 ${desktopSnapshot?.pet.name ?? "Aster"}，当前状态平静`}>
               <div className="orbit orbit-one" />
               <div className="orbit orbit-two" />
               <div className="pet-shadow" />
@@ -278,6 +305,10 @@ export function App() {
 
           <section className="metric-card affinity-card">
             <p className="card-label">陪伴关系</p>
+            <form className="pet-name-form" onSubmit={(event) => { event.preventDefault(); void renamePet(); }}>
+              <label><span>伙伴名字</span><input aria-label="伙伴名字" disabled={recoveryMode} maxLength={64} value={petNameDraft} onChange={(event) => setPetNameDraft(event.target.value)} /></label>
+              <button type="submit" disabled={recoveryMode}>保存</button>
+            </form>
             <div className="metric-row"><strong>Lv. {relationship.level}</strong><span>累计陪伴 {relationship.bondPoints}</span></div>
             <div className="progress-track relationship-progress" aria-label={`当前等级进度 ${relationship.levelProgress}/${relationship.pointsPerLevel}`}>
               <span style={{ width: `${relationship.progressPercent}%` }} />

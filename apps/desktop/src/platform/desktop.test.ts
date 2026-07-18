@@ -19,6 +19,23 @@ describe("desktop platform adapter", () => {
     expect(invoke).toHaveBeenCalledWith("use_pet_item", { itemId: "berry_bite" });
   });
 
+  it("normalizes preview names and maps native rename commands", async () => {
+    const preview = createDesktopApi(false);
+    const originalName = (await preview.snapshot()).pet.name;
+    try {
+      await preview.renamePet("  Mochi  ");
+      expect((await preview.snapshot()).pet.name).toBe("Mochi");
+      await expect(preview.renamePet(" ")).rejects.toThrow("invalid pet name");
+    } finally {
+      await preview.renamePet(originalName);
+    }
+
+    const invoke = vi.fn(async () => null);
+    const native = createDesktopApi(true, invoke);
+    await native.renamePet("Mochi");
+    expect(invoke).toHaveBeenCalledWith("rename_pet", { name: "Mochi" });
+  });
+
   it("keeps browser preview fully offline", async () => {
     const api = createDesktopApi(false);
     expect(api.native).toBe(false);

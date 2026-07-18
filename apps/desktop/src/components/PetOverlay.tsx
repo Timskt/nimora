@@ -26,7 +26,8 @@ export function PetOverlay() {
   const [rendererFailed, setRendererFailed] = useState(false);
   const [message, setMessage] = useState("正在醒来…");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [menuPage, setMenuPage] = useState<"root" | "inventory">("root");
+  const [menuPage, setMenuPage] = useState<"root" | "inventory" | "rename">("root");
+  const [nameDraft, setNameDraft] = useState("");
   const gestureTrail = useRef<PetGestureTrail | null>(null);
   const dragging = useRef(false);
   const suppressClick = useRef(false);
@@ -48,6 +49,7 @@ export function PetOverlay() {
     void Promise.all([desktopApi.snapshot(), desktopApi.activeCharacterRenderer()]).then(([value, descriptor]) => {
       if (disposed) return;
       setSnapshot(value);
+      setNameDraft(value.pet.name);
       setRenderer(descriptor);
       setRendererFailed(false);
       setMessage(desktopApi.native ? petStatusMessage(value.pet) : "浏览器预览");
@@ -105,7 +107,7 @@ export function PetOverlay() {
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        if (menuPage === "inventory") {
+        if (menuPage !== "root") {
           setMenuPage("root");
         } else {
           setMenuOpen(false);
@@ -122,7 +124,9 @@ export function PetOverlay() {
   }, [menuPage]);
 
   useEffect(() => {
-    if (menuOpen) menu.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    if (!menuOpen) return;
+    if (menuPage === "rename") menu.current?.querySelector<HTMLInputElement>("input")?.focus();
+    else menu.current?.querySelector<HTMLButtonElement>("button")?.focus();
   }, [menuOpen, menuPage]);
 
   const handleRendererFailure = useCallback(() => {
@@ -177,6 +181,24 @@ export function PetOverlay() {
       setMessage(`已使用${petItemPresentation(itemId).label}`);
     } catch {
       setMessage("道具不可用或正在冷却");
+    }
+  }
+
+  async function renamePet() {
+    const name = nameDraft.trim();
+    if (!name || [...name].length > 64) {
+      setMessage("名字需要 1–64 个字符");
+      return;
+    }
+    try {
+      await desktopApi.renamePet(name);
+      const next = await desktopApi.snapshot();
+      setSnapshot(next);
+      setNameDraft(next.pet.name);
+      setMenuPage("root");
+      setMessage(`以后就叫我${next.pet.name}吧`);
+    } catch {
+      setMessage("现在不能改名，原来的名字还在");
     }
   }
 
@@ -311,7 +333,7 @@ export function PetOverlay() {
           suppressClick.current = true;
           openPetMenu();
         }}
-        aria-label="与 Aster 互动、抚摸或拖动"
+        aria-label={`与 ${snapshot?.pet.name ?? "Aster"} 互动、抚摸或拖动`}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
       >
@@ -341,17 +363,18 @@ export function PetOverlay() {
         <span className="overlay-shadow" aria-hidden="true" />
       </button>
       {menuOpen ? (
-        <div ref={menu} className={`overlay-pet-menu${menuPage === "inventory" ? " inventory-page" : ""}`} role="menu" aria-label={menuPage === "inventory" ? "随身背包" : "宠物菜单"}>
+        <div ref={menu} className={`overlay-pet-menu${menuPage === "inventory" ? " inventory-page" : menuPage === "rename" ? " rename-page" : ""}`} role={menuPage === "rename" ? "dialog" : "menu"} aria-label={menuPage === "inventory" ? "随身背包" : menuPage === "rename" ? "修改伙伴名字" : "宠物菜单"}>
           {menuPage === "root" ? (
             <>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("feed"); }}><span>◒</span>喂食</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("play"); }}><span>✧</span>玩耍</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("groom"); }}><span>♢</span>梳理</button>
               <button type="button" role="menuitem" onClick={() => setMenuPage("inventory")}><span>▣</span>背包<small>{petInventoryQuantity(snapshot?.pet.inventory ?? [])}</small></button>
+              <button type="button" role="menuitem" onClick={() => { setNameDraft(snapshot?.pet.name ?? "Aster"); setMenuPage("rename"); }}><span>✎</span>改名字</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("sleep"); }}><span>☾</span>休息</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void toggleClickThrough(); }}><span>⌁</span>鼠标穿透</button>
             </>
-          ) : (
+          ) : menuPage === "inventory" ? (
             <>
               <button className="inventory-back" type="button" role="menuitem" onClick={() => setMenuPage("root")}><span>‹</span>返回宠物菜单</button>
               {snapshot?.pet.inventory.map((stack) => {
@@ -360,19 +383,23 @@ export function PetOverlay() {
               })}
               {(snapshot?.pet.inventory.length ?? 0) === 0 ? <p className="overlay-inventory-empty">背包空空的<br />已有物品不会过期</p> : null}
             </>
-          )}
+          ) : <form className="overlay-rename-form" onSubmit={(event) => { event.preventDefault(); void renamePet(); }}>
+            <label htmlFor="overlay-pet-name">新的名字</label>
+            <input id="overlay-pet-name" maxLength={64} value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} autoFocus />
+            <div><button type="button" onClick={() => setMenuPage("root")}>返回</button><button type="submit">保存</button></div>
+          </form>}
         </div>
       ) : null}
       <div className="overlay-actions" aria-label="宠物快捷操作">
-        <button type="button" onClick={() => void care("feed")} aria-label="给 Aster 喂食">◒</button>
-        <button type="button" onClick={() => void care("play")} aria-label="陪 Aster 玩耍">✧</button>
-        <button type="button" onClick={() => void care("groom")} aria-label="为 Aster 梳理">♢</button>
+        <button type="button" onClick={() => void care("feed")} aria-label={`给 ${snapshot?.pet.name ?? "Aster"} 喂食`}>◒</button>
+        <button type="button" onClick={() => void care("play")} aria-label={`陪 ${snapshot?.pet.name ?? "Aster"} 玩耍`}>✧</button>
+        <button type="button" onClick={() => void care("groom")} aria-label={`为 ${snapshot?.pet.name ?? "Aster"} 梳理`}>♢</button>
         <button
           type="button"
           onClick={(event) => void interact(event.screenX, event.screenY)}
-          aria-label="和 Aster 互动"
+          aria-label={`和 ${snapshot?.pet.name ?? "Aster"} 互动`}
         >✦</button>
-        <button type="button" onClick={() => void play("sleep")} aria-label="让 Aster 休息">☾</button>
+        <button type="button" onClick={() => void play("sleep")} aria-label={`让 ${snapshot?.pet.name ?? "Aster"} 休息`}>☾</button>
         <button type="button" onClick={() => void toggleClickThrough()} aria-label="切换鼠标穿透">⌁</button>
       </div>
     </main>

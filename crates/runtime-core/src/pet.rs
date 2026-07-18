@@ -315,6 +315,21 @@ impl Pet {
         Ok(())
     }
 
+    /// Replaces the companion name after applying the same normalization as creation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PetError::InvalidName`] when the normalized name is empty or exceeds 64
+    /// Unicode scalar values.
+    pub fn rename(&mut self, name: impl Into<String>) -> Result<(), PetError> {
+        let name = name.into().trim().to_owned();
+        if name.is_empty() || name.chars().count() > 64 {
+            return Err(PetError::InvalidName);
+        }
+        self.name = name;
+        Ok(())
+    }
+
     /// Enters the semantic pointer-interaction state.
     ///
     /// # Errors
@@ -776,6 +791,17 @@ pub enum PetError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rename_normalizes_and_rejects_invalid_names_without_mutation() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.rename("  Mochi  ").expect("rename");
+        assert_eq!(pet.name, "Mochi");
+        assert_eq!(pet.rename("   "), Err(PetError::InvalidName));
+        assert_eq!(pet.name, "Mochi");
+        assert_eq!(pet.rename("灵".repeat(65)), Err(PetError::InvalidName));
+        assert_eq!(pet.name, "Mochi");
+    }
 
     #[test]
     fn autonomy_is_deterministic_and_respects_cooldown() {

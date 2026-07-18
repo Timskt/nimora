@@ -6772,6 +6772,20 @@ fn use_pet_item(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn rename_pet(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    name: String,
+) -> Result<Command, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let command = state.runtime.rename_pet(name)?;
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    Ok(command)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn click_pet(
     app: AppHandle,
     state: State<'_, DesktopState>,
@@ -10725,6 +10739,7 @@ pub fn run() {
             play_pet_action,
             care_pet,
             use_pet_item,
+            rename_pet,
             click_pet,
             stroke_pet,
             begin_pet_drag,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { itemPresentation, keepsakePresentation, navigation, navItemClassName, runtimeActivities, voiceGain } from "./App";
+import { itemPresentation, keepsakePresentation, navigation, navItemClassName, normalizedPetName, runtimeActivities, voiceGain } from "./App";
 import { petInventoryQuantity, petItemPresentation } from "./components/petItems";
 
 describe("navItemClassName", () => {
@@ -21,6 +21,14 @@ describe("voiceGain", () => {
     expect(voiceGain(0)).toBe(1);
     expect(voiceGain(-6)).toBeCloseTo(0.501, 3);
     expect(voiceGain(6)).toBe(1);
+  });
+});
+
+describe("normalizedPetName", () => {
+  it("trims valid names and rejects empty or oversized names", () => {
+    expect(normalizedPetName("  灵栖  ")).toBe("灵栖");
+    expect(normalizedPetName(" ")).toBeNull();
+    expect(normalizedPetName("灵".repeat(65))).toBeNull();
   });
 });
 

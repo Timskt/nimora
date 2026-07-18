@@ -834,3 +834,20 @@ ID / 标题 / 优先级 / 前置条件
 
 - 验证：260×300、最小 180×210、200% 缩放和长标签下，菜单与三项 Starter Pack 不被窗口裁切，焦点样式和数量仍可辨识。
 - 验证：打开背包后首个“返回”动作获得焦点；Esc 先回宠物菜单，再次 Esc 关闭并聚焦桌宠；空态可读且不创建第二窗口。
+
+### PET-067 宠物改名原子性与迁移
+
+- 验证：首尾空白被规范化，1–64 个 Unicode scalar values 可保存；空名称和 65 字符名称失败且原名称不变。
+- 验证：Command 为 `pet.identity.rename`，Event 为 `pet.identity.renamed`，Trace 对应并包含前后名称；SQLite 重启恢复新名称。
+- 验证：改名不改变 Pet ID、关系、生命值、背包、纪念、位置、策略或 Renderer；Repository 保存失败不发布 Event 且内存 Snapshot 不变。
+
+### PET-068 多窗口名称同步与失败关闭
+
+- 验证：控制中心和原生 Overlay 任一入口改名后，另一窗口从宿主 Snapshot 更新；断网、禁用 Provider、关闭控制中心后 Overlay 仍可改名。
+- 验证：Safe/Recovery Mode、非法输入和宿主失败均显示温和错误，不伪造成功；AI、Program、Skill 和 Renderer 不能直接修改名称。
+
+### UI-027 控制中心与 Overlay 命名体验
+
+- 验证：控制中心关系卡使用紧凑内联表单，Overlay 右键/长按菜单使用独立对话页，不调用浏览器 Prompt 或创建新窗口。
+- 验证：Hero、互动反馈、快捷操作和 ARIA 标签全部使用持久名称；改名页输入框自动聚焦，Esc 先返回根菜单，再次关闭并聚焦桌宠。
+- 验证：260×300 Overlay、窄控制中心、200% 缩放、高对比度、中文/Emoji/长名称下输入、保存和错误反馈仍清晰可用。

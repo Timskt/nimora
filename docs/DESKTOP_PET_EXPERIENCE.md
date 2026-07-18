@@ -61,6 +61,10 @@ Needs → Mood → Intent → Action Plan → Renderer Semantics → Adapter Ani
 
 Sleep 是领域状态而非纯动画。用户主动休息时，每个生命周期恢复 2 Energy，最多 100；Mood、Satiety 与 Cleanliness 仍按低压力节奏自然演化。自主 Rest 的动作时长短于生命周期，因此在一次合法完成时直接恢复 8 Energy；被用户拖拽、Safe/Focus 策略或其它状态中断时不获得完成收益。两条路径均经过原子 Snapshot/Event 持久化，离线追赶受既有 24 小时上限约束。
 
+宠物名称属于持久 `Pet Identity`，不是用户 Profile 名称、角色资源名称或 Renderer 标签。用户可在控制中心关系卡以及桌宠长按/右键菜单中使用内联表单改名；名称在去除首尾空白后必须包含 1–64 个 Unicode scalar values。改名只替换显示身份，不改变 Pet ID，不重置关系、生命值、背包、纪念、位置、行为策略或角色资产。Command `pet.identity.rename`、Event `pet.identity.renamed` 与 Snapshot 在同一应用事务中提交；校验或 Repository 保存失败时名称、事件和所有其它状态均保持不变。
+
+改名必须完全离线，关闭控制中心、禁用 Provider 或断网时仍可从原生 Overlay 完成。两个窗口通过宿主 Snapshot 事件同步，所有可见文案和 ARIA 名称使用持久名称；Esc 从改名页先返回宠物菜单，再次关闭菜单。Safe/Recovery Mode 失败关闭。AI、Agent、Program、Skill 与第三方模型不得直接写 Snapshot，只能在获得明确 Identity Capability 后经 Capability Gateway 请求相同命令，因此未来语音命名、剧情昵称和家庭多宠扩展不会绕过身份权威。
+
 ## 4. 经典桌宠能力
 
 ### 4.1 直接互动
