@@ -57,6 +57,10 @@ use nimora_runtime_core::{
     Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction, PointerButton,
     Position, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
 };
+use nimora_skill_host::{
+    SKILL_WORKER_PROTOCOL_VERSION, SkillAgentTaskRequest, SkillExecutionOutput, SkillHostError,
+    SkillWorkerConfig, SkillWorkerMessage, SkillWorkerProcess,
+};
 use nimora_skill_package::{
     SkillPackageError, install_skill_atomically, load_installed_skill, rollback_skill,
 };
@@ -678,6 +682,23 @@ struct SkillCatalogSnapshot {
     skills: Vec<SkillCatalogEntry>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExecuteSkillRequest {
+    skill_id: String,
+    activation_event: String,
+    #[serde(default)]
+    input: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillExecutionReceipt {
+    execution_id: Uuid,
+    skill_id: String,
+    agent_results: Vec<DesktopAgentRunResult>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UserProgramEventSessionReceipt {
@@ -865,10 +886,14 @@ enum DesktopError {
     SkillPackage(#[from] SkillPackageError),
     #[error(transparent)]
     SkillRuntime(#[from] SkillError),
+    #[error("Skill Worker failed: {0}")]
+    SkillHost(#[from] SkillHostError),
     #[error("Skill must be authorized before it can be enabled")]
     SkillAuthorizationRequired,
     #[error("installed Skill does not match its persisted exact-version state")]
     SkillStateMismatch,
+    #[error("Skill command plans are unavailable until the shared Command Registry is active")]
+    SkillCommandRegistryUnavailable,
     #[error(transparent)]
     Automation(#[from] AutomationError),
     #[error("user program execution was not found")]
@@ -3853,6 +3878,95 @@ fn rollback_installed_skill(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn execute_skill(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    request: ExecuteSkillRequest,
+) -> Result<SkillExecutionReceipt, DesktopError> {
+    execute_skill_inner(&app, &state, request)
+}
+
+fn execute_skill_inner(
+    app: &AppHandle,
+    state: &DesktopState,
+    request: ExecuteSkillRequest,
+) -> Result<SkillExecutionReceipt, DesktopError> {
+    ensure_normal_mode(state)?;
+    let installed = load_installed_skill(&state.skill_store, &request.skill_id)?;
+    let execution_id = Uuid::now_v7();
+    let output = {
+        let mut host = state
+            .skill_host
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?;
+        let manifest = host.active_manifest(&request.skill_id)?.clone();
+        if manifest != *installed.manifest.manifest() {
+            return Err(DesktopError::SkillStateMismatch);
+        }
+        let worker_request = SkillWorkerMessage::Run {
+            protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
+            execution_id: execution_id.to_string(),
+            manifest: Box::new(manifest),
+            source: installed.source,
+            activation_event: request.activation_event,
+            input: request.input,
+        };
+        let mut worker = SkillWorkerProcess::spawn(
+            skill_worker_config(app, execution_id),
+            &worker_request,
+            &host,
+        )?;
+        let response =
+            worker.wait_recording_failure(&mut host, &request.skill_id, current_time_ms()?)?;
+        terminal_skill_worker_output(response)?
+    };
+    ensure_skill_command_registry(output.commands.len())?;
+    let requester = state
+        .skill_host
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .module_agent_identity(&request.skill_id)?;
+    let mut agent_results = Vec::with_capacity(output.agent_tasks.len());
+    for task in output.agent_tasks {
+        agent_results.push(run_skill_agent_task(
+            state,
+            &request.skill_id,
+            execution_id,
+            &requester,
+            task,
+        )?);
+    }
+    Ok(SkillExecutionReceipt {
+        execution_id,
+        skill_id: request.skill_id,
+        agent_results,
+    })
+}
+
+fn ensure_skill_command_registry(command_count: usize) -> Result<(), DesktopError> {
+    if command_count == 0 {
+        Ok(())
+    } else {
+        Err(DesktopError::SkillCommandRegistryUnavailable)
+    }
+}
+
+fn terminal_skill_worker_output(
+    response: SkillWorkerMessage,
+) -> Result<SkillExecutionOutput, DesktopError> {
+    match response {
+        SkillWorkerMessage::Completed { output, .. } => Ok(output),
+        SkillWorkerMessage::Error { code, message, .. } => Err(DesktopError::SkillHost(
+            SkillHostError::Protocol(format!("{code}: {message}")),
+        )),
+        SkillWorkerMessage::Run { .. } => Err(DesktopError::SkillHost(SkillHostError::Protocol(
+            "worker returned a non-terminal response".to_owned(),
+        ))),
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn install_user_program(
     state: State<'_, DesktopState>,
     request: InstallUserProgramRequest,
@@ -4743,6 +4857,62 @@ fn run_user_program_agent_task(
     execution_id: Uuid,
     request: UserProgramAgentTask,
 ) -> Result<DesktopAgentRunResult, DesktopError> {
+    run_module_agent_task(
+        state,
+        program_id,
+        execution_id,
+        format!("program:{program_id}"),
+        request.provider_id,
+        request.model,
+        request.instruction,
+        request
+            .context
+            .into_iter()
+            .map(|segment| ContextSegment {
+                source: segment.source,
+                content: segment.content,
+            })
+            .collect(),
+    )
+}
+
+fn run_skill_agent_task(
+    state: &DesktopState,
+    skill_id: &str,
+    execution_id: Uuid,
+    requester: &str,
+    request: SkillAgentTaskRequest,
+) -> Result<DesktopAgentRunResult, DesktopError> {
+    run_module_agent_task(
+        state,
+        skill_id,
+        execution_id,
+        requester.to_owned(),
+        request.provider_id,
+        request.model,
+        request.instruction,
+        request
+            .context
+            .into_iter()
+            .map(|segment| ContextSegment {
+                source: segment.source,
+                content: segment.content,
+            })
+            .collect(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_module_agent_task(
+    state: &DesktopState,
+    module_id: &str,
+    execution_id: Uuid,
+    requester: String,
+    provider_id: String,
+    model: String,
+    instruction: String,
+    context: Vec<ContextSegment>,
+) -> Result<DesktopAgentRunResult, DesktopError> {
     let budget = AgentBudget {
         max_steps: 2,
         max_tool_calls: 0,
@@ -4752,7 +4922,7 @@ fn run_user_program_agent_task(
         max_cost_microunits: 0,
     };
     let adapter = ModuleAgentAdapter::new(
-        format!("program:{program_id}"),
+        requester,
         [
             DETERMINISTIC_PROVIDER_ID.to_owned(),
             "provider:ollama-loopback".to_owned(),
@@ -4763,17 +4933,10 @@ fn run_user_program_agent_task(
     let admitted = adapter
         .admit(
             ModuleAgentRequest {
-                provider_id: request.provider_id,
-                model: request.model,
-                instruction: request.instruction,
-                context: request
-                    .context
-                    .into_iter()
-                    .map(|segment| ContextSegment {
-                        source: segment.source,
-                        content: segment.content,
-                    })
-                    .collect(),
+                provider_id,
+                model,
+                instruction,
+                context,
             },
             current_time_ms()?,
         )
@@ -4782,7 +4945,7 @@ fn run_user_program_agent_task(
                 message,
                 trace_id,
                 audit,
-            } => record_module_context_rejection(state, program_id, execution_id, trace_id, &audit)
+            } => record_module_context_rejection(state, module_id, execution_id, trace_id, &audit)
                 .map_or_else(
                     |_| DesktopError::Agent("context rejection audit unavailable".to_owned()),
                     |()| DesktopError::Agent(message),
@@ -4945,6 +5108,48 @@ fn worker_config(app: &AppHandle, execution: &ExecutionHandle) -> WorkerConfig {
         timeout: execution.limits.timeout,
         output_bytes: execution.limits.output_bytes,
         cancellation: Some(execution.cancellation()),
+    }
+}
+
+fn skill_worker_config(app: &AppHandle, execution_id: Uuid) -> SkillWorkerConfig {
+    let executable = option_env!("NIMORA_SKILL_WORKER_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let executable_candidates = app
+                .path()
+                .executable_dir()
+                .ok()
+                .into_iter()
+                .map(|directory| directory.join("nimora-skill-worker"));
+            let resource_candidates =
+                app.path()
+                    .resource_dir()
+                    .ok()
+                    .into_iter()
+                    .flat_map(|directory| {
+                        [
+                            directory.join("binaries/nimora-skill-worker"),
+                            directory.join("nimora-skill-worker"),
+                        ]
+                    });
+            executable_candidates
+                .chain(resource_candidates)
+                .find(|path| path.is_file())
+                .or_else(|| {
+                    std::env::current_exe()
+                        .ok()
+                        .and_then(|path| path.parent().map(Path::to_path_buf))
+                        .map(|directory| directory.join("nimora-skill-worker"))
+                })
+                .unwrap_or_else(|| PathBuf::from("nimora-skill-worker"))
+        });
+    SkillWorkerConfig {
+        executable: executable.to_string_lossy().into_owned(),
+        args: Vec::new(),
+        execution_id: execution_id.to_string(),
+        timeout: Duration::from_secs(5),
+        output_bytes: 256 * 1024,
+        cancellation: None,
     }
 }
 
@@ -5707,6 +5912,7 @@ pub fn run() {
             authorize_skill,
             set_skill_enabled,
             rollback_installed_skill,
+            execute_skill,
             install_user_program,
             rollback_user_program,
             user_program_permission_status,
@@ -5854,14 +6060,14 @@ mod tests {
         cancel_all_pending_agent_tools, cancel_automation_run_inner, confirm_agent_tool_inner,
         confirm_agent_tool_with_registry, default_agent_model, default_agent_provider_id,
         diagnostic_report, ensure_normal_mode, ensure_program_permissions,
-        ensure_user_program_agent_capability, inspect_asset_catalog, install_gltf_character,
-        open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
-        permission_grant, persist_active_character, prepare_agent_tool_inner,
-        reject_agent_tool_inner, resolve_active_character, resolve_character_renderer,
-        run_live_automation, run_local_agent_inner, run_user_program_agent_task, screen_coordinate,
-        serve_asset_protocol, skill_capability_names, test_automation, user_program_input,
-        valid_asset_identifier, validate_model_source, validate_package_source,
-        validate_requested_animation_map,
+        ensure_skill_command_registry, ensure_user_program_agent_capability, inspect_asset_catalog,
+        install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
+        parse_user_program_plan, permission_grant, persist_active_character,
+        prepare_agent_tool_inner, reject_agent_tool_inner, resolve_active_character,
+        resolve_character_renderer, run_live_automation, run_local_agent_inner,
+        run_skill_agent_task, run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
+        skill_capability_names, test_automation, user_program_input, valid_asset_identifier,
+        validate_model_source, validate_package_source, validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentTask, AgentTaskOrigin, AgentTaskStatus, CancellationFlag,
@@ -5884,6 +6090,7 @@ mod tests {
         SqliteAutomationJournal, SqliteProgramPermissionRepository,
     };
     use nimora_runtime_core::{Event, EventSource, Position, RuntimeMode};
+    use nimora_skill_host::{SkillAgentTaskRequest, SkillContextSegment};
     use nimora_skill_package::install_skill_atomically;
     use nimora_skill_runtime::{SkillCapability, SkillManifest, SkillStatus};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
@@ -7845,6 +8052,41 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].task.origin, AgentTaskOrigin::Module);
         std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn skill_agent_task_uses_leased_module_identity_without_tools() {
+        let (root, state) = normal_desktop_state();
+        let result = run_skill_agent_task(
+            &state,
+            "studio.example.summarizer",
+            Uuid::now_v7(),
+            "skill:studio.example.summarizer",
+            SkillAgentTaskRequest {
+                provider_id: DETERMINISTIC_PROVIDER_ID.to_owned(),
+                model: "model:echo-v1".to_owned(),
+                instruction: "Summarize this focus session.".to_owned(),
+                context: vec![SkillContextSegment {
+                    source: "event:focus.completed".to_owned(),
+                    content: "The focus session lasted 25 minutes.".to_owned(),
+                }],
+            },
+        )
+        .expect("Skill module Agent task");
+        assert_eq!(result.status, DesktopAgentRunStatus::Completed);
+        assert_eq!(result.task.origin, AgentTaskOrigin::Module);
+        assert_eq!(result.task.requester, "skill:studio.example.summarizer");
+        assert!(result.pending_tools.is_empty());
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn skill_commands_fail_closed_before_shared_registry_dispatch() {
+        ensure_skill_command_registry(0).expect("empty command plan");
+        assert!(matches!(
+            ensure_skill_command_registry(1),
+            Err(DesktopError::SkillCommandRegistryUnavailable)
+        ));
     }
 
     #[test]

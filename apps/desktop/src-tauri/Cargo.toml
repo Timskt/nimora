@@ -28,6 +28,7 @@ nimora-persistence-sqlite = { path = "../../../crates/persistence-sqlite" }
 nimora-runtime-app = { path = "../../../crates/runtime-app" }
 nimora-runtime-core = { path = "../../../crates/runtime-core" }
 nimora-skill-package = { path = "../../../crates/skill-package" }
+nimora-skill-host = { path = "../../../crates/skill-host" }
 nimora-skill-runtime = { path = "../../../crates/skill-runtime" }
 nimora-user-code-policy = { path = "../../../crates/user-code-policy" }
 nimora-user-code-gateway = { path = "../../../crates/user-code-gateway" }

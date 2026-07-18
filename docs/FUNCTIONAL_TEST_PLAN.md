@@ -171,6 +171,9 @@ ID / 标题 / 优先级 / 前置条件
 | EXT-025 | Desktop Skill 升级与回滚授权 | 升级或回滚后强制清零授权和启用状态，旧版本授权不得跨版本复用 | P0 |
 | EXT-026 | Recovery Mode 扩展隔离 | 不读取正常 Skill Store、不恢复 Worker 或 Contribution，所有 Skill 写 IPC fail-closed | P0 |
 | EXT-027 | Skill 双向模块调用 | Worker Command 计划只能进入共享 Command Registry、风险批准与 Capability Gateway；Agent Task 计划只能凭激活 requester 进入 Module Adapter | P0 |
+| EXT-028 | Desktop Skill Worker 执行 | `execute_skill` 重新复验 active 包，Worker 请求 Manifest 必须与当前 Activated 租约逐字段一致，未激活、篡改或未声明 activation event 时进程前拒绝 | P0 |
+| EXT-029 | Desktop Skill Agent 回执 | Agent 计划固定使用 `Module + skill:<id> + draft + no-tools`，上下文注入检测、Provider allowlist、Agent History 与用户程序共用生产链路 | P0 |
+| EXT-030 | Skill Command 接线前安全降级 | 共享 Command Registry 尚未接通期间，任何非空 Command 计划整体失败，不能直接调用内部函数、执行部分命令或先运行 Agent 计划 | P0 |
 | SCRIPT-001 | 用户脚本调用已授权 Command | 正常执行并产生 Run、Trace 和审计记录 | P0 |
 | SCRIPT-002 | 脚本访问未授权文件、网络、进程 | Host 拒绝，不能绕过 Capability Broker | P0 |
 | SCRIPT-003 | 死循环、内存泄漏、事件递归 | 对应实例被限流或终止，Core 继续运行 | P0 |
