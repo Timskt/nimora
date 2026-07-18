@@ -85,6 +85,23 @@ export interface AgentHistoryPage {
   historyDegraded: boolean;
 }
 
+export interface SkillExecutionHistoryRecord {
+  spec: "nimora.skill-execution-history/1";
+  executionId: string;
+  skillId: string;
+  status: "waitingForApproval" | "completed" | "rejected" | "failed";
+  commandCount: number;
+  agentTaskCount: number;
+  createdAtMs: number;
+  updatedAtMs: number;
+  error: string | null;
+}
+
+export interface SkillExecutionHistoryPage {
+  spec: "nimora.desktop-skill-execution-history/1";
+  records: SkillExecutionHistoryRecord[];
+}
+
 export interface AgentToolResult {
   spec: "nimora.desktop-agent-tool-result/1";
   task: { id: string; status: string; providerId: string };
@@ -454,6 +471,8 @@ export interface DesktopApi {
   agentProviderStatus(providerId: string): Promise<AgentProviderStatus>;
   agentHistory(limit?: number, before?: { createdAtMs: number; taskId: string }): Promise<AgentHistoryPage>;
   deleteAgentHistory(taskId?: string): Promise<number>;
+  skillExecutionHistory(limit?: number, before?: { createdAtMs: number; executionId: string }): Promise<SkillExecutionHistoryPage>;
+  deleteSkillExecutionHistory(executionId?: string): Promise<number>;
   runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
   prepareAgentTool(toolId: string, argumentsValue: Record<string, unknown>): Promise<AgentToolResult>;
   confirmAgentTool(invocationId: string): Promise<AgentToolResult>;
@@ -796,6 +815,8 @@ export function createDesktopApi(
     agentProviderStatus: async (providerId) => await invokeCommand("agent_provider_status", { request: { providerId } }) as AgentProviderStatus,
     agentHistory: async (limit = 50, before) => await invokeCommand("agent_history_list", { request: { beforeCreatedAtMs: before?.createdAtMs ?? null, beforeTaskId: before?.taskId ?? null, limit } }) as AgentHistoryPage,
     deleteAgentHistory: async (taskId) => (await invokeCommand("delete_agent_history", { request: { taskId: taskId ?? null } }) as { deleted: number }).deleted,
+    skillExecutionHistory: async (limit = 50, before) => await invokeCommand("skill_execution_history_list", { request: { beforeCreatedAtMs: before?.createdAtMs ?? null, beforeExecutionId: before?.executionId ?? null, limit } }) as SkillExecutionHistoryPage,
+    deleteSkillExecutionHistory: async (executionId) => (await invokeCommand("delete_skill_execution_history", { request: { executionId: executionId ?? null } }) as { deleted: number }).deleted,
     runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") => await invokeCommand("run_local_agent", { request: { prompt, providerId, model } }) as LocalAgentResult,
     prepareAgentTool: async (toolId, argumentsValue) => await invokeCommand("prepare_agent_tool", { request: { toolId, arguments: argumentsValue } }) as AgentToolResult,
     confirmAgentTool: async (invocationId) => await invokeCommand("confirm_agent_tool", { request: { invocationId } }) as AgentToolResult,

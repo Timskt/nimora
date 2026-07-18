@@ -403,6 +403,17 @@ ID / 标题 / 优先级 / 前置条件
 | AAG-016 | Context 审计故障 fail-closed | Journal 锁、序列化或持久写入失败时 Automation 永久失败且只尝试一次，Agent Submitter、Provider 和模块 Backend 零调用 | P0 |
 | AAG-017 | Context 正常路径无误报 | 合法有界外部数据获准并保持 untrusted 标记，不产生 `context-admission-rejected` 诊断事件 | P0 |
 
+### 18.2 Skill 执行历史与隐私
+
+| ID | 场景 | 预期结果 | P |
+|---|---|---|---:|
+| SKH-001 | Skill 等待高风险批准 | 执行元数据立即写入历史，状态为 `waitingForApproval`，不保存输入、源码、命令参数或 Agent 正文 | P0 |
+| SKH-002 | 批准后执行完成 | 同一 `executionId` 原地收敛为 `completed`，创建时间和分页位置不变 | P0 |
+| SKH-003 | 批准后执行失败 | 状态收敛为 `failed`，仅保存最大 4 KiB 的脱敏错误，重复批准不生成第二条历史 | P0 |
+| SKH-004 | 用户拒绝执行 | 状态原地收敛为 `rejected`，Command 与 Agent Task 均无副作用 | P0 |
+| SKH-005 | 历史稳定分页 | 使用 `(createdAtMs, executionId)` 成对游标，新到旧稳定分页且限制每页 1–200 条 | P1 |
+| SKH-006 | 隐私删除 | 支持按 execution 删除或全部删除；删除历史不执行、取消或恢复任何 Skill | P0 |
+
 - 每次提交：Unit、Schema、核心 Contract。
 - 每次合并：核心 Integration、Pet/Asset/Permission P0。
 - 每夜：完整功能回归、恶意包、网络故障和 UI 截图对比。

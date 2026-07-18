@@ -44,11 +44,12 @@ use nimora_persistence_sqlite::{
     AgentHistoryRecord, AutomationAgentJournalEntry, AutomationAgentJournalStatus,
     AutomationJournalEntry, AutomationRunStart, BackupCoordinator, BackupHealth, BackupPolicy,
     BackupRecord, DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant,
-    SkillApprovalJournalEntry, SkillApprovalJournalStatus, SkillStateRecord,
-    SqliteAgentHistoryRepository, SqliteAutomationAgentJournal, SqliteAutomationJournal,
-    SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
-    SqliteProgramPermissionRepository, SqliteSkillApprovalJournal, SqliteSkillStateRepository,
-    apply_pending_restore, verify_database_file,
+    SkillApprovalJournalEntry, SkillApprovalJournalStatus, SkillExecutionHistoryRecord,
+    SkillExecutionHistoryStatus, SkillStateRecord, SqliteAgentHistoryRepository,
+    SqliteAutomationAgentJournal, SqliteAutomationJournal, SqliteOutboxRepository,
+    SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
+    SqliteProgramPermissionRepository, SqliteSkillApprovalJournal, SqliteSkillExecutionHistory,
+    SqliteSkillStateRepository, apply_pending_restore, verify_database_file,
 };
 use nimora_runtime_app::{
     ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBatch,
@@ -156,6 +157,7 @@ struct DesktopState {
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
     pending_agent_tools: Mutex<HashMap<Uuid, PendingAgentTool>>,
     skill_approval_journal: SqliteSkillApprovalJournal,
+    skill_execution_history: SqliteSkillExecutionHistory,
     active_agent_tasks: Mutex<HashMap<Uuid, CancellationFlag>>,
     active_automation_runs: Mutex<HashMap<Uuid, CancellationFlag>>,
     execution_controller: ExecutionController,
@@ -180,6 +182,7 @@ struct PendingSkillExecution {
     command_allowlist: BTreeSet<String>,
     output: SkillExecutionOutput,
     expires_at_ms: u64,
+    created_at_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -358,6 +361,7 @@ impl DesktopState {
         automation_agent_journal.recover_active(current_time_ms()?)?;
         let skill_approval_journal = SqliteSkillApprovalJournal::open(database_path)?;
         skill_approval_journal.recover(current_time_ms()?)?;
+        let skill_execution_history = SqliteSkillExecutionHistory::open(database_path)?;
         Ok(Self {
             native_app,
             runtime,
@@ -389,6 +393,7 @@ impl DesktopState {
             user_programs: Mutex::new(HashMap::new()),
             pending_agent_tools: Mutex::new(HashMap::new()),
             skill_approval_journal,
+            skill_execution_history,
             active_agent_tasks: Mutex::new(HashMap::new()),
             active_automation_runs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
@@ -457,6 +462,7 @@ impl DesktopState {
             user_programs: Mutex::new(HashMap::new()),
             pending_agent_tools: Mutex::new(HashMap::new()),
             skill_approval_journal: SqliteSkillApprovalJournal::in_memory()?,
+            skill_execution_history: SqliteSkillExecutionHistory::in_memory()?,
             active_agent_tasks: Mutex::new(HashMap::new()),
             active_automation_runs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
@@ -719,6 +725,27 @@ struct SkillExecutionReceipt {
     approval: Option<SkillApprovalRequest>,
     command_results: Vec<CapabilityResponse>,
     agent_results: Vec<DesktopAgentRunResult>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SkillExecutionHistoryListRequest {
+    before_created_at_ms: Option<u64>,
+    before_execution_id: Option<Uuid>,
+    limit: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillExecutionHistoryPage {
+    spec: &'static str,
+    records: Vec<SkillExecutionHistoryRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeleteSkillExecutionHistoryRequest {
+    execution_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3973,6 +4000,7 @@ fn execute_skill_inner(
     ensure_normal_mode(state)?;
     let installed = load_installed_skill(&state.skill_store, &request.skill_id)?;
     let execution_id = Uuid::now_v7();
+    let created_at_ms = current_time_ms()?;
     let (output, command_allowlist) = {
         let mut host = state
             .skill_host
@@ -4014,8 +4042,8 @@ fn execute_skill_inner(
             command_allowlist,
             output,
             expires_at_ms,
+            created_at_ms,
         };
-        let created_at_ms = current_time_ms()?;
         if state.skill_approval_journal.pending_count(created_at_ms)?
             >= MAX_PENDING_SKILL_EXECUTIONS
         {
@@ -4029,8 +4057,15 @@ fn execute_skill_inner(
                 request.skill_id.clone(),
                 created_at_ms,
                 expires_at_ms,
-                serde_json::to_value(pending)?,
+                serde_json::to_value(&pending)?,
             )?)?;
+        save_skill_execution_history(
+            state,
+            &pending,
+            SkillExecutionHistoryStatus::WaitingForApproval,
+            created_at_ms,
+            None,
+        )?;
         return Ok(SkillExecutionReceipt {
             execution_id,
             skill_id: request.skill_id,
@@ -4050,6 +4085,7 @@ fn execute_skill_inner(
         request.skill_id,
         &command_allowlist,
         output,
+        created_at_ms,
     )
 }
 
@@ -4059,37 +4095,62 @@ fn complete_skill_execution(
     skill_id: String,
     command_allowlist: &BTreeSet<String>,
     output: SkillExecutionOutput,
+    created_at_ms: u64,
 ) -> Result<SkillExecutionReceipt, DesktopError> {
-    let command_results = dispatch_skill_commands(
-        state,
-        execution_id,
-        command_allowlist,
-        output.commands,
-        true,
-    )?;
-    let requester = state
-        .skill_host
-        .lock()
-        .map_err(|_| DesktopError::StatePoisoned)?
-        .module_agent_identity(&skill_id)?;
-    let mut agent_results = Vec::with_capacity(output.agent_tasks.len());
-    for task in output.agent_tasks {
-        agent_results.push(run_skill_agent_task(
+    let command_count = output.commands.len();
+    let agent_task_count = output.agent_tasks.len();
+    let result: Result<SkillExecutionReceipt, DesktopError> = (|| {
+        let command_results = dispatch_skill_commands(
             state,
-            &skill_id,
             execution_id,
-            &requester,
-            task,
-        )?);
-    }
-    Ok(SkillExecutionReceipt {
-        execution_id,
-        skill_id,
-        status: SkillExecutionStatus::Completed,
-        approval: None,
-        command_results,
-        agent_results,
-    })
+            command_allowlist,
+            output.commands,
+            true,
+        )?;
+        let requester = state
+            .skill_host
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?
+            .module_agent_identity(&skill_id)?;
+        let mut agent_results = Vec::with_capacity(output.agent_tasks.len());
+        for task in output.agent_tasks {
+            agent_results.push(run_skill_agent_task(
+                state,
+                &skill_id,
+                execution_id,
+                &requester,
+                task,
+            )?);
+        }
+        Ok(SkillExecutionReceipt {
+            execution_id,
+            skill_id: skill_id.clone(),
+            status: SkillExecutionStatus::Completed,
+            approval: None,
+            command_results,
+            agent_results,
+        })
+    })();
+    let (status, error) = match &result {
+        Ok(_) => (SkillExecutionHistoryStatus::Completed, None),
+        Err(error) => (
+            SkillExecutionHistoryStatus::Failed,
+            Some(error.to_string().chars().take(4 * 1024).collect()),
+        ),
+    };
+    state
+        .skill_execution_history
+        .save(&SkillExecutionHistoryRecord::new(
+            execution_id,
+            skill_id,
+            status,
+            command_count,
+            agent_task_count,
+            created_at_ms,
+            current_time_ms()?,
+            error,
+        )?)?;
+    result
 }
 
 #[tauri::command]
@@ -4147,6 +4208,7 @@ fn approve_skill_execution_inner(
         pending.skill_id,
         &pending.command_allowlist,
         pending.output,
+        pending.created_at_ms,
     );
     let (status, error) = match &result {
         Ok(_) => (SkillApprovalJournalStatus::Completed, None),
@@ -4180,6 +4242,13 @@ fn reject_skill_execution_inner(
         .reject(request.approval_id, current_time_ms()?)
         .map_err(map_skill_approval_error)?;
     let pending: PendingSkillExecution = serde_json::from_value(entry.plan)?;
+    save_skill_execution_history(
+        state,
+        &pending,
+        SkillExecutionHistoryStatus::Rejected,
+        current_time_ms()?,
+        None,
+    )?;
     Ok(SkillExecutionReceipt {
         execution_id: pending.execution_id,
         skill_id: pending.skill_id,
@@ -4187,6 +4256,65 @@ fn reject_skill_execution_inner(
         approval: None,
         command_results: Vec::new(),
         agent_results: Vec::new(),
+    })
+}
+
+fn save_skill_execution_history(
+    state: &DesktopState,
+    pending: &PendingSkillExecution,
+    status: SkillExecutionHistoryStatus,
+    updated_at_ms: u64,
+    error: Option<String>,
+) -> Result<(), DesktopError> {
+    state
+        .skill_execution_history
+        .save(&SkillExecutionHistoryRecord::new(
+            pending.execution_id,
+            pending.skill_id.clone(),
+            status,
+            pending.output.commands.len(),
+            pending.output.agent_tasks.len(),
+            pending.created_at_ms,
+            updated_at_ms,
+            error,
+        )?)?;
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn skill_execution_history_list(
+    request: SkillExecutionHistoryListRequest,
+    state: State<'_, DesktopState>,
+) -> Result<SkillExecutionHistoryPage, DesktopError> {
+    let cursor = match (request.before_created_at_ms, request.before_execution_id) {
+        (Some(created_at_ms), Some(execution_id)) => Some((created_at_ms, execution_id)),
+        (None, None) => None,
+        _ => {
+            return Err(DesktopError::Agent(
+                "Skill history cursor is incomplete".to_owned(),
+            ));
+        }
+    };
+    Ok(SkillExecutionHistoryPage {
+        spec: "nimora.desktop-skill-execution-history/1",
+        records: state.skill_execution_history.list(cursor, request.limit)?,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn delete_skill_execution_history(
+    request: DeleteSkillExecutionHistoryRequest,
+    state: State<'_, DesktopState>,
+) -> Result<DeleteAgentHistoryResult, DesktopError> {
+    let deleted = match request.execution_id {
+        Some(execution_id) => u64::from(state.skill_execution_history.delete(execution_id)?),
+        None => state.skill_execution_history.delete_all()?,
+    };
+    Ok(DeleteAgentHistoryResult {
+        spec: "nimora.desktop-skill-execution-history-delete/1",
+        deleted,
     })
 }
 
@@ -6245,6 +6373,8 @@ pub fn run() {
             pending_skill_approvals,
             approve_skill_execution,
             reject_skill_execution,
+            skill_execution_history_list,
+            delete_skill_execution_history,
             install_user_program,
             rollback_user_program,
             user_program_permission_status,
@@ -8508,6 +8638,7 @@ mod tests {
                 agent_tasks: Vec::new(),
             },
             expires_at_ms: created_at_ms + 60_000,
+            created_at_ms,
         };
         state
             .skill_approval_journal
@@ -8518,7 +8649,7 @@ mod tests {
                     skill_id.clone(),
                     created_at_ms,
                     pending.expires_at_ms,
-                    serde_json::to_value(pending).expect("serialized pending plan"),
+                    serde_json::to_value(&pending).expect("serialized pending plan"),
                 )
                 .expect("approval entry"),
             )
@@ -8531,6 +8662,15 @@ mod tests {
         )
         .expect_err("headless profile switch must fail closed");
         assert!(matches!(error, DesktopError::UserCodeGateway(_)));
+        let history = state
+            .skill_execution_history
+            .list(None, 10)
+            .expect("Skill execution history");
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].status,
+            nimora_persistence_sqlite::SkillExecutionHistoryStatus::Failed
+        );
         assert!(matches!(
             approve_skill_execution_inner(
                 &state,

@@ -4,6 +4,7 @@ mod automation_agent_journal;
 mod automation_journal;
 mod backup;
 mod skill_approval_journal;
+mod skill_execution_history;
 
 pub use automation_agent_journal::{
     AutomationAgentJournalEntry, AutomationAgentJournalStatus, SqliteAutomationAgentJournal,
@@ -17,6 +18,9 @@ pub use backup::{
 };
 pub use skill_approval_journal::{
     SkillApprovalJournalEntry, SkillApprovalJournalStatus, SqliteSkillApprovalJournal,
+};
+pub use skill_execution_history::{
+    SkillExecutionHistoryRecord, SkillExecutionHistoryStatus, SqliteSkillExecutionHistory,
 };
 
 use nimora_agent_runtime::{AgentTask, ProviderFinishReason, ProviderUsage};
@@ -1115,6 +1119,17 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
         );
         CREATE INDEX IF NOT EXISTS skill_approval_journal_status_idx
             ON skill_approval_journal(status, expires_at_ms, approval_id);
+        CREATE TABLE IF NOT EXISTS skill_execution_history (
+            execution_id TEXT PRIMARY KEY,
+            skill_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('waiting-for-approval', 'completed', 'rejected', 'failed')),
+            created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+            updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
+            schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS skill_execution_history_created_idx
+            ON skill_execution_history(created_at_ms DESC, execution_id DESC);
         CREATE TABLE IF NOT EXISTS skill_state (
             skill_id TEXT PRIMARY KEY,
             skill_version TEXT NOT NULL,
@@ -1352,6 +1367,8 @@ pub enum SqlitePersistenceError {
     InvalidAutomationAgentJournal,
     #[error("Skill approval journal record or state transition is invalid")]
     InvalidSkillApprovalJournal,
+    #[error("Skill execution history record or request is invalid")]
+    InvalidSkillExecutionHistory,
     #[error("Skill approval is missing, claimed, expired, or already resolved")]
     SkillApprovalNotPending,
     #[error("Skill approval expired")]
@@ -1362,6 +1379,8 @@ pub enum SqlitePersistenceError {
     UnsupportedAutomationAgentJournalVersion(u32),
     #[error("Skill approval journal version {0} is unsupported")]
     UnsupportedSkillApprovalJournalVersion(u32),
+    #[error("Skill execution history version {0} is unsupported")]
+    UnsupportedSkillExecutionHistoryVersion(u32),
     #[error("Agent history version {0} is unsupported")]
     UnsupportedAgentHistoryVersion(u32),
     #[error("outbox lease is not owned by this consumer")]
