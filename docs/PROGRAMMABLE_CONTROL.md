@@ -79,7 +79,7 @@ any → disabled → deleted
 - 自动事件 Supervisor 已执行全部三种策略：`serial` 有界保留最新待执行事件，`drop` 忙时丢弃新触发，`cancel-previous` 强制终止旧 Worker 并隔离其迟到完成；关闭会话、撤权、升级、回滚和安全模式都会取消 active Worker。
 - 每次事件执行都重新加载 active 程序、校验完整性和精确授权，再经 Capability Gateway 调用模块能力；脚本不能直接持有模块实例、系统句柄或绕过每次调用的鉴权。
 
-当前自动化内核位于 `crates/automation-runtime`，直接复用 `nimora.command/1` 与 `nimora.event/1`。`nimora.automation/1` 已实现事件类型触发、JSON Pointer 等值条件、有界顺序 Action、取消、运行超时、显式失败策略、逆序补偿，以及只有同时声明 `retrySafe` 和幂等键才允许的最多三次瞬时错误重试。`nimora.automation-run/1` 保留 Run ID、Trace ID、Event ID、逐步状态、尝试次数、补偿结果和失败原因。桌面“自动化”工作区通过原生 `test_automation` IPC 或浏览器同契约预览执行 dry-run；该路径只验证并生成预计步骤，Backend 即使被错误调用也会拒绝执行，因此不会触发 Renderer、Worker、网络或桌面 Command。持久规则仓储、定时调度、真实 Action Backend、运行历史与事件回放仍需继续实现。
+当前自动化内核位于 `crates/automation-runtime`，直接复用 `nimora.command/1` 与 `nimora.event/1`。`nimora.automation/1` 已实现事件类型触发、JSON Pointer 等值条件、有界顺序 Action、取消、运行超时、显式失败策略、逆序补偿，以及只有同时声明 `retrySafe` 和幂等键才允许的最多三次瞬时错误重试。`nimora.automation-run/1` 保留 Run ID、Trace ID、Event ID、逐步状态、尝试次数、补偿结果和失败原因。桌面“自动化”工作区通过原生 `test_automation` IPC 或浏览器同契约预览执行 dry-run；该路径只验证并生成预计步骤，Backend 即使被错误调用也会拒绝执行，因此不会触发 Renderer、Worker、网络或桌面 Command。已启用 Catalog 条目会在正常桌面启动时建立独立有界 Event Bus 订阅，将原始 Event/Trace ID 交给真实 Capability/Agent Backend 并写入运行 Journal；停用、升级、回滚、安全模式与退出会取消订阅和在途 Run，线程创建失败会补偿为停用。工作区展示有界最近运行及结果，并允许删除单条或全部终态记录，运行中记录不可删除。定时调度、稳定游标翻页、丢弃事件指标、重放和跨进程 Worker 隔离仍需继续实现。
 
 ## 6. 权限与信任
 
@@ -142,4 +142,4 @@ pnpm deskpet extension pack ./scripts/build-companion
 
 ## AI 辅助创作边界
 
-桌面“扩展”工作区可让外接 AI 生成 User Program、Skill 与 Automation 的结构化草案。入口使用空 Tool allowlist、`AgentAutonomy::Draft`、固定深度和受限预算；模型输出经过严格 JSON、生产契约、独立 Worker 或 DryRun。审查生成草案摘要、当前安装版本、Capability/作用域 Diff 与风险；批准绑定草案和完整审查摘要，安装前重审，基线变化即失败关闭。User Program/Skill 复用生产包安装器；Automation 定义要求三段数字版本并进入 SQLite 原子 Catalog。Automation 首装、升级和回滚均保持停用，普通安装只接受严格递增版本并保存一个上一版本；同版本覆盖或隐式降级失败，降级只能走显式回滚。工作区提供目录、启停和回滚。当前 Diff 覆盖 Capability/命令新增移除、Program/Skill 声明范围和 Automation 触发器、条件、动作参数、补偿与失败策略变化。多事件 Mock、文件/依赖/数据迁移 Diff、Automation 运行期授权、真实事件订阅、删除/历史和运行监控仍需继续闭环。完整范围见 [`AI_EXTENSION_FACTORY.md`](AI_EXTENSION_FACTORY.md)。
+桌面“扩展”工作区可让外接 AI 生成 User Program、Skill 与 Automation 的结构化草案。入口使用空 Tool allowlist、`AgentAutonomy::Draft`、固定深度和受限预算；模型输出经过严格 JSON、生产契约、独立 Worker 或 DryRun。审查生成草案摘要、当前安装版本、Capability/作用域 Diff 与风险；批准绑定草案和完整审查摘要，安装前重审，基线变化即失败关闭。User Program/Skill 复用生产包安装器；Automation 定义要求三段数字版本并进入 SQLite 原子 Catalog。Automation 首装、升级和回滚均保持停用，普通安装只接受严格递增版本并保存一个上一版本；同版本覆盖或隐式降级失败，降级只能走显式回滚。工作区提供目录、启停和回滚。当前 Diff 覆盖 Capability/命令新增移除、Program/Skill 声明范围和 Automation 触发器、条件、动作参数、补偿与失败策略变化。多事件 Mock、文件/依赖/数据迁移 Diff、Automation Medium/High 参数级运行期批准、历史游标翻页、丢弃指标和运行监控仍需继续闭环。完整范围见 [`AI_EXTENSION_FACTORY.md`](AI_EXTENSION_FACTORY.md)。

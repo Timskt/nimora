@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AutomationCatalogEntry, AutomationDefinition, AutomationRun } from "../platform/desktop";
+import type { AutomationCatalogEntry, AutomationDefinition, AutomationJournalEntry, AutomationRun } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const sampleDefinition: AutomationDefinition = {
@@ -31,6 +31,7 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
   const [busy, setBusy] = useState(false);
   const [run, setRun] = useState<AutomationRun | null>(null);
   const [catalog, setCatalog] = useState<AutomationCatalogEntry[]>([]);
+  const [history, setHistory] = useState<AutomationJournalEntry[]>([]);
   const definition = useMemo(() => sampleDefinition, []);
 
   async function refreshCatalog() {
@@ -41,7 +42,28 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
     }
   }
 
-  useEffect(() => { void refreshCatalog(); }, []);
+  async function refreshHistory() {
+    try {
+      setHistory(await desktopApi.automationRunHistory());
+    } catch {
+      setHistory([]);
+    }
+  }
+
+  useEffect(() => { void Promise.all([refreshCatalog(), refreshHistory()]); }, []);
+
+  async function deleteHistory(runId?: string) {
+    setBusy(true);
+    try {
+      const deleted = await desktopApi.deleteAutomationRunHistory(runId);
+      await refreshHistory();
+      onNotice(deleted > 0 ? "自动化运行历史已删除" : "运行中记录受到保护，未删除");
+    } catch {
+      onNotice("运行历史删除失败，审计记录保持不变");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function toggleAutomation(entry: AutomationCatalogEntry) {
     setBusy(true);
@@ -99,6 +121,14 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
           <span className={entry.enabled ? "automation-enabled" : "automation-disabled"}>{entry.enabled ? "已启用" : "已停用"}</span>
           <button disabled={disabled || busy} onClick={() => void toggleAutomation(entry)} type="button">{entry.enabled ? "停用" : "启用"}</button>
           <button disabled={disabled || busy || !entry.previousVersion} onClick={() => void rollbackAutomation(entry)} type="button">回滚</button>
+        </article>)}
+      </section>
+      <section className="automation-catalog" aria-label="自动化运行历史">
+        <div className="section-heading"><div><p className="card-label">RUN HISTORY</p><h3>最近运行</h3></div><button disabled={disabled || busy || history.length === 0} onClick={() => void deleteHistory()} type="button">清空终态记录</button></div>
+        {history.length === 0 ? <p>暂无真实运行记录。测试运行不会写入这里。</p> : history.map((entry) => <article className="automation-catalog-entry" key={entry.runId}>
+          <div><strong>{entry.automationId}</strong><code>{entry.result?.status ?? entry.status}</code><small>{new Date(entry.startedAtMs).toLocaleString()} · Event {entry.eventId}</small></div>
+          <span className={entry.status === "running" ? "automation-enabled" : "automation-disabled"}>{entry.status === "running" ? "运行中" : entry.status === "interrupted" ? "已中断" : "已完成"}</span>
+          <button disabled={disabled || busy || entry.status === "running"} onClick={() => void deleteHistory(entry.runId)} type="button">删除</button>
         </article>)}
       </section>
       <article className="automation-rule-card">

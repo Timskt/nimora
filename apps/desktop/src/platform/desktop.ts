@@ -717,6 +717,8 @@ export interface DesktopApi {
   rollbackAutomation(automationId: string): Promise<AutomationInstallReceipt>;
   runAutomation(definition: AutomationDefinition, eventType: string, eventData: unknown): Promise<AutomationRun>;
   automationRunStatus(runId: string): Promise<AutomationJournalEntry | null>;
+  automationRunHistory(limit?: number): Promise<AutomationJournalEntry[]>;
+  deleteAutomationRunHistory(runId?: string): Promise<number>;
   automationAgentTaskStatus(taskId: string): Promise<AutomationAgentJournalEntry | null>;
   automationRunAgentTasks(runId: string): Promise<AutomationAgentJournalEntry[]>;
   cancelAutomationRun(runId: string): Promise<boolean>;
@@ -913,6 +915,8 @@ export function createDesktopApi(
       async rollbackAutomation() { throw new Error("Automation catalog requires the Nimora desktop runtime."); },
       async runAutomation() { throw new Error("Live automation requires the Nimora desktop runtime."); },
       async automationRunStatus() { return null; },
+      async automationRunHistory() { return []; },
+      async deleteAutomationRunHistory() { return 0; },
       async automationAgentTaskStatus() { return null; },
       async automationRunAgentTasks() { return []; },
       async cancelAgentTask() { return false; },
@@ -1186,6 +1190,8 @@ export function createDesktopApi(
     rollbackAutomation: async (automationId) => await invokeCommand("rollback_automation", { automationId }) as AutomationInstallReceipt,
     runAutomation: async (definition, eventType, eventData) => await invokeCommand("run_automation", { request: { definition, eventType, eventData } }) as AutomationRun,
     automationRunStatus: async (runId) => await invokeCommand("automation_run_status", { runId }) as AutomationJournalEntry | null,
+    automationRunHistory: async (limit = 20) => await invokeCommand("automation_run_history", { limit }) as AutomationJournalEntry[],
+    deleteAutomationRunHistory: async (runId) => await invokeCommand("delete_automation_run_history", { runId: runId ?? null }) as number,
     automationAgentTaskStatus: async (taskId) => await invokeCommand("automation_agent_task_status", { taskId }) as AutomationAgentJournalEntry | null,
     automationRunAgentTasks: async (runId) => await invokeCommand("automation_run_agent_tasks", { runId }) as AutomationAgentJournalEntry[],
     cancelAutomationRun: async (runId) => await invokeCommand("cancel_automation_run", { runId }) as boolean,

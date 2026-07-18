@@ -4,6 +4,7 @@ pub(crate) enum SafeModeConvergenceStep {
     UserPrograms,
     UserProgramEvents,
     SkillEvents,
+    AutomationEvents,
     AgentTools,
     RememberWindowPolicy,
     CacheSafeWindowPolicy,
@@ -18,6 +19,7 @@ impl SafeModeConvergenceStep {
             Self::UserPrograms => "user-programs",
             Self::UserProgramEvents => "user-program-events",
             Self::SkillEvents => "skill-events",
+            Self::AutomationEvents => "automation-events",
             Self::AgentTools => "agent-tools",
             Self::RememberWindowPolicy => "remember-window-policy",
             Self::CacheSafeWindowPolicy => "cache-safe-window-policy",
@@ -45,6 +47,7 @@ pub(crate) trait SafeModeConvergenceOperations {
     fn cancel_user_programs(&mut self) -> Result<(), Self::Error>;
     fn cancel_user_program_events(&mut self) -> Result<(), Self::Error>;
     fn stop_skill_events(&mut self) -> Result<(), Self::Error>;
+    fn stop_automation_events(&mut self) -> Result<(), Self::Error>;
     fn cancel_agent_tools(&mut self) -> Result<(), Self::Error>;
     fn remember_window_policy(&mut self) -> Result<(), Self::Error>;
     fn cache_safe_window_policy(&mut self) -> Result<(), Self::Error>;
@@ -74,6 +77,11 @@ pub(crate) fn converge_safe_mode(
         &mut failed_steps,
         SafeModeConvergenceStep::SkillEvents,
         || operations.stop_skill_events(),
+    );
+    attempt(
+        &mut failed_steps,
+        SafeModeConvergenceStep::AutomationEvents,
+        || operations.stop_automation_events(),
     );
     attempt(
         &mut failed_steps,
@@ -160,6 +168,10 @@ mod tests {
             self.run(SafeModeConvergenceStep::SkillEvents)
         }
 
+        fn stop_automation_events(&mut self) -> Result<(), Self::Error> {
+            self.run(SafeModeConvergenceStep::AutomationEvents)
+        }
+
         fn cancel_agent_tools(&mut self) -> Result<(), Self::Error> {
             self.run(SafeModeConvergenceStep::AgentTools)
         }
@@ -193,6 +205,7 @@ mod tests {
                 SafeModeConvergenceStep::UserPrograms,
                 SafeModeConvergenceStep::UserProgramEvents,
                 SafeModeConvergenceStep::SkillEvents,
+                SafeModeConvergenceStep::AutomationEvents,
                 SafeModeConvergenceStep::AgentTools,
                 SafeModeConvergenceStep::RememberWindowPolicy,
                 SafeModeConvergenceStep::CacheSafeWindowPolicy,
@@ -210,9 +223,9 @@ mod tests {
 
         let failure = converge_safe_mode(&mut operations).expect_err("must fail closed");
 
-        assert_eq!(operations.calls.len(), 9);
+        assert_eq!(operations.calls.len(), 10);
         assert_eq!(
-            operations.calls[8],
+            operations.calls[9],
             SafeModeConvergenceStep::DiagnosticEvent
         );
         assert_eq!(

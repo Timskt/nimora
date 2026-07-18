@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 const AUTOMATION_JOURNAL_VERSION: u32 = 1;
 const MAX_INTERRUPTION_REASON_BYTES: usize = 4 * 1024;
+const MAX_AUTOMATION_HISTORY_PAGE_SIZE: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutomationRunStart {
@@ -199,6 +200,103 @@ impl SqliteAutomationJournal {
             .optional()?;
         row.map(|row| decode_entry(run_id, row)).transpose()
     }
+
+    /// Lists a bounded newest-first page of Automation runs.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero or oversized limits and malformed stored rows.
+    pub fn list(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<AutomationJournalEntry>, SqlitePersistenceError> {
+        if limit == 0 || limit > MAX_AUTOMATION_HISTORY_PAGE_SIZE {
+            return Err(SqlitePersistenceError::InvalidAutomationJournal);
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
+        let mut statement = connection.prepare(
+            "SELECT run_id, automation_id, trace_id, event_id, status, started_at_ms,
+                    updated_at_ms, schema_version, payload, interruption_reason
+             FROM automation_run_journal
+             ORDER BY started_at_ms DESC, run_id DESC LIMIT ?1",
+        )?;
+        statement
+            .query_map(
+                [i64::try_from(limit)
+                    .map_err(|_| SqlitePersistenceError::InvalidAutomationJournal)?],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, u32>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                    ))
+                },
+            )?
+            .map(|row| {
+                let (
+                    run_id,
+                    automation_id,
+                    trace_id,
+                    event_id,
+                    status,
+                    started,
+                    updated,
+                    version,
+                    payload,
+                    reason,
+                ) = row?;
+                let run_id = Uuid::parse_str(&run_id)
+                    .map_err(|_| SqlitePersistenceError::InvalidAutomationJournal)?;
+                decode_entry(
+                    run_id,
+                    (
+                        automation_id,
+                        trace_id,
+                        event_id,
+                        status,
+                        started,
+                        updated,
+                        version,
+                        payload,
+                        reason,
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    /// Deletes one terminal run or all terminal Automation history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for storage failures. Running rows are always retained.
+    pub fn delete_terminal(&self, run_id: Option<Uuid>) -> Result<usize, SqlitePersistenceError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
+        match run_id {
+            Some(run_id) => connection.execute(
+                "DELETE FROM automation_run_journal WHERE run_id = ?1 AND status != 'running'",
+                [run_id.to_string()],
+            ),
+            None => connection.execute(
+                "DELETE FROM automation_run_journal WHERE status != 'running'",
+                [],
+            ),
+        }
+        .map_err(Into::into)
+    }
 }
 
 fn validate_start(start: &AutomationRunStart) -> Result<(), SqlitePersistenceError> {
@@ -377,5 +475,37 @@ mod tests {
             journal.complete(&result, 1_600),
             Err(SqlitePersistenceError::InvalidAutomationJournal)
         ));
+    }
+
+    #[test]
+    fn history_is_bounded_ordered_and_never_deletes_running_rows() {
+        let journal = SqliteAutomationJournal::in_memory().expect("journal");
+        let older = start();
+        journal.start(&older).expect("start older");
+        journal
+            .complete(&result(&older), 1_500)
+            .expect("complete older");
+        let mut newer = start();
+        newer.started_at_ms = 2_000;
+        journal.start(&newer).expect("start newer");
+
+        let entries = journal.list(2).expect("history");
+        assert_eq!(entries[0].run_id, newer.run_id);
+        assert_eq!(entries[1].run_id, older.run_id);
+        assert!(journal.list(0).is_err());
+        assert!(journal.list(MAX_AUTOMATION_HISTORY_PAGE_SIZE + 1).is_err());
+        assert_eq!(
+            journal
+                .delete_terminal(Some(newer.run_id))
+                .expect("retain running"),
+            0
+        );
+        assert_eq!(
+            journal
+                .delete_terminal(Some(older.run_id))
+                .expect("delete older"),
+            1
+        );
+        assert_eq!(journal.list(10).expect("remaining").len(), 1);
     }
 }
