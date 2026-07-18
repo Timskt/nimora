@@ -638,6 +638,10 @@ ID / 标题 / 优先级 / 前置条件
 - Verify Capability Gap 声称已注册精确 ID 缺失时失败关闭；真实缺失 ID 生成带 Catalog Digest 的确定性 Composition Plan，resolved/missing 集合不可混淆。
 - Verify 持久 Gap 报告包含宿主重新计算的 Composition Plan；伪造、过期或与 Gap ID 不一致的证明不能写入 Workspace。
 - Verify UI 将精确 ID 缺失证明与自然语言目标不可实现证明明确区分，不能用绿色核验状态暗示所有组合路径已穷尽。
+- Verify Gap 的语义输入/输出必须使用排序、去重、有界的小写命名空间 ID，输出集合不得为空；未知字段和模型自报的“已满足前置条件”失败关闭。
+- Verify 宿主以实时 Semantic Graph、空可信前置事实和固定数据等级/副作用/成本上限重算路径；若目标被完整解析，则与 Gap 声明矛盾并拒绝。
+- Verify `nimora.persisted-capability-gap/2` 同时保存实时重算的 Exact-ID Plan 与 Semantic Plan；Graph 摘要、缺失输出或 Gap 候选不一致时不得写盘。
+- Verify Gap UI 展示候选输入、目标输出、宿主能力路径、成本、扩展状态和缺失输出，并明确模型候选映射不等于自然语言完备证明。
 - Verify AI 对同一目标按设置、组合、Automation、Program、Skill、Connector 和 L4 Proposal 比较，选择最低充分层级并给出不自动化理由。
 - Verify 多模态 Perception Pipeline 对每个来源单独授权，原始音视频默认不持久化，低置信推断不能触发高风险动作。
 - Verify Personal API 只能映射 Registry 中的 Command/Query，声明鉴权、幂等、速率、离线和撤销语义，不能生成任意本地 Handler。

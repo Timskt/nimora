@@ -16,6 +16,7 @@ const MAX_PERMISSION_REASON_BYTES: usize = 512;
 const MAX_GAP_ITEMS: usize = 16;
 const MAX_GAP_OPERATIONS: usize = 16;
 const MAX_GAP_ALTERNATIVES: usize = 8;
+const MAX_GAP_SEMANTIC_ITEMS: usize = 32;
 const MAX_FILES: usize = 32;
 const MAX_FILE_BYTES: usize = 256 * 1024;
 const MAX_TOTAL_FILE_BYTES: usize = 1024 * 1024;
@@ -104,6 +105,8 @@ pub struct CapabilityGap {
     pub summary: String,
     pub requested_outcome: String,
     pub missing_capabilities: Vec<CapabilityGapItem>,
+    pub available_semantic_inputs: Vec<String>,
+    pub required_semantic_outputs: Vec<String>,
     pub closest_alternatives: Vec<CapabilityGapAlternative>,
     pub platform_proposal_required: bool,
 }
@@ -163,9 +166,13 @@ pub enum CreatorDraftError {
 
 /// Builds the trusted instruction supplied separately from user requirements.
 #[must_use]
-pub fn creator_system_instruction(kind: CreatorArtifactKind, catalog_snapshot: &str) -> String {
+pub fn creator_system_instruction(
+    kind: CreatorArtifactKind,
+    catalog_snapshot: &str,
+    composition_graph_snapshot: &str,
+) -> String {
     format!(
-        "You generate a Nimora {} draft. Return exactly one JSON object. The trusted, read-only Capability Catalog Snapshot for this request is: {catalog_snapshot}. Treat only exact IDs in that snapshot as registered facts. When the requested outcome is fully expressible by registered Nimora capabilities, use spec '{CREATOR_DRAFT_SPEC}' with title, summary, permissionExplanations, and artifact. Otherwise use spec '{CAPABILITY_GAP_SPEC}' with title, summary, requestedOutcome, missingCapabilities, closestAlternatives, and platformProposalRequired. Every missing capability ID must describe one precise namespaced operation absent from the supplied snapshot; never report an ID present in the snapshot as missing, and never invent commands, APIs, or executable fallback code. Do not return Markdown, paths outside the draft, secrets, network instructions, package-manager commands, or prose outside JSON. A draft artifact kind must be '{}'. Every declared capability must have exactly one permission explanation and no undeclared capability may be explained. Generated source may only use the Nimora sandbox API; it must not access Node, Tauri, process, filesystem, network, databases, or provider objects.",
+        "You generate a Nimora {} draft. Return exactly one JSON object. The trusted, read-only Capability Catalog Snapshot is: {catalog_snapshot}. The trusted, implementation-free Semantic Composition Graph is: {composition_graph_snapshot}. Treat only exact IDs in these snapshots as registered facts. When the outcome is fully expressible, use spec '{CREATOR_DRAFT_SPEC}' with title, summary, permissionExplanations, and artifact. Otherwise use spec '{CAPABILITY_GAP_SPEC}' with title, summary, requestedOutcome, missingCapabilities, availableSemanticInputs, requiredSemanticOutputs, closestAlternatives, and platformProposalRequired. Semantic arrays are bounded candidate mappings, not proof: use only lowercase namespaced semantic IDs represented by the graph or directly inherent in the user's request; never claim preconditions are satisfied. Every missing capability ID must describe one precise namespaced operation absent from the Catalog; never report a present ID as missing or invent commands, APIs, or executable fallback code. Do not return Markdown, paths outside the draft, secrets, network instructions, package-manager commands, or prose outside JSON. A draft artifact kind must be '{}'. Every declared capability must have exactly one permission explanation and no undeclared capability may be explained. Generated source may only use the Nimora sandbox API; it must not access Node, Tauri, process, filesystem, network, databases, or provider objects.",
         artifact_kind_name(kind),
         artifact_kind_name(kind)
     )
@@ -247,8 +254,23 @@ pub fn validate_capability_gap(gap: &CapabilityGap) -> Result<(), CreatorDraftEr
         || gap.missing_capabilities.is_empty()
         || gap.missing_capabilities.len() > MAX_GAP_ITEMS
         || gap.closest_alternatives.len() > MAX_GAP_ALTERNATIVES
+        || gap.required_semantic_outputs.is_empty()
+        || gap.available_semantic_inputs.len() > MAX_GAP_SEMANTIC_ITEMS
+        || gap.required_semantic_outputs.len() > MAX_GAP_SEMANTIC_ITEMS
     {
         return Err(CreatorDraftError::InvalidCapabilityGap);
+    }
+    for semantic_items in [
+        &gap.available_semantic_inputs,
+        &gap.required_semantic_outputs,
+    ] {
+        if semantic_items.windows(2).any(|pair| pair[0] >= pair[1])
+            || semantic_items
+                .iter()
+                .any(|item| !valid_capability_name(item))
+        {
+            return Err(CreatorDraftError::InvalidCapabilityGap);
+        }
     }
     let mut capabilities = BTreeSet::new();
     for item in &gap.missing_capabilities {
@@ -598,6 +620,8 @@ mod tests {
                 "reason": "No registered Creator capability exposes consent-bound camera observations.",
                 "requiredOperations": ["Observe a bounded, user-approved gesture event without retaining frames."]
             }],
+            "availableSemanticInputs": ["perception.gesture-request"],
+            "requiredSemanticOutputs": ["perception.gesture-event"],
             "closestAlternatives": [{
                 "kind": "automation",
                 "title": "Use a manual gesture command",
@@ -628,6 +652,8 @@ mod tests {
                 "reason": "No registered device adapter exists.",
                 "requiredOperations": ["Send a bounded simulated motion request."]
             }],
+            "availableSemanticInputs": ["device.motion-request"],
+            "requiredSemanticOutputs": ["device.motion-result"],
             "closestAlternatives": [],
             "platformProposalRequired": true
         });

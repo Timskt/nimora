@@ -71,9 +71,11 @@ use nimora_automation_runtime::{
     ActionFailure, AutomationBackend, AutomationDefinition, AutomationEngine, AutomationError,
     AutomationExecutionContext, AutomationRun, RunControl, RunMode, Uncancelled,
 };
+use nimora_capability_contract::{CapabilityDataClass, CapabilityEffect};
 use nimora_creator_composition::{
     CapabilityCatalogSnapshot, CapabilityCompositionGraph, CapabilityCompositionPlan,
-    CompositionError, plan_exact_capabilities,
+    CompositionError, SemanticCompositionPlan, SemanticCompositionRequest, plan_exact_capabilities,
+    plan_semantic_composition,
 };
 use nimora_creator_draft::{
     CapabilityGap, CreatorArtifactKind, CreatorDraft, CreatorDraftError, CreatorDraftRequest,
@@ -1347,6 +1349,7 @@ struct DesktopCreatorDraftResult {
     catalog_digest: String,
     composition_graph_digest: String,
     composition_plan: Option<CapabilityCompositionPlan>,
+    semantic_composition_plan: Option<SemanticCompositionPlan>,
     usage: nimora_agent_runtime::ProviderUsage,
     finish_reason: nimora_agent_runtime::ProviderFinishReason,
 }
@@ -3100,20 +3103,12 @@ fn generate_creator_draft_inner(
         state,
         task,
         request.model,
-        vec![
-            ProviderMessage::text(
-                ProviderMessageRole::System,
-                creator_system_instruction(request.kind, &creator_catalog.compact_prompt_slice()?),
-                DataClassification::Public,
-                true,
-            ),
-            ProviderMessage::text(
-                ProviderMessageRole::User,
-                draft_request.requirement.clone(),
-                DataClassification::Personal,
-                false,
-            ),
-        ],
+        creator_provider_messages(
+            request.kind,
+            &draft_request,
+            &creator_catalog,
+            &composition_graph,
+        )?,
         4096,
         true,
         tool_ids,
@@ -3125,13 +3120,21 @@ fn generate_creator_draft_inner(
         ));
     };
     let proposal = parse_creator_proposal(&draft_request, &response.content)?;
-    let (outcome, draft, capability_gap, composition_plan) = match proposal {
-        CreatorProposal::Draft(draft) => ("draft", Some(*draft), None, None),
-        CreatorProposal::CapabilityGap(gap) => {
-            let plan = verify_capability_gap_against_catalog(&creator_catalog, &gap)?;
-            ("capability-gap", None, Some(gap), Some(plan))
-        }
-    };
+    let (outcome, draft, capability_gap, composition_plan, semantic_composition_plan) =
+        match proposal {
+            CreatorProposal::Draft(draft) => ("draft", Some(*draft), None, None, None),
+            CreatorProposal::CapabilityGap(gap) => {
+                let verification =
+                    verify_capability_gap(&creator_catalog, &composition_graph, &gap)?;
+                (
+                    "capability-gap",
+                    None,
+                    Some(gap),
+                    Some(verification.exact_id_plan),
+                    Some(verification.semantic_plan),
+                )
+            }
+        };
     Ok(DesktopCreatorDraftResult {
         spec: "nimora.desktop-creator-draft/1",
         outcome,
@@ -3141,15 +3144,46 @@ fn generate_creator_draft_inner(
         catalog_digest: creator_catalog.digest,
         composition_graph_digest: composition_graph.digest,
         composition_plan,
+        semantic_composition_plan,
         usage: response.usage,
         finish_reason: response.finish_reason,
     })
 }
 
-fn verify_capability_gap_against_catalog(
+fn creator_provider_messages(
+    kind: CreatorArtifactKind,
+    request: &CreatorDraftRequest,
     catalog: &CapabilityCatalogSnapshot,
+    graph: &CapabilityCompositionGraph,
+) -> Result<Vec<ProviderMessage>, DesktopError> {
+    let graph_snapshot =
+        serde_json::to_string(graph).map_err(|error| DesktopError::Agent(error.to_string()))?;
+    Ok(vec![
+        ProviderMessage::text(
+            ProviderMessageRole::System,
+            creator_system_instruction(kind, &catalog.compact_prompt_slice()?, &graph_snapshot),
+            DataClassification::Public,
+            true,
+        ),
+        ProviderMessage::text(
+            ProviderMessageRole::User,
+            request.requirement.clone(),
+            DataClassification::Personal,
+            false,
+        ),
+    ])
+}
+
+struct CapabilityGapVerification {
+    exact_id_plan: CapabilityCompositionPlan,
+    semantic_plan: SemanticCompositionPlan,
+}
+
+fn verify_capability_gap(
+    catalog: &CapabilityCatalogSnapshot,
+    graph: &CapabilityCompositionGraph,
     gap: &CapabilityGap,
-) -> Result<CapabilityCompositionPlan, DesktopError> {
+) -> Result<CapabilityGapVerification, DesktopError> {
     let plan = plan_exact_capabilities(
         catalog,
         gap.missing_capabilities
@@ -3161,7 +3195,27 @@ fn verify_capability_gap_against_catalog(
             "creator capability gap contradicts the live Catalog Snapshot".to_owned(),
         ));
     }
-    Ok(plan)
+    let semantic_plan = plan_semantic_composition(
+        graph,
+        &SemanticCompositionRequest {
+            available_inputs: gap.available_semantic_inputs.iter().cloned().collect(),
+            required_outputs: gap.required_semantic_outputs.iter().cloned().collect(),
+            satisfied_preconditions: BTreeSet::default(),
+            maximum_data_class: CapabilityDataClass::Internal,
+            maximum_effect: CapabilityEffect::ReversibleWrite,
+            maximum_cost_units: 1_000,
+            offline_only: false,
+        },
+    )?;
+    if semantic_plan.fully_resolved {
+        return Err(DesktopError::Agent(
+            "creator capability gap contradicts the live Semantic Composition Graph".to_owned(),
+        ));
+    }
+    Ok(CapabilityGapVerification {
+        exact_id_plan: plan,
+        semantic_plan,
+    })
 }
 
 fn creator_capability_catalog(
@@ -3230,11 +3284,13 @@ fn save_capability_gap_command(
     state: State<'_, DesktopState>,
 ) -> Result<CapabilityGapSaveReceipt, DesktopError> {
     let catalog = creator_capability_catalog(&state)?;
-    let plan = verify_capability_gap_against_catalog(&catalog, &request.capability_gap)?;
+    let graph = creator_composition_graph(&state)?;
+    let verification = verify_capability_gap(&catalog, &graph, &request.capability_gap)?;
     save_capability_gap(
         &request.workspace_root,
         &request.capability_gap,
-        &plan,
+        &verification.exact_id_plan,
+        &verification.semantic_plan,
         &Uuid::now_v7().to_string(),
     )
     .map_err(Into::into)
@@ -9823,7 +9879,7 @@ mod tests {
         skill_capability_names, skill_event_types, stage_creator_package,
         stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
         validate_model_source, validate_package_source, validate_requested_animation_map,
-        verify_capability_gap_against_catalog,
+        verify_capability_gap,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -12912,12 +12968,14 @@ mod tests {
                 "reason": "Claimed absent by the model.",
                 "requiredOperations": ["Read the current bounded pet state."]
             }],
+            "availableSemanticInputs": ["pet.state-request"],
+            "requiredSemanticOutputs": ["pet.state-result"],
             "closestAlternatives": [],
             "platformProposalRequired": true
         }))
         .expect("gap");
         assert!(matches!(
-            verify_capability_gap_against_catalog(&catalog, &gap),
+            verify_capability_gap(&catalog, &creator_composition_graph(&state).expect("graph"), &gap),
             Err(DesktopError::Agent(message))
                 if message == "creator capability gap contradicts the live Catalog Snapshot"
         ));
@@ -12938,15 +12996,24 @@ mod tests {
                 "reason": "The exact capability is absent from the live snapshot.",
                 "requiredOperations": ["Produce a bounded gesture event without retaining frames."]
             }],
+            "availableSemanticInputs": ["perception.gesture-request"],
+            "requiredSemanticOutputs": ["perception.gesture-event"],
             "closestAlternatives": [],
             "platformProposalRequired": true
         }))
         .expect("gap");
-        let plan = verify_capability_gap_against_catalog(&catalog, &gap).expect("verified gap");
-        assert_eq!(plan.catalog_digest, catalog.digest);
-        assert_eq!(plan.missing_capabilities, ["perception.camera.observe"]);
-        assert!(plan.resolved_capabilities.is_empty());
-        assert!(!plan.fully_resolved);
+        let verification = verify_capability_gap(
+            &catalog,
+            &creator_composition_graph(&state).expect("graph"),
+            &gap,
+        )
+        .expect("verified gap");
+        assert_eq!(verification.exact_id_plan.catalog_digest, catalog.digest);
+        assert_eq!(
+            verification.exact_id_plan.missing_capabilities,
+            ["perception.camera.observe"]
+        );
+        assert!(!verification.semantic_plan.fully_resolved);
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 

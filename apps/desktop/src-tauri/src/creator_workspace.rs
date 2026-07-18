@@ -1,8 +1,11 @@
+use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path};
 
-use nimora_creator_composition::{COMPOSITION_PLAN_SPEC, CapabilityCompositionPlan};
+use nimora_creator_composition::{
+    COMPOSITION_PLAN_SPEC, CapabilityCompositionPlan, SEMANTIC_PLAN_SPEC, SemanticCompositionPlan,
+};
 use nimora_creator_draft::{
     CapabilityGap, CreatorArtifact, CreatorDraft, CreatorDraftError, CreatorDraftFile,
     validate_capability_gap,
@@ -35,6 +38,7 @@ struct PersistedCapabilityGapReport<'a> {
     spec: &'static str,
     gap: &'a CapabilityGap,
     composition_plan: &'a CapabilityCompositionPlan,
+    semantic_composition_plan: &'a SemanticCompositionPlan,
 }
 
 #[derive(Debug, Error)]
@@ -100,6 +104,7 @@ pub fn save_capability_gap(
     workspace_root: &Path,
     gap: &CapabilityGap,
     composition_plan: &CapabilityCompositionPlan,
+    semantic_composition_plan: &SemanticCompositionPlan,
     operation_id: &str,
 ) -> Result<CapabilityGapSaveReceipt, CreatorWorkspaceError> {
     validate_capability_gap(gap)?;
@@ -108,6 +113,17 @@ pub fn save_capability_gap(
         .iter()
         .map(|item| item.capability.as_str())
         .collect::<Vec<_>>();
+    let semantic_partition = semantic_composition_plan
+        .available_outputs
+        .iter()
+        .chain(&semantic_composition_plan.missing_outputs)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let required_outputs = gap
+        .required_semantic_outputs
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
     if composition_plan.spec != COMPOSITION_PLAN_SPEC
         || !valid_sha256_digest(&composition_plan.catalog_digest)
         || !composition_plan.resolved_capabilities.is_empty()
@@ -118,6 +134,15 @@ pub fn save_capability_gap(
             .map(String::as_str)
             .collect::<Vec<_>>()
             != requested
+        || semantic_composition_plan.spec != SEMANTIC_PLAN_SPEC
+        || !valid_sha256_digest(&semantic_composition_plan.graph_digest)
+        || semantic_composition_plan.fully_resolved
+        || semantic_composition_plan.missing_outputs.is_empty()
+        || semantic_partition != required_outputs
+        || semantic_composition_plan
+            .available_outputs
+            .iter()
+            .any(|output| semantic_composition_plan.missing_outputs.contains(output))
         || composition_plan
             .missing_capabilities
             .iter()
@@ -143,9 +168,10 @@ pub fn save_capability_gap(
     let file_name = format!("{report_id}.json");
     let destination = drafts_root.join(&file_name);
     let bytes = serde_json::to_vec_pretty(&PersistedCapabilityGapReport {
-        spec: "nimora.persisted-capability-gap/1",
+        spec: "nimora.persisted-capability-gap/2",
         gap,
         composition_plan,
+        semantic_composition_plan,
     })
     .map_err(|_| CreatorWorkspaceError::Io)?;
     write_new(&destination, &bytes)?;
@@ -329,6 +355,8 @@ mod tests {
                 "reason": "No consent-bound observation capability is registered.",
                 "requiredOperations": ["Produce a bounded gesture event without retaining frames."]
             }],
+            "availableSemanticInputs": ["perception.gesture-request"],
+            "requiredSemanticOutputs": ["perception.gesture-event"],
             "closestAlternatives": [],
             "platformProposalRequired": true
         }))
@@ -347,19 +375,40 @@ mod tests {
             CapabilityCatalogSnapshot::from_tool_descriptors([descriptor]).expect("catalog");
         let plan = plan_exact_capabilities(&catalog, ["perception.camera.observe".to_owned()])
             .expect("plan");
-        let receipt =
-            save_capability_gap(&root, &gap, &plan, "018f0000-0000-7000-8000-000000000032")
-                .expect("save");
+        let semantic_plan = SemanticCompositionPlan {
+            spec: SEMANTIC_PLAN_SPEC.to_owned(),
+            graph_digest: format!("sha256:{}", "1".repeat(64)),
+            capability_path: Vec::new(),
+            available_outputs: Vec::new(),
+            missing_outputs: vec!["perception.gesture-event".to_owned()],
+            total_cost_units: 0,
+            fully_resolved: false,
+            expanded_states: 1,
+        };
+        let receipt = save_capability_gap(
+            &root,
+            &gap,
+            &plan,
+            &semantic_plan,
+            "018f0000-0000-7000-8000-000000000032",
+        )
+        .expect("save");
         assert_eq!(receipt.spec, "nimora.capability-gap-save/1");
         let report: serde_json::Value =
             serde_json::from_slice(&fs::read(root.join(&receipt.relative_file)).expect("report"))
                 .expect("JSON report");
-        assert_eq!(report["spec"], "nimora.persisted-capability-gap/1");
+        assert_eq!(report["spec"], "nimora.persisted-capability-gap/2");
         assert_eq!(report["compositionPlan"]["catalogDigest"], catalog.digest);
         assert_eq!(
-            save_capability_gap(&root, &gap, &plan, "018f0000-0000-7000-8000-000000000032",)
-                .unwrap_err()
-                .to_string(),
+            save_capability_gap(
+                &root,
+                &gap,
+                &plan,
+                &semantic_plan,
+                "018f0000-0000-7000-8000-000000000032",
+            )
+            .unwrap_err()
+            .to_string(),
             CreatorWorkspaceError::Io.to_string()
         );
         fs::remove_dir_all(root).expect("cleanup");

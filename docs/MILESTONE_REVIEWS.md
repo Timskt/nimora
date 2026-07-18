@@ -4,6 +4,14 @@
 > 状态：持续维护  
 > 目的：在可演示纵切、每五个生产提交、公开契约变化或重大偏差时校准方向
 
+## M-2026-07-18 Creator Semantic Gap Verification 纵切
+
+- 结果：Gap 增加严格语义输入/输出候选，Creator 同时接收受信 Catalog 与实现无关 Semantic Graph；模型不能提交宿主前置事实。
+- 裁决：宿主以固定安全策略运行确定性 Planner；当前图若能完全产生目标输出则拒绝 Gap，未解析结果才与 Exact-ID 证据一同返回。
+- 持久化：保存命令重新构建实时 Catalog 与 Graph、重算双计划，报告升级为 `nimora.persisted-capability-gap/2`，不接受前端旧摘要或旧计划。
+- UI：展示候选语义、能力路径、成本、搜索状态与缺失输出，并明确证据范围不等于自然语言理解绝对完备。
+- 复盘：外接 AI 现在可以发现已有能力组合而不只生成新代码，同时仍不能扩权、伪造前置条件或获得模块原生对象。
+
 ## M-2026-07-18 Semantic Composition Graph 基础纵切
 
 - 实现：共享 Semantic Contract、摘要绑定 Graph、确定性有界最低成本搜索、13 个内建 Tool 显式契约、Skill 可选语义 Contribution 与 Desktop 实时合并已贯通。

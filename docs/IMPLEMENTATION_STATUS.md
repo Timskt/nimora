@@ -6,8 +6,9 @@
 - `creator-composition` 新增摘要绑定的 `nimora.capability-composition-graph/1` 与 `nimora.capability-semantic-plan/1`，在节点 256、深度 8、扩展状态 2048 和请求项 32 的硬上限内执行确定性最低成本搜索；搜索只读契约，不执行 Tool，也不从 Schema、标题、描述或模型文本推断语义。
 - 内建生产 Tool 现在都有显式宿主维护的语义契约，一致性测试证明 Tool ID 与 Contract ID 一一对应；Character、Program 等路径显式声明安装、完整性和授权前置条件。
 - Skill Agent Tool Contribution 可选携带语义契约，旧 Manifest 保持兼容；安装前复验 Contract ID、effect 和输出命名空间，第三方 Skill 不能冒充平台语义事实。
-- Desktop 从同一实时 Tool Registry 合并内建契约与当前激活 Skill 的已验证契约；Skill 暂停后图节点立即撤销且摘要变化。Creator 结果与 Gap UI 投影组合图摘要，并明确该摘要尚不证明模型把自然语言目标映射到了正确语义输出。
-- 当前已实现机器级语义路径搜索基础层，但 Gap Schema 尚未接收严格 `requiredSemanticOutputs/availableSemanticInputs`，因此现有 Gap 仍只执行 Exact-ID 结论；在模型候选字段、宿主复验和持久报告升级落地前，不得宣称自然语言 Capability Gap 已由图搜索证明。
+- Desktop 从同一实时 Tool Registry 合并内建契约与当前激活 Skill 的已验证契约；Skill 暂停后图节点立即撤销且摘要变化。Creator 的受信 System Message 只接收实现无关的 Catalog 与 Semantic Graph 快照。
+- Gap Schema 已接收排序、去重、有界的 `availableSemanticInputs/requiredSemanticOutputs` 候选；模型无权声明前置条件已满足。宿主使用固定数据等级、副作用、成本策略和空可信前置事实运行确定性 Graph Planner，若找到完整路径则拒绝模型的伪缺口。
+- Creator 结果同时投影 Exact-ID 与 Semantic Plan；Gap 保存时重新读取实时 Registry 和 Graph、重算双计划，并写入 `nimora.persisted-capability-gap/2`。该证据只覆盖候选语义映射和当前宿主事实，不宣称自然语言理解绝对完备。
 
 ## 2026-07-18 — Creator Catalog Snapshot 与精确组合核验纵切
 

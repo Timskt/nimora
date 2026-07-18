@@ -94,8 +94,20 @@ export interface CreatorDraftResult {
     summary: string;
     requestedOutcome: string;
     missingCapabilities: Array<{ capability: string; reason: string; requiredOperations: string[] }>;
+    availableSemanticInputs: string[];
+    requiredSemanticOutputs: string[];
     closestAlternatives: Array<{ kind: CreatorArtifactKind; title: string; tradeoff: string }>;
     platformProposalRequired: boolean;
+  } | null;
+  semanticCompositionPlan: {
+    spec: "nimora.capability-semantic-plan/1";
+    graphDigest: string;
+    capabilityPath: string[];
+    availableOutputs: string[];
+    missingOutputs: string[];
+    totalCostUnits: number;
+    fullyResolved: boolean;
+    expandedStates: number;
   } | null;
   catalogDigest: string;
   compositionGraphDigest: string;

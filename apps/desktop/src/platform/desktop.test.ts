@@ -185,6 +185,8 @@ describe("desktop platform adapter", () => {
       summary: "The Registry cannot express the requested outcome.",
       requestedOutcome: "Observe a user-approved gesture.",
       missingCapabilities: [{ capability: "perception.camera.observe", reason: "No adapter exists.", requiredOperations: ["Produce a bounded gesture event."] }],
+      availableSemanticInputs: ["perception.gesture-request"],
+      requiredSemanticOutputs: ["perception.gesture-event"],
       closestAlternatives: [],
       platformProposalRequired: true,
     };

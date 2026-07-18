@@ -20,6 +20,8 @@ describe("CapabilityGapPreview", () => {
           reason: "尚无持续同意约束的摄像头观察能力。",
           requiredOperations: ["生成不保留原始帧的手势事件。"],
         }],
+        availableSemanticInputs: ["perception.gesture-request"],
+        requiredSemanticOutputs: ["perception.gesture-event"],
         closestAlternatives: [{ kind: "automation", title: "手动触发动作", tradeoff: "需要用户主动操作。" }],
         platformProposalRequired: true,
       },
@@ -33,6 +35,12 @@ describe("CapabilityGapPreview", () => {
         missingCapabilities: ["perception.camera.observe"],
         fullyResolved: false,
       },
+      semanticCompositionPlan: {
+        spec: "nimora.capability-semantic-plan/1",
+        graphDigest: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        capabilityPath: [], availableOutputs: [], missingOutputs: ["perception.gesture-event"],
+        totalCostUnits: 0, fullyResolved: false, expandedStates: 1,
+      },
       usage: { inputTokens: 12, outputTokens: 18, costMicrounits: 0 },
       finishReason: "stop",
     };
@@ -41,9 +49,9 @@ describe("CapabilityGapPreview", () => {
     expect(markup).toContain("CAPABILITY GAP · NON-EXECUTABLE");
     expect(markup).toContain("perception.camera.observe");
     expect(markup).toContain("需要平台提案");
-    expect(markup).toContain("宿主目录已核验");
-    expect(markup).toContain("语义组合图");
-    expect(markup).toContain("未证明自然语言目标不存在其他组合路径");
+    expect(markup).toContain("宿主双重核验");
+    expect(markup).toContain("perception.gesture-event");
+    expect(markup).toContain("不证明自然语言映射绝对完整");
     expect(markup).not.toContain("批准此权限与行为审查");
     expect(markup).not.toContain("原子安装");
     expect(markup).toContain("保存缺口报告");
