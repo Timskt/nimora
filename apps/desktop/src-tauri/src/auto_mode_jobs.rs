@@ -222,7 +222,12 @@ impl AutoModeJobSupervisor {
         now_ms: u64,
     ) -> Result<AutoModeJobSnapshot, AutoModeJobError> {
         self.update(job_id, now_ms, |snapshot| {
-            if snapshot.status != AutoModeJobStatus::Running {
+            if !matches!(
+                snapshot.status,
+                AutoModeJobStatus::Running
+                    | AutoModeJobStatus::Pausing
+                    | AutoModeJobStatus::Cancelling
+            ) {
                 return Err(AutoModeJobError::InvalidTransition);
             }
             snapshot.turns_executed = snapshot
@@ -490,5 +495,22 @@ mod tests {
             supervisor.mark_running(job.job_id, 99),
             Err(AutoModeJobError::TimeMovedBackwards)
         );
+    }
+
+    #[test]
+    fn records_committed_progress_while_control_is_pending() {
+        let supervisor = AutoModeJobSupervisor::default();
+        let (job, _) = supervisor.start(Uuid::now_v7(), 100).expect("job");
+        supervisor.mark_running(job.job_id, 101).expect("running");
+        supervisor.request_pause(job.job_id, 102).expect("pause");
+
+        let progress = supervisor
+            .record_batch(job.job_id, 2, 1, 7, 103)
+            .expect("committed progress");
+
+        assert_eq!(progress.status, AutoModeJobStatus::Pausing);
+        assert_eq!(progress.turns_executed, 2);
+        assert_eq!(progress.cache_hits, 1);
+        assert_eq!(progress.checkpoint_sequence, 7);
     }
 }

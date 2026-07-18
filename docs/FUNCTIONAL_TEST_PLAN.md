@@ -488,3 +488,5 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-112 | Job 版本化快照 | Desktop、TypeScript 与 UI 使用 `nimora.desktop-auto-mode-job/1`，浏览器预览不得伪造宿主执行 | P0 |
 | AGT-113 | Job 全量取消隔离 | 应用退出只向活跃 Job 发布共享取消信号，已完成历史不改变；控制广播不持有锁等待 Runner，时间倒退整体拒绝 | P0 |
 | AGT-114 | 在途取消确定性 | Provider/Tool 在途收到 Pause/Cancel 后，只有可证明未产生副作用或已原子提交的结果可写确定终态；其余 Attempt 与 Job 标记 `indeterminate`，不得自动重放 | P0 |
+| AGT-115 | Job 启动契约 | 原生 Start 原子保留 Session 并立即返回 Starting 快照，默认每批 8 Turn、512 输出 Token、离线执行；浏览器预览稳定拒绝 `desktop-host-required` | P0 |
+| AGT-116 | 控制竞争记账 | 批次执行期间进入 `pausing/cancelling` 后，已原子提交的 Turn、Cache Hit 与 Checkpoint 仍单调写入快照，再执行终态收敛 | P0 |

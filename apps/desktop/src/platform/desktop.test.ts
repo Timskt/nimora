@@ -34,6 +34,10 @@ describe("desktop platform adapter", () => {
       pauseReason: "desktop-host-required",
       requestFingerprint: null,
     });
+    await expect(api.startAutoModeJob({
+      sessionId: "018f0000-0000-7000-8000-000000000012",
+      workspaceRoot: "/preview/workspace",
+    })).rejects.toThrow("desktop-host-required");
     await expect(api.playAction("celebrate")).resolves.toBeNull();
   });
 
@@ -165,6 +169,10 @@ describe("desktop platform adapter", () => {
       sessionId: "018f0000-0000-7000-8000-000000000012",
       workspaceRoot: "/workspace",
     });
+    await api.startAutoModeJob({
+      sessionId: "018f0000-0000-7000-8000-000000000012",
+      workspaceRoot: "/workspace",
+    });
     await api.prepareAgentTool("pet.animation.play", { action: "celebrate" });
     await api.confirmAgentTool("018f0000-0000-7000-8000-000000000004");
     await api.confirmAgentRunTool("018f0000-0000-7000-8000-000000000006");
@@ -276,6 +284,14 @@ describe("desktop platform adapter", () => {
         constraints: [],
         maxOutputTokens: 512,
         offline: true,
+      } }],
+      ["start_auto_mode_job", { request: {
+        sessionId: "018f0000-0000-7000-8000-000000000012",
+        workspaceRoot: "/workspace",
+        constraints: [],
+        maxOutputTokens: 512,
+        offline: true,
+        maxTurnsPerBatch: 8,
       } }],
       ["prepare_agent_tool", { request: { toolId: "pet.animation.play", arguments: { action: "celebrate" } } }],
       ["confirm_agent_tool", { request: { invocationId: "018f0000-0000-7000-8000-000000000004" } }],

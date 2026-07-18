@@ -76,6 +76,10 @@ export interface ResumeAutoModeTurnRequest {
   offline?: boolean;
 }
 
+export interface StartAutoModeJobRequest extends ResumeAutoModeTurnRequest {
+  maxTurnsPerBatch?: number;
+}
+
 export interface DesktopAutoModeTurnResult {
   spec: "nimora.desktop-auto-mode-turn/1";
   sessionId: string;
@@ -508,6 +512,7 @@ export interface DesktopApi {
   cancelSkillExecution(executionId: string): Promise<boolean>;
   runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
   resumeAutoModeTurn(request: ResumeAutoModeTurnRequest): Promise<DesktopAutoModeTurnResult>;
+  startAutoModeJob(request: StartAutoModeJobRequest): Promise<DesktopAutoModeJobSnapshot>;
   autoModeJobStatus(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
   pauseAutoModeJob(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
   cancelAutoModeJob(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
@@ -755,6 +760,9 @@ export function createDesktopApi(
           requestFingerprint: null,
         };
       },
+      async startAutoModeJob() {
+        throw new Error("desktop-host-required");
+      },
       async autoModeJobStatus() {
         throw new Error("desktop-host-required");
       },
@@ -890,6 +898,16 @@ export function createDesktopApi(
         offline: request.offline ?? true,
       },
     }) as DesktopAutoModeTurnResult,
+    startAutoModeJob: async (request) => await invokeCommand("start_auto_mode_job", {
+      request: {
+        sessionId: request.sessionId,
+        workspaceRoot: request.workspaceRoot,
+        constraints: request.constraints ?? [],
+        maxOutputTokens: request.maxOutputTokens ?? 512,
+        offline: request.offline ?? true,
+        maxTurnsPerBatch: request.maxTurnsPerBatch ?? 8,
+      },
+    }) as DesktopAutoModeJobSnapshot,
     autoModeJobStatus: async (jobId) => await invokeCommand("auto_mode_job_status", { jobId }) as DesktopAutoModeJobSnapshot,
     pauseAutoModeJob: async (jobId) => await invokeCommand("pause_auto_mode_job", { jobId }) as DesktopAutoModeJobSnapshot,
     cancelAutoModeJob: async (jobId) => await invokeCommand("cancel_auto_mode_job", { jobId }) as DesktopAutoModeJobSnapshot,

@@ -35,7 +35,7 @@ Nimora 不以复刻某个 CLI 为目标，而是吸收 Codex、Claude Code 等 C
 | 能力 | Nimora 设计 | 当前状态 | 必须补齐的产品闭环 |
 | --- | --- | --- | --- |
 | Goal / Plan | Goal 跨会话持久化；Plan 独立修订；完成需要逐步证据 | 核心、SQLite 与机器可读 CLI 已实现 | 桌面 Goal 工作台、交互式 Plan diff、证据查看与回退 |
-| Auto Mode | 在 Tool、Capability、风险、数据、费用、时间、步骤和并发预算交集内自动推进 | Supervisor 领域、SQLite 会话、CLI 控制面及安全单轮 Provider/Tool 协调已实现 | 桌面 Gateway 持久循环、桌面控制与真实执行端到端验证 |
+| Auto Mode | 在 Tool、Capability、风险、数据、费用、时间、步骤和并发预算交集内自动推进 | Supervisor 领域、SQLite 会话、CLI 控制面、安全单轮协调及桌面有界后台循环已实现 | 线程有界退出、崩溃投影恢复、桌面控制 UI 与真实执行端到端验证 |
 | 权限模式 | 支持建议、只读、受控执行等主动性；批准绑定具体参数，不提供全局永久绕过 | Task/Tool 准入和一次性批准已实现 | 面向用户的模式预设、会话权限摘要、计划级不可变批准 |
 | Checkpoint / Resume | 保存 Goal、Plan 修订、Task 预算、Provider continuation、工具摘要和资源版本；批准不可重放 | 版本化领域对象、SQLite 单调序号 CAS、跨仓储恢复候选，以及 Session/Checkpoint 双 CAS 显式 Resume 原子提交已实现 | Provider/Tool 单轮结果原子提交、损坏处置和版本漂移 UI |
 | 上下文压缩 | 压缩时保留目标、约束、待办、证据与来源；不提升不可信内容权限 | 结构化 Anchor、系统指令保留、Tool 原子单元、源摘要和预算门禁已实现 | Tokenizer 水位适配、语义摘要 Provider、压缩前后一致性评估和桌面 Timeline |
