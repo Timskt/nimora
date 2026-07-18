@@ -5,7 +5,7 @@ import { DataProtection } from "./components/DataProtection";
 import { AgentWorkspace } from "./components/AgentWorkspace";
 import { AutomationWorkspace } from "./components/AutomationWorkspace";
 import { AiCreatorWorkspace } from "./components/AiCreatorWorkspace";
-import type { ActiveThemeSnapshot, AssetPreviewAudio, DesktopSnapshot, OutboxSnapshot, ThemeDescriptor } from "./platform/desktop";
+import type { ActiveThemeSnapshot, AssetPreviewAudio, DesktopSnapshot, OutboxSnapshot, PetCareAction, ThemeDescriptor } from "./platform/desktop";
 import { desktopApi } from "./platform/desktop";
 
 export const navigation = ["概览", "角色", "Agent", "自动化", "扩展", "活动", "设置"] as const;
@@ -94,6 +94,25 @@ export function App() {
     await desktopApi.playAction(action);
     void playVoiceCue(action === "celebrate" ? "pet.celebrate" : "pet.work", quiet).catch(() => undefined);
     setNotice(action === "celebrate" ? "Aster 正在回应你" : "专注场景已启动");
+  }
+
+  async function runCare(action: PetCareAction) {
+    if (recoveryMode) {
+      setNotice("恢复模式下照料保持暂停");
+      return;
+    }
+    const labels: Record<PetCareAction, string> = {
+      feed: "已为 Aster 补充能量",
+      play: "Aster 玩得很开心",
+      groom: "Aster 已经整理好啦",
+    };
+    try {
+      await desktopApi.carePet(action);
+      setDesktopSnapshot(await desktopApi.snapshot());
+      setNotice(labels[action]);
+    } catch {
+      setNotice("照料正在冷却，请稍后再试");
+    }
   }
 
   async function toggleSafeMode() {
@@ -190,6 +209,9 @@ export function App() {
               <div className="stage-actions">
                 <button className="primary-button" type="button" disabled={recoveryMode} onClick={() => void runAction("celebrate")}>开始互动</button>
                 <button className="secondary-button" type="button" disabled={recoveryMode} onClick={() => void runAction("work")}>进入专注</button>
+                <button className="secondary-button" type="button" disabled={recoveryMode} onClick={() => void runCare("feed")}>喂食</button>
+                <button className="secondary-button" type="button" disabled={recoveryMode} onClick={() => void runCare("play")}>玩耍</button>
+                <button className="secondary-button" type="button" disabled={recoveryMode} onClick={() => void runCare("groom")}>梳理</button>
               </div>
             </div>
             <div className="pet-visual" aria-label="默认角色 Aster，当前状态平静">

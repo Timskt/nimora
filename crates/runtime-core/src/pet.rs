@@ -55,6 +55,14 @@ pub enum PetAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum PetCareAction {
+    Feed,
+    Play,
+    Groom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PetIntent {
     Observe,
     Explore,
@@ -161,6 +169,8 @@ pub struct Pet {
     #[serde(default)]
     pub last_vitals_update_ms: u64,
     #[serde(default)]
+    pub last_care_ms: u64,
+    #[serde(default)]
     pub autonomy: PetAutonomyState,
 }
 
@@ -186,6 +196,7 @@ impl Pet {
             mood: 70,
             affinity: 0,
             last_vitals_update_ms: 0,
+            last_care_ms: 0,
             autonomy: PetAutonomyState::default(),
         })
     }
@@ -320,6 +331,47 @@ impl Pet {
         self.last_vitals_update_ms = now_ms;
     }
 
+    /// Applies one direct care action while enforcing user-state priority and cooldown.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid transition while dragged or a cooldown error when care is repeated early.
+    pub fn care(
+        &mut self,
+        action: PetCareAction,
+        now_ms: u64,
+        cooldown_ms: u64,
+    ) -> Result<(), PetError> {
+        if self.state == PetState::Dragged {
+            return Err(PetError::InvalidTransition);
+        }
+        if self.last_care_ms != 0 && now_ms.saturating_sub(self.last_care_ms) < cooldown_ms {
+            return Err(PetError::CareCooldown);
+        }
+        match action {
+            PetCareAction::Feed => {
+                self.energy = self.energy.saturating_add(20).min(100);
+                self.mood = self.mood.saturating_add(2).min(100);
+                self.affinity = self.affinity.saturating_add(1).min(100);
+            }
+            PetCareAction::Play => {
+                self.energy = self.energy.saturating_sub(5);
+                self.mood = self.mood.saturating_add(12).min(100);
+                self.affinity = self.affinity.saturating_add(2).min(100);
+            }
+            PetCareAction::Groom => {
+                self.mood = self.mood.saturating_add(6).min(100);
+                self.affinity = self.affinity.saturating_add(3).min(100);
+            }
+        }
+        self.state = PetState::Interacting;
+        self.emotion = Emotion::Happy;
+        self.autonomy.active_intent = None;
+        self.autonomy.active_until_ms = None;
+        self.last_care_ms = now_ms;
+        Ok(())
+    }
+
     pub fn recover_transient_state(&mut self) -> bool {
         if matches!(
             self.state,
@@ -422,6 +474,8 @@ pub enum PetError {
     InvalidPosition,
     #[error("pet vitals must be between 0 and 100")]
     InvalidVitals,
+    #[error("pet care action is cooling down")]
+    CareCooldown,
     #[error("pet state transition is not allowed")]
     InvalidTransition,
 }
@@ -536,6 +590,33 @@ mod tests {
         pet.interact().expect("interaction");
         assert_eq!(pet.mood, 100);
         assert_eq!(pet.affinity, 100);
+    }
+
+    #[test]
+    fn care_actions_apply_distinct_bounded_vital_changes() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.energy = 50;
+        pet.mood = 50;
+        pet.care(PetCareAction::Feed, 1_000, 30_000).expect("feed");
+        assert_eq!((pet.energy, pet.mood, pet.affinity), (70, 52, 1));
+        assert_eq!(pet.state, PetState::Interacting);
+        assert_eq!(
+            pet.care(PetCareAction::Play, 2_000, 30_000),
+            Err(PetError::CareCooldown)
+        );
+        pet.care(PetCareAction::Play, 31_000, 30_000).expect("play");
+        assert_eq!((pet.energy, pet.mood, pet.affinity), (65, 64, 3));
+    }
+
+    #[test]
+    fn care_never_overrides_drag_state() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.begin_drag().expect("drag");
+        assert_eq!(
+            pet.care(PetCareAction::Groom, 1_000, 30_000),
+            Err(PetError::InvalidTransition)
+        );
+        assert_eq!(pet.state, PetState::Dragged);
     }
 
     #[test]

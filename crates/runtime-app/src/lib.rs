@@ -2,8 +2,8 @@
 
 use nimora_runtime_core::{
     Command, CommandError, CommandRisk, Event, EventError, EventSource, Pet, PetAction,
-    PetAutonomyDecision, PetAutonomyPolicy, PetError, PointerButton, Position, Profile,
-    ProfileError, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
+    PetAutonomyDecision, PetAutonomyPolicy, PetCareAction, PetError, PointerButton, Position,
+    Profile, ProfileError, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -565,6 +565,37 @@ impl<R: PetRepository> RuntimeService<R> {
         .map(Some)
     }
 
+    /// Applies a direct care action and atomically publishes its vital changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when care is invalid, cooling down, or cannot be persisted.
+    pub fn care_pet(
+        &self,
+        action: PetCareAction,
+        now_ms: u64,
+        cooldown_ms: u64,
+    ) -> Result<Command, RuntimeError> {
+        self.update(
+            |pet| pet.care(action, now_ms, cooldown_ms),
+            || {
+                Command::new(
+                    "pet.care.perform",
+                    serde_json::json!({ "action": action }),
+                    CommandRisk::Safe,
+                )
+            },
+            "pet.care.performed",
+            |before, after| {
+                serde_json::json!({
+                    "action": action,
+                    "before": { "energy": before.energy, "mood": before.mood, "affinity": before.affinity },
+                    "after": { "energy": after.energy, "mood": after.mood, "affinity": after.affinity },
+                })
+            },
+        )
+    }
+
     /// Records a semantic pointer interaction with the pet.
     ///
     /// # Errors
@@ -1096,6 +1127,51 @@ mod tests {
             service.snapshot().expect("snapshot").last_vitals_update_ms,
             0
         );
+        assert!(service.drain_events().expect("events").is_empty());
+    }
+
+    #[test]
+    fn care_is_persisted_with_correlated_vital_event_and_cooldown() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let command = service
+            .care_pet(PetCareAction::Play, 1_000, 30_000)
+            .expect("care");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(
+            (snapshot.energy, snapshot.mood, snapshot.affinity),
+            (95, 82, 2)
+        );
+        assert!(matches!(
+            service.care_pet(PetCareAction::Feed, 2_000, 30_000),
+            Err(RuntimeError::Pet(PetError::CareCooldown))
+        ));
+        let event = service
+            .drain_events()
+            .expect("events")
+            .pop()
+            .expect("event");
+        assert_eq!(event.event_type, "pet.care.performed");
+        assert_eq!(event.trace_id, command.trace_id);
+        assert_eq!(event.data["action"], "play");
+    }
+
+    #[test]
+    fn failed_care_persistence_preserves_vitals_and_cooldown() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        service.repository.fail_save.store(true, Ordering::Relaxed);
+        assert!(
+            service
+                .care_pet(PetCareAction::Feed, 1_000, 30_000)
+                .is_err()
+        );
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(
+            (snapshot.energy, snapshot.mood, snapshot.affinity),
+            (100, 70, 0)
+        );
+        assert_eq!(snapshot.last_care_ms, 0);
         assert!(service.drain_events().expect("events").is_empty());
     }
 

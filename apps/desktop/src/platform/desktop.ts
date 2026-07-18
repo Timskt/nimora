@@ -15,6 +15,8 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 
 export const petActions = ["idle", "walk", "sleep", "work", "celebrate"] as const;
 export type PetAction = (typeof petActions)[number];
+export const petCareActions = ["feed", "play", "groom"] as const;
+export type PetCareAction = (typeof petCareActions)[number];
 export type CommandRisk = "safe" | "low" | "medium" | "high" | "critical";
 
 export interface DesktopSnapshot {
@@ -1014,6 +1016,7 @@ export interface DesktopApi {
   exitSafeMode(): Promise<NimoraCommand | null>;
   movePet(x: number, y: number): Promise<NimoraCommand | null>;
   playAction(action: PetAction): Promise<NimoraCommand | null>;
+  carePet(action: PetCareAction): Promise<NimoraCommand | null>;
   clickPet(x: number, y: number, button: PointerButton): Promise<NimoraCommand | null>;
   dragPet(): Promise<NimoraCommand | null>;
   setClickThrough(enabled: boolean): Promise<void>;
@@ -1381,6 +1384,17 @@ export function createDesktopApi(
       async exitSafeMode() { return null; },
       async movePet() { return null; },
       async playAction() { return null; },
+      async carePet(action) {
+        const gains = action === "feed"
+          ? { energy: 20, mood: 2, affinity: 1 }
+          : action === "play"
+            ? { energy: -5, mood: 12, affinity: 2 }
+            : { energy: 0, mood: 6, affinity: 3 };
+        previewSnapshot.pet.energy = Math.max(0, Math.min(100, previewSnapshot.pet.energy + gains.energy));
+        previewSnapshot.pet.mood = Math.min(100, previewSnapshot.pet.mood + gains.mood);
+        previewSnapshot.pet.affinity = Math.min(100, previewSnapshot.pet.affinity + gains.affinity);
+        return null;
+      },
       async clickPet() { return null; },
       async dragPet() { return null; },
       async setClickThrough() {},
@@ -1555,6 +1569,7 @@ export function createDesktopApi(
     exitSafeMode: async () => await invokeCommand("exit_safe_mode") as NimoraCommand,
     movePet: async (x, y) => await invokeCommand("move_pet", { request: { x, y } }) as NimoraCommand,
     playAction: async (action) => await invokeCommand("play_pet_action", { action }) as NimoraCommand,
+    carePet: async (action) => await invokeCommand("care_pet", { action }) as NimoraCommand,
     clickPet: async (x, y, button) => await invokeCommand("click_pet", {
       request: { x, y, button },
     }) as NimoraCommand,

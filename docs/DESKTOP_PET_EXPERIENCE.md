@@ -47,6 +47,8 @@ Needs → Mood → Intent → Action Plan → Renderer Semantics → Adapter Ani
 
 生命状态同样必须完全本地运行。当前基线每十分钟确定性推进 Energy 与 Mood，首次运行只建立时间基线，休眠或退出后的追赶最多计算 24 小时，避免长时间未启动造成瞬时归零；每次点击互动增加 Mood 与 Affinity 并在 100 封顶。时间戳、生命值和标准 `pet.vitals.changed` Event 由同一 Repository 事务原子保存，失败时内存状态和事件总线均不发布。Pet Overlay 与控制中心通过可信宿主事件刷新同一 Snapshot，控制中心不得再展示与真实领域状态无关的演示数字。
 
+照料采用独立的 `PetCareAction` 语义，而不是把喂食伪装成动画。Feed 恢复 Energy 并小幅增加 Mood/Affinity，Play 消耗少量 Energy 换取较高 Mood/Affinity，Groom 提升 Mood 与关系；所有结果在 0–100 饱和。照料拥有 30 秒宿主时间冷却、防止误触和脚本刷值，Drag 具有绝对优先级；合法照料可以安全中止自主动作并进入短暂互动反馈。Overlay 与控制中心提供同一三种操作，Safe/Recovery Mode 失败关闭，浏览器预览只模拟 UI，不冒充原生持久化完成。
+
 ## 4. 经典桌宠能力
 
 ### 4.1 直接互动

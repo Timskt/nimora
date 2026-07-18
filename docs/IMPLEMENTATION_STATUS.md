@@ -25,6 +25,13 @@
 - `RuntimeService::tick_vitals` 将 Snapshot 与 `pet.vitals.changed` Outbox Event 原子保存，持久化失败不改变内存或事件总线；Desktop Host 仅在 Normal Mode 推进并向 Pet Overlay、控制中心发送可信刷新事件。
 - 控制中心已移除硬编码 Energy、等级和演示文案，改为展示生产 Snapshot；Rust、Schema 和前端契约测试覆盖旧字段兼容、有界衰减、互动封顶、事务失败与事件关联。
 
+## 2026-07-19 — 桌宠照料闭环第一纵切
+
+- 新增可扩展的 `PetCareAction::{Feed, Play, Groom}` 领域语义，各自具有不同 Energy、Mood、Affinity 收益并全程使用 0–100 饱和运算。
+- 三类照料共享 30 秒持久冷却；Drag 状态拒绝照料，自主行为可被合法照料安全中止，避免用户操作和后台状态机互相覆盖。
+- `RuntimeService::care_pet` 原子保存 Pet Snapshot 与 `pet.care.performed` Event，失败不消耗冷却、不改变内存、不发布事件；Safe/Recovery Mode 在调用前拒绝。
+- Pet Overlay 和控制中心均提供喂食、玩耍、梳理入口、成功文案与冷却反馈，控制中心按钮支持窄宽换行；浏览器预览仅更新隔离的预览 Snapshot。
+
 ## 2026-07-19 — 运行级 Provider 推理策略纵切
 
 - Provider Descriptor 新增显式、版本化推理能力声明；`auto` 不能伪装为 Provider 具体能力，空集合和非法 Mapping Version 在注册前拒绝。

@@ -9,8 +9,8 @@ mod safety;
 pub use command::{Command, CommandError, CommandId, CommandRisk, CommandStatus};
 pub use event::{Event, EventError, EventId, EventSource};
 pub use pet::{
-    Emotion, Pet, PetAction, PetAutonomyDecision, PetAutonomyPolicy, PetAutonomyState, PetError,
-    PetId, PetIntent, PetState, PointerButton, Position,
+    Emotion, Pet, PetAction, PetAutonomyDecision, PetAutonomyPolicy, PetAutonomyState,
+    PetCareAction, PetError, PetId, PetIntent, PetState, PointerButton, Position,
 };
 pub use profile::{Profile, ProfileError, ProfileId, ProfileMode, ProfilePolicy};
 pub use safety::{RuntimeMode, SafeModeReason, SafetySnapshot};

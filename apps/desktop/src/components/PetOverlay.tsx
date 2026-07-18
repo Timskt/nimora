@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction } from "../platform/desktop";
+import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction, PetCareAction } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 import { RendererErrorBoundary } from "./RendererErrorBoundary";
 import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
@@ -93,6 +93,21 @@ export function PetOverlay() {
     setSnapshot(await desktopApi.snapshot());
   }
 
+  async function care(action: PetCareAction) {
+    const labels: Record<PetCareAction, string> = {
+      feed: "吃饱啦，谢谢你！",
+      play: "一起玩最开心！",
+      groom: "整理得漂漂亮亮！",
+    };
+    try {
+      await desktopApi.carePet(action);
+      setSnapshot(await desktopApi.snapshot());
+      setMessage(labels[action]);
+    } catch {
+      setMessage("让我缓一会儿再照料吧");
+    }
+  }
+
   async function drag() {
     setMessage("抓稳啦…");
     await desktopApi.dragPet();
@@ -146,6 +161,9 @@ export function PetOverlay() {
         <span className="overlay-shadow" aria-hidden="true" />
       </button>
       <div className="overlay-actions" aria-label="宠物快捷操作">
+        <button type="button" onClick={() => void care("feed")} aria-label="给 Aster 喂食">◒</button>
+        <button type="button" onClick={() => void care("play")} aria-label="陪 Aster 玩耍">✧</button>
+        <button type="button" onClick={() => void care("groom")} aria-label="为 Aster 梳理">♢</button>
         <button
           type="button"
           onClick={(event) => void interact(event.screenX, event.screenY)}
