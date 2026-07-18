@@ -294,4 +294,5 @@ Actions 分钟：
 - 实现：Safe/Low 立即执行；Medium/High 使用五分钟不可变 SQLite Approval Journal，返回 `waiting_for_approval`，批准前不创建 Run Journal、不注册活跃运行、不调用 Pet 或 Agent Backend。
 - 复验：批准原子 claim 后重新校验定义、事件身份、完整参数、风险摘要和已安装精确版本，并使用同一预分配 `runId` 执行；Critical 不进入普通批准。
 - 鲁棒性：拒绝、过期、重复处理和 Safe Mode 均失败关闭；重启保留未过期 pending、将 executing 标记 interrupted；Engine 异常精确中断 Run Journal，避免遗留 running。
+- 回顾修正：故障测试发现 Catalog 的独立 `enabled` 列没有同步回运行 Definition，导致已启用事件 Automation 被 Engine 当作禁用并跳过；读取边界现以持久启用态覆盖 Definition，且测试证明待批期间停用或升级会使旧批准失败终结，Safe Mode 则在 claim 前拒绝并保留用户决定权。
 - UI：Automation Workspace 显示逐动作有效风险、实际参数和过期时间，明确整次执行尚未开始；Browser Preview 只返回空目录并拒绝伪造批准。

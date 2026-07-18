@@ -10336,6 +10336,140 @@ mod tests {
     }
 
     #[test]
+    fn installed_automation_cannot_run_after_pending_plan_is_disabled_or_upgraded() {
+        for mutation in ["disabled", "upgraded"] {
+            let (root, state) = normal_desktop_state();
+            let request = live_move_request("pet.position.move", "medium");
+            state
+                .automation_catalog
+                .install(&request.definition, current_time_ms().expect("clock"))
+                .expect("install Automation");
+            state
+                .automation_catalog
+                .set_enabled(
+                    &request.definition.id,
+                    true,
+                    current_time_ms().expect("clock"),
+                )
+                .expect("enable Automation");
+            let installed = state
+                .automation_catalog
+                .get(&request.definition.id)
+                .expect("catalog lookup")
+                .expect("installed Automation");
+            let event = Event::new(
+                request.event_type.clone(),
+                EventSource::System("automation-drift-test".to_owned()),
+                request.event_data.clone(),
+            )
+            .expect("source event");
+            let waiting = run_live_automation_event(
+                &state,
+                &installed.definition,
+                &event,
+                CancellationFlag::default(),
+                AutomationRunOrigin::Installed,
+            )
+            .expect("pending installed Automation");
+            let approval = state
+                .automation_approval_journal
+                .list_pending(current_time_ms().expect("clock"), 32)
+                .expect("pending approvals")
+                .into_iter()
+                .find(|entry| entry.run_id == waiting.run_id)
+                .expect("run approval");
+
+            if mutation == "disabled" {
+                state
+                    .automation_catalog
+                    .set_enabled(
+                        &request.definition.id,
+                        false,
+                        current_time_ms().expect("clock"),
+                    )
+                    .expect("disable Automation");
+            } else {
+                let mut upgraded = request.definition.clone();
+                upgraded.version = "1.1.0".to_owned();
+                state
+                    .automation_catalog
+                    .install(&upgraded, current_time_ms().expect("clock"))
+                    .expect("upgrade Automation");
+            }
+
+            assert!(matches!(
+                approve_automation_run_inner(&state, approval.approval_id),
+                Err(DesktopError::AutomationApprovalVersionChanged)
+            ));
+            assert!(approve_automation_run_inner(&state, approval.approval_id).is_err());
+            assert!(
+                state
+                    .automation_journal
+                    .get(waiting.run_id)
+                    .expect("run journal")
+                    .is_none()
+            );
+            assert_eq!(
+                state.runtime.snapshot().expect("snapshot").position,
+                Position { x: 0.0, y: 0.0 }
+            );
+            std::fs::remove_dir_all(root).expect("fixture cleanup");
+        }
+    }
+
+    #[test]
+    fn safe_mode_rejects_approval_before_claim_and_preserves_pending_decision() {
+        let (root, state) = normal_desktop_state();
+        let waiting = run_live_automation(&state, live_move_request("pet.position.move", "medium"))
+            .expect("pending medium-risk run");
+        let approval = state
+            .automation_approval_journal
+            .list_pending(current_time_ms().expect("clock"), 32)
+            .expect("pending approvals")
+            .into_iter()
+            .find(|entry| entry.run_id == waiting.run_id)
+            .expect("run approval");
+        state
+            .safety
+            .enter(nimora_runtime_core::SafeModeReason::Manual)
+            .expect("enter safe mode");
+
+        assert!(matches!(
+            approve_automation_run_inner(&state, approval.approval_id),
+            Err(DesktopError::SafeModeActive)
+        ));
+        assert!(
+            state
+                .automation_approval_journal
+                .list_pending(current_time_ms().expect("clock"), 32)
+                .expect("pending approvals")
+                .iter()
+                .any(|entry| entry.approval_id == approval.approval_id)
+        );
+        assert!(
+            state
+                .automation_journal
+                .get(waiting.run_id)
+                .expect("run journal")
+                .is_none()
+        );
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").position,
+            Position { x: 0.0, y: 0.0 }
+        );
+
+        state.safety.exit().expect("exit safe mode");
+        let run = approve_automation_run_inner(&state, approval.approval_id)
+            .expect("approve preserved pending run");
+        assert_eq!(run.run_id, waiting.run_id);
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").position,
+            Position { x: 41.0, y: 73.0 }
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
     fn high_risk_compensation_pauses_entire_run_before_low_risk_action() {
         let (root, state) = normal_desktop_state();
         let mut request = live_move_request("pet.position.move", "low");

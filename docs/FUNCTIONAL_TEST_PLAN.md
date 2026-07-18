@@ -587,8 +587,9 @@ ID / 标题 / 优先级 / 前置条件
 - Verify 未注册命令在任何 Journal、活跃运行或 Backend 副作用前失败关闭。
 - Verify 任一 Medium/High 主动作或补偿动作使整次 Run 返回 `waiting_for_approval`；此前低风险动作也未执行，Run Journal 不存在。
 - Verify 待批目录只返回 Automation/版本/Run ID/过期时间与逐项实际参数，不返回 Event data 正文。
-- Verify 批准绑定不可变定义、事件、参数、风险摘要和 `runId`；安装版本、启用状态或宿主策略漂移后不能执行。
-- Verify 批准原子单次 claim；拒绝、过期、重复批准和 Safe Mode 批准均失败关闭且不创建 Run Journal。
+- Verify Catalog 读取会把独立持久化的有效启用态同步进运行 Definition；已启用事件 Automation 不得因安装 Payload 的默认禁用态被错误跳过。
+- Verify 批准绑定不可变定义、事件、参数、风险摘要和 `runId`；待批期间安装版本升级或停用后，旧计划进入失败终态且不能执行、重试或创建 Run Journal。
+- Verify 批准原子单次 claim；拒绝、过期和重复批准失败关闭；Safe Mode 必须在 claim 前拒绝并保留 pending，退出 Safe Mode 后用户仍可明确批准或拒绝。
 - Verify 批准后使用预分配 `runId` 创建并完成真实 Run Journal；Backend 或 Engine 异常收敛为 failed/interrupted，不遗留 running。
 - Verify 重启保留未过期 pending、过期 pending 变为 expired、executing 变为 interrupted，且不会自动重放命令。
 - Verify Browser Preview 返回空待批目录，并对批准/拒绝明确报“需要桌面运行时”，不得伪造成功。

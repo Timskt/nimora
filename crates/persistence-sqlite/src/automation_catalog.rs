@@ -307,14 +307,21 @@ fn decode_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<AutomationCatalogEn
     if schema_version != AUTOMATION_CATALOG_VERSION {
         return Err(rusqlite::Error::InvalidQuery);
     }
-    let definition = serde_json::from_str::<AutomationDefinition>(&payload).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
-    })?;
+    let mut definition =
+        serde_json::from_str::<AutomationDefinition>(&payload).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
+    let enabled = row.get::<_, bool>(1)?;
+    definition.enabled = enabled;
     AutomationEngine::validate(&definition).map_err(|_| rusqlite::Error::InvalidQuery)?;
     Ok(AutomationCatalogEntry {
         spec: "nimora.automation-catalog-entry/1".to_owned(),
         definition,
-        enabled: row.get(1)?,
+        enabled,
         installed_at_ms: u64::try_from(row.get::<_, i64>(2)?)
             .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, i64::MIN))?,
         updated_at_ms: u64::try_from(row.get::<_, i64>(3)?)
@@ -379,13 +386,12 @@ mod tests {
         catalog
             .set_enabled(&first.automation_id, true, 11)
             .expect("enable");
-        assert!(
-            catalog
-                .get(&first.automation_id)
-                .expect("get")
-                .expect("entry")
-                .enabled
-        );
+        let enabled = catalog
+            .get(&first.automation_id)
+            .expect("get")
+            .expect("entry");
+        assert!(enabled.enabled);
+        assert!(enabled.definition.enabled);
 
         let upgraded = catalog.install(&definition("2.0.0"), 20).expect("upgrade");
         assert_eq!(upgraded.replaced_version.as_deref(), Some("1.0.0"));
