@@ -2,9 +2,9 @@
 
 use nimora_agent_runtime::{
     AgentGoal, AgentPlan, AgentTask, AgentTaskStatus, AutoModeCheckpoint, AutoModePauseReason,
-    AutoModeSession, AutoModeStatus, CompactedContext, ContextAnchor, ContextCompactionPolicy,
-    ContextCompactor, ContextManagementError, DataClassification, ProviderMessage, ToolDescriptor,
-    WorkspaceSnapshot,
+    AutoModeSession, AutoModeStatus, AutoModeTurnOutcome, CompactedContext, ContextAnchor,
+    ContextCompactionPolicy, ContextCompactor, ContextManagementError, DataClassification,
+    ProviderMessage, ProviderMessageRole, ToolDescriptor, WorkspaceSnapshot,
 };
 use nimora_agent_workspace_host::{WorkspaceHostError, WorkspaceScanPolicy, WorkspaceScanner};
 use nimora_persistence_sqlite::{
@@ -140,6 +140,138 @@ pub enum WorkspaceTurnPreflight {
         checkpoint_sequence: u64,
         workspace: Box<WorkspaceSnapshot>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommittedAutoModeTurn {
+    Continue(Box<RecoveredAutoModeTurn>),
+    Paused(Box<RecoveredAutoModeTurn>),
+    Completed(Box<RecoveredAutoModeTurn>),
+}
+
+#[derive(Debug, Clone)]
+pub struct AutoModeTurnCommitService {
+    database_path: PathBuf,
+}
+
+impl AutoModeTurnCommitService {
+    #[must_use]
+    pub fn new(database_path: impl Into<PathBuf>) -> Self {
+        Self {
+            database_path: database_path.into(),
+        }
+    }
+
+    /// Durably couples a post-Provider turn to its session and checkpoint versions.
+    ///
+    /// A persistence error after a Provider or Tool call is deliberately classified as
+    /// indeterminate. Callers must recover or pause for inspection and must never replay the
+    /// remote call automatically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid outcome state or an indeterminate atomic commit.
+    pub fn commit(
+        &self,
+        mut turn: RecoveredAutoModeTurn,
+        outcome: AutoModeTurnOutcome,
+        expected_session_updated_at_ms: u64,
+        now_ms: u64,
+    ) -> Result<CommittedAutoModeTurn, AutoModeTurnCommitError> {
+        if now_ms < turn.session.updated_at_ms
+            || expected_session_updated_at_ms > turn.session.updated_at_ms
+        {
+            return Err(AutoModeTurnCommitError::InvalidOutcomeState);
+        }
+        let previous_checkpoint_sequence = turn.checkpoint_sequence;
+        let committed = match outcome {
+            AutoModeTurnOutcome::Continue { messages } => {
+                if turn.task.status != AgentTaskStatus::Running {
+                    return Err(AutoModeTurnCommitError::InvalidOutcomeState);
+                }
+                turn.messages.extend(messages);
+                CommittedAutoModeTurnKind::Continue
+            }
+            AutoModeTurnOutcome::Paused { reason, .. } => {
+                if turn.session.status != AutoModeStatus::Paused
+                    || turn.session.pause_reason != Some(reason)
+                {
+                    return Err(AutoModeTurnCommitError::InvalidOutcomeState);
+                }
+                if turn.task.status != AgentTaskStatus::Paused {
+                    turn.task
+                        .transition(AgentTaskStatus::Paused, now_ms)
+                        .map_err(|_| AutoModeTurnCommitError::InvalidOutcomeState)?;
+                }
+                CommittedAutoModeTurnKind::Paused
+            }
+            AutoModeTurnOutcome::Completed { response } => {
+                if turn.task.status != AgentTaskStatus::Succeeded {
+                    return Err(AutoModeTurnCommitError::InvalidOutcomeState);
+                }
+                turn.messages.push(ProviderMessage::text(
+                    ProviderMessageRole::Assistant,
+                    response.content,
+                    DataClassification::Personal,
+                    false,
+                ));
+                turn.session
+                    .complete(now_ms)
+                    .map_err(|_| AutoModeTurnCommitError::InvalidOutcomeState)?;
+                CommittedAutoModeTurnKind::Completed
+            }
+        };
+        turn.checkpoint_sequence = turn
+            .checkpoint_sequence
+            .checked_add(1)
+            .ok_or(AutoModeTurnCommitError::InvalidOutcomeState)?;
+        let checkpoint = AutoModeCheckpoint::new(
+            turn.session.id,
+            turn.goal.id,
+            turn.plan.revision,
+            turn.checkpoint_sequence,
+            turn.task.clone(),
+            turn.model.clone(),
+            turn.messages.clone(),
+            turn.workspace.fingerprint.clone(),
+            turn.session.policy_fingerprint.clone(),
+            turn.checkpoint_created_at_ms,
+            now_ms,
+        )
+        .map_err(|_| AutoModeTurnCommitError::InvalidOutcomeState)?;
+        SqliteAutoModeCommitRepository::open(&self.database_path)
+            .and_then(|mut repository| {
+                repository.commit_turn(
+                    &turn.session,
+                    expected_session_updated_at_ms,
+                    &checkpoint,
+                    previous_checkpoint_sequence,
+                )
+            })
+            .map_err(AutoModeTurnCommitError::CommitIndeterminate)?;
+        Ok(match committed {
+            CommittedAutoModeTurnKind::Continue => CommittedAutoModeTurn::Continue(Box::new(turn)),
+            CommittedAutoModeTurnKind::Paused => CommittedAutoModeTurn::Paused(Box::new(turn)),
+            CommittedAutoModeTurnKind::Completed => {
+                CommittedAutoModeTurn::Completed(Box::new(turn))
+            }
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CommittedAutoModeTurnKind {
+    Continue,
+    Paused,
+    Completed,
+}
+
+#[derive(Debug, Error)]
+pub enum AutoModeTurnCommitError {
+    #[error("Auto Mode turn outcome is inconsistent with its session or task")]
+    InvalidOutcomeState,
+    #[error("Auto Mode turn commit is indeterminate and must not be replayed automatically")]
+    CommitIndeterminate(#[source] SqlitePersistenceError),
 }
 
 #[derive(Debug, Clone)]
@@ -418,10 +550,12 @@ pub enum AutoModeRecoveryError {
 mod tests {
     use super::*;
     use nimora_agent_runtime::{
-        AgentBudget, AgentPlanStep, AgentTaskOrigin, AutoModePolicy, DataClassification,
-        ProviderMessageRole,
+        AgentBudget, AgentPlanStep, AgentTaskOrigin, AutoModePolicy, AutoModeStepRequest,
+        AutoModeUsage, DataClassification, ProviderFinishReason, ProviderMessageRole,
+        ProviderResponse, ProviderUsage, ToolEffect,
     };
     use nimora_persistence_sqlite::StoredWorkspaceSnapshot;
+    use nimora_runtime_core::CommandRisk;
     use std::fs;
 
     fn temporary_path(label: &str) -> PathBuf {
@@ -742,6 +876,131 @@ mod tests {
                 .expect("stored workspace")
                 .snapshot,
             *successor
+        );
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn commits_continuation_once_and_rejects_stale_replay() {
+        let (database, workspace, session_id) = fixture();
+        let recovery = AutoModeRecoveryService::new(&database, WorkspaceScanPolicy::default());
+        let recovered = recovery
+            .recover(session_id, &workspace, 1_100)
+            .expect("recover");
+        let mut running = recovery.commit_resume(recovered, 1_101).expect("resume");
+        let expected_session_updated_at_ms = running.session.updated_at_ms;
+        running
+            .session
+            .evaluate_step(
+                &AutoModeStepRequest {
+                    goal_id: running.goal.id,
+                    plan_revision: running.plan.revision,
+                    workspace_revision: running.workspace.fingerprint.clone(),
+                    tool_id: None,
+                    risk: CommandRisk::Safe,
+                    effect: ToolEffect::ReadOnly,
+                    data_classification: DataClassification::Personal,
+                    projected_usage: AutoModeUsage {
+                        cycles: 1,
+                        ..AutoModeUsage::default()
+                    },
+                },
+                1_102,
+            )
+            .expect("account turn");
+        let replay = running.clone();
+        let outcome = AutoModeTurnOutcome::Continue {
+            messages: vec![ProviderMessage::text(
+                ProviderMessageRole::Assistant,
+                "continue safely",
+                DataClassification::Personal,
+                false,
+            )],
+        };
+        let committed = AutoModeTurnCommitService::new(&database)
+            .commit(
+                running,
+                outcome.clone(),
+                expected_session_updated_at_ms,
+                1_102,
+            )
+            .expect("commit turn");
+        let CommittedAutoModeTurn::Continue(committed) = committed else {
+            panic!("turn must continue");
+        };
+        assert_eq!(committed.checkpoint_sequence, 3);
+        assert_eq!(committed.messages.len(), 2);
+        let error = AutoModeTurnCommitService::new(&database)
+            .commit(replay, outcome, expected_session_updated_at_ms, 1_102)
+            .expect_err("stale Provider result must not replay");
+        assert!(matches!(
+            error,
+            AutoModeTurnCommitError::CommitIndeterminate(
+                SqlitePersistenceError::AutoModeCommitConflict
+            )
+        ));
+        let checkpoint = SqliteAutoModeCheckpointRepository::open(&database)
+            .expect("checkpoints")
+            .get(session_id)
+            .expect("checkpoint")
+            .expect("stored checkpoint");
+        assert_eq!(checkpoint.sequence, 3);
+        assert_eq!(checkpoint.messages.len(), 2);
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn commits_terminal_provider_result_with_session_completion() {
+        let (database, workspace, session_id) = fixture();
+        let recovery = AutoModeRecoveryService::new(&database, WorkspaceScanPolicy::default());
+        let recovered = recovery
+            .recover(session_id, &workspace, 1_100)
+            .expect("recover");
+        let mut running = recovery.commit_resume(recovered, 1_101).expect("resume");
+        let expected_session_updated_at_ms = running.session.updated_at_ms;
+        running
+            .task
+            .transition(AgentTaskStatus::Succeeded, 1_102)
+            .expect("succeed task");
+        let response = ProviderResponse {
+            spec: "nimora.agent-provider-response/1".to_owned(),
+            request_id: Uuid::now_v7(),
+            content: "finished".to_owned(),
+            tool_calls: Vec::new(),
+            finish_reason: ProviderFinishReason::Completed,
+            usage: ProviderUsage {
+                input_tokens: 1,
+                output_tokens: 1,
+                cost_microunits: 0,
+            },
+        };
+        let committed = AutoModeTurnCommitService::new(&database)
+            .commit(
+                running,
+                AutoModeTurnOutcome::Completed { response },
+                expected_session_updated_at_ms,
+                1_102,
+            )
+            .expect("commit completion");
+        let CommittedAutoModeTurn::Completed(committed) = committed else {
+            panic!("turn must complete");
+        };
+        assert_eq!(committed.session.status, AutoModeStatus::Completed);
+        assert_eq!(committed.task.status, AgentTaskStatus::Succeeded);
+        assert_eq!(
+            committed.messages.last().expect("answer").content,
+            "finished"
+        );
+        assert_eq!(
+            SqliteAutoModeRepository::open(&database)
+                .expect("sessions")
+                .get(session_id)
+                .expect("session")
+                .expect("stored session")
+                .status,
+            AutoModeStatus::Completed
         );
         fs::remove_file(database).expect("database cleanup");
         fs::remove_dir_all(workspace).expect("workspace cleanup");

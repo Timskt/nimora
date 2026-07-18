@@ -339,7 +339,10 @@ const fn valid_transition(current: AgentTaskStatus, next: AgentTaskStatus) -> bo
                     | AgentTaskStatus::Running,
                 AgentTaskStatus::Cancelled
             )
-            | (AgentTaskStatus::Running, AgentTaskStatus::Paused)
+            | (
+                AgentTaskStatus::Running | AgentTaskStatus::WaitingForConfirmation,
+                AgentTaskStatus::Paused
+            )
     )
 }
 

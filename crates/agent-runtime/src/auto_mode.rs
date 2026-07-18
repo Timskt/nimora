@@ -308,6 +308,21 @@ impl AutoModeSession {
         Ok(())
     }
 
+    /// Completes a running session after its terminal Provider result is durable-ready.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the session is running and time is monotonic.
+    pub fn complete(&mut self, now_ms: u64) -> Result<(), AutoModeError> {
+        if self.status != AutoModeStatus::Running || now_ms < self.updated_at_ms {
+            return Err(AutoModeError::InvalidTransition);
+        }
+        self.status = AutoModeStatus::Completed;
+        self.pause_reason = None;
+        self.updated_at_ms = now_ms;
+        Ok(())
+    }
+
     /// Validates a session restored across a persistence boundary.
     ///
     /// # Errors

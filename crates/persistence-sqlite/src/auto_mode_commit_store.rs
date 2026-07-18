@@ -192,6 +192,108 @@ impl SqliteAutoModeCommitRepository {
         transaction.commit()?;
         Ok(())
     }
+
+    /// Atomically commits one completed, continuing, or paused Auto Mode turn.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid lifecycle coupling or stale session/checkpoint versions.
+    pub fn commit_turn(
+        &mut self,
+        session: &AutoModeSession,
+        previous_session_updated_at_ms: u64,
+        checkpoint: &AutoModeCheckpoint,
+        previous_checkpoint_sequence: u64,
+    ) -> Result<(), SqlitePersistenceError> {
+        session
+            .validate()
+            .map_err(|_| SqlitePersistenceError::InvalidAutoModeSession)?;
+        checkpoint
+            .validate()
+            .map_err(|_| SqlitePersistenceError::InvalidAutoModeCheckpoint)?;
+        let coupled = matches!(
+            (session.status, checkpoint.task.status),
+            (AutoModeStatus::Running, AgentTaskStatus::Running)
+                | (AutoModeStatus::Paused, AgentTaskStatus::Paused)
+                | (AutoModeStatus::Completed, AgentTaskStatus::Succeeded)
+        );
+        if !coupled
+            || checkpoint.sequence != previous_checkpoint_sequence.saturating_add(1)
+            || !checkpoint.matches_bindings(
+                session.id,
+                session.goal_id,
+                session.plan_revision,
+                &session.policy.workspace_revision,
+                &session.policy_fingerprint,
+            )
+        {
+            return Err(SqlitePersistenceError::InvalidAutoModeCheckpoint);
+        }
+
+        let session_payload = serde_json::to_string(session)?;
+        let checkpoint_payload = serde_json::to_string(checkpoint)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let session_changed = transaction.execute(
+            "UPDATE auto_mode_session SET status = ?1, pause_reason = ?2, updated_at_ms = ?3,
+                payload = ?4 WHERE session_id = ?5 AND goal_id = ?6 AND plan_revision = ?7
+                AND created_at_ms = ?8 AND updated_at_ms = ?9 AND status = 'running'",
+            params![
+                status_name(session.status),
+                session.pause_reason.map(pause_reason_name),
+                to_i64(session.updated_at_ms)?,
+                session_payload,
+                session.id.to_string(),
+                session.goal_id.to_string(),
+                to_i64(session.plan_revision)?,
+                to_i64(session.created_at_ms)?,
+                to_i64(previous_session_updated_at_ms)?,
+            ],
+        )?;
+        let checkpoint_changed = transaction.execute(
+            "UPDATE auto_mode_checkpoint SET sequence = ?1, task_id = ?2, updated_at_ms = ?3,
+                payload = ?4 WHERE session_id = ?5 AND goal_id = ?6 AND plan_revision = ?7
+                AND sequence = ?8",
+            params![
+                to_i64(checkpoint.sequence)?,
+                checkpoint.task.id.to_string(),
+                to_i64(checkpoint.updated_at_ms)?,
+                checkpoint_payload,
+                checkpoint.session_id.to_string(),
+                checkpoint.goal_id.to_string(),
+                to_i64(checkpoint.plan_revision)?,
+                to_i64(previous_checkpoint_sequence)?,
+            ],
+        )?;
+        if session_changed != 1 || checkpoint_changed != 1 {
+            return Err(SqlitePersistenceError::AutoModeCommitConflict);
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+}
+
+const fn status_name(status: AutoModeStatus) -> &'static str {
+    match status {
+        AutoModeStatus::Running => "running",
+        AutoModeStatus::Paused => "paused",
+        AutoModeStatus::Completed => "completed",
+        AutoModeStatus::Cancelled => "cancelled",
+    }
+}
+
+const fn pause_reason_name(reason: AutoModePauseReason) -> &'static str {
+    match reason {
+        AutoModePauseReason::ConfirmationRequired => "confirmation_required",
+        AutoModePauseReason::BudgetExhausted => "budget_exhausted",
+        AutoModePauseReason::GoalChanged => "goal_changed",
+        AutoModePauseReason::WorkspaceChanged => "workspace_changed",
+        AutoModePauseReason::ProviderUnavailable => "provider_unavailable",
+        AutoModePauseReason::Restarted => "restarted",
+        AutoModePauseReason::UnsafeEffect => "unsafe_effect",
+        AutoModePauseReason::UserRequested => "user_requested",
+    }
 }
 
 fn to_i64(value: u64) -> Result<i64, SqlitePersistenceError> {

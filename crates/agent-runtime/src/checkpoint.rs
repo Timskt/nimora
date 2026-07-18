@@ -76,7 +76,10 @@ impl AutoModeCheckpoint {
             || self.updated_at_ms < self.created_at_ms
             || !matches!(
                 self.task.status,
-                AgentTaskStatus::Planning | AgentTaskStatus::Running | AgentTaskStatus::Paused
+                AgentTaskStatus::Planning
+                    | AgentTaskStatus::Running
+                    | AgentTaskStatus::Paused
+                    | AgentTaskStatus::Succeeded
             )
             || self.model.trim().is_empty()
             || self.model.len() > MAX_MODEL_BYTES

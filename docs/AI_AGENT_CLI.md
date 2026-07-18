@@ -20,7 +20,7 @@ Auto Mode 不是“跳过确认”。它只允许 Agent 在 Goal、调用方 Cap
 
 Goal CLI 的所有内容输入均使用 256 KiB 有界 JSON 文件或 stdin；Goal 标题、目标、步骤、证据数量与单项字节数还受领域硬上限约束。Plan 替换创建新修订而不覆盖历史修订；`completed` 不是任意可写字段，只有当前修订非空且所有步骤为 `completed` 并携带非空有界证据时才允许进入。暂停、恢复、取消和完成均由领域状态机与仓储二次复核，CLI 不能直接修改数据库 Payload 绕过门禁。
 
-恢复候选现在必须经过显式 Resume：Session `updated_at_ms` 与 Checkpoint `sequence` 双 CAS 在单一 SQLite Immediate 事务内同时提交 Session 与 Task 的 `running` 状态。任一陈旧或并发写入都会整体回滚；提交阶段不调用 Provider/Tool，也不恢复旧 Approval。后续缺口收窄为单轮 Provider/Tool 结果持久提交、每轮 Workspace 重扫及持久 Context Cache 接入。
+恢复候选现在必须经过显式 Resume：Session `updated_at_ms` 与 Checkpoint `sequence` 双 CAS 在单一 SQLite Immediate 事务内同时提交 Session 与 Task 的 `running` 状态。任一陈旧或并发写入都会整体回滚；提交阶段不调用 Provider/Tool，也不恢复旧 Approval。每轮执行结果现可把 Continue、Paused 或 Completed 的 Session/Task 生命周期、完整 Provider continuation 与单调 Checkpoint sequence 在同一 SQLite Immediate 事务中双 CAS 提交；终态 Assistant 文本随 Checkpoint 保存，批准证明与待执行写调用不进入持久 continuation。远程 Provider 或 Tool 已经执行后若提交失败，Host 返回明确的 `CommitIndeterminate`，上层必须恢复或交由用户检查，禁止自动重放未知结果。后续缺口收窄为该提交服务与桌面持久监督循环的实际接线、执行前 durable attempt/lease、系统密钥加密与治理 UI。
 
 Auto Host 已新增每轮 Provider 前 Workspace 门禁：按当前 revision 真实重扫并复验 root/fingerprint，只有完全一致才返回 Ready。发现文件变化时生成父指纹绑定的 successor，并在单一 SQLite Immediate 事务中以 Session timestamp、Checkpoint sequence、Workspace revision/fingerprint 三重 CAS 同时暂停 Session/Task 和追加快照；此路径不会释放 Provider continuation。
 

@@ -13,6 +13,7 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+nimora-runtime-core = { path = "../runtime-core" }
 serde_json.workspace = true
 
 [lints]
