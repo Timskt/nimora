@@ -294,12 +294,12 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-062 | Checkpoint 安全恢复 | 恢复保留任务因果、预算和结果摘要，但旧批准证明、原生句柄与版本已变化的工具租约必须失效 | P0 |
 | AGT-063 | 上下文压缩可追溯 | 压缩前后保留 Goal、约束、未完成项、关键证据和来源引用；不可信正文不能被提升为系统约束 | P0 |
 | AGT-064 | 多 Agent 权限与预算继承 | 子 Agent 继承 Trace、最小 Tool allowlist 和父级剩余预算，不能重置深度、费用或主动性，也不能读取兄弟任务私有上下文 | P0 |
-| AGT-060 | Agent 自动化定义验证 | `automation.definition.validate` 仅接受对象定义、事件类型和对象事件数据；经专用 Agent Gateway Query 调用自动化 Dry-run，返回计划或不匹配状态且尝试次数为零，不创建确认项、不调用 Command Backend；普通用户程序不继承该能力 | P0 |
-| AGT-061 | 用户程序创建模块 Agent 任务 | 未声明 `invoke-agent-tasks` 时在 Provider 前拒绝；精确版本授权后固定使用 `Module` Origin、`program:<id>` requester、`draft`、空 Tool Allowlist 与宿主预算，结果进入回执和 Agent History | P0 |
-| AGT-062 | 用户程序不可信 Context Admission | `context[]` 计入统一 32 操作预算并通过共享来源、段数、字节和注入检测；Prompt Injection 不进入 Provider/History，诊断只含来源类别及 Trace/Module/Execution 关联 ID | P0 |
-| AGT-063 | 用户程序 Agent 审计故障 fail-closed | Context 被拒绝但安全 Journal 不可写时返回审计不可用，Provider、History 与模块 Backend 零调用，攻击正文和密钥不出现在序列化诊断中 | P0 |
-| AGT-064 | 通用 Module Agent Adapter | Program、Skill、Connector 共用 Adapter 固定 `Module + Personal + draft + no-tools`；越权 Provider 在 Context/Provider 前拒绝，合法 Context 分离为 trusted instruction 与 untrusted data message | P0 |
-| AGT-065 | Module Context Trace 相关性 | Adapter 先生成 Gateway Task/Trace 再做 Context Admission；拒绝错误携带同一 Trace 和无正文审计，宿主不得在准入后修改 Task Trace | P0 |
+| AGT-066 | Agent 自动化定义验证 | `automation.definition.validate` 仅接受对象定义、事件类型和对象事件数据；经专用 Agent Gateway Query 调用自动化 Dry-run，返回计划或不匹配状态且尝试次数为零，不创建确认项、不调用 Command Backend；普通用户程序不继承该能力 | P0 |
+| AGT-067 | 用户程序创建模块 Agent 任务 | 未声明 `invoke-agent-tasks` 时在 Provider 前拒绝；精确版本授权后固定使用 `Module` Origin、`program:<id>` requester、`draft`、空 Tool Allowlist 与宿主预算，结果进入回执和 Agent History | P0 |
+| AGT-068 | 用户程序不可信 Context Admission | `context[]` 计入统一 32 操作预算并通过共享来源、段数、字节和注入检测；Prompt Injection 不进入 Provider/History，诊断只含来源类别及 Trace/Module/Execution 关联 ID | P0 |
+| AGT-069 | 用户程序 Agent 审计故障 fail-closed | Context 被拒绝但安全 Journal 不可写时返回审计不可用，Provider、History 与模块 Backend 零调用，攻击正文和密钥不出现在序列化诊断中 | P0 |
+| AGT-070 | 通用 Module Agent Adapter | Program、Skill、Connector 共用 Adapter 固定 `Module + Personal + draft + no-tools`；越权 Provider 在 Context/Provider 前拒绝，合法 Context 分离为 trusted instruction 与 untrusted data message | P0 |
+| AGT-071 | Module Context Trace 相关性 | Adapter 先生成 Gateway Task/Trace 再做 Context Admission；拒绝错误携带同一 Trace 和无正文审计，宿主不得在准入后修改 Task Trace | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |
