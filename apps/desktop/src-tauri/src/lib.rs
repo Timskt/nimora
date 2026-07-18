@@ -103,9 +103,10 @@ use nimora_persistence_sqlite::{
     AgentHistoryRecord, AutoModeAttemptResolution, AutoModeAttemptResolutionDecision,
     AutoModeTurnAttempt, AutoModeTurnAttemptStatus, AutomationAgentJournalEntry,
     AutomationAgentJournalStatus, AutomationApprovalEntry, AutomationApprovalStatus,
-    AutomationCostReservation, AutomationJournalEntry, AutomationRunAdmission, AutomationRunStart,
-    BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, ContextCacheKey,
-    ContextCachePolicy, DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant, ProviderConfig,
+    AutomationCostReconciliationReason, AutomationCostReservation, AutomationJournalEntry,
+    AutomationRunAdmission, AutomationRunStart, BackupCoordinator, BackupHealth, BackupPolicy,
+    BackupRecord, ContextCacheKey, ContextCachePolicy, DATABASE_VERSION, OutboxSnapshot,
+    ProgramPermissionGrant, ProviderConfig, ReconcileAutomationCostRequest,
     ResolveAutoModeAttemptRequest, SkillApprovalJournalEntry, SkillApprovalJournalStatus,
     SkillExecutionHistoryRecord, SkillExecutionHistoryStatus, SkillStateRecord,
     SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
@@ -508,6 +509,54 @@ struct AutomationGovernanceCatalog {
     spec: &'static str,
     generated_at_ms: u64,
     entries: Vec<AutomationGovernanceEntry>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationUnknownCost {
+    task_id: Uuid,
+    run_id: Uuid,
+    automation_id: String,
+    reserved_cost_microunits: u64,
+    updated_at_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationCostReconciliationView {
+    decision_id: Uuid,
+    task_id: Uuid,
+    run_id: Uuid,
+    automation_id: String,
+    reserved_cost_microunits: u64,
+    actual_cost_microunits: u64,
+    reason: &'static str,
+    decided_at_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationCostReconciliationCatalog {
+    spec: &'static str,
+    pending: Vec<AutomationUnknownCost>,
+    decisions: Vec<AutomationCostReconciliationView>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DesktopReconcileAutomationCostRequest {
+    task_id: Uuid,
+    expected_updated_at_ms: u64,
+    actual_cost_microunits: u64,
+    reason: DesktopAutomationCostReconciliationReason,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum DesktopAutomationCostReconciliationReason {
+    ProviderStatement,
+    BillingExport,
+    OperatorConservativeEstimate,
 }
 
 struct ActiveSkillExecutionGuard<'a> {
@@ -2471,6 +2520,103 @@ fn automation_governance_catalog_inner(
         generated_at_ms: now_ms,
         entries,
     })
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri command parameters are deserialized and injected by value"
+)]
+fn automation_cost_reconciliation_catalog(
+    state: State<'_, DesktopState>,
+) -> Result<AutomationCostReconciliationCatalog, DesktopError> {
+    let pending = state
+        .automation_governance
+        .list_indeterminate_costs(100)?
+        .into_iter()
+        .map(|entry| AutomationUnknownCost {
+            task_id: entry.task_id,
+            run_id: entry.run_id,
+            automation_id: entry.automation_id,
+            reserved_cost_microunits: entry.reserved_cost_microunits,
+            updated_at_ms: entry.updated_at_ms,
+        })
+        .collect();
+    let decisions = state
+        .automation_governance
+        .list_cost_reconciliations(100)?
+        .into_iter()
+        .map(|entry| AutomationCostReconciliationView {
+            decision_id: entry.decision_id,
+            task_id: entry.task_id,
+            run_id: entry.run_id,
+            automation_id: entry.automation_id,
+            reserved_cost_microunits: entry.reserved_cost_microunits,
+            actual_cost_microunits: entry.actual_cost_microunits,
+            reason: automation_reconciliation_reason_name(entry.reason),
+            decided_at_ms: entry.decided_at_ms,
+        })
+        .collect();
+    Ok(AutomationCostReconciliationCatalog {
+        spec: "nimora.automation-cost-reconciliation-catalog/1",
+        pending,
+        decisions,
+    })
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri command parameters are deserialized and injected by value"
+)]
+fn reconcile_automation_cost(
+    state: State<'_, DesktopState>,
+    request: DesktopReconcileAutomationCostRequest,
+) -> Result<AutomationCostReconciliationView, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let reason = match request.reason {
+        DesktopAutomationCostReconciliationReason::ProviderStatement => {
+            AutomationCostReconciliationReason::ProviderStatement
+        }
+        DesktopAutomationCostReconciliationReason::BillingExport => {
+            AutomationCostReconciliationReason::BillingExport
+        }
+        DesktopAutomationCostReconciliationReason::OperatorConservativeEstimate => {
+            AutomationCostReconciliationReason::OperatorConservativeEstimate
+        }
+    };
+    let receipt = state.automation_governance.reconcile_indeterminate_cost(
+        &ReconcileAutomationCostRequest {
+            decision_id: Uuid::now_v7(),
+            task_id: request.task_id,
+            expected_updated_at_ms: request.expected_updated_at_ms,
+            actual_cost_microunits: request.actual_cost_microunits,
+            reason,
+            decided_at_ms: current_time_ms()?,
+        },
+    )?;
+    Ok(AutomationCostReconciliationView {
+        decision_id: receipt.decision_id,
+        task_id: receipt.task_id,
+        run_id: receipt.run_id,
+        automation_id: receipt.automation_id,
+        reserved_cost_microunits: receipt.reserved_cost_microunits,
+        actual_cost_microunits: receipt.actual_cost_microunits,
+        reason: automation_reconciliation_reason_name(receipt.reason),
+        decided_at_ms: receipt.decided_at_ms,
+    })
+}
+
+fn automation_reconciliation_reason_name(
+    reason: AutomationCostReconciliationReason,
+) -> &'static str {
+    match reason {
+        AutomationCostReconciliationReason::ProviderStatement => "provider_statement",
+        AutomationCostReconciliationReason::BillingExport => "billing_export",
+        AutomationCostReconciliationReason::OperatorConservativeEstimate => {
+            "operator_conservative_estimate"
+        }
+    }
 }
 
 #[tauri::command]
@@ -10176,6 +10322,8 @@ pub fn run() {
             automation_run_history,
             automation_event_health,
             automation_governance_catalog,
+            automation_cost_reconciliation_catalog,
+            reconcile_automation_cost,
             automation_pending_approval_count,
             pending_automation_approvals,
             approve_automation_run,

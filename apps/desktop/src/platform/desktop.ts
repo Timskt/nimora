@@ -837,6 +837,29 @@ export interface AutomationGovernanceCatalog {
   }>;
 }
 
+export type AutomationCostReconciliationReason = "provider_statement" | "billing_export" | "operator_conservative_estimate";
+
+export interface AutomationCostReconciliationCatalog {
+  spec: "nimora.automation-cost-reconciliation-catalog/1";
+  pending: Array<{
+    taskId: string;
+    runId: string;
+    automationId: string;
+    reservedCostMicrounits: number;
+    updatedAtMs: number;
+  }>;
+  decisions: Array<{
+    decisionId: string;
+    taskId: string;
+    runId: string;
+    automationId: string;
+    reservedCostMicrounits: number;
+    actualCostMicrounits: number;
+    reason: AutomationCostReconciliationReason;
+    decidedAtMs: number;
+  }>;
+}
+
 export interface AutomationApprovalRisk {
   actionId: string;
   command: string;
@@ -894,6 +917,8 @@ export interface DesktopApi {
   automationRunHistory(limit?: number, before?: { startedAtMs: number; runId: string }): Promise<AutomationRunHistoryPage>;
   automationEventHealth(): Promise<AutomationEventHealthSnapshot>;
   automationGovernanceCatalog(): Promise<AutomationGovernanceCatalog>;
+  automationCostReconciliationCatalog(): Promise<AutomationCostReconciliationCatalog>;
+  reconcileAutomationCost(request: { taskId: string; expectedUpdatedAtMs: number; actualCostMicrounits: number; reason: AutomationCostReconciliationReason }): Promise<AutomationCostReconciliationCatalog["decisions"][number]>;
   automationPendingApprovalCount(): Promise<number>;
   pendingAutomationApprovals(): Promise<AutomationApprovalCatalog>;
   approveAutomationRun(approvalId: string): Promise<AutomationRun>;
@@ -1107,6 +1132,8 @@ export function createDesktopApi(
       async automationRunHistory() { return { spec: "nimora.desktop-automation-run-history/1", records: [] }; },
       async automationEventHealth() { return { spec: "nimora.automation-event-health/1", sessions: [] }; },
       async automationGovernanceCatalog() { return { spec: "nimora.automation-governance-catalog/1", generatedAtMs: Date.now(), entries: [] }; },
+      async automationCostReconciliationCatalog() { return { spec: "nimora.automation-cost-reconciliation-catalog/1", pending: [], decisions: [] }; },
+      async reconcileAutomationCost() { throw new Error("Cost reconciliation requires the Nimora desktop runtime."); },
       async automationPendingApprovalCount() { return 0; },
       async pendingAutomationApprovals() { return { spec: "nimora.automation-approval-catalog/1", approvals: [] }; },
       async approveAutomationRun() { throw new Error("Automation approval requires the Nimora desktop runtime."); },
@@ -1407,6 +1434,8 @@ export function createDesktopApi(
     automationRunHistory: async (limit = 20, before) => await invokeCommand("automation_run_history", { request: { beforeStartedAtMs: before?.startedAtMs ?? null, beforeRunId: before?.runId ?? null, limit } }) as AutomationRunHistoryPage,
     automationEventHealth: async () => await invokeCommand("automation_event_health") as AutomationEventHealthSnapshot,
     automationGovernanceCatalog: async () => await invokeCommand("automation_governance_catalog") as AutomationGovernanceCatalog,
+    automationCostReconciliationCatalog: async () => await invokeCommand("automation_cost_reconciliation_catalog") as AutomationCostReconciliationCatalog,
+    reconcileAutomationCost: async (request) => await invokeCommand("reconcile_automation_cost", { request }) as AutomationCostReconciliationCatalog["decisions"][number],
     automationPendingApprovalCount: async () => await invokeCommand("automation_pending_approval_count") as number,
     pendingAutomationApprovals: async () => await invokeCommand("pending_automation_approvals") as AutomationApprovalCatalog,
     approveAutomationRun: async (approvalId) => await invokeCommand("approve_automation_run", { request: { approvalId } }) as AutomationRun,

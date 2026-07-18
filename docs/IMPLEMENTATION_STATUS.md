@@ -71,13 +71,21 @@
 - 文档补充了跨能力组合、渐进式 Creator UI、离线与 Safe Mode、预算、取消、未知副作用和完整退役测试门禁。
 - 本条是产品与架构基线，不是功能完成声明；通用 Capability Gap、Composition Planner、CreatorArtifact Handler 和 Simulation Pack 尚未形成真实代码纵切。
 
+## 2026-07-19 — Automation 未知 AI 费用人工对账纵切
+
+- SQLite 新增未知费用待办查询与不可变 `automation_cost_reconciliation` 决议审计；仅 `indeterminate` 任务可通过任务更新时间 CAS 对账，单任务和 Decision ID 均只能成功一次。
+- 决议与费用账本在 Immediate 事务中原子提交；实际费用允许高于预留以如实记录已发生支出，结算后的真实费用继续参与每日预算封锁，不能通过低报或清零绕过治理。
+- 桌面宿主生成 UUIDv7 Decision ID，Safe Mode 与 Recovery Mode 禁止决议；Browser Preview 只返回同 Schema 空态且拒绝写入，不伪造本机账本。
+- Automation Workspace 提供逐任务实际费用、三类证据来源、不可修改/删除确认和最近决议审计；浏览器扩展连接正常但当前配置无可控标签页，真实卡片视觉验收已登记为待恢复项，不影响持久层、IPC 与前端契约门禁。
+- SQLite 79 项、Desktop 142 项、前端 48 项及 TypeScript、生产构建、Bundle Budget、Clippy、Rustfmt 与 Diff Check 已通过；平台适配器另补 Browser 空态和两条原生 IPC 命令映射断言。
+
 ## 2026-07-18 — Automation 资源与 AI 费用治理可观测纵切
 
 - SQLite Governance 新增按 Automation 和 UTC 日桶聚合的隐私安全快照，只返回活跃租约、最近启动时间及 reserved/settled/indeterminate 费用，不暴露任务内容、事件正文或 Provider 数据。
 - 桌面只读 IPC 将当前 Catalog 策略与持久治理事实合并，确定性计算冷却剩余、并发占用和当日可用预算；Browser Preview 返回带真实 Schema 的空态，不伪造本机账本。
 - Automation Workspace 新增资源治理卡片，分别展示并发、冷却、已结算、执行中预留、未知费用占用和可用预算；未知费用以显著警告说明不会自动按零释放。
 - 用户可看到并发、冷却和预算拒绝的本地化原因，运行历史优先显示生产 Engine 的终态原因；SQLite 9 项治理测试、Desktop 125 项宿主测试和前端 40 项测试通过。
-- 当前仍缺少未知费用的人工对账操作和不可变决议审计，不得把只读健康展示误报为完整费用争议处理。
+- 未知费用人工对账与不可变决议审计已在 2026-07-19 纵切补齐；Provider 账单抓取、外部证据附件留存与真实 Tauri 跨重启视觉/操作演练仍是后续独立验证范围。
 
 ## 2026-07-18 — Automation 持久并发、冷却与 AI 费用治理
 

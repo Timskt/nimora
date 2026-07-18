@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AutomationApprovalCatalog, AutomationCatalogEntry, AutomationDefinition, AutomationEventHealthSnapshot, AutomationGovernanceCatalog, AutomationJournalEntry, AutomationRun } from "../platform/desktop";
+import type { AutomationApprovalCatalog, AutomationCatalogEntry, AutomationCostReconciliationCatalog, AutomationCostReconciliationReason, AutomationDefinition, AutomationEventHealthSnapshot, AutomationGovernanceCatalog, AutomationJournalEntry, AutomationRun } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const sampleDefinition: AutomationDefinition = {
@@ -41,6 +41,10 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
   const [historyExhausted, setHistoryExhausted] = useState(false);
   const [eventHealth, setEventHealth] = useState<AutomationEventHealthSnapshot["sessions"]>([]);
   const [governance, setGovernance] = useState<AutomationGovernanceCatalog["entries"]>([]);
+  const [costReconciliation, setCostReconciliation] = useState<AutomationCostReconciliationCatalog>({ spec: "nimora.automation-cost-reconciliation-catalog/1", pending: [], decisions: [] });
+  const [costInputs, setCostInputs] = useState<Record<string, string>>({});
+  const [costReasons, setCostReasons] = useState<Record<string, AutomationCostReconciliationReason>>({});
+  const [costConfirmed, setCostConfirmed] = useState<Record<string, boolean>>({});
   const [approvals, setApprovals] = useState<AutomationApprovalCatalog["approvals"]>([]);
   const definition = useMemo(() => sampleDefinition, []);
 
@@ -79,6 +83,14 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
     }
   }
 
+  async function refreshCostReconciliation() {
+    try {
+      setCostReconciliation(await desktopApi.automationCostReconciliationCatalog());
+    } catch {
+      setCostReconciliation({ spec: "nimora.automation-cost-reconciliation-catalog/1", pending: [], decisions: [] });
+    }
+  }
+
   async function refreshApprovals() {
     try {
       setApprovals((await desktopApi.pendingAutomationApprovals()).approvals);
@@ -87,7 +99,33 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
     }
   }
 
-  useEffect(() => { void Promise.all([refreshCatalog(), refreshHistory(), refreshEventHealth(), refreshGovernance(), refreshApprovals()]); }, []);
+  useEffect(() => { void Promise.all([refreshCatalog(), refreshHistory(), refreshEventHealth(), refreshGovernance(), refreshCostReconciliation(), refreshApprovals()]); }, []);
+
+  async function reconcileCost(entry: AutomationCostReconciliationCatalog["pending"][number]) {
+    const actualCostMicrounits = Number(costInputs[entry.taskId]);
+    if (!Number.isSafeInteger(actualCostMicrounits) || actualCostMicrounits < 0 || !costConfirmed[entry.taskId]) {
+      onNotice("请输入非负整数费用，并确认已核对外部账单证据");
+      return;
+    }
+    setBusy(true);
+    try {
+      await desktopApi.reconcileAutomationCost({
+        taskId: entry.taskId,
+        expectedUpdatedAtMs: entry.updatedAtMs,
+        actualCostMicrounits,
+        reason: costReasons[entry.taskId] ?? "provider_statement",
+      });
+      setCostInputs((current) => ({ ...current, [entry.taskId]: "" }));
+      setCostConfirmed((current) => ({ ...current, [entry.taskId]: false }));
+      await Promise.all([refreshCostReconciliation(), refreshGovernance()]);
+      onNotice("未知费用已原子结算，不可变决议审计已写入");
+    } catch {
+      await refreshCostReconciliation();
+      onNotice("费用账本已变化或决议冲突，未修改任何记录");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function resolveApproval(approvalId: string, approve: boolean) {
     setBusy(true);
@@ -210,6 +248,19 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
             {hasUnknownCost && <div className="automation-governance-warning"><strong>费用状态未知，预算不会自动释放</strong><p>Provider 或宿主未能证明最终费用。系统保持失败关闭，避免按零费用重复执行。</p></div>}
           </article>;
         })}
+      </section>
+      <section className="automation-catalog automation-reconciliation" aria-label="未知 AI 费用人工对账">
+        <div className="section-heading"><div><p className="card-label">COST RECONCILIATION</p><h3>未知费用对账</h3></div><button disabled={busy} onClick={() => void refreshCostReconciliation()} type="button">刷新账本</button></div>
+        {costReconciliation.pending.length === 0 ? <p>没有待对账费用。历史决议仍保留在不可变审计中。</p> : costReconciliation.pending.map((entry) => <article className="automation-reconciliation-card" key={entry.taskId}>
+          <div className="automation-governance-heading"><div><strong>{entry.automationId}</strong><small>Task {entry.taskId} · Run {entry.runId}</small></div><span className="automation-governance-alert">预留 {formatMicrounits(entry.reservedCostMicrounits)}</span></div>
+          <div className="automation-reconciliation-grid">
+            <label>实际费用（微单位）<input inputMode="numeric" min="0" step="1" value={costInputs[entry.taskId] ?? ""} onChange={(event) => setCostInputs((current) => ({ ...current, [entry.taskId]: event.target.value }))} /></label>
+            <label>证据来源<select value={costReasons[entry.taskId] ?? "provider_statement"} onChange={(event) => setCostReasons((current) => ({ ...current, [entry.taskId]: event.target.value as AutomationCostReconciliationReason }))}><option value="provider_statement">Provider 账单声明</option><option value="billing_export">账单导出文件</option><option value="operator_conservative_estimate">人工保守估算</option></select></label>
+          </div>
+          <label className="automation-reconciliation-confirm"><input checked={costConfirmed[entry.taskId] ?? false} onChange={(event) => setCostConfirmed((current) => ({ ...current, [entry.taskId]: event.target.checked }))} type="checkbox" />我已核对外部证据；此决议不可修改或删除。</label>
+          <button className="primary-button" disabled={disabled || busy || !costConfirmed[entry.taskId]} onClick={() => void reconcileCost(entry)} type="button">写入不可变决议</button>
+        </article>)}
+        {costReconciliation.decisions.length > 0 && <div className="automation-reconciliation-audit"><h4>最近决议审计</h4>{costReconciliation.decisions.map((entry) => <article key={entry.decisionId}><div><strong>{entry.automationId}</strong><small>{new Date(entry.decidedAtMs).toLocaleString()} · {entry.reason}</small></div><span>{formatMicrounits(entry.actualCostMicrounits)} / {formatMicrounits(entry.reservedCostMicrounits)}</span></article>)}</div>}
       </section>
       <section className="automation-catalog" aria-label="自动化运行历史">
         <div className="section-heading"><div><p className="card-label">RUN HISTORY</p><h3>最近运行</h3></div><button disabled={disabled || busy || history.length === 0} onClick={() => void deleteHistory()} type="button">清空终态记录</button></div>

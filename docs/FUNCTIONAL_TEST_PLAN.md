@@ -646,6 +646,12 @@ ID / 标题 / 优先级 / 前置条件
 - Verify Governance Catalog 按 Automation 隔离聚合活跃租约和当日 reserved/settled/indeterminate 费用；不得返回任务内容、事件正文、Provider 请求或 Secret。
 - Verify 桌面 UI 分别展示预留与实际费用，未知费用显著标记并说明预算不会自动释放；预算为零显示“仅零费用任务”，不能误报为无限预算。
 - Verify 并发、冷却与每日预算拒绝给出不同的本地化用户原因，同时保持拒绝前零 Backend/Provider 副作用。
+- Verify 未知费用 Catalog 只列出 `indeterminate` 任务并携带最新 `updatedAtMs`；Browser Preview 返回同版本 Schema 的空 `pending/decisions`，且任何决议请求都拒绝为 desktop-host-required。
+- Verify 人工对账仅接受 Provider 对账单、账单导出或操作员保守估算三类原因，要求非负实际微单位和精确 `expectedUpdatedAtMs` CAS；陈旧页面、已结算任务、重复任务决议和重复 Decision ID 均失败关闭。
+- Verify 决议审计与费用状态在同一 Immediate 事务中原子提交；成功后任务由未知转为已结算且不可再次决议，审计记录不能通过应用修改或删除。
+- Verify 实际费用可高于预留并按真实值参与每日预算，超限后继续阻止新任务；不得为了释放预算而截断、低报或自动归零未知费用。
+- Verify Safe Mode 与 Recovery Mode 可读取待办和审计但不能提交决议；宿主而非前端生成 UUIDv7 Decision ID，调用方不能伪造决议身份或时间。
+- Verify 对账 UI 逐任务显示预留费用、实际费用、证据来源及“不可修改或删除”显式确认；未确认、非法数字、提交中重复点击均不能调用 IPC，窄屏布局不丢失风险说明和操作标签。
 
 ## 外接 AI 能力开发平台
 

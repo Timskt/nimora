@@ -40,6 +40,36 @@ pub struct AutomationCostEntry {
     pub reserved_cost_microunits: u64,
     pub actual_cost_microunits: Option<u64>,
     pub status: AutomationCostStatus,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutomationCostReconciliationReason {
+    ProviderStatement,
+    BillingExport,
+    OperatorConservativeEstimate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconcileAutomationCostRequest {
+    pub decision_id: Uuid,
+    pub task_id: Uuid,
+    pub expected_updated_at_ms: u64,
+    pub actual_cost_microunits: u64,
+    pub reason: AutomationCostReconciliationReason,
+    pub decided_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutomationCostReconciliation {
+    pub decision_id: Uuid,
+    pub task_id: Uuid,
+    pub run_id: Uuid,
+    pub automation_id: String,
+    pub reserved_cost_microunits: u64,
+    pub actual_cost_microunits: u64,
+    pub reason: AutomationCostReconciliationReason,
+    pub decided_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -363,6 +393,173 @@ impl SqliteAutomationGovernance {
         load_cost_entry(&connection, task_id)
     }
 
+    /// Lists unresolved cost entries in stable oldest-first order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid limit, malformed persisted data, poisoned state, or
+    /// `SQLite` failure.
+    pub fn list_indeterminate_costs(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<AutomationCostEntry>, SqlitePersistenceError> {
+        if !(1..=200).contains(&limit) {
+            return Err(SqlitePersistenceError::InvalidAutomationGovernance);
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
+        let mut statement = connection.prepare(
+            "SELECT task_id FROM automation_cost_ledger
+             WHERE status = 'indeterminate'
+             ORDER BY updated_at_ms ASC, task_id ASC LIMIT ?1",
+        )?;
+        let task_ids = statement
+            .query_map(
+                [i64::try_from(limit)
+                    .map_err(|_| SqlitePersistenceError::InvalidAutomationGovernance)?],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        task_ids
+            .into_iter()
+            .map(|task_id| {
+                let task_id = Uuid::parse_str(&task_id)
+                    .map_err(|_| SqlitePersistenceError::InvalidAutomationGovernance)?;
+                load_cost_entry(&connection, task_id)?
+                    .ok_or(SqlitePersistenceError::InvalidAutomationGovernance)
+            })
+            .collect()
+    }
+
+    /// Atomically resolves one unknown cost and appends an immutable audit decision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid input, stale state, a duplicate decision, malformed
+    /// persisted data, poisoned state, or `SQLite` failure.
+    pub fn reconcile_indeterminate_cost(
+        &self,
+        request: &ReconcileAutomationCostRequest,
+    ) -> Result<AutomationCostReconciliation, SqlitePersistenceError> {
+        validate_reconciliation(request)?;
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let entry = load_cost_entry(&transaction, request.task_id)?
+            .ok_or(SqlitePersistenceError::AutomationCostReconciliationConflict)?;
+        if entry.status != AutomationCostStatus::Indeterminate
+            || entry.updated_at_ms != request.expected_updated_at_ms
+            || request.decided_at_ms < entry.updated_at_ms
+        {
+            return Err(SqlitePersistenceError::AutomationCostReconciliationConflict);
+        }
+        let reconciliation = AutomationCostReconciliation {
+            decision_id: request.decision_id,
+            task_id: request.task_id,
+            run_id: entry.run_id,
+            automation_id: entry.automation_id,
+            reserved_cost_microunits: entry.reserved_cost_microunits,
+            actual_cost_microunits: request.actual_cost_microunits,
+            reason: request.reason,
+            decided_at_ms: request.decided_at_ms,
+        };
+        transaction
+            .execute(
+                "INSERT INTO automation_cost_reconciliation
+                (decision_id, task_id, run_id, automation_id, reserved_cost_microunits,
+                 actual_cost_microunits, reason, decided_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    reconciliation.decision_id.to_string(),
+                    reconciliation.task_id.to_string(),
+                    reconciliation.run_id.to_string(),
+                    reconciliation.automation_id,
+                    to_i64(reconciliation.reserved_cost_microunits)?,
+                    to_i64(reconciliation.actual_cost_microunits)?,
+                    reconciliation_reason_name(reconciliation.reason),
+                    to_i64(reconciliation.decided_at_ms)?,
+                ],
+            )
+            .map_err(|_| SqlitePersistenceError::AutomationCostReconciliationConflict)?;
+        let changed = transaction.execute(
+            "UPDATE automation_cost_ledger
+             SET actual_cost_microunits = ?2, status = 'settled', updated_at_ms = ?3
+             WHERE task_id = ?1 AND status = 'indeterminate' AND updated_at_ms = ?4",
+            params![
+                request.task_id.to_string(),
+                to_i64(request.actual_cost_microunits)?,
+                to_i64(request.decided_at_ms)?,
+                to_i64(request.expected_updated_at_ms)?,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(SqlitePersistenceError::AutomationCostReconciliationConflict);
+        }
+        transaction.commit()?;
+        Ok(reconciliation)
+    }
+
+    /// Lists immutable reconciliation decisions in stable newest-first order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid limit, malformed persisted data, poisoned state, or
+    /// `SQLite` failure.
+    pub fn list_cost_reconciliations(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<AutomationCostReconciliation>, SqlitePersistenceError> {
+        if !(1..=200).contains(&limit) {
+            return Err(SqlitePersistenceError::InvalidAutomationGovernance);
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
+        let mut statement = connection.prepare(
+            "SELECT decision_id, task_id, run_id, automation_id,
+                    reserved_cost_microunits, actual_cost_microunits, reason, decided_at_ms
+             FROM automation_cost_reconciliation
+             ORDER BY decided_at_ms DESC, decision_id DESC LIMIT ?1",
+        )?;
+        statement
+            .query_map(
+                [i64::try_from(limit)
+                    .map_err(|_| SqlitePersistenceError::InvalidAutomationGovernance)?],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
+                    ))
+                },
+            )?
+            .map(|row| {
+                let (decision_id, task_id, run_id, automation_id, reserved, actual, reason, at) =
+                    row?;
+                Ok(AutomationCostReconciliation {
+                    decision_id: parse_uuid(&decision_id)?,
+                    task_id: parse_uuid(&task_id)?,
+                    run_id: parse_uuid(&run_id)?,
+                    automation_id,
+                    reserved_cost_microunits: from_i64(reserved)?,
+                    actual_cost_microunits: from_i64(actual)?,
+                    reason: parse_reconciliation_reason(&reason)?,
+                    decided_at_ms: from_i64(at)?,
+                })
+            })
+            .collect()
+    }
+
     /// Loads a privacy-safe runtime and daily cost aggregate for an Automation.
     ///
     /// # Errors
@@ -459,7 +656,20 @@ pub(crate) fn ensure_automation_governance_schema(
                 OR (status != 'settled' AND actual_cost_microunits IS NULL))
         );
         CREATE INDEX IF NOT EXISTS automation_cost_daily_idx
-            ON automation_cost_ledger(automation_id, day_bucket, status);",
+            ON automation_cost_ledger(automation_id, day_bucket, status);
+        CREATE TABLE IF NOT EXISTS automation_cost_reconciliation (
+            decision_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL UNIQUE,
+            run_id TEXT NOT NULL,
+            automation_id TEXT NOT NULL,
+            reserved_cost_microunits INTEGER NOT NULL CHECK (reserved_cost_microunits >= 0),
+            actual_cost_microunits INTEGER NOT NULL CHECK (actual_cost_microunits >= 0),
+            reason TEXT NOT NULL CHECK (reason IN
+                ('provider_statement', 'billing_export', 'operator_conservative_estimate')),
+            decided_at_ms INTEGER NOT NULL CHECK (decided_at_ms >= 0)
+        );
+        CREATE INDEX IF NOT EXISTS automation_cost_reconciliation_audit_idx
+            ON automation_cost_reconciliation(automation_id, decided_at_ms, decision_id);",
     )?;
     Ok(())
 }
@@ -502,6 +712,42 @@ fn validate_cost_reservation(
     Ok(())
 }
 
+fn validate_reconciliation(
+    request: &ReconcileAutomationCostRequest,
+) -> Result<(), SqlitePersistenceError> {
+    if request.decision_id.is_nil() || request.task_id.is_nil() {
+        return Err(SqlitePersistenceError::InvalidAutomationGovernance);
+    }
+    Ok(())
+}
+
+fn reconciliation_reason_name(reason: AutomationCostReconciliationReason) -> &'static str {
+    match reason {
+        AutomationCostReconciliationReason::ProviderStatement => "provider_statement",
+        AutomationCostReconciliationReason::BillingExport => "billing_export",
+        AutomationCostReconciliationReason::OperatorConservativeEstimate => {
+            "operator_conservative_estimate"
+        }
+    }
+}
+
+fn parse_reconciliation_reason(
+    reason: &str,
+) -> Result<AutomationCostReconciliationReason, SqlitePersistenceError> {
+    match reason {
+        "provider_statement" => Ok(AutomationCostReconciliationReason::ProviderStatement),
+        "billing_export" => Ok(AutomationCostReconciliationReason::BillingExport),
+        "operator_conservative_estimate" => {
+            Ok(AutomationCostReconciliationReason::OperatorConservativeEstimate)
+        }
+        _ => Err(SqlitePersistenceError::InvalidAutomationGovernance),
+    }
+}
+
+fn parse_uuid(value: &str) -> Result<Uuid, SqlitePersistenceError> {
+    Uuid::parse_str(value).map_err(|_| SqlitePersistenceError::InvalidAutomationGovernance)
+}
+
 fn load_cost_entry(
     connection: &Connection,
     task_id: Uuid,
@@ -509,7 +755,7 @@ fn load_cost_entry(
     connection
         .query_row(
             "SELECT run_id, automation_id, day_bucket, reserved_cost_microunits,
-                    actual_cost_microunits, status
+                    actual_cost_microunits, status, updated_at_ms
              FROM automation_cost_ledger WHERE task_id = ?1",
             [task_id.to_string()],
             |row| {
@@ -520,12 +766,13 @@ fn load_cost_entry(
                     row.get::<_, i64>(3)?,
                     row.get::<_, Option<i64>>(4)?,
                     row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
                 ))
             },
         )
         .optional()?
         .map(
-            |(run_id, automation_id, day_bucket, reserved, actual, status)| {
+            |(run_id, automation_id, day_bucket, reserved, actual, status, updated_at_ms)| {
                 Ok(AutomationCostEntry {
                     task_id,
                     run_id: Uuid::parse_str(&run_id)
@@ -545,6 +792,8 @@ fn load_cost_entry(
                         "indeterminate" => AutomationCostStatus::Indeterminate,
                         _ => return Err(SqlitePersistenceError::InvalidAutomationGovernance),
                     },
+                    updated_at_ms: u64::try_from(updated_at_ms)
+                        .map_err(|_| SqlitePersistenceError::InvalidAutomationGovernance)?,
                 })
             },
         )
@@ -800,6 +1049,65 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+    }
+
+    #[test]
+    fn reconciles_unknown_cost_once_with_immutable_audit() {
+        let store = SqliteAutomationGovernance::in_memory().expect("store");
+        let run_id = Uuid::now_v7();
+        let task_id = Uuid::now_v7();
+        store.admit_run(&admission(run_id, 100)).expect("run");
+        store
+            .reserve_agent_cost(AutomationCostReservation {
+                task_id,
+                run_id,
+                reserved_cost_microunits: 80,
+                now_ms: 101,
+            })
+            .expect("reserve");
+        store
+            .mark_agent_cost_indeterminate(task_id, 102)
+            .expect("unknown");
+        assert_eq!(
+            store.list_indeterminate_costs(20).expect("pending")[0].task_id,
+            task_id
+        );
+        let request = ReconcileAutomationCostRequest {
+            decision_id: Uuid::now_v7(),
+            task_id,
+            expected_updated_at_ms: 102,
+            actual_cost_microunits: 135,
+            reason: AutomationCostReconciliationReason::ProviderStatement,
+            decided_at_ms: 103,
+        };
+        let receipt = store
+            .reconcile_indeterminate_cost(&request)
+            .expect("reconcile");
+        assert_eq!(receipt.actual_cost_microunits, 135);
+        assert!(
+            store
+                .list_indeterminate_costs(20)
+                .expect("pending")
+                .is_empty()
+        );
+        let entry = store.get_cost(task_id).expect("load").expect("entry");
+        assert_eq!(entry.status, AutomationCostStatus::Settled);
+        assert_eq!(entry.actual_cost_microunits, Some(135));
+        assert_eq!(
+            store.list_cost_reconciliations(20).expect("audit"),
+            vec![receipt]
+        );
+        assert!(matches!(
+            store.reconcile_indeterminate_cost(&request),
+            Err(SqlitePersistenceError::AutomationCostReconciliationConflict)
+        ));
+        let mut excessive = request;
+        excessive.decision_id = Uuid::now_v7();
+        excessive.actual_cost_microunits = 81;
+        assert!(matches!(
+            store.reconcile_indeterminate_cost(&excessive),
+            Err(SqlitePersistenceError::AutomationCostReconciliationConflict)
+        ));
     }
 
     #[test]

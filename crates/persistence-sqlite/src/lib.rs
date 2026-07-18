@@ -39,8 +39,9 @@ pub use automation_catalog::{
     AutomationCatalogEntry, AutomationInstallReceipt, SqliteAutomationCatalog,
 };
 pub use automation_governance::{
-    AutomationCostEntry, AutomationCostReservation, AutomationCostStatus,
-    AutomationGovernanceSnapshot, AutomationRunAdmission, SqliteAutomationGovernance,
+    AutomationCostEntry, AutomationCostReconciliation, AutomationCostReconciliationReason,
+    AutomationCostReservation, AutomationCostStatus, AutomationGovernanceSnapshot,
+    AutomationRunAdmission, ReconcileAutomationCostRequest, SqliteAutomationGovernance,
 };
 pub use automation_journal::{
     AutomationJournalEntry, AutomationJournalStatus, AutomationRunStart, SqliteAutomationJournal,
@@ -1629,6 +1630,8 @@ pub enum SqlitePersistenceError {
     AutomationDailyCostBudgetExceeded,
     #[error("Automation Agent cost reservation is stale or inconsistent")]
     AutomationCostReservationConflict,
+    #[error("Automation cost reconciliation is stale, duplicate, or inconsistent")]
+    AutomationCostReconciliationConflict,
     #[error("Automation approval journal record or state transition is invalid")]
     InvalidAutomationApprovalJournal,
     #[error("Skill approval journal record or state transition is invalid")]

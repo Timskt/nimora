@@ -22,6 +22,17 @@ describe("desktop platform adapter", () => {
     await expect(api.automationPendingApprovalCount()).resolves.toBe(0);
     await expect(api.pendingAutomationApprovals()).resolves.toEqual({ spec: "nimora.automation-approval-catalog/1", approvals: [] });
     await expect(api.automationGovernanceCatalog()).resolves.toMatchObject({ spec: "nimora.automation-governance-catalog/1", entries: [] });
+    await expect(api.automationCostReconciliationCatalog()).resolves.toEqual({
+      spec: "nimora.automation-cost-reconciliation-catalog/1",
+      pending: [],
+      decisions: [],
+    });
+    await expect(api.reconcileAutomationCost({
+      taskId: "018f0000-0000-7000-8000-000000000020",
+      expectedUpdatedAtMs: 1_700_000_000_000,
+      actualCostMicrounits: 42,
+      reason: "provider_statement",
+    })).rejects.toThrow("desktop runtime");
     await expect(api.approveAutomationRun("018f0000-0000-7000-8000-000000000021")).rejects.toThrow("desktop runtime");
     await expect(api.rejectAutomationRun("018f0000-0000-7000-8000-000000000021")).rejects.toThrow("desktop runtime");
     const result = await api.runLocalAgent("离线检查");
@@ -239,6 +250,13 @@ describe("desktop platform adapter", () => {
     const startDragging = vi.fn(async () => undefined);
     const api = createDesktopApi(true, invoke, startDragging);
     await api.automationGovernanceCatalog();
+    await api.automationCostReconciliationCatalog();
+    await api.reconcileAutomationCost({
+      taskId: "018f0000-0000-7000-8000-000000000020",
+      expectedUpdatedAtMs: 1_700_000_000_000,
+      actualCostMicrounits: 42,
+      reason: "billing_export",
+    });
     await api.automationPendingApprovalCount();
     await api.pendingAutomationApprovals();
     await api.approveAutomationRun("018f0000-0000-7000-8000-000000000021");
@@ -369,6 +387,13 @@ describe("desktop platform adapter", () => {
     await api.stopUserProgram(envelope.executionId);
     expect(invoke.mock.calls).toEqual([
       ["automation_governance_catalog"],
+      ["automation_cost_reconciliation_catalog"],
+      ["reconcile_automation_cost", { request: {
+        taskId: "018f0000-0000-7000-8000-000000000020",
+        expectedUpdatedAtMs: 1_700_000_000_000,
+        actualCostMicrounits: 42,
+        reason: "billing_export",
+      } }],
       ["automation_pending_approval_count"],
       ["pending_automation_approvals"],
       ["approve_automation_run", { request: { approvalId: "018f0000-0000-7000-8000-000000000021" } }],
