@@ -33,9 +33,13 @@
 
 `AutoModeExecutionService` 是应用层 Facade：依次执行 Workspace 预检、Context Strategy/Cache、durable Turn Attempt、Runtime Supervisor 和原子 Commit。`AutoModeTurnSupervisor` 是领域协调器；Provider 与 Tool Backend 是 Adapter；Tool Registry、Risk Evaluator 和 Capability Gateway 构成责任链；Session、Task 与 Attempt 是显式状态机。
 
+桌面 `resume_auto_mode_turn` 也是应用层 Facade：负责 Normal/Safe Mode 门禁、恢复、生产依赖装配和一次有界执行，不重新实现风险判断、Tool 准入或持久化不变量。Provider 与 Tool 通过 Registry 发现，真实模块副作用只允许经过 Capability Gateway；Session、Checkpoint、Attempt 与 Workspace 的结果由 Repository 和 Unit of Work 原子提交。该入口不创建第二套 Agent 执行栈，也不把 Tauri、SQLite、Provider SDK 或原生对象泄漏到领域层。
+
 Attempt 创建后，Provider 或 Tool 的未知结果使用“不可确定结果隔离”模式：不自动重试、不释放 continuation、不通过超时租约重新领取。人工对账或确定性恢复是唯一后续入口。该规则优先于可用性和自动推进速度。
 
 上下文压缩与缓存使用 Strategy + Content Addressing：Goal、约束、Plan、证据、Workspace、Provider、模型和消息协议共同组成身份。缓存命中不能扩大数据等级，也不能替代每轮 Workspace 重扫。
+
+新增模式必须证明具体变化轴。Provider、模型、角色渲染器、缓存、上下文压缩和 Workspace 扫描适合 Strategy/Adapter；Goal、Task、Attempt、安装和扩展生命周期适合 State Machine；跨模块动作适合 Command + Gateway。禁止用全局 Service Locator 隐藏依赖，禁止让 UI 直接访问 Repository，禁止为了“以后可能用到”提前制造只有一个空实现的接口。
 
 ## 4. 扩展点标准
 

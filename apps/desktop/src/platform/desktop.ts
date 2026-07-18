@@ -68,6 +68,24 @@ export interface LocalAgentResult {
   pendingTools: AgentToolResult[];
 }
 
+export interface ResumeAutoModeTurnRequest {
+  sessionId: string;
+  workspaceRoot: string;
+  constraints?: string[];
+  maxOutputTokens?: number;
+  offline?: boolean;
+}
+
+export interface DesktopAutoModeTurnResult {
+  spec: "nimora.desktop-auto-mode-turn/1";
+  sessionId: string;
+  checkpointSequence: number;
+  status: "running" | "paused" | "completed";
+  pauseReason: string | null;
+  cacheHit: boolean;
+  requestFingerprint: string | null;
+}
+
 export interface AgentHistoryRecord {
   spec: "nimora.agent-history/1";
   task: { id: string; createdAtMs: number; providerId: string; status: string };
@@ -475,6 +493,7 @@ export interface DesktopApi {
   deleteSkillExecutionHistory(executionId?: string): Promise<number>;
   cancelSkillExecution(executionId: string): Promise<boolean>;
   runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
+  resumeAutoModeTurn(request: ResumeAutoModeTurnRequest): Promise<DesktopAutoModeTurnResult>;
   prepareAgentTool(toolId: string, argumentsValue: Record<string, unknown>): Promise<AgentToolResult>;
   confirmAgentTool(invocationId: string): Promise<AgentToolResult>;
   confirmAgentRunTool(invocationId: string): Promise<LocalAgentResult>;
@@ -703,6 +722,17 @@ export function createDesktopApi(
         const historyRecord = recordPreviewAgentHistory(task, prompt, model, content, "stop", usage);
         return { spec: "nimora.desktop-agent-result/1", status: "completed", task: historyRecord.task, content, finishReason: "stop", usage, pendingTools: [] };
       },
+      async resumeAutoModeTurn(request) {
+        return {
+          spec: "nimora.desktop-auto-mode-turn/1",
+          sessionId: request.sessionId,
+          checkpointSequence: 0,
+          status: "paused",
+          pauseReason: "desktop-host-required",
+          cacheHit: false,
+          requestFingerprint: null,
+        };
+      },
       async prepareAgentTool(toolId, argumentsValue) {
         const invocationId = crypto.randomUUID();
         const requiresConfirmation = toolId === "pet.animation.play" || toolId === "pet.position.move";
@@ -820,6 +850,15 @@ export function createDesktopApi(
     deleteSkillExecutionHistory: async (executionId) => (await invokeCommand("delete_skill_execution_history", { request: { executionId: executionId ?? null } }) as { deleted: number }).deleted,
     cancelSkillExecution: async (executionId) => await invokeCommand("cancel_skill_execution", { executionId }) as boolean,
     runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") => await invokeCommand("run_local_agent", { request: { prompt, providerId, model } }) as LocalAgentResult,
+    resumeAutoModeTurn: async (request) => await invokeCommand("resume_auto_mode_turn", {
+      request: {
+        sessionId: request.sessionId,
+        workspaceRoot: request.workspaceRoot,
+        constraints: request.constraints ?? [],
+        maxOutputTokens: request.maxOutputTokens ?? 512,
+        offline: request.offline ?? true,
+      },
+    }) as DesktopAutoModeTurnResult,
     prepareAgentTool: async (toolId, argumentsValue) => await invokeCommand("prepare_agent_tool", { request: { toolId, arguments: argumentsValue } }) as AgentToolResult,
     confirmAgentTool: async (invocationId) => await invokeCommand("confirm_agent_tool", { request: { invocationId } }) as AgentToolResult,
     confirmAgentRunTool: async (invocationId) => await invokeCommand("confirm_agent_run_tool", { request: { invocationId } }) as LocalAgentResult,

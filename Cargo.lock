@@ -2330,9 +2330,11 @@ dependencies = [
 name = "nimora-desktop"
 version = "0.1.0"
 dependencies = [
+ "nimora-agent-auto-host",
  "nimora-agent-provider-worker",
  "nimora-agent-runtime",
  "nimora-agent-tools",
+ "nimora-agent-workspace-host",
  "nimora-asset-installer",
  "nimora-automation-agent-bridge",
  "nimora-automation-capability-bridge",

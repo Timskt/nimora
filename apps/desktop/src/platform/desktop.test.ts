@@ -26,6 +26,14 @@ describe("desktop platform adapter", () => {
       prompt: "离线检查",
       response: "[model:echo-v1] 离线检查",
     });
+    await expect(api.resumeAutoModeTurn({
+      sessionId: "018f0000-0000-7000-8000-000000000012",
+      workspaceRoot: "/preview/workspace",
+    })).resolves.toMatchObject({
+      status: "paused",
+      pauseReason: "desktop-host-required",
+      requestFingerprint: null,
+    });
     await expect(api.playAction("celebrate")).resolves.toBeNull();
   });
 
@@ -153,6 +161,10 @@ describe("desktop platform adapter", () => {
     await api.agentHistory(25);
     await api.deleteAgentHistory("018f0000-0000-7000-8000-000000000007");
     await api.runLocalAgent("检查本地能力");
+    await api.resumeAutoModeTurn({
+      sessionId: "018f0000-0000-7000-8000-000000000012",
+      workspaceRoot: "/workspace",
+    });
     await api.prepareAgentTool("pet.animation.play", { action: "celebrate" });
     await api.confirmAgentTool("018f0000-0000-7000-8000-000000000004");
     await api.confirmAgentRunTool("018f0000-0000-7000-8000-000000000006");
@@ -258,6 +270,13 @@ describe("desktop platform adapter", () => {
       ["agent_history_list", { request: { beforeCreatedAtMs: null, beforeTaskId: null, limit: 25 } }],
       ["delete_agent_history", { request: { taskId: "018f0000-0000-7000-8000-000000000007" } }],
       ["run_local_agent", { request: { prompt: "检查本地能力", providerId: "provider:deterministic-local", model: "model:echo-v1" } }],
+      ["resume_auto_mode_turn", { request: {
+        sessionId: "018f0000-0000-7000-8000-000000000012",
+        workspaceRoot: "/workspace",
+        constraints: [],
+        maxOutputTokens: 512,
+        offline: true,
+      } }],
       ["prepare_agent_tool", { request: { toolId: "pet.animation.play", arguments: { action: "celebrate" } } }],
       ["confirm_agent_tool", { request: { invocationId: "018f0000-0000-7000-8000-000000000004" } }],
       ["confirm_agent_run_tool", { request: { invocationId: "018f0000-0000-7000-8000-000000000006" } }],

@@ -1,15 +1,21 @@
+use nimora_agent_auto_host::{
+    AutoModeExecutionRequest, AutoModeExecutionResult, AutoModeExecutionService,
+    AutoModeRecoveryService, CommittedAutoModeTurn,
+};
 use nimora_agent_provider_worker::{
     OllamaEndpoint, OllamaModel, WorkerOllamaProvider, probe_ollama_worker, verify_provider_sidecar,
 };
 use nimora_agent_runtime::{
     AgentAutonomy, AgentBudget, AgentCoordinator, AgentTask, AgentTaskGateway,
-    AgentTaskGatewayPolicy, AgentTaskOrigin, AgentTaskRequest, AgentTaskStatus, BaseRiskEvaluator,
-    CancellationFlag, DataClassification, DeterministicLocalProvider, PlannedToolCall,
-    ProviderExecutionContext, ProviderMessage, ProviderMessageRole, ProviderRegistry,
-    ProviderResponse, ProviderStepInput, ProviderStepOutcome, ProviderToolTurn, ToolAdmission,
-    ToolApproval, ToolDescriptor, ToolEffect, ToolInvocation, ToolRegistry, ToolStepOutcome,
+    AgentTaskGatewayPolicy, AgentTaskOrigin, AgentTaskRequest, AgentTaskStatus,
+    AutoModePauseReason, BaseRiskEvaluator, CancellationFlag, ContextCompactionPolicy,
+    DataClassification, DeterministicLocalProvider, PlannedToolCall, ProviderExecutionContext,
+    ProviderMessage, ProviderMessageRole, ProviderRegistry, ProviderResponse, ProviderStepInput,
+    ProviderStepOutcome, ProviderToolTurn, ToolAdmission, ToolApproval, ToolDescriptor, ToolEffect,
+    ToolInvocation, ToolRegistry, ToolStepOutcome,
 };
 use nimora_agent_tools::{GatewayToolBackend, production_tool_registry};
+use nimora_agent_workspace_host::WorkspaceScanPolicy;
 use nimora_asset_installer::{
     AssetPackageSummary, AssetPreviewReport, AssetRendererDescriptor, GltfCharacterMetadata,
     InstallError, InstallFile, ModelAnimationBinding, RenderAnchor, RenderCanvas, SpriteClips,
@@ -43,7 +49,7 @@ use nimora_module_agent_adapter::{
 use nimora_persistence_sqlite::{
     AgentHistoryRecord, AutomationAgentJournalEntry, AutomationAgentJournalStatus,
     AutomationJournalEntry, AutomationRunStart, BackupCoordinator, BackupHealth, BackupPolicy,
-    BackupRecord, DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant,
+    BackupRecord, ContextCachePolicy, DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant,
     SkillApprovalJournalEntry, SkillApprovalJournalStatus, SkillExecutionHistoryRecord,
     SkillExecutionHistoryStatus, SkillStateRecord, SqliteAgentHistoryRepository,
     SqliteAutomationAgentJournal, SqliteAutomationJournal, SqliteOutboxRepository,
@@ -132,6 +138,7 @@ const AUTOMATION_AGENT_REQUESTER: &str = "automation:desktop";
 #[derive(Debug)]
 struct DesktopState {
     native_app: Option<AppHandle>,
+    database_path: Option<PathBuf>,
     runtime: RuntimeService<SqlitePetRepository>,
     profiles: ProfileService<SqliteProfileRepository>,
     safety: SafetyService,
@@ -399,6 +406,7 @@ impl DesktopState {
         let skill_execution_history = SqliteSkillExecutionHistory::open(database_path)?;
         Ok(Self {
             native_app,
+            database_path: Some(database_path.to_path_buf()),
             runtime,
             profiles,
             safety: SafetyService::new(events.clone()),
@@ -470,6 +478,7 @@ impl DesktopState {
         )?);
         Ok(Self {
             native_app,
+            database_path: None,
             runtime,
             profiles,
             safety: SafetyService::new(events.clone()),
@@ -1075,6 +1084,27 @@ struct LocalAgentRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResumeAutoModeTurnRequest {
+    session_id: Uuid,
+    workspace_root: PathBuf,
+    #[serde(default)]
+    constraints: Vec<String>,
+    #[serde(default = "default_auto_mode_output_tokens")]
+    max_output_tokens: u64,
+    #[serde(default = "default_true")]
+    offline: bool,
+}
+
+const fn default_auto_mode_output_tokens() -> u64 {
+    512
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AutomationTestRequest {
     definition: AutomationDefinition,
     event_type: String,
@@ -1651,6 +1681,18 @@ enum DesktopAgentRunStatus {
     WaitingForConfirmation,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopAutoModeTurnResult {
+    spec: &'static str,
+    session_id: Uuid,
+    checkpoint_sequence: u64,
+    status: &'static str,
+    pause_reason: Option<AutoModePauseReason>,
+    cache_hit: bool,
+    request_fingerprint: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PrepareAgentToolRequest {
@@ -1882,6 +1924,120 @@ fn run_local_agent_inner(
         cancellation,
     )?;
     Ok(desktop_agent_run_result(outcome))
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn resume_auto_mode_turn(
+    request: ResumeAutoModeTurnRequest,
+    state: State<'_, DesktopState>,
+) -> Result<DesktopAutoModeTurnResult, DesktopError> {
+    resume_auto_mode_turn_inner(request, &state)
+}
+
+fn resume_auto_mode_turn_inner(
+    request: ResumeAutoModeTurnRequest,
+    state: &DesktopState,
+) -> Result<DesktopAutoModeTurnResult, DesktopError> {
+    ensure_normal_mode(state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    if request.max_output_tokens == 0 || request.max_output_tokens > 16_384 {
+        return Err(DesktopError::Agent(
+            "Auto Mode output tokens must be between 1 and 16384".to_owned(),
+        ));
+    }
+    let database_path = state
+        .database_path
+        .as_ref()
+        .ok_or_else(|| DesktopError::Agent("Auto Mode persistence is unavailable".to_owned()))?;
+    let now_ms = current_time_ms()?;
+    let recovery = AutoModeRecoveryService::new(database_path, WorkspaceScanPolicy::default());
+    let recovered = recovery
+        .recover(request.session_id, &request.workspace_root, now_ms)
+        .map_err(agent_error)?;
+    let running = recovery
+        .commit_resume(recovered, now_ms)
+        .map_err(agent_error)?;
+    let task_id = running.task.id;
+    let trace_id = running.task.trace_id;
+    let providers = desktop_provider_registry(state)?;
+    let tools = desktop_tool_registry(state)?;
+    let backend = desktop_tool_backend(state, task_id, trace_id)?;
+    let service = AutoModeExecutionService::new(
+        database_path,
+        WorkspaceScanPolicy::default(),
+        ContextCachePolicy::new(256, 64 * 1024 * 1024).map_err(agent_error)?,
+        ContextCompactionPolicy {
+            max_messages: 128,
+            max_content_bytes: 128 * 1024,
+            retain_recent_units: 32,
+        },
+        24 * 60 * 60 * 1_000,
+    )
+    .map_err(agent_error)?;
+    let result = service
+        .execute(
+            &providers,
+            &tools,
+            &backend,
+            AutoModeExecutionRequest {
+                turn: running,
+                workspace_root: request.workspace_root,
+                constraints: request.constraints,
+                max_output_tokens: request.max_output_tokens,
+                provider_context: ProviderExecutionContext {
+                    timeout: Duration::from_mins(2),
+                    cancellation: CancellationFlag::default(),
+                    credential_reference: None,
+                },
+                offline: request.offline,
+                data_classification: DataClassification::Personal,
+                maximum_data_classification: DataClassification::Personal,
+                now_ms,
+            },
+        )
+        .map_err(agent_error)?;
+    Ok(desktop_auto_mode_turn_result(result))
+}
+
+fn desktop_auto_mode_turn_result(result: AutoModeExecutionResult) -> DesktopAutoModeTurnResult {
+    match result {
+        AutoModeExecutionResult::WorkspaceDrift {
+            session,
+            checkpoint_sequence,
+            ..
+        } => DesktopAutoModeTurnResult {
+            spec: "nimora.desktop-auto-mode-turn/1",
+            session_id: session.id,
+            checkpoint_sequence,
+            status: "paused",
+            pause_reason: session.pause_reason,
+            cache_hit: false,
+            request_fingerprint: None,
+        },
+        AutoModeExecutionResult::Committed {
+            turn,
+            cache_hit,
+            request_fingerprint,
+        } => {
+            let (turn, status) = match turn {
+                CommittedAutoModeTurn::Continue(turn) => (turn, "running"),
+                CommittedAutoModeTurn::Paused(turn) => (turn, "paused"),
+                CommittedAutoModeTurn::Completed(turn) => (turn, "completed"),
+            };
+            DesktopAutoModeTurnResult {
+                spec: "nimora.desktop-auto-mode-turn/1",
+                session_id: turn.session.id,
+                checkpoint_sequence: turn.checkpoint_sequence,
+                status,
+                pause_reason: turn.session.pause_reason,
+                cache_hit,
+                request_fingerprint: Some(request_fingerprint),
+            }
+        }
+    }
 }
 
 fn desktop_agent_run_result(outcome: ProviderAgentOutcome) -> DesktopAgentRunResult {
@@ -6824,6 +6980,7 @@ pub fn run() {
             agent_history_list,
             delete_agent_history,
             run_local_agent,
+            resume_auto_mode_turn,
             prepare_agent_tool,
             confirm_agent_tool,
             confirm_agent_run_tool,
@@ -7013,23 +7170,24 @@ mod tests {
         BUILTIN_CHARACTER_ID, CapabilityBackend, DETERMINISTIC_PROVIDER_ID, DesktopAgentRunStatus,
         DesktopCapabilityBackend, DesktopError, DesktopState, ExecutionCancellation,
         LocalAgentRequest, PendingSkillExecution, PetAction, PrepareAgentToolRequest,
-        ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest, SkillEventSession,
-        StartupMode, TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
-        UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
-        approve_skill_execution_inner, automation_agent_messages, cancel_agent_task_inner,
-        cancel_all_pending_agent_tools, cancel_automation_run_inner, cancel_skill_execution_inner,
-        confirm_agent_tool_inner, confirm_agent_tool_with_registry, current_time_ms,
-        default_agent_model, default_agent_provider_id, desktop_tool_registry, diagnostic_report,
+        ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest,
+        ResumeAutoModeTurnRequest, SkillEventSession, StartupMode, TrayAction,
+        UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
+        WindowPolicy, agent_catalog_inner, approve_skill_execution_inner,
+        automation_agent_messages, cancel_agent_task_inner, cancel_all_pending_agent_tools,
+        cancel_automation_run_inner, cancel_skill_execution_inner, confirm_agent_tool_inner,
+        confirm_agent_tool_with_registry, current_time_ms, default_agent_model,
+        default_agent_provider_id, desktop_tool_registry, diagnostic_report,
         dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
         parse_user_program_plan, permission_grant, persist_active_character,
         prepare_agent_tool_inner, reject_agent_tool_inner, resolve_active_character,
-        resolve_character_renderer, run_live_automation, run_local_agent_inner,
-        run_skill_agent_task, run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
-        skill_capability_names, skill_event_types, stop_skill_event_sessions, test_automation,
-        user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
-        validate_requested_animation_map,
+        resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
+        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
+        screen_coordinate, serve_asset_protocol, skill_capability_names, skill_event_types,
+        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
+        validate_model_source, validate_package_source, validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentTask, AgentTaskOrigin, AgentTaskStatus, CancellationFlag,
@@ -8164,6 +8322,46 @@ mod tests {
             )
             .is_err()
         );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn desktop_auto_mode_rejects_invalid_budget_before_recovery() {
+        let (root, state) = normal_desktop_state();
+        let result = resume_auto_mode_turn_inner(
+            ResumeAutoModeTurnRequest {
+                session_id: Uuid::now_v7(),
+                workspace_root: root.clone(),
+                constraints: Vec::new(),
+                max_output_tokens: 0,
+                offline: true,
+            },
+            &state,
+        );
+        assert!(
+            matches!(result, Err(DesktopError::Agent(message)) if message.contains("between 1 and 16384"))
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn desktop_auto_mode_fails_closed_in_safe_mode() {
+        let (root, state) = normal_desktop_state();
+        state
+            .safety
+            .enter(nimora_runtime_core::SafeModeReason::Manual)
+            .expect("safe mode");
+        let result = resume_auto_mode_turn_inner(
+            ResumeAutoModeTurnRequest {
+                session_id: Uuid::now_v7(),
+                workspace_root: root.clone(),
+                constraints: Vec::new(),
+                max_output_tokens: 512,
+                offline: true,
+            },
+            &state,
+        );
+        assert!(matches!(result, Err(DesktopError::SafeModeActive)));
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 

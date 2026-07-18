@@ -232,6 +232,10 @@ nimora ai history delete --database <path> (--task-id <uuid>|--all)
 
 ## 14. 桌面工作台当前纵切
 
+桌面宿主现已提供版本化 `resume_auto_mode_turn` IPC 与 TypeScript 平台契约。一次调用执行显式 Resume、真实 Workspace 重扫、持久 Context Cache、durable Turn Attempt、生产 Provider/Tool Registry、共享 Capability Gateway 和 Session/Checkpoint/Attempt 原子结果提交；默认离线，输出预算限制为 `1..=16384`，Safe Mode 与 Recovery Mode 在 Provider 前 fail-closed。浏览器预览不会伪造 Auto Mode 执行，而返回 `desktop-host-required` 暂停结果。
+
+该控制面目前只推进一个持久 Turn，不能描述为后台无限自动运行。仍需实现有界后台 Supervisor、暂停/取消控制、Goal/Plan/Attempt 桌面 UI、不确定 Attempt 人工对账、网络 Provider 数据出境交互和系统密钥加密缓存。
+
 桌面 Control Center 已提供 Agent 一级入口。工作台从宿主读取与 CLI、Provider 请求相同的十项生产 Tool Catalog，明确区分只读能力与必须确认的可逆写能力，并显示本地、无凭据、零费用边界。当前对话路径为 `provider:deterministic-local` 的确定性离线诊断单步，返回真实 Task、Finish Reason 与 Usage；它不伪装成通用对话模型，也不会自行产生 Tool Call。
 
 工作台提供生产 Tool Catalog 的真实执行验证入口：只读工具经 Tool Registry 和共享 Capability Gateway 立即执行；写工具由 Rust 宿主生成参数绑定的 Invocation 与 Approval，并仅在 UI 展示实际 Tool ID、参数、风险和期限。Approval 不交给前端，宿主最多持有 32 个待确认项，5 分钟过期，确认或拒绝时一次性移除后再处理，因此不能换参、重放或在执行失败后隐式重试。进入 Safe Mode 会撤销全部待确认项；Recovery Mode 不允许创建或确认工具调用。
