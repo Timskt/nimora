@@ -33,7 +33,7 @@ flowchart LR
 5. Automation 子 Agent 的 `submitted`、`waiting_for_confirmation`、`completed`、`failed`、`cancelled`、`interrupted` 状态可按 Task 或根 Run 查询；重启不会保存 Prompt 或静默续跑，而是把活跃任务标记为 `interrupted`。
 6. 每个桌面 Provider Task 绑定一个宿主拥有的共享 `CancellationFlag`。用户按 Task 取消、工具拒绝/过期和 Safe Mode 会先设置 Flag；递归 Provider step 与批准后续跑复用同一 Flag，隔离 Worker 观察取消后强制终止子进程，再由 Journal 收敛终态。
 7. `AgentTaskSubmitter` 返回类型化幂等结果：首次为 `Accepted`，已提交/等待为 `DuplicateActive`，已完成为 `DuplicateCompleted`；历史 `failed`、`cancelled`、`interrupted` 返回永久失败。Bridge 只对明确瞬态的宿主故障重试，不把任一失败终态当作成功。
-5. 双向调用共享 Trace，但 Trace ID 不是权限凭证；权限由调用方身份、Capability、预算和批准证明共同决定。
+8. 双向调用共享 Trace，但 Trace ID 不是权限凭证；权限由调用方身份、Capability、预算和批准证明共同决定。
 
 Skill 的两种方向必须保持分离：Skill 请求 AI 时，由复验并激活的精确 Manifest 租约签发 `skill:<id>`，再进入 `module-agent-adapter`；AI 请求 Skill 能力时，只能调用宿主审查后汇入 Tool Registry 的 Contribution，经批准与 Capability Gateway 到达 Skill Command Adapter。Skill JavaScript、安装包、Worker 输出和 Agent 文本都不能自行注册生产工具、扩大 allowlist、直连 Provider 或绕过 Gateway。
 
