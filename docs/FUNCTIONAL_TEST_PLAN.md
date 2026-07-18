@@ -481,3 +481,8 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-105 | Adaptive 与缓存隔离 | 推荐等级受任务、风险、费用上限约束；策略、实际等级或映射版本变化不命中旧生成缓存 | P1 |
 | AGT-106 | Away Summary | 展示文件、测试、网络、预算、自动授权、失败重试和暂停原因，不暴露 Secret 或隐藏推理 | P1 |
 | AGT-107 | 授权撤销与未知结果 | 撤销阻止新派发；无法确认的在途结果进入 `indeterminate` 且不自动重放 | P0 |
+| AGT-108 | Desktop 后台 Job 唯一性 | 同一 Session 只能原子创建一个活跃 Job；终态释放 Session 后允许新 Job，旧快照仍可查询 | P0 |
+| AGT-109 | Job 跨批次进度 | 每批 Turn、Cache Hit 与 Checkpoint sequence 单调累计；Yield 不伪装成 Pause 或终态 | P0 |
+| AGT-110 | Job Pause/Cancel 控制 | Pause 与 Cancel 使用独立控制信号；Cancel 可覆盖未收敛 Pause，终态后任何控制稳定拒绝 | P0 |
+| AGT-111 | Job 退出收敛 | Safe/Recovery Mode、应用退出与宿主崩溃均收敛持久 Session/Task/Attempt；超时结果进入 `indeterminate` | P0 |
+| AGT-112 | Job 版本化快照 | Desktop、TypeScript 与 UI 使用 `nimora.desktop-auto-mode-job/1`，浏览器预览不得伪造宿主执行 | P0 |

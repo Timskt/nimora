@@ -1,3 +1,5 @@
+pub mod auto_mode_jobs;
+
 use nimora_agent_auto_host::{
     AutoModeExecutionRequest, AutoModeExecutionResult, AutoModeExecutionService,
     AutoModeRecoveryService, CommittedAutoModeTurn,
