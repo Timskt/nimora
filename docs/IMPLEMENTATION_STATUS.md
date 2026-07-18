@@ -74,3 +74,4 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - `accept_external_effect_and_cancel` atomically cancels Session and Task without fabricating a Provider success result.
 - Desktop IPC exposes bounded detail/history and resolution commands; browser preview fails closed with `desktop-host-required`.
 - Resolution binds Session, Attempt, Checkpoint sequence, request fingerprint, actor, reason, decision, and host timestamp. Stale or replayed requests roll back as a unit.
+- Five dedicated real-SQLite tests now prove both decisions, zero-write rejection, one-winner concurrent reconciliation, replay rejection, audit persistence across reopen, bounded queries, and index/payload divergence detection.

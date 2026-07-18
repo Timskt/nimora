@@ -161,7 +161,9 @@ impl SqliteAutoModeAttemptResolutionRepository {
             return Err(SqlitePersistenceError::InvalidAutoModeAttemptResolution);
         }
         let mut statement = self.connection.prepare(
-            "SELECT schema_version, payload FROM auto_mode_attempt_resolution
+            "SELECT schema_version, payload, resolution_id, attempt_id, checkpoint_sequence,
+                request_fingerprint, decision, actor, reason, resolved_at_ms
+             FROM auto_mode_attempt_resolution
              WHERE session_id = ?1 ORDER BY resolved_at_ms DESC, resolution_id DESC LIMIT ?2",
         )?;
         let rows = statement.query_map(
@@ -170,15 +172,51 @@ impl SqliteAutoModeAttemptResolutionRepository {
                 i64::try_from(limit)
                     .map_err(|_| SqlitePersistenceError::InvalidAutoModeAttemptResolution)?
             ],
-            |row| Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, i64>(9)?,
+                ))
+            },
         )?;
         rows.map(|row| {
-            let (version, payload) = row?;
+            let (
+                version,
+                payload,
+                resolution_id,
+                attempt_id,
+                sequence,
+                fingerprint,
+                decision,
+                actor,
+                reason,
+                resolved_at_ms,
+            ) = row?;
             if version != RESOLUTION_VERSION {
                 return Err(SqlitePersistenceError::InvalidAutoModeAttemptResolution);
             }
             let resolution: AutoModeAttemptResolution = serde_json::from_str(&payload)?;
             validate_resolution(&resolution)?;
+            if resolution.session_id != session_id
+                || resolution.id.to_string() != resolution_id
+                || resolution.attempt_id.to_string() != attempt_id
+                || to_i64(resolution.checkpoint_sequence)? != sequence
+                || resolution.request_fingerprint != fingerprint
+                || decision_name(resolution.decision) != decision
+                || resolution.actor != actor
+                || resolution.reason != reason
+                || to_i64(resolution.resolved_at_ms)? != resolved_at_ms
+            {
+                return Err(SqlitePersistenceError::InvalidAutoModeAttemptResolution);
+            }
             Ok(resolution)
         })
         .collect()
@@ -432,4 +470,330 @@ fn to_i64(value: u64) -> Result<i64, SqlitePersistenceError> {
 }
 fn to_u64(value: i64) -> Result<u64, SqlitePersistenceError> {
     u64::try_from(value).map_err(|_| SqlitePersistenceError::InvalidAutoModeAttemptResolution)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        SqliteAgentGoalRepository, SqliteAutoModeCheckpointRepository, SqliteAutoModeRepository,
+        SqliteAutoModeTurnAttemptRepository,
+    };
+    use nimora_agent_runtime::{
+        AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
+        AutoModePolicy, DataClassification, ProviderMessage, ProviderMessageRole,
+    };
+    use std::{fs, path::PathBuf, thread};
+
+    struct Fixture {
+        path: PathBuf,
+        session_id: Uuid,
+        attempt: AutoModeTurnAttempt,
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.path);
+            let _ = fs::remove_file(self.path.with_extension("sqlite3-shm"));
+            let _ = fs::remove_file(self.path.with_extension("sqlite3-wal"));
+        }
+    }
+
+    fn fixture(mark_indeterminate: bool) -> Fixture {
+        let path = std::env::temp_dir().join(format!(
+            "nimora-attempt-resolution-{}.sqlite3",
+            Uuid::now_v7()
+        ));
+        let plan = AgentPlan::new(
+            Uuid::now_v7(),
+            vec![AgentPlanStep::new("Inspect").expect("step")],
+            "initial",
+            1_000,
+        )
+        .expect("plan");
+        let goal = AgentGoal::new("Resolve", "Resolve safely", &plan, 1_000).expect("goal");
+        let policy = AutoModePolicy::new(
+            4,
+            1,
+            AgentBudget::default(),
+            DataClassification::Personal,
+            ["pet.state.read".to_owned()],
+            "git:abc",
+        )
+        .expect("policy");
+        let session = AutoModeSession::start(&goal, &plan, policy, 1_000).expect("session");
+        let mut task = AgentTask::new(
+            AgentTaskOrigin::Desktop,
+            "desktop:auto-mode",
+            "provider:local",
+            AgentBudget::default(),
+            1_000,
+        )
+        .expect("task");
+        task.transition(AgentTaskStatus::Planning, 1_001)
+            .expect("planning");
+        task.transition(AgentTaskStatus::Running, 1_002)
+            .expect("running");
+        let checkpoint = AutoModeCheckpoint::new(
+            session.id,
+            goal.id,
+            plan.revision,
+            1,
+            task,
+            "model:local",
+            vec![ProviderMessage::text(
+                ProviderMessageRole::User,
+                "continue",
+                DataClassification::Personal,
+                true,
+            )],
+            "git:abc",
+            session.policy_fingerprint.clone(),
+            1_000,
+            1_002,
+        )
+        .expect("checkpoint");
+        SqliteAgentGoalRepository::open(&path)
+            .expect("goals")
+            .create(&goal, &plan)
+            .expect("goal");
+        SqliteAutoModeRepository::open(&path)
+            .expect("sessions")
+            .create(&session)
+            .expect("session");
+        SqliteAutoModeCheckpointRepository::open(&path)
+            .expect("checkpoints")
+            .create(&checkpoint)
+            .expect("checkpoint");
+        let mut attempts = SqliteAutoModeTurnAttemptRepository::open(&path).expect("attempts");
+        let attempt = attempts
+            .begin(
+                session.id,
+                1,
+                session.updated_at_ms,
+                "sha256:request",
+                1_003,
+            )
+            .expect("begin");
+        if mark_indeterminate {
+            attempts.mark_indeterminate(&attempt, 1_004).expect("mark");
+        }
+        Fixture {
+            path,
+            session_id: session.id,
+            attempt,
+        }
+    }
+
+    fn request(
+        fixture: &Fixture,
+        decision: AutoModeAttemptResolutionDecision,
+    ) -> ResolveAutoModeAttemptRequest {
+        ResolveAutoModeAttemptRequest {
+            session_id: fixture.session_id,
+            attempt_id: fixture.attempt.id,
+            checkpoint_sequence: fixture.attempt.checkpoint_sequence,
+            request_fingerprint: fixture.attempt.request_fingerprint.clone(),
+            decision,
+            actor: "user:owner".to_owned(),
+            reason: Some("Manually verified".to_owned()),
+            resolved_at_ms: 1_005,
+        }
+    }
+
+    #[test]
+    fn confirmed_not_executed_atomically_pauses_and_survives_reopen() {
+        let fixture = fixture(true);
+        let resolution = SqliteAutoModeAttemptResolutionRepository::open(&fixture.path)
+            .expect("resolutions")
+            .resolve(&request(
+                &fixture,
+                AutoModeAttemptResolutionDecision::ConfirmedNotExecuted,
+            ))
+            .expect("resolve");
+        let session = SqliteAutoModeRepository::open(&fixture.path)
+            .expect("sessions")
+            .get(fixture.session_id)
+            .expect("get")
+            .expect("session");
+        let checkpoint = SqliteAutoModeCheckpointRepository::open(&fixture.path)
+            .expect("checkpoints")
+            .get(fixture.session_id)
+            .expect("get")
+            .expect("checkpoint");
+        assert_eq!(session.status, AutoModeStatus::Paused);
+        assert_eq!(
+            session.pause_reason,
+            Some(AutoModePauseReason::UserRequested)
+        );
+        assert_eq!(checkpoint.sequence, 2);
+        assert_eq!(checkpoint.task.status, AgentTaskStatus::Paused);
+        assert!(
+            SqliteAutoModeTurnAttemptRepository::open(&fixture.path)
+                .expect("attempts")
+                .get(fixture.session_id)
+                .expect("get")
+                .is_none()
+        );
+        let reopened = SqliteAutoModeAttemptResolutionRepository::open(&fixture.path)
+            .expect("reopen")
+            .list_for_session(fixture.session_id, 10)
+            .expect("list");
+        assert_eq!(reopened, vec![resolution]);
+    }
+
+    #[test]
+    fn accepting_external_effect_cancels_without_fabricating_success() {
+        let fixture = fixture(true);
+        SqliteAutoModeAttemptResolutionRepository::open(&fixture.path)
+            .expect("resolutions")
+            .resolve(&request(
+                &fixture,
+                AutoModeAttemptResolutionDecision::AcceptExternalEffectAndCancel,
+            ))
+            .expect("resolve");
+        let session = SqliteAutoModeRepository::open(&fixture.path)
+            .expect("sessions")
+            .get(fixture.session_id)
+            .expect("get")
+            .expect("session");
+        let checkpoint = SqliteAutoModeCheckpointRepository::open(&fixture.path)
+            .expect("checkpoints")
+            .get(fixture.session_id)
+            .expect("get")
+            .expect("checkpoint");
+        assert_eq!(session.status, AutoModeStatus::Cancelled);
+        assert_eq!(checkpoint.task.status, AgentTaskStatus::Cancelled);
+        assert_eq!(checkpoint.sequence, 2);
+    }
+
+    #[test]
+    fn stale_binding_and_active_attempt_leave_all_state_unchanged() {
+        let indeterminate = fixture(true);
+        let mut stale = request(
+            &indeterminate,
+            AutoModeAttemptResolutionDecision::ConfirmedNotExecuted,
+        );
+        stale.request_fingerprint = "sha256:stale".to_owned();
+        assert!(matches!(
+            SqliteAutoModeAttemptResolutionRepository::open(&indeterminate.path)
+                .expect("store")
+                .resolve(&stale),
+            Err(SqlitePersistenceError::AutoModeAttemptResolutionConflict)
+        ));
+        let attempt = SqliteAutoModeTurnAttemptRepository::open(&indeterminate.path)
+            .expect("attempts")
+            .get(indeterminate.session_id)
+            .expect("get")
+            .expect("attempt");
+        assert_eq!(attempt.status, AutoModeTurnAttemptStatus::Indeterminate);
+        assert!(
+            SqliteAutoModeAttemptResolutionRepository::open(&indeterminate.path)
+                .expect("store")
+                .list_for_session(indeterminate.session_id, 10)
+                .expect("list")
+                .is_empty()
+        );
+
+        let active = fixture(false);
+        assert!(matches!(
+            SqliteAutoModeAttemptResolutionRepository::open(&active.path)
+                .expect("store")
+                .resolve(&request(
+                    &active,
+                    AutoModeAttemptResolutionDecision::ConfirmedNotExecuted
+                )),
+            Err(SqlitePersistenceError::AutoModeAttemptResolutionConflict)
+        ));
+    }
+
+    #[test]
+    fn replay_and_concurrent_decisions_have_exactly_one_winner() {
+        let resolved = fixture(true);
+        let first_request = request(
+            &resolved,
+            AutoModeAttemptResolutionDecision::ConfirmedNotExecuted,
+        );
+        SqliteAutoModeAttemptResolutionRepository::open(&resolved.path)
+            .expect("store")
+            .resolve(&first_request)
+            .expect("first");
+        assert!(matches!(
+            SqliteAutoModeAttemptResolutionRepository::open(&resolved.path)
+                .expect("store")
+                .resolve(&first_request),
+            Err(SqlitePersistenceError::AutoModeAttemptResolutionConflict)
+        ));
+
+        let concurrent = fixture(true);
+        let left_path = concurrent.path.clone();
+        let right_path = concurrent.path.clone();
+        let left_request = request(
+            &concurrent,
+            AutoModeAttemptResolutionDecision::ConfirmedNotExecuted,
+        );
+        let right_request = request(
+            &concurrent,
+            AutoModeAttemptResolutionDecision::AcceptExternalEffectAndCancel,
+        );
+        let left = thread::spawn(move || {
+            SqliteAutoModeAttemptResolutionRepository::open(left_path)
+                .expect("left")
+                .resolve(&left_request)
+        });
+        let right = thread::spawn(move || {
+            SqliteAutoModeAttemptResolutionRepository::open(right_path)
+                .expect("right")
+                .resolve(&right_request)
+        });
+        let outcomes = [
+            left.join().expect("left join"),
+            right.join().expect("right join"),
+        ];
+        assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|result| matches!(
+                    result,
+                    Err(SqlitePersistenceError::AutoModeAttemptResolutionConflict)
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(
+            SqliteAutoModeAttemptResolutionRepository::open(&concurrent.path)
+                .expect("store")
+                .list_for_session(concurrent.session_id, 10)
+                .expect("list")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn audit_query_rejects_index_payload_divergence_and_unbounded_pages() {
+        let fixture = fixture(true);
+        SqliteAutoModeAttemptResolutionRepository::open(&fixture.path)
+            .expect("store")
+            .resolve(&request(
+                &fixture,
+                AutoModeAttemptResolutionDecision::ConfirmedNotExecuted,
+            ))
+            .expect("resolve");
+        let connection = Connection::open(&fixture.path).expect("connection");
+        connection
+            .execute(
+                "UPDATE auto_mode_attempt_resolution SET actor = 'user:tampered' WHERE session_id = ?1",
+                [fixture.session_id.to_string()],
+            )
+            .expect("tamper");
+        let store = SqliteAutoModeAttemptResolutionRepository::open(&fixture.path).expect("store");
+        assert!(matches!(
+            store.list_for_session(fixture.session_id, 10),
+            Err(SqlitePersistenceError::InvalidAutoModeAttemptResolution)
+        ));
+        assert!(store.list_for_session(fixture.session_id, 0).is_err());
+        assert!(store.list_for_session(fixture.session_id, 101).is_err());
+    }
 }
