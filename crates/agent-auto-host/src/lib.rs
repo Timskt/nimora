@@ -1,15 +1,17 @@
 //! Host-side recovery and supervision services for persistent Auto Mode sessions.
 
 use nimora_agent_runtime::{
-    AgentGoal, AgentPlan, AgentTask, AgentTaskStatus, AutoModeCheckpoint, AutoModeSession,
-    AutoModeStatus, CompactedContext, ContextAnchor, ContextCompactionPolicy, ContextCompactor,
-    ContextManagementError, DataClassification, ProviderMessage, ToolDescriptor, WorkspaceSnapshot,
+    AgentGoal, AgentPlan, AgentTask, AgentTaskStatus, AutoModeCheckpoint, AutoModePauseReason,
+    AutoModeSession, AutoModeStatus, CompactedContext, ContextAnchor, ContextCompactionPolicy,
+    ContextCompactor, ContextManagementError, DataClassification, ProviderMessage, ToolDescriptor,
+    WorkspaceSnapshot,
 };
 use nimora_agent_workspace_host::{WorkspaceHostError, WorkspaceScanPolicy, WorkspaceScanner};
 use nimora_persistence_sqlite::{
     ContextCachePolicy, SqliteAgentGoalRepository, SqliteAutoModeCheckpointRepository,
     SqliteAutoModeCommitRepository, SqliteAutoModeRepository, SqliteContextCacheRepository,
     SqlitePersistenceError, SqliteWorkspaceSnapshotRepository, StoredContextCacheEntry,
+    StoredWorkspaceSnapshot,
 };
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -124,9 +126,20 @@ pub struct RecoveredAutoModeTurn {
     pub plan: AgentPlan,
     pub task: AgentTask,
     pub checkpoint_sequence: u64,
+    pub checkpoint_created_at_ms: u64,
     pub model: String,
     pub messages: Vec<ProviderMessage>,
     pub workspace: WorkspaceSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorkspaceTurnPreflight {
+    Ready(Box<RecoveredAutoModeTurn>),
+    PausedForDrift {
+        session: Box<AutoModeSession>,
+        checkpoint_sequence: u64,
+        workspace: Box<WorkspaceSnapshot>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -204,6 +217,7 @@ impl AutoModeRecoveryService {
 
         let AutoModeCheckpoint {
             sequence,
+            created_at_ms,
             mut task,
             model,
             messages,
@@ -223,6 +237,7 @@ impl AutoModeRecoveryService {
             plan: goal.current_plan,
             task,
             checkpoint_sequence: sequence,
+            checkpoint_created_at_ms: created_at_ms,
             model,
             messages,
             workspace,
@@ -271,7 +286,7 @@ impl AutoModeRecoveryService {
             resumed.messages.clone(),
             resumed.workspace.fingerprint.clone(),
             resumed.session.policy_fingerprint.clone(),
-            resumed.session.created_at_ms,
+            resumed.checkpoint_created_at_ms,
             now_ms,
         )
         .map_err(|_| AutoModeRecoveryError::UnsafeTaskState)?;
@@ -282,6 +297,96 @@ impl AutoModeRecoveryService {
             previous_checkpoint_sequence,
         )?;
         Ok(resumed)
+    }
+
+    /// Rechecks the Workspace immediately before a Provider turn and atomically pauses drift.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for root changes, scan failures, invalid state, or concurrent writes.
+    pub fn preflight_workspace(
+        &self,
+        mut turn: RecoveredAutoModeTurn,
+        workspace_root: &Path,
+        now_ms: u64,
+    ) -> Result<WorkspaceTurnPreflight, AutoModeRecoveryError> {
+        if turn.session.status != AutoModeStatus::Running
+            || turn.task.status != AgentTaskStatus::Running
+        {
+            return Err(AutoModeRecoveryError::UnsafeTaskState);
+        }
+        let stored = SqliteWorkspaceSnapshotRepository::open(&self.database_path)?
+            .latest(turn.session.id)?
+            .ok_or(AutoModeRecoveryError::WorkspaceNotFound)?;
+        let scanner = WorkspaceScanner::open(workspace_root, self.workspace_policy.clone())?;
+        if scanner.root_fingerprint() != stored.root_fingerprint {
+            return Err(AutoModeRecoveryError::WorkspaceChanged);
+        }
+        let observed = scanner.scan(
+            stored.snapshot.revision,
+            stored.snapshot.parent_fingerprint.clone(),
+            now_ms,
+        )?;
+        if observed.fingerprint == stored.snapshot.fingerprint {
+            turn.workspace = observed;
+            return Ok(WorkspaceTurnPreflight::Ready(Box::new(turn)));
+        }
+
+        let successor_revision = stored
+            .snapshot
+            .revision
+            .checked_add(1)
+            .ok_or(AutoModeRecoveryError::WorkspaceChanged)?;
+        let successor = scanner.scan(
+            successor_revision,
+            Some(stored.snapshot.fingerprint.clone()),
+            now_ms,
+        )?;
+        let previous_session_updated_at_ms = turn.session.updated_at_ms;
+        let previous_checkpoint_sequence = turn.checkpoint_sequence;
+        turn.session
+            .pause(AutoModePauseReason::WorkspaceChanged, now_ms)
+            .map_err(|_| AutoModeRecoveryError::UnsafeTaskState)?;
+        turn.task
+            .transition(AgentTaskStatus::Paused, now_ms)
+            .map_err(|_| AutoModeRecoveryError::UnsafeTaskState)?;
+        turn.checkpoint_sequence = turn
+            .checkpoint_sequence
+            .checked_add(1)
+            .ok_or(AutoModeRecoveryError::UnsafeTaskState)?;
+        let checkpoint = AutoModeCheckpoint::new(
+            turn.session.id,
+            turn.goal.id,
+            turn.plan.revision,
+            turn.checkpoint_sequence,
+            turn.task,
+            turn.model,
+            turn.messages,
+            stored.snapshot.fingerprint.clone(),
+            turn.session.policy_fingerprint.clone(),
+            turn.checkpoint_created_at_ms,
+            now_ms,
+        )
+        .map_err(|_| AutoModeRecoveryError::UnsafeTaskState)?;
+        let successor_record = StoredWorkspaceSnapshot::new(
+            turn.session.id,
+            stored.root_fingerprint,
+            successor.clone(),
+        )?;
+        SqliteAutoModeCommitRepository::open(&self.database_path)?.commit_workspace_drift(
+            &turn.session,
+            previous_session_updated_at_ms,
+            &checkpoint,
+            previous_checkpoint_sequence,
+            &successor_record,
+            stored.snapshot.revision,
+            &stored.snapshot.fingerprint,
+        )?;
+        Ok(WorkspaceTurnPreflight::PausedForDrift {
+            session: Box::new(turn.session),
+            checkpoint_sequence: turn.checkpoint_sequence,
+            workspace: Box::new(successor),
+        })
     }
 }
 
@@ -585,6 +690,59 @@ mod tests {
             )
             .expect("isolated model");
         assert!(!other_model.cache_hit);
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn per_turn_workspace_drift_pauses_all_state_atomically() {
+        let (database, workspace, session_id) = fixture();
+        let service = AutoModeRecoveryService::new(&database, WorkspaceScanPolicy::default());
+        let recovered = service
+            .recover(session_id, &workspace, 1_100)
+            .expect("recover");
+        let running = service.commit_resume(recovered, 1_101).expect("resume");
+        let ready = service
+            .preflight_workspace(running, &workspace, 1_102)
+            .expect("unchanged preflight");
+        let WorkspaceTurnPreflight::Ready(running) = ready else {
+            panic!("unchanged workspace must remain ready");
+        };
+        fs::write(workspace.join("task.txt"), b"drifted").expect("drift");
+        let paused = service
+            .preflight_workspace(*running, &workspace, 1_103)
+            .expect("drift preflight");
+        let WorkspaceTurnPreflight::PausedForDrift {
+            session,
+            checkpoint_sequence,
+            workspace: successor,
+        } = paused
+        else {
+            panic!("drift must pause before Provider execution");
+        };
+        assert_eq!(session.status, AutoModeStatus::Paused);
+        assert_eq!(
+            session.pause_reason,
+            Some(AutoModePauseReason::WorkspaceChanged)
+        );
+        assert_eq!(checkpoint_sequence, 3);
+        assert_eq!(successor.revision, 2);
+        let stored_checkpoint = SqliteAutoModeCheckpointRepository::open(&database)
+            .expect("checkpoints")
+            .get(session_id)
+            .expect("checkpoint")
+            .expect("stored checkpoint");
+        assert_eq!(stored_checkpoint.task.status, AgentTaskStatus::Paused);
+        assert_eq!(stored_checkpoint.sequence, 3);
+        assert_eq!(
+            SqliteWorkspaceSnapshotRepository::open(&database)
+                .expect("workspaces")
+                .latest(session_id)
+                .expect("workspace")
+                .expect("stored workspace")
+                .snapshot,
+            *successor
+        );
         fs::remove_file(database).expect("database cleanup");
         fs::remove_dir_all(workspace).expect("workspace cleanup");
     }

@@ -1,5 +1,8 @@
+use crate::StoredWorkspaceSnapshot;
 use crate::{SqlitePersistenceError, prepare_connection};
-use nimora_agent_runtime::{AgentTaskStatus, AutoModeCheckpoint, AutoModeSession, AutoModeStatus};
+use nimora_agent_runtime::{
+    AgentTaskStatus, AutoModeCheckpoint, AutoModePauseReason, AutoModeSession, AutoModeStatus,
+};
 use rusqlite::{Connection, TransactionBehavior, params};
 use std::path::Path;
 
@@ -88,6 +91,102 @@ impl SqliteAutoModeCommitRepository {
             ],
         )?;
         if session_changed != 1 || checkpoint_changed != 1 {
+            return Err(SqlitePersistenceError::AutoModeCommitConflict);
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Atomically pauses a drifting turn and appends its observed Workspace successor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid bindings or when any expected version is stale.
+    #[allow(clippy::too_many_arguments)]
+    pub fn commit_workspace_drift(
+        &mut self,
+        session: &AutoModeSession,
+        previous_session_updated_at_ms: u64,
+        checkpoint: &AutoModeCheckpoint,
+        previous_checkpoint_sequence: u64,
+        workspace: &StoredWorkspaceSnapshot,
+        previous_workspace_revision: u64,
+        previous_workspace_fingerprint: &str,
+    ) -> Result<(), SqlitePersistenceError> {
+        session
+            .validate()
+            .map_err(|_| SqlitePersistenceError::InvalidAutoModeSession)?;
+        checkpoint
+            .validate()
+            .map_err(|_| SqlitePersistenceError::InvalidAutoModeCheckpoint)?;
+        workspace
+            .snapshot
+            .validate()
+            .map_err(|_| SqlitePersistenceError::InvalidWorkspaceSnapshot)?;
+        if session.status != AutoModeStatus::Paused
+            || session.pause_reason != Some(AutoModePauseReason::WorkspaceChanged)
+            || checkpoint.task.status != AgentTaskStatus::Paused
+            || checkpoint.sequence != previous_checkpoint_sequence.saturating_add(1)
+            || workspace.session_id != session.id
+            || workspace.snapshot.revision != previous_workspace_revision.saturating_add(1)
+            || workspace.snapshot.parent_fingerprint.as_deref()
+                != Some(previous_workspace_fingerprint)
+        {
+            return Err(SqlitePersistenceError::InvalidWorkspaceSnapshot);
+        }
+        let session_payload = serde_json::to_string(session)?;
+        let checkpoint_payload = serde_json::to_string(checkpoint)?;
+        let workspace_payload = serde_json::to_string(workspace)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let session_changed = transaction.execute(
+            "UPDATE auto_mode_session SET status = 'paused', pause_reason = 'workspace_changed',
+                updated_at_ms = ?1, payload = ?2
+             WHERE session_id = ?3 AND updated_at_ms = ?4 AND status = 'running'",
+            params![
+                to_i64(session.updated_at_ms)?,
+                session_payload,
+                session.id.to_string(),
+                to_i64(previous_session_updated_at_ms)?,
+            ],
+        )?;
+        let checkpoint_changed = transaction.execute(
+            "UPDATE auto_mode_checkpoint SET sequence = ?1, task_id = ?2, updated_at_ms = ?3,
+                payload = ?4 WHERE session_id = ?5 AND sequence = ?6",
+            params![
+                to_i64(checkpoint.sequence)?,
+                checkpoint.task.id.to_string(),
+                to_i64(checkpoint.updated_at_ms)?,
+                checkpoint_payload,
+                checkpoint.session_id.to_string(),
+                to_i64(previous_checkpoint_sequence)?,
+            ],
+        )?;
+        let workspace_changed = transaction.execute(
+            "INSERT INTO agent_workspace_snapshot (
+                session_id, revision, root_fingerprint, snapshot_fingerprint, created_at_ms,
+                schema_version, payload
+             ) SELECT ?1, ?2, ?3, ?4, ?5, 1, ?6
+             WHERE EXISTS (
+                SELECT 1 FROM agent_workspace_snapshot
+                WHERE session_id = ?1 AND revision = ?7 AND snapshot_fingerprint = ?8
+                    AND root_fingerprint = ?3
+             ) AND NOT EXISTS (
+                SELECT 1 FROM agent_workspace_snapshot WHERE session_id = ?1 AND revision > ?7
+             )",
+            params![
+                workspace.session_id.to_string(),
+                to_i64(workspace.snapshot.revision)?,
+                workspace.root_fingerprint,
+                workspace.snapshot.fingerprint,
+                to_i64(workspace.snapshot.created_at_ms)?,
+                workspace_payload,
+                to_i64(previous_workspace_revision)?,
+                previous_workspace_fingerprint,
+            ],
+        )?;
+        if session_changed != 1 || checkpoint_changed != 1 || workspace_changed != 1 {
             return Err(SqlitePersistenceError::AutoModeCommitConflict);
         }
         transaction.commit()?;

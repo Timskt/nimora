@@ -22,6 +22,8 @@ Goal CLI 的所有内容输入均使用 256 KiB 有界 JSON 文件或 stdin；Go
 
 恢复候选现在必须经过显式 Resume：Session `updated_at_ms` 与 Checkpoint `sequence` 双 CAS 在单一 SQLite Immediate 事务内同时提交 Session 与 Task 的 `running` 状态。任一陈旧或并发写入都会整体回滚；提交阶段不调用 Provider/Tool，也不恢复旧 Approval。后续缺口收窄为单轮 Provider/Tool 结果持久提交、每轮 Workspace 重扫及持久 Context Cache 接入。
 
+Auto Host 已新增每轮 Provider 前 Workspace 门禁：按当前 revision 真实重扫并复验 root/fingerprint，只有完全一致才返回 Ready。发现文件变化时生成父指纹绑定的 successor，并在单一 SQLite Immediate 事务中以 Session timestamp、Checkpoint sequence、Workspace revision/fingerprint 三重 CAS 同时暂停 Session/Task 和追加快照；此路径不会释放 Provider continuation。
+
 Auto Host 的上下文准备现已接入 SQLite Context Cache：每次从完整 continuation 重新生成可验证内容身份，再按 Provider、模型、Plan、Workspace、消息内容与数据等级精确查询；命中直接复用经过 Payload 复验的压缩上下文，miss 才写入受 TTL/LRU/容量约束的条目。模型或资源版本变化不会误命中。
 
 ### 1.2 Coding Agent 能力对照与取舍
