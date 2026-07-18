@@ -1185,9 +1185,10 @@ struct DesktopResolveAutoModeAttemptRequest {
     checkpoint_sequence: u64,
     request_fingerprint: String,
     decision: AutoModeAttemptResolutionDecision,
-    actor: String,
     reason: Option<String>,
 }
+
+const DESKTOP_OWNER_ACTOR: &str = "user:desktop-owner";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1210,6 +1211,8 @@ struct DesktopAutoModeControlCenter {
 #[serde(rename_all = "camelCase")]
 struct DesktopAutoModeControlEntry {
     job: AutoModeJobSnapshot,
+    effective_status: nimora_agent_runtime::AutoModeStatus,
+    projection_stale: bool,
     session: nimora_agent_runtime::AutoModeSession,
     goal: nimora_agent_runtime::AgentGoal,
     plan: nimora_agent_runtime::AgentPlan,
@@ -2151,20 +2154,42 @@ fn auto_mode_control_center_inner(
             .ok_or_else(|| {
                 DesktopError::Agent("Auto Mode session plan revision is unavailable".to_owned())
             })?;
+        let projection_stale = !auto_mode_projection_matches(job.status, session.status);
         entries.push(DesktopAutoModeControlEntry {
             checkpoint: checkpoints.get(session.id)?,
             attempt: attempts.get(session.id)?,
             resolutions: resolutions.list_for_session(session.id, 100)?,
             job,
+            effective_status: session.status,
+            projection_stale,
             session,
             goal: goal_snapshot.goal,
             plan,
         });
     }
     Ok(DesktopAutoModeControlCenter {
-        spec: "nimora.desktop-auto-mode-control-center/1",
+        spec: "nimora.desktop-auto-mode-control-center/2",
         entries,
     })
+}
+
+fn auto_mode_projection_matches(
+    job: AutoModeJobStatus,
+    session: nimora_agent_runtime::AutoModeStatus,
+) -> bool {
+    use nimora_agent_runtime::AutoModeStatus as SessionStatus;
+    match session {
+        SessionStatus::Running => matches!(
+            job,
+            AutoModeJobStatus::Starting
+                | AutoModeJobStatus::Running
+                | AutoModeJobStatus::Pausing
+                | AutoModeJobStatus::Cancelling
+        ),
+        SessionStatus::Paused => job == AutoModeJobStatus::Paused,
+        SessionStatus::Completed => job == AutoModeJobStatus::Completed,
+        SessionStatus::Cancelled => job == AutoModeJobStatus::Cancelled,
+    }
 }
 
 #[tauri::command]
@@ -2206,7 +2231,21 @@ fn resolve_auto_mode_attempt(
     request: DesktopResolveAutoModeAttemptRequest,
     state: State<'_, DesktopState>,
 ) -> Result<AutoModeAttemptResolution, DesktopError> {
-    ensure_normal_mode(&state)?;
+    resolve_auto_mode_attempt_inner(request, &state)
+}
+
+fn resolve_auto_mode_attempt_inner(
+    request: DesktopResolveAutoModeAttemptRequest,
+    state: &DesktopState,
+) -> Result<AutoModeAttemptResolution, DesktopError> {
+    ensure_normal_mode(state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    let reason = request
+        .reason
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| DesktopError::Agent("Auto Mode resolution reason is required".to_owned()))?;
     let database_path = state
         .database_path
         .as_ref()
@@ -2218,8 +2257,8 @@ fn resolve_auto_mode_attempt(
             checkpoint_sequence: request.checkpoint_sequence,
             request_fingerprint: request.request_fingerprint,
             decision: request.decision,
-            actor: request.actor,
-            reason: request.reason,
+            actor: DESKTOP_OWNER_ACTOR.to_owned(),
+            reason: Some(reason),
             resolved_at_ms: current_time_ms()?,
         })
         .map_err(Into::into)
@@ -2231,6 +2270,17 @@ fn pause_auto_mode_job(
     job_id: Uuid,
     state: State<'_, DesktopState>,
 ) -> Result<AutoModeJobSnapshot, DesktopError> {
+    pause_auto_mode_job_inner(job_id, &state)
+}
+
+fn pause_auto_mode_job_inner(
+    job_id: Uuid,
+    state: &DesktopState,
+) -> Result<AutoModeJobSnapshot, DesktopError> {
+    ensure_normal_mode(state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
     state
         .auto_mode_jobs
         .request_pause(job_id, current_time_ms()?)
@@ -2243,6 +2293,17 @@ fn cancel_auto_mode_job(
     job_id: Uuid,
     state: State<'_, DesktopState>,
 ) -> Result<AutoModeJobSnapshot, DesktopError> {
+    cancel_auto_mode_job_inner(job_id, &state)
+}
+
+fn cancel_auto_mode_job_inner(
+    job_id: Uuid,
+    state: &DesktopState,
+) -> Result<AutoModeJobSnapshot, DesktopError> {
+    ensure_normal_mode(state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
     state
         .auto_mode_jobs
         .request_cancel(job_id, current_time_ms()?)
@@ -7520,27 +7581,28 @@ mod tests {
     use super::{
         ACTIVE_CHARACTER_FILE, ActiveSkillExecution, AssetInstallReceipt, AutoModeJobStatus,
         AutomationTestRequest, BUILTIN_CHARACTER_ID, CapabilityBackend, DETERMINISTIC_PROVIDER_ID,
-        DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError, DesktopState,
-        ExecutionCancellation, LocalAgentRequest, PendingSkillExecution, PetAction,
-        PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
-        ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SkillEventSession, StartupMode,
-        TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
-        UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
-        approve_skill_execution_inner, auto_mode_control_center_inner, automation_agent_messages,
-        cancel_agent_task_inner, cancel_all_pending_agent_tools, cancel_automation_run_inner,
+        DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
+        DesktopResolveAutoModeAttemptRequest, DesktopState, ExecutionCancellation,
+        LocalAgentRequest, PendingSkillExecution, PetAction, PrepareAgentToolRequest,
+        ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest,
+        ResumeAutoModeTurnRequest, SkillEventSession, StartupMode, TrayAction,
+        UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
+        WindowPolicy, agent_catalog_inner, approve_skill_execution_inner,
+        auto_mode_control_center_inner, automation_agent_messages, cancel_agent_task_inner,
+        cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
         cancel_skill_execution_inner, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
         current_time_ms, default_agent_model, default_agent_provider_id, desktop_tool_registry,
         diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
-        parse_user_program_plan, permission_grant, persist_active_character,
-        prepare_agent_tool_inner, quiesce_auto_mode_jobs, reject_agent_tool_inner,
-        resolve_active_character, resolve_character_renderer, resume_auto_mode_turn_inner,
-        run_live_automation, run_local_agent_inner, run_skill_agent_task,
-        run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
-        skill_capability_names, skill_event_types, stop_skill_event_sessions, test_automation,
-        user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
-        validate_requested_animation_map,
+        parse_user_program_plan, pause_auto_mode_job_inner, permission_grant,
+        persist_active_character, prepare_agent_tool_inner, quiesce_auto_mode_jobs,
+        reject_agent_tool_inner, resolve_active_character, resolve_auto_mode_attempt_inner,
+        resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
+        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
+        screen_coordinate, serve_asset_protocol, skill_capability_names, skill_event_types,
+        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
+        validate_model_source, validate_package_source, validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -7559,10 +7621,11 @@ mod tests {
         DiagnosticComponent, DiagnosticEventCode, DiagnosticSeverity, PersistentDiagnosticJournal,
     };
     use nimora_persistence_sqlite::{
-        AutomationAgentJournalEntry, AutomationAgentJournalStatus, AutomationJournalStatus,
-        AutomationRunStart, BackupCoordinator, BackupPolicy, SkillApprovalJournalEntry,
-        SkillExecutionHistoryStatus, SkillStateRecord, SqliteAgentGoalRepository,
-        SqliteAutoModeRepository, SqliteAutomationJournal, SqliteProgramPermissionRepository,
+        AutoModeAttemptResolutionDecision, AutomationAgentJournalEntry,
+        AutomationAgentJournalStatus, AutomationJournalStatus, AutomationRunStart,
+        BackupCoordinator, BackupPolicy, SkillApprovalJournalEntry, SkillExecutionHistoryStatus,
+        SkillStateRecord, SqliteAgentGoalRepository, SqliteAutoModeRepository,
+        SqliteAutomationJournal, SqliteProgramPermissionRepository,
     };
     use nimora_runtime_core::{CommandRisk, Event, EventSource, Position, RuntimeMode};
     use nimora_skill_host::{
@@ -8795,6 +8858,105 @@ mod tests {
         );
         assert!(matches!(result, Err(DesktopError::SafeModeActive)));
         std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn desktop_auto_mode_job_controls_pause_then_escalate_to_cancel() {
+        let (root, state) = normal_desktop_state();
+        let (job, _control) = state
+            .auto_mode_jobs
+            .start(Uuid::now_v7(), 100)
+            .expect("job");
+        state
+            .auto_mode_jobs
+            .mark_running(job.job_id, 101)
+            .expect("running");
+
+        let paused = pause_auto_mode_job_inner(job.job_id, &state).expect("pause request");
+        assert_eq!(paused.status, AutoModeJobStatus::Pausing);
+        let cancelled = cancel_auto_mode_job_inner(job.job_id, &state).expect("cancel escalation");
+        assert_eq!(cancelled.status, AutoModeJobStatus::Cancelling);
+
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn desktop_auto_mode_job_controls_fail_closed_in_safe_mode() {
+        let (root, state) = normal_desktop_state();
+        let (job, _control) = state
+            .auto_mode_jobs
+            .start(Uuid::now_v7(), 100)
+            .expect("job");
+        state
+            .auto_mode_jobs
+            .mark_running(job.job_id, 101)
+            .expect("running");
+        let before = state.auto_mode_jobs.snapshot(job.job_id).expect("before");
+        state
+            .safety
+            .enter(nimora_runtime_core::SafeModeReason::Manual)
+            .expect("safe mode");
+
+        assert!(matches!(
+            pause_auto_mode_job_inner(job.job_id, &state),
+            Err(DesktopError::SafeModeActive)
+        ));
+        assert!(matches!(
+            cancel_auto_mode_job_inner(job.job_id, &state),
+            Err(DesktopError::SafeModeActive)
+        ));
+        assert_eq!(
+            state.auto_mode_jobs.snapshot(job.job_id).expect("after"),
+            before
+        );
+
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn desktop_auto_mode_job_controls_fail_closed_in_recovery_mode() {
+        let (root, mut state) = normal_desktop_state();
+        let (job, _control) = state
+            .auto_mode_jobs
+            .start(Uuid::now_v7(), 100)
+            .expect("job");
+        state
+            .auto_mode_jobs
+            .mark_running(job.job_id, 101)
+            .expect("running");
+        let before = state.auto_mode_jobs.snapshot(job.job_id).expect("before");
+        state.startup.mode = StartupMode::Recovery;
+
+        assert!(pause_auto_mode_job_inner(job.job_id, &state).is_err());
+        assert!(cancel_auto_mode_job_inner(job.job_id, &state).is_err());
+        assert_eq!(
+            state.auto_mode_jobs.snapshot(job.job_id).expect("after"),
+            before
+        );
+
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn desktop_auto_mode_resolution_rejects_blank_reason_before_persistence() {
+        for reason in [None, Some(String::new()), Some("   ".to_owned())] {
+            let (root, state) = normal_desktop_state();
+            let result = resolve_auto_mode_attempt_inner(
+                DesktopResolveAutoModeAttemptRequest {
+                    session_id: Uuid::now_v7(),
+                    attempt_id: Uuid::now_v7(),
+                    checkpoint_sequence: 1,
+                    request_fingerprint: "sha256:test".to_owned(),
+                    decision: AutoModeAttemptResolutionDecision::ConfirmedNotExecuted,
+                    reason,
+                },
+                &state,
+            );
+            assert!(
+                matches!(result, Err(DesktopError::Agent(message)) if message.contains("reason is required"))
+            );
+            std::fs::remove_dir_all(root).expect("fixture cleanup");
+        }
     }
 
     #[test]

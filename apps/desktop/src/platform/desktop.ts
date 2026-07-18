@@ -137,9 +137,11 @@ export interface DesktopAutoModeAttemptDetail {
 }
 
 export interface DesktopAutoModeControlCenter {
-  spec: "nimora.desktop-auto-mode-control-center/1";
+  spec: "nimora.desktop-auto-mode-control-center/2";
   entries: Array<{
     job: DesktopAutoModeJobSnapshot;
+    effectiveStatus: "running" | "paused" | "completed" | "cancelled";
+    projectionStale: boolean;
     session: {
       id: string; goalId: string; planRevision: number; status: "running" | "paused" | "completed" | "cancelled";
       pauseReason: string | null; usage: { cycles: number; toolCalls: number; elapsedMs: number; inputTokens: number; outputTokens: number; costMicrounits: number };
@@ -569,7 +571,7 @@ export interface DesktopApi {
   autoModeAttemptDetail(sessionId: string): Promise<DesktopAutoModeAttemptDetail>;
   resolveAutoModeAttempt(request: {
     sessionId: string; attemptId: string; checkpointSequence: number; requestFingerprint: string;
-    decision: AutoModeAttemptResolutionDecision; actor: string; reason?: string;
+    decision: AutoModeAttemptResolutionDecision; reason?: string;
   }): Promise<DesktopAutoModeAttemptResolution>;
   pauseAutoModeJob(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
   cancelAutoModeJob(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
@@ -829,8 +831,9 @@ export function createDesktopApi(
       async autoModeControlCenter() {
         const now = Date.now();
         const sessionId = "preview-session";
-        return { spec: "nimora.desktop-auto-mode-control-center/1", entries: [{
+        return { spec: "nimora.desktop-auto-mode-control-center/2", entries: [{
           job: { spec: "nimora.desktop-auto-mode-job/1", jobId: "preview-job", sessionId, status: "paused", turnsExecuted: 7, cacheHits: 3, checkpointSequence: 7, pauseReason: "confirmation_required", errorCode: null, startedAtMs: now - 420_000, updatedAtMs: now - 12_000 },
+          effectiveStatus: "paused", projectionStale: false,
           session: { id: sessionId, goalId: "preview-goal", planRevision: 2, status: "paused", pauseReason: "confirmation_required", usage: { cycles: 7, toolCalls: 4, elapsedMs: 408_000, inputTokens: 8400, outputTokens: 2100, costMicrounits: 0 }, policy: { maxCycles: 32, maxConcurrency: 1, budget: { maxSteps: 32, maxToolCalls: 16, maxElapsedMs: 3_600_000, maxInputTokens: 64_000, maxOutputTokens: 16_000, maxCostMicrounits: 0 }, workspaceRevision: "git:preview" }, createdAtMs: now - 420_000, updatedAtMs: now - 12_000 },
           goal: { id: "preview-goal", title: "完善 Nimora 控制中心", objective: "完成安全、可审计的 Agent 长任务体验", status: "active", currentPlanRevision: 2 },
           plan: { goalId: "preview-goal", revision: 2, summary: "实现聚合控制中心", steps: [{ id: "step-1", description: "聚合运行事实", status: "completed" }, { id: "step-2", description: "等待高风险操作确认", status: "in_progress" }] },

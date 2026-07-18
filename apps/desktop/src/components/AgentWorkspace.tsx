@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { desktopApi, type AgentCatalog, type AgentHistoryPage, type AgentProviderStatus, type AgentToolResult, type DesktopAutoModeControlCenter, type LocalAgentResult } from "../platform/desktop";
 
+type ControlEntry = DesktopAutoModeControlCenter["entries"][number];
+type PendingControl =
+  | { kind: "pause"; entry: ControlEntry }
+  | { kind: "cancel"; entry: ControlEntry }
+  | { kind: "resolve"; entry: ControlEntry; decision: "confirmed_not_executed" | "accept_external_effect_and_cancel" };
+
 interface AgentWorkspaceProps {
   safeMode: boolean;
   recoveryMode: boolean;
@@ -33,6 +39,9 @@ export function providerStatusLabel(status: AgentProviderStatus | null): string 
 export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorkspaceProps) {
   const [view, setView] = useState<"run" | "control" | "history">("run");
   const [controlCenter, setControlCenter] = useState<DesktopAutoModeControlCenter | null>(null);
+  const [pendingControl, setPendingControl] = useState<PendingControl | null>(null);
+  const [controlReason, setControlReason] = useState("");
+  const [controlBusy, setControlBusy] = useState(false);
   const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
   const [prompt, setPrompt] = useState("总结一下当前可用的本地能力");
   const [providerId, setProviderId] = useState("provider:deterministic-local");
@@ -59,6 +68,50 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
 
   async function refreshHistory() {
     setHistory(await desktopApi.agentHistory(5));
+  }
+
+  async function refreshControlCenter() {
+    setControlCenter(await desktopApi.autoModeControlCenter());
+  }
+
+  function prepareControl(action: PendingControl) {
+    if (safeMode || recoveryMode || !desktopApi.native) return;
+    setControlReason("");
+    setPendingControl(action);
+  }
+
+  async function executeControl() {
+    if (!pendingControl || controlBusy || safeMode || recoveryMode || !desktopApi.native) return;
+    if (pendingControl.kind === "resolve" && !controlReason.trim()) return;
+    setControlBusy(true);
+    try {
+      if (pendingControl.kind === "pause") {
+        await desktopApi.pauseAutoModeJob(pendingControl.entry.job.jobId);
+        onNotice("已请求安全暂停，当前原子步骤结束后生效");
+      } else if (pendingControl.kind === "cancel") {
+        await desktopApi.cancelAutoModeJob(pendingControl.entry.job.jobId);
+        onNotice("已请求取消，正在收敛运行状态");
+      } else {
+        const attempt = pendingControl.entry.attempt;
+        if (!attempt) throw new Error("attempt-missing");
+        await desktopApi.resolveAutoModeAttempt({
+          sessionId: pendingControl.entry.session.id,
+          attemptId: attempt.id,
+          checkpointSequence: attempt.checkpointSequence,
+          requestFingerprint: attempt.requestFingerprint,
+          decision: pendingControl.decision,
+          reason: controlReason.trim(),
+        });
+        onNotice(pendingControl.decision === "confirmed_not_executed" ? "已确认外部操作未执行；任务保持暂停" : "已接受潜在外部副作用并取消任务");
+      }
+      setPendingControl(null);
+      await refreshControlCenter();
+    } catch {
+      onNotice("控制请求已失效或状态发生变化，没有自动重试");
+      await refreshControlCenter().catch(() => undefined);
+    } finally {
+      setControlBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -170,16 +223,19 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
     {(["run", "control", "history"] as const).map((item) => <button aria-current={view === item ? "page" : undefined} key={item} onClick={() => setView(item)} type="button">{{ run: "对话运行", control: "目标控制", history: "执行历史" }[item]}</button>)}
   </nav>;
 
-  if (view === "control") return <><header className="agent-section-header"><div><p className="card-label">GOAL CONTROL CENTER</p><h2>目标、计划与每一次执行，都有据可查。</h2></div><span>{controlCenter?.entries.length ?? 0} 个任务</span></header>{tabs}<section className="control-center" aria-label="目标控制中心">
+  if (view === "control") return <><header className="agent-section-header"><div><p className="card-label">GOAL CONTROL CENTER</p><h2>目标、计划与每一次执行，都有据可查。</h2></div><span>{controlCenter?.entries.length ?? 0} 个任务</span></header>{tabs}{(safeMode || recoveryMode || !desktopApi.native) && <div className="control-readonly" role="status">{!desktopApi.native ? "浏览器预览仅展示演示数据，真实控制需要桌面宿主" : "当前运行模式仅允许查看，控制操作已锁定"}</div>}<section className="control-center" aria-label="目标控制中心">
     {controlCenter?.entries.length ? controlCenter.entries.map((entry) => <article className={entry.job.status === "indeterminate" ? "control-entry risk" : "control-entry"} key={entry.job.jobId}>
-      <header><div><span>{entry.job.status}</span><h3>{entry.goal.title}</h3><p>{entry.goal.objective}</p></div><strong>Plan r{entry.plan.revision}</strong></header>
+      <header><div><span>{entry.attempt?.status === "indeterminate" ? "indeterminate" : entry.effectiveStatus}</span><h3>{entry.goal.title}</h3><p>{entry.goal.objective}</p></div><strong>Plan r{entry.plan.revision}</strong></header>
+      {entry.projectionStale && <p className="projection-warning" role="status">运行投影正在收敛；此处以持久化 Session 事实为准，不会自动重试外部操作。</p>}
       <div className="control-metrics"><div><small>进度</small><b>{entry.session.usage.cycles} / {entry.session.policy.maxCycles}</b></div><div><small>Checkpoint</small><b>#{entry.checkpoint?.sequence ?? 0}</b></div><div><small>缓存命中</small><b>{entry.job.cacheHits}</b></div><div><small>模型</small><b>{entry.checkpoint?.model ?? "待启动"}</b></div></div>
       <div className="control-budget"><span style={{ width: `${Math.min(100, entry.session.usage.cycles / entry.session.policy.maxCycles * 100)}%` }} /></div>
       <ol>{entry.plan.steps.map((step) => <li key={step.id}><i aria-hidden="true" /> <span>{step.description}</span><em>{step.status}</em></li>)}</ol>
       <footer><code>{entry.session.policy.workspaceRevision}</code><span>{entry.job.pauseReason ?? "运行边界正常"}</span></footer>
-      {entry.attempt?.status === "indeterminate" && <div className="control-risk" role="alert"><strong>外部执行结果未知，禁止自动重试</strong><p>Attempt {entry.attempt.id} · Checkpoint #{entry.attempt.checkpointSequence}</p><code>{entry.attempt.requestFingerprint}</code></div>}
+      {entry.attempt?.status === "indeterminate" && <div className="control-risk" role="alert"><strong>外部执行结果未知，禁止自动重试</strong><p>Attempt {entry.attempt.id} · Checkpoint #{entry.attempt.checkpointSequence}</p><code>{entry.attempt.requestFingerprint}</code><div><button disabled={safeMode || recoveryMode || !desktopApi.native || controlBusy} onClick={() => prepareControl({ kind: "resolve", entry, decision: "confirmed_not_executed" })} type="button">确认未执行并暂停</button><button disabled={safeMode || recoveryMode || !desktopApi.native || controlBusy} onClick={() => prepareControl({ kind: "resolve", entry, decision: "accept_external_effect_and_cancel" })} type="button">接受副作用并取消</button></div></div>}
+      {!entry.attempt && ["starting", "running"].includes(entry.job.status) && <div className="control-actions"><button disabled={safeMode || recoveryMode || !desktopApi.native || controlBusy} onClick={() => prepareControl({ kind: "pause", entry })} type="button">暂停</button><button disabled={safeMode || recoveryMode || !desktopApi.native || controlBusy} onClick={() => prepareControl({ kind: "cancel", entry })} type="button">取消任务</button></div>}
+      {entry.resolutions.length > 0 && <details className="resolution-history"><summary>不可变对账记录 · {entry.resolutions.length}</summary>{entry.resolutions.map((resolution) => <article key={resolution.id}><strong>{resolution.decision}</strong><p>{resolution.reason}</p><small>{resolution.actor} · {new Date(resolution.resolvedAtMs).toLocaleString("zh-CN")}</small></article>)}</details>}
     </article>) : <div className="control-empty"><strong>还没有 Auto Mode 目标</strong><p>控制中心只展示宿主持久化并验证过的事实；浏览器预览使用明确的演示数据。</p></div>}
-  </section></>;
+  </section>{pendingControl && <div className="control-dialog-backdrop"><section aria-labelledby="control-dialog-title" aria-modal="true" className={pendingControl.kind === "pause" ? "control-dialog" : "control-dialog danger"} role="dialog"><p className="card-label">参数绑定确认</p><h3 id="control-dialog-title">{pendingControl.kind === "pause" ? "暂停这个任务？" : pendingControl.kind === "cancel" ? "取消这个任务？" : pendingControl.decision === "confirmed_not_executed" ? "确认外部操作未执行？" : "接受潜在副作用并取消？"}</h3><p>{pendingControl.kind === "pause" ? "任务会在当前原子步骤结束后暂停，不会丢弃 Checkpoint。" : pendingControl.kind === "cancel" ? "取消不可恢复为同一个运行；已产生的外部副作用不会自动回滚。" : "此决议将绑定当前 Attempt、Checkpoint 与请求指纹，并永久写入审计记录。"}</p><dl><div><dt>Goal</dt><dd>{pendingControl.entry.goal.title}</dd></div><div><dt>Session</dt><dd><code>{pendingControl.entry.session.id}</code></dd></div>{pendingControl.kind === "resolve" && <div><dt>Attempt</dt><dd><code>{pendingControl.entry.attempt?.id}</code></dd></div>}</dl>{pendingControl.kind === "resolve" && <label><span>对账理由（必填）</span><textarea autoFocus maxLength={2048} onChange={(event) => setControlReason(event.target.value)} placeholder="说明你核对了什么证据，以及为什么选择此决议" value={controlReason} /></label>}<div><button disabled={controlBusy} onClick={() => setPendingControl(null)} type="button">返回检查</button><button className="primary-button" disabled={controlBusy || (pendingControl.kind === "resolve" && !controlReason.trim())} onClick={() => void executeControl()} type="button">{controlBusy ? "提交中…" : "确认提交"}</button></div></section></div>}</>;
 
   if (view === "history") return <><header className="agent-section-header"><div><p className="card-label">LOCAL EXECUTION HISTORY</p><h2>本机记录，清晰、私密、可删除。</h2></div></header>{tabs}<section className="history-page" aria-labelledby="history-page-heading"><div><h3 id="history-page-heading">最近完成</h3><button disabled={busy || !history?.records.length} onClick={() => void clearHistory()} type="button">清除全部</button></div>{history?.records.length ? history.records.map((record) => <article key={record.task.id}><strong>{record.prompt}</strong><p>{record.response || "任务已完成，无文本回答"}</p><small>{record.model} · {record.usage.inputTokens + record.usage.outputTokens} tokens · {new Date(record.completedAtMs).toLocaleString("zh-CN")}</small></article>) : <p>完成一次任务后，记录会安全保存在本机。</p>}</section></>;
 

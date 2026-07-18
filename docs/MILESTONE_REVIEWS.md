@@ -156,3 +156,11 @@ Actions 分钟：
 - 证据：主入口 285,916 / 350,000 bytes；独立 GLTF 动态入口 615,183 / 650,000 bytes；生产构建不再产生泛化大块警告。
 - 边界：GLTF 仍由受控角色描述符触发，加载中使用稳定占位，WebGL 初始化、资源加载或 Context 丢失继续降级至内置角色。
 - 后续：真实 Tauri/WebGL 连续模型切换与 GPU 资源释放仍需进入跨平台发布验收，不以 Bundle Budget 替代运行时测试。
+
+## M-2026-07-18 控制中心真实操作与一致性纠偏
+
+- 不足：Pause/Cancel 原先主要依赖 UI 禁用，缺少宿主门禁回归证据；Job 投影与持久 Session 状态可能短暂分叉，React 被迫猜测事实。
+- 修正：Pause、Cancel、人工对账统一经过 Normal/Safe/Recovery 宿主门禁；对账理由必填并绑定 Attempt、Checkpoint、指纹与固定桌面用户主体。
+- 一致性：控制中心契约升级为 `/2`，由宿主返回持久化 `effectiveStatus` 和 `projectionStale`，UI 明示收敛状态且绝不自动重试未知外部操作。
+- 证据：Normal Pause→Cancel 升级、Safe/Recovery 零状态变化、空理由持久化前拒绝、31 项前端测试、TypeScript，以及浏览器宽屏截图与语义树均通过。
+- 边界：浏览器只验证预览只读态；真实 Tauri 的鼠标、键盘、跨重启对账和操作系统级辅助技术仍必须单独验收。

@@ -509,3 +509,7 @@ ID / 标题 / 优先级 / 前置条件
 - Verify missing Session, Goal, bound Plan revision, corrupt payload, or index/payload divergence fails the entire query without returning partial entries.
 - Verify browser preview labels its deterministic sample as preview data and never permits Pause, Cancel, resolution, Provider, Tool, or filesystem side effects.
 - Verify the three workspace tabs expose accessible names/current state, preserve safe/recovery write restrictions, and remain usable at the 720px layout breakpoint.
+- Verify Normal Mode can request Pause and then escalate the same active Job to Cancel; terminal jobs reject both controls.
+- Verify Safe Mode and Recovery Mode reject Pause/Cancel at the IPC application-service boundary and leave the complete Job snapshot byte-for-byte unchanged.
+- Verify `None`, empty, and whitespace-only reconciliation reasons fail before any persistence lookup or write.
+- Verify control-center `/2` reports persisted `effectiveStatus` separately from `projectionStale`; UI shows a convergence warning and never retries an external operation because a projection is stale.

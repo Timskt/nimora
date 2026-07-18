@@ -197,3 +197,6 @@ Domain Core
 - Session 必须读取其启动时绑定的历史 Plan revision，不能用 Goal 当前 Plan 替代；缺失绑定、损坏载荷或元数据分叉全部失败关闭。
 - 聚合只属于宿主应用服务层，不进入纯领域 Agent Runtime，也不向 UI 暴露数据库连接、Provider、文件句柄或原生对象。
 - 控制中心查询只读；Pause、Cancel 与 Attempt 对账继续使用独立命令、精确身份绑定和安全模式门禁。
+- 聚合契约 `/2` 显式返回 `effectiveStatus` 与 `projectionStale`：前者只取持久化 Session 事实，后者表示进程内 Job 投影尚未收敛。React 不得自行推导或用 Job 覆盖事实状态。
+- Pause、Cancel 与人工对账必须先经过宿主 `ensure_normal_mode` 和 Safe Mode 门禁；浏览器禁用按钮只属于体验防线，不能替代 IPC 授权边界。
+- 人工对账理由在打开数据库前完成非空校验，决议成功后只重新读取事实，不自动重放 Provider、Tool 或外部副作用。
