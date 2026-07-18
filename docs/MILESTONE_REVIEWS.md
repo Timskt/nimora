@@ -195,3 +195,10 @@ Actions 分钟：
 - 安全边界：Importer 识别 GLB 2.0 内声明的 `VRMC_vrm`，强制 1.0、meta、humanoid、无外部 URI与既有资源预算；Installer 重开内容复验并拒绝普通 GLB 伪装。
 - 渲染边界：`@pixiv/three-vrm` 仅在活动 VRM 时动态加载，驱动 MToon/Spring Bone 更新；卸载时深度释放 VRM 场景，失败沿用内置角色回退。
 - 性能边界：Bundle Gate 按依赖图计算 GLTF 基础图，并单独限制 VRM 增量，不能通过代码拆块隐藏真实成本。
+
+## M-2026-07-18 架构边界机器化纠偏
+
+- 不足：目标拓扑与当前实现混写，架构文档仍声称 VRM 未实现并描述不存在的统一 Extension Host；三个 UI 组件直接导入 Tauri，平台 Port 约束只有文字承诺。
+- 修正：UI 文件选择、保存与角色变更事件全部收敛到 `platform/desktop.ts`；Creator Studio 同时开放严格 `.glb/.vrm` 选择，不再让页面持有插件协议或原生事件名。
+- 门禁：新增自验证 `pnpm check:architecture`，检查 UI 原生导入和关键 Rust 层的禁止依赖，并接入本地 `check` 与低成本 Ubuntu CI。
+- 边界：当前实现是确定性文本扫描，不证明传递依赖；后续需基于 Cargo Metadata 与 TypeScript AST 扩展，但新增直接旁路现在会立即失败。

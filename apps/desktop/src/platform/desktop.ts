@@ -9,7 +9,9 @@ import type {
   SpriteClips,
 } from "@nimora/schemas";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 export const petActions = ["idle", "walk", "sleep", "work", "celebrate"] as const;
 export type PetAction = (typeof petActions)[number];
@@ -627,6 +629,10 @@ export interface AutomationAgentJournalEntry {
 
 export interface DesktopApi {
   readonly native: boolean;
+  pickFile(options: { title: string; name: string; extensions: string[] }): Promise<string | null>;
+  pickDirectory(title: string): Promise<string | null>;
+  saveFile(options: { title: string; defaultPath: string; name: string; extensions: string[] }): Promise<string | null>;
+  onCharacterRendererChanged(handler: () => void): Promise<() => void>;
   snapshot(): Promise<DesktopSnapshot>;
   drainEvents(): Promise<NimoraEvent[]>;
   outboxSnapshot(): Promise<OutboxSnapshot>;
@@ -789,6 +795,10 @@ export function createDesktopApi(
     };
     return {
       native: false,
+      async pickFile() { return null; },
+      async pickDirectory() { return null; },
+      async saveFile() { return null; },
+      async onCharacterRendererChanged() { return () => undefined; },
       async snapshot() { return structuredClone(previewSnapshot); },
       async drainEvents() { return []; },
       async outboxSnapshot() { return { pending: 0, leased: 0, delivered: 0, deadLetter: 0 }; },
@@ -1043,6 +1053,29 @@ export function createDesktopApi(
 
   return {
     native: true,
+    async pickFile(options) {
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        title: options.title,
+        filters: [{ name: options.name, extensions: options.extensions }],
+      });
+      return typeof selected === "string" ? selected : null;
+    },
+    async pickDirectory(title) {
+      const selected = await open({ directory: true, multiple: false, title });
+      return typeof selected === "string" ? selected : null;
+    },
+    async saveFile(options) {
+      return await save({
+        title: options.title,
+        defaultPath: options.defaultPath,
+        filters: [{ name: options.name, extensions: options.extensions }],
+      });
+    },
+    async onCharacterRendererChanged(handler) {
+      return await listen("nimora://character-renderer-changed", handler);
+    },
     snapshot: async () => await invokeCommand("desktop_snapshot") as DesktopSnapshot,
     drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],
     outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,

@@ -46,6 +46,7 @@ jobs:
       - name: Check whitespace errors
         run: git diff --check HEAD^ HEAD || git diff --check
       - run: pnpm install --frozen-lockfile
+      - run: pnpm check:architecture
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build

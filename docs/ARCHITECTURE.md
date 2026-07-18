@@ -1,7 +1,7 @@
 # Nimora 系统架构
 
 > 版本：0.1.0-draft  
-> 更新日期：2026-07-17  
+> 更新日期：2026-07-18
 > 状态：开发基线
 
 ## 1. 架构目标
@@ -13,6 +13,8 @@
 - 允许 Windows 与 macOS 使用不同平台适配，但共享领域语义。
 
 ## 2. 总体结构
+
+下图是目标拓扑，不代表每个方框都已实现。当前实现事实必须以 [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) 为准；尚未落地的 Local Gateway、Connector Runtime 和部分 OS Adapter 不得被调用方假设存在。
 
 ```mermaid
 flowchart TB
@@ -47,12 +49,12 @@ flowchart TB
 |---|---|---|
 | Desktop/Core | 窗口、领域状态、策略、持久化、IPC | 必须保持存活；进入降级模式 |
 | WebView UI | 渲染与配置界面 | 可重载，不持有唯一业务状态 |
-| Extension Host | 运行可信或受限 TS 扩展 | 崩溃后限次重启并可禁用 |
-| High-risk Worker | 单个高风险扩展或原生适配器 | 独立生命周期和更严格配额 |
+| Skill Worker | 运行获准 Skill 的受限 JavaScript | 单执行独立进程；取消、超时或崩溃即终止并可 quarantine |
+| User Code Worker | 运行用户程序的受限 JavaScript | 单执行独立进程；无 Node/Tauri/原生对象，仅返回结构化计划 |
 | Model Importer Worker | 单次探测暂存区内的不可信模型 | 超时强杀；崩溃或拒绝不影响 Core |
 | Agent Worker | Provider 请求、计划和工具循环 | 超时终止，不直接访问 OS |
 
-独立进程只提供崩溃隔离，不等于安全沙箱。所有敏感能力必须经过 Capability Broker。
+独立进程只提供崩溃隔离，不等于操作系统安全沙箱。所有敏感能力必须经过当前统一的 Capability Gateway；“Broker”仅作为目标架构中的职责名称，不是第二条调用路径。
 
 ## 4. 模块边界
 
@@ -72,7 +74,7 @@ Core 包含纯领域逻辑：Pet、Command、Event、Profile、Policy、Permissi
 
 第三方模型必须经过隔离 Importer 探测、校验和规范化，再交给版本化 Renderer Adapter。Pet Runtime 只依赖统一动作与表达语义，不直接依赖 Live2D、VRM 或 glTF 私有结构。
 
-当前首个 Importer 实现是 `nimora-model-importer-worker`：仅探测 GLB 2.0，桌面宿主先把绝对普通源文件复制为一次性暂存目录内的固定文件名，再以清空环境、关闭 stdin、固定工作目录的一次性子进程运行，限制 80 MiB 输入、1 MiB JSON、64 KiB 协议输出、执行截止时间以及节点、网格、材质和纹理数量。Worker 拒绝外部 URI、data URI、路径逃逸、错误 chunk 顺序和长度不一致，宿主在所有返回路径清理暂存目录且不向 WebView 暴露路径。安装确认会对新暂存副本重新探测，再由宿主生成固定 `models/character.glb`、`nimora.asset/1` Manifest 和 SHA-256 inventory，通过 Asset Installer 原子激活；本地生成身份限制在 `character.local.*`。Pet Overlay 的首个真实 3D Adapter 使用 Three.js `WebGLRenderer` 与 `GLTFLoader`，只能从宿主签发的 Renderer Descriptor 构造 Pet 专用资源 URL；宿主每次读取都复验包并仅返回唯一 `entrypoints.model`。Adapter 自动计算包围盒、居中取景、播放首动画回退，并在卸载或 GPU context 丢失时停止动画、释放几何体、材质、纹理与 WebGL context。该实现仍不代表 Renderer 独立进程或 OS/GPU 沙箱，也未完成网格/纹理重写、许可证扫描、标准动作语义、GLTF JSON、VRM 或 Live2D 支持。
+当前 Importer 探测 GLB 2.0 与严格 VRM 1.0：桌面宿主先将绝对普通源文件复制到一次性暂存区，再以清空环境、关闭 stdin、固定工作目录的子进程运行，限制 80 MiB 输入、1 MiB JSON、64 KiB 协议输出、执行截止时间以及节点、网格、材质和纹理数量。Worker 拒绝外部 URI、data URI、路径逃逸、错误 chunk 顺序和长度不一致；VRM 还必须声明 `VRMC_vrm`、使用 1.0 `specVersion` 并包含 meta 与 humanoid。安装确认重新探测新副本，Asset Installer 再重开复验格式与完整性后原子激活。Pet Overlay 使用按需 Three.js Adapter；VRM Runtime 独立动态加载并更新物理，卸载深度释放资源，失败回退内置角色。该实现仍不代表 Renderer 独立进程或 OS/GPU 沙箱，也未完成网格/纹理重写、许可证扫描、统一 expression/look-at/动作语义或 Live2D Runtime。
 
 ### 4.4 Extension Supervisor
 

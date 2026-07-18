@@ -1,11 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 import { RendererErrorBoundary } from "./RendererErrorBoundary";
 import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
 
-const CHARACTER_RENDERER_CHANGED_EVENT = "nimora://character-renderer-changed";
 const GltfRenderer = lazy(async () => {
   const module = await import("./GltfRenderer");
   return { default: module.GltfRenderer };
@@ -25,7 +23,7 @@ export function PetOverlay() {
 
   useEffect(() => {
     let disposed = false;
-    let unlisten: UnlistenFn | undefined;
+    let unlisten: (() => void) | undefined;
     void Promise.all([desktopApi.snapshot(), desktopApi.activeCharacterRenderer()]).then(([value, descriptor]) => {
       if (disposed) return;
       setSnapshot(value);
@@ -37,7 +35,7 @@ export function PetOverlay() {
       setMessage("角色资源不可用，已使用内置角色");
     });
     if (desktopApi.native) {
-      void listen(CHARACTER_RENDERER_CHANGED_EVENT, () => {
+      void desktopApi.onCharacterRendererChanged(() => {
         void refreshRenderer().catch(() => {
           if (!disposed) {
             setRendererFailed(true);

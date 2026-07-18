@@ -42,3 +42,4 @@
 | R-033 | 第三方声音覆盖权限、危险或恢复提示，造成安全语义欺骗 | 中 | 严重 | 平台提示 Cue 使用保留命名空间且不查询第三方 Voice；功能测试验证不可覆盖 |
 | R-034 | Quiet Mode 只改变 UI 状态而未在播放边界阻断音频 | 中 | 高 | 最终 Audio 播放适配器强制门禁；动作成功与音频失败解耦并加入端到端测试 |
 | R-035 | Manifest 宣称支持 Renderer，但 Loader/许可证/格式验证未落地，形成虚假兼容 | 低（VRM 已缓解） | 高 | VRM 1.0 使用 Importer + Installer 双层复验和独立 Runtime；未实现的 Live2D 在 Manifest 边界提前拒绝 |
+| R-036 | 架构边界仅靠文档约定，UI 或领域模块新增原生/Provider 旁路 | 低（直接依赖已门禁） | 高 | UI 原生调用收敛到 Desktop Port；自验证架构脚本和 CI 拒绝 Tauri、SQLite、HTTP Client 与 Provider Worker 的已定义越层依赖；继续建设传递依赖图 |

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
 import type { ActiveCharacterSnapshot, ActiveThemeSnapshot, ActiveVoiceSnapshot, AssetCatalogSnapshot, AssetPackageSummary, AssetPreviewReport, ModelAnimationBinding, ModelProbeReport, ThemeDescriptor } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
@@ -140,11 +139,10 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
     setImportNotice(null);
     setImporting(true);
     try {
-      const selected = await open({
-        directory: false,
-        multiple: false,
+      const selected = await desktopApi.pickFile({
         title: "选择 Nimora 资源包",
-        filters: [{ name: "Nimora 资源包", extensions: ["nimora"] }],
+        name: "Nimora 资源包",
+        extensions: ["nimora"],
       });
       if (typeof selected !== "string") return;
       const report = await desktopApi.previewAsset({ sourcePath: selected });
@@ -180,14 +178,15 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
     setExportError(null);
     setExportNotice(null);
     try {
-      const sourcePath = await open({ directory: true, multiple: false, title: "选择已展开的 Nimora 资源目录" });
+      const sourcePath = await desktopApi.pickDirectory("选择已展开的 Nimora 资源目录");
       if (typeof sourcePath !== "string") return;
       const preview = await desktopApi.previewAsset({ sourcePath });
       if (!preview) throw new Error("当前环境不支持资源包导出");
-      const destinationPath = await save({
+      const destinationPath = await desktopApi.saveFile({
         title: "导出 Nimora 资源包",
         defaultPath: `${preview.summary.id}-${preview.summary.version}.nimora`,
-        filters: [{ name: "Nimora 资源包", extensions: ["nimora"] }],
+        name: "Nimora 资源包",
+        extensions: ["nimora"],
       });
       if (typeof destinationPath !== "string") return;
       const exported = await desktopApi.exportAsset({ sourcePath, destinationPath });
@@ -205,11 +204,10 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
     setModelError(null);
     setModelCandidate(null);
     try {
-      const sourcePath = await open({
-        directory: false,
-        multiple: false,
-        title: "选择 GLB 2.0 模型",
-        filters: [{ name: "GLB 2.0 模型", extensions: ["glb"] }],
+      const sourcePath = await desktopApi.pickFile({
+        title: "选择 GLB 2.0 / VRM 1.0 模型",
+        name: "3D 角色模型",
+        extensions: ["glb", "vrm"],
       });
       if (typeof sourcePath !== "string") return;
       const report = await desktopApi.inspectModel({ sourcePath });

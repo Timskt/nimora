@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
 import type { BackupHealth, DiagnosticReport } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
@@ -37,10 +36,11 @@ export function DataProtection({ recoveryMode, onNotice }: DataProtectionProps) 
       onNotice("浏览器预览不会创建诊断包");
       return;
     }
-    const destinationPath = await save({
+    const destinationPath = await desktopApi.saveFile({
       title: "导出 Nimora 脱敏诊断包",
       defaultPath: `nimora-${Date.now()}.nimora-diagnostics.zip`,
-      filters: [{ name: "Nimora diagnostics", extensions: ["zip"] }],
+      name: "Nimora diagnostics",
+      extensions: ["zip"],
     });
     if (typeof destinationPath !== "string") return;
     setBusy(true);
