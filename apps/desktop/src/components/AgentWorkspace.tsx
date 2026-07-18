@@ -1,5 +1,10 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { desktopApi, type AgentCatalog, type AgentHistoryPage, type AgentProviderStatus, type AgentToolResult, type DesktopAutoModeControlCenter, type LocalAgentResult } from "../platform/desktop";
+
+const ProviderSettings = lazy(async () => {
+  const module = await import("./ProviderSettings");
+  return { default: module.ProviderSettings };
+});
 
 type ControlEntry = DesktopAutoModeControlCenter["entries"][number];
 type PendingControl =
@@ -37,7 +42,7 @@ export function providerStatusLabel(status: AgentProviderStatus | null): string 
 }
 
 export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorkspaceProps) {
-  const [view, setView] = useState<"run" | "control" | "history">("run");
+  const [view, setView] = useState<"run" | "control" | "providers" | "history">("run");
   const [controlCenter, setControlCenter] = useState<DesktopAutoModeControlCenter | null>(null);
   const [pendingControl, setPendingControl] = useState<PendingControl | null>(null);
   const [controlReason, setControlReason] = useState("");
@@ -48,6 +53,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
   const [model, setModel] = useState("model:echo-v1");
   const [result, setResult] = useState<LocalAgentResult | null>(null);
   const [providerStatus, setProviderStatus] = useState<AgentProviderStatus | null>(null);
+  const [allowNetwork, setAllowNetwork] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toolBusy, setToolBusy] = useState(false);
   const [toolResult, setToolResult] = useState<AgentToolResult | null>(null);
@@ -57,7 +63,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
   const activeProvider = catalog?.providers.find((provider) => provider.id === activeProviderId);
 
   useEffect(() => {
-    void desktopApi.agentCatalog().then(setCatalog).catch(() => onNotice("Agent 工具目录暂时不可用"));
+    void refreshCatalog();
     void desktopApi.agentHistory(5).then(setHistory).catch(() => onNotice("Agent 历史暂时不可用"));
   }, [onNotice]);
 
@@ -68,6 +74,14 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
 
   async function refreshHistory() {
     setHistory(await desktopApi.agentHistory(5));
+  }
+
+  async function refreshCatalog() {
+    try {
+      setCatalog(await desktopApi.agentCatalog());
+    } catch {
+      onNotice("Agent 工具目录暂时不可用");
+    }
   }
 
   async function refreshControlCenter() {
@@ -125,7 +139,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
           setModel(firstModel.name);
         }
       }
-    }).catch(() => current && setProviderStatus({ spec: "nimora.desktop-agent-provider-status/1", providerId, state: "unavailable", workerVerified: false, serviceReachable: false, models: [], message: "Provider 状态不可用" }));
+    }).catch(() => current && setProviderStatus({ spec: "nimora.desktop-agent-provider-status/1", providerId, state: "unavailable", workerVerified: false, serviceReachable: false, locality: "local", credentialPresent: false, models: [], message: "Provider 状态不可用" }));
     return () => { current = false; };
   }, [providerId]);
 
@@ -134,10 +148,10 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
     setBusy(true);
     setTurnCancelled(false);
     try {
-      const next = await desktopApi.runLocalAgent(prompt.trim(), providerId, model.trim());
+      const next = await desktopApi.runLocalAgent(prompt.trim(), providerId, model.trim(), allowNetwork);
       setResult(next);
       if (next.status === "completed") await refreshHistory();
-      onNotice("离线 Agent 任务已完成");
+      onNotice(allowNetwork ? "网络 Agent 任务已完成" : "离线 Agent 任务已完成");
     } catch {
       onNotice("Agent 任务失败，未执行任何模块操作");
     } finally {
@@ -220,7 +234,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
   }
 
   const tabs = <nav className="agent-view-tabs" aria-label="Agent 工作区视图">
-    {(["run", "control", "history"] as const).map((item) => <button aria-current={view === item ? "page" : undefined} key={item} onClick={() => setView(item)} type="button">{{ run: "对话运行", control: "目标控制", history: "执行历史" }[item]}</button>)}
+    {(["run", "control", "providers", "history"] as const).map((item) => <button aria-current={view === item ? "page" : undefined} key={item} onClick={() => setView(item)} type="button">{{ run: "对话运行", control: "目标控制", providers: "模型连接", history: "执行历史" }[item]}</button>)}
   </nav>;
 
   if (view === "control") return <><header className="agent-section-header"><div><p className="card-label">GOAL CONTROL CENTER</p><h2>目标、计划与每一次执行，都有据可查。</h2></div><span>{controlCenter?.entries.length ?? 0} 个任务</span></header>{tabs}{(safeMode || recoveryMode || !desktopApi.native) && <div className="control-readonly" role="status">{!desktopApi.native ? "浏览器预览仅展示演示数据，真实控制需要桌面宿主" : "当前运行模式仅允许查看，控制操作已锁定"}</div>}<section className="control-center" aria-label="目标控制中心">
@@ -238,6 +252,8 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
   </section>{pendingControl && <div className="control-dialog-backdrop"><section aria-labelledby="control-dialog-title" aria-modal="true" className={pendingControl.kind === "pause" ? "control-dialog" : "control-dialog danger"} role="dialog"><p className="card-label">参数绑定确认</p><h3 id="control-dialog-title">{pendingControl.kind === "pause" ? "暂停这个任务？" : pendingControl.kind === "cancel" ? "取消这个任务？" : pendingControl.decision === "confirmed_not_executed" ? "确认外部操作未执行？" : "接受潜在副作用并取消？"}</h3><p>{pendingControl.kind === "pause" ? "任务会在当前原子步骤结束后暂停，不会丢弃 Checkpoint。" : pendingControl.kind === "cancel" ? "取消不可恢复为同一个运行；已产生的外部副作用不会自动回滚。" : "此决议将绑定当前 Attempt、Checkpoint 与请求指纹，并永久写入审计记录。"}</p><dl><div><dt>Goal</dt><dd>{pendingControl.entry.goal.title}</dd></div><div><dt>Session</dt><dd><code>{pendingControl.entry.session.id}</code></dd></div>{pendingControl.kind === "resolve" && <div><dt>Attempt</dt><dd><code>{pendingControl.entry.attempt?.id}</code></dd></div>}</dl>{pendingControl.kind === "resolve" && <label><span>对账理由（必填）</span><textarea autoFocus maxLength={2048} onChange={(event) => setControlReason(event.target.value)} placeholder="说明你核对了什么证据，以及为什么选择此决议" value={controlReason} /></label>}<div><button disabled={controlBusy} onClick={() => setPendingControl(null)} type="button">返回检查</button><button className="primary-button" disabled={controlBusy || (pendingControl.kind === "resolve" && !controlReason.trim())} onClick={() => void executeControl()} type="button">{controlBusy ? "提交中…" : "确认提交"}</button></div></section></div>}</>;
 
   if (view === "history") return <><header className="agent-section-header"><div><p className="card-label">LOCAL EXECUTION HISTORY</p><h2>本机记录，清晰、私密、可删除。</h2></div></header>{tabs}<section className="history-page" aria-labelledby="history-page-heading"><div><h3 id="history-page-heading">最近完成</h3><button disabled={busy || !history?.records.length} onClick={() => void clearHistory()} type="button">清除全部</button></div>{history?.records.length ? history.records.map((record) => <article key={record.task.id}><strong>{record.prompt}</strong><p>{record.response || "任务已完成，无文本回答"}</p><small>{record.model} · {record.usage.inputTokens + record.usage.outputTokens} tokens · {new Date(record.completedAtMs).toLocaleString("zh-CN")}</small></article>) : <p>完成一次任务后，记录会安全保存在本机。</p>}</section></>;
+
+  if (view === "providers") return <>{tabs}<Suspense fallback={<div className="provider-page-loading" role="status">正在载入安全 Provider 管理器…</div>}><ProviderSettings disabled={safeMode || recoveryMode} onCatalogChanged={() => void refreshCatalog()} onNotice={onNotice} /></Suspense></>;
 
   return <>{tabs}<section className="agent-workspace" aria-labelledby="agent-heading">
     <div className="agent-main">
@@ -267,11 +283,12 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
 
       <form className="agent-composer" onSubmit={(event) => { event.preventDefault(); void run(); }}>
         <div className="agent-runtime-controls">
-          <label><span>Provider</span><select aria-label="Agent Provider" disabled={busy} value={providerId} onChange={(event) => { const nextProviderId = event.target.value; setProviderId(nextProviderId); setModel(defaultModelForProvider(nextProviderId)); }}>{catalog?.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
+          <label><span>Provider</span><select aria-label="Agent Provider" disabled={busy} value={providerId} onChange={(event) => { const nextProviderId = event.target.value; setProviderId(nextProviderId); setModel(defaultModelForProvider(nextProviderId)); setAllowNetwork(false); }}>{catalog?.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
           <label><span>模型</span><input aria-label="Agent 模型" disabled={busy} list="agent-provider-models" maxLength={128} value={model} onChange={(event) => setModel(event.target.value)} /><datalist id="agent-provider-models">{providerStatus?.models.map((item) => <option key={item.name} value={item.name} />)}</datalist></label>
         </div>
+        {activeProvider?.locality === "network" && <label className="agent-network-consent"><input checked={allowNetwork} disabled={busy} type="checkbox" onChange={(event) => setAllowNetwork(event.target.checked)} /><span><strong>允许本次请求联网</strong><small>任务内容将发送到你配置的第三方服务；模块能力仍受本机网关约束。</small></span></label>}
         <textarea value={prompt} maxLength={32768} onChange={(event) => setPrompt(event.target.value)} aria-label="Agent 任务内容" />
-        <div><span>{providerStatus?.message ?? "正在检查 Provider"}</span><button className="primary-button" disabled={busy || !prompt.trim() || !model.trim() || providerStatus?.state !== "ready" || !providerStatus.models.some((item) => item.name === model)} type="submit">{busy ? "运行中…" : "运行任务"}</button></div>
+        <div><span>{providerStatus?.message ?? "正在检查 Provider"}</span><button className="primary-button" disabled={busy || !prompt.trim() || !model.trim() || providerStatus?.state !== "ready" || !providerStatus.models.some((item) => item.name === model) || (activeProvider?.locality === "network" && !allowNetwork)} type="submit">{busy ? "运行中…" : "运行任务"}</button></div>
       </form>
     </div>
 

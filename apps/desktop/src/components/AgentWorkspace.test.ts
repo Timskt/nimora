@@ -24,7 +24,7 @@ describe("AgentWorkspace", () => {
 
   it("distinguishes worker verification from service and model readiness", () => {
     expect(providerStatusLabel(null)).toBe("检测中");
-    expect(providerStatusLabel({ spec: "nimora.desktop-agent-provider-status/1", providerId: "provider:ollama-loopback", state: "unavailable", workerVerified: true, serviceReachable: false, models: [], message: "offline" })).toBe("服务离线");
-    expect(providerStatusLabel({ spec: "nimora.desktop-agent-provider-status/1", providerId: "provider:ollama-loopback", state: "unavailable", workerVerified: true, serviceReachable: true, models: [], message: "empty" })).toBe("无模型");
+    expect(providerStatusLabel({ spec: "nimora.desktop-agent-provider-status/1", providerId: "provider:ollama-loopback", state: "unavailable", workerVerified: true, serviceReachable: false, locality: "local", credentialPresent: true, models: [], message: "offline" })).toBe("服务离线");
+    expect(providerStatusLabel({ spec: "nimora.desktop-agent-provider-status/1", providerId: "provider:ollama-loopback", state: "unavailable", workerVerified: true, serviceReachable: true, locality: "local", credentialPresent: true, models: [], message: "empty" })).toBe("无模型");
   });
 });

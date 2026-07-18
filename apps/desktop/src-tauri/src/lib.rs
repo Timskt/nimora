@@ -40,16 +40,19 @@ use nimora_agent_auto_host::{
     AutoModeLoopService, AutoModeLoopStop, AutoModeRecoveryService, CommittedAutoModeTurn,
 };
 use nimora_agent_provider_worker::{
-    OllamaEndpoint, OllamaModel, WorkerOllamaProvider, probe_ollama_worker, verify_provider_sidecar,
+    OllamaEndpoint, OllamaModel, OpenAiCompatibleEndpoint, ProviderCredentialResolver,
+    WorkerOllamaProvider, WorkerOpenAiCompatibleProvider, WorkerSecret, probe_ollama_worker,
+    probe_openai_worker, verify_provider_sidecar,
 };
 use nimora_agent_runtime::{
     AgentAutonomy, AgentBudget, AgentCoordinator, AgentTask, AgentTaskGateway,
     AgentTaskGatewayPolicy, AgentTaskOrigin, AgentTaskRequest, AgentTaskStatus,
     AutoModePauseReason, AutoModeStatus, BaseRiskEvaluator, CancellationFlag,
     ContextCompactionPolicy, DataClassification, DeterministicLocalProvider, PlannedToolCall,
-    ProviderExecutionContext, ProviderMessage, ProviderMessageRole, ProviderRegistry,
-    ProviderResponse, ProviderStepInput, ProviderStepOutcome, ProviderToolTurn, ToolAdmission,
-    ToolApproval, ToolDescriptor, ToolEffect, ToolInvocation, ToolRegistry, ToolStepOutcome,
+    ProviderError, ProviderErrorKind, ProviderExecutionContext, ProviderMessage,
+    ProviderMessageRole, ProviderRegistry, ProviderResponse, ProviderStepInput,
+    ProviderStepOutcome, ProviderToolTurn, ToolAdmission, ToolApproval, ToolDescriptor, ToolEffect,
+    ToolInvocation, ToolRegistry, ToolStepOutcome,
 };
 use nimora_agent_tools::{
     GatewayToolBackend, production_capability_semantic_contracts, production_tool_registry,
@@ -102,17 +105,17 @@ use nimora_persistence_sqlite::{
     AutomationAgentJournalStatus, AutomationApprovalEntry, AutomationApprovalStatus,
     AutomationCostReservation, AutomationJournalEntry, AutomationRunAdmission, AutomationRunStart,
     BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, ContextCachePolicy,
-    DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant, ResolveAutoModeAttemptRequest,
-    SkillApprovalJournalEntry, SkillApprovalJournalStatus, SkillExecutionHistoryRecord,
-    SkillExecutionHistoryStatus, SkillStateRecord, SqliteAgentGoalRepository,
-    SqliteAgentHistoryRepository, SqliteAutoModeAttemptResolutionRepository,
-    SqliteAutoModeCheckpointRepository, SqliteAutoModeRepository,
-    SqliteAutoModeTurnAttemptRepository, SqliteAutomationAgentJournal,
+    DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant, ProviderConfig,
+    ResolveAutoModeAttemptRequest, SkillApprovalJournalEntry, SkillApprovalJournalStatus,
+    SkillExecutionHistoryRecord, SkillExecutionHistoryStatus, SkillStateRecord,
+    SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
+    SqliteAutoModeAttemptResolutionRepository, SqliteAutoModeCheckpointRepository,
+    SqliteAutoModeRepository, SqliteAutoModeTurnAttemptRepository, SqliteAutomationAgentJournal,
     SqliteAutomationApprovalJournal, SqliteAutomationCatalog, SqliteAutomationGovernance,
     SqliteAutomationJournal, SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository,
-    SqliteProfileRepository, SqliteProgramPermissionRepository, SqliteSkillApprovalJournal,
-    SqliteSkillExecutionHistory, SqliteSkillStateRepository, apply_pending_restore,
-    verify_database_file,
+    SqliteProfileRepository, SqliteProgramPermissionRepository, SqliteProviderConfigRepository,
+    SqliteSkillApprovalJournal, SqliteSkillExecutionHistory, SqliteSkillStateRepository,
+    apply_pending_restore, verify_database_file,
 };
 use nimora_runtime_app::{
     ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBatch,
@@ -121,6 +124,10 @@ use nimora_runtime_app::{
 use nimora_runtime_core::{
     Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction, PointerButton,
     Position, Profile, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
+};
+use nimora_secret_store::{
+    MemorySecretStore, SecretPresence, SecretReference, SecretStore, SecretStoreError,
+    SystemSecretStore,
 };
 use nimora_skill_host::{
     SKILL_WORKER_PROTOCOL_VERSION, SkillAgentTaskRequest, SkillExecutionOutput, SkillHostError,
@@ -168,6 +175,7 @@ use tauri::{
 };
 use thiserror::Error;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 const CONTROL_CENTER_LABEL: &str = "control-center";
 const PET_WINDOW_LABEL: &str = "pet";
@@ -218,6 +226,8 @@ struct DesktopState {
     skill_host: Mutex<SkillHost>,
     outbox: SqliteOutboxRepository,
     agent_history: SqliteAgentHistoryRepository,
+    provider_configs: SqliteProviderConfigRepository,
+    secret_store: DesktopSecretStore,
     automation_catalog: SqliteAutomationCatalog,
     automation_governance: SqliteAutomationGovernance,
     automation_journal: SqliteAutomationJournal,
@@ -237,12 +247,42 @@ struct DesktopState {
     active_skill_executions: Mutex<HashMap<Uuid, ActiveSkillExecution>>,
     skill_event_sessions: Mutex<HashMap<String, SkillEventSession>>,
     automation_event_sessions: Mutex<HashMap<String, AutomationEventSession>>,
-    active_agent_tasks: Mutex<HashMap<Uuid, CancellationFlag>>,
+    active_agent_tasks: Mutex<HashMap<Uuid, ActiveAgentTask>>,
     active_automation_runs: Mutex<HashMap<Uuid, CancellationFlag>>,
     auto_mode_jobs: AutoModeJobSupervisor,
     execution_controller: ExecutionController,
     ollama_worker: Option<PathBuf>,
     startup: StartupStatus,
+}
+
+#[derive(Clone)]
+struct DesktopSecretStore(Arc<dyn SecretStore>);
+
+impl std::fmt::Debug for DesktopSecretStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("DesktopSecretStore([REDACTED])")
+    }
+}
+
+#[derive(Clone)]
+struct DesktopProviderCredentialResolver(DesktopSecretStore);
+
+impl ProviderCredentialResolver for DesktopProviderCredentialResolver {
+    fn resolve(&self, reference: &str) -> Result<WorkerSecret, ProviderError> {
+        let reference = SecretReference::parse(reference).map_err(|_| {
+            ProviderError::new(
+                ProviderErrorKind::InvalidRequest,
+                "provider credential reference is invalid",
+            )
+        })?;
+        let secret = self.0.0.resolve(&reference).map_err(|_| {
+            ProviderError::new(
+                ProviderErrorKind::Unavailable,
+                "provider credential is unavailable",
+            )
+        })?;
+        WorkerSecret::from_zeroizing(secret)
+    }
 }
 
 #[derive(Debug)]
@@ -298,9 +338,15 @@ struct PendingProviderAgent {
     cancellation: CancellationFlag,
 }
 
+#[derive(Debug, Clone)]
+struct ActiveAgentTask {
+    provider_id: String,
+    cancellation: CancellationFlag,
+}
+
 #[derive(Debug)]
 struct ActiveAgentTaskGuard<'a> {
-    tasks: &'a Mutex<HashMap<Uuid, CancellationFlag>>,
+    tasks: &'a Mutex<HashMap<Uuid, ActiveAgentTask>>,
     task_id: Uuid,
     retain: bool,
 }
@@ -581,6 +627,8 @@ impl DesktopState {
             skill_host: Mutex::new(skill_host),
             outbox: SqliteOutboxRepository::open(database_path)?,
             agent_history: SqliteAgentHistoryRepository::open(database_path)?,
+            provider_configs: SqliteProviderConfigRepository::open(database_path)?,
+            secret_store: DesktopSecretStore(Arc::new(SystemSecretStore)),
             automation_catalog: SqliteAutomationCatalog::open(database_path)?,
             automation_governance,
             automation_journal,
@@ -659,6 +707,8 @@ impl DesktopState {
             skill_host: Mutex::new(SkillHost::default()),
             outbox: SqliteOutboxRepository::in_memory()?,
             agent_history: SqliteAgentHistoryRepository::in_memory()?,
+            provider_configs: SqliteProviderConfigRepository::in_memory()?,
+            secret_store: DesktopSecretStore(Arc::new(MemorySecretStore::default())),
             automation_catalog: SqliteAutomationCatalog::in_memory()?,
             automation_governance: SqliteAutomationGovernance::in_memory()?,
             automation_journal: SqliteAutomationJournal::in_memory()?,
@@ -1241,6 +1291,8 @@ enum DesktopError {
     #[error(transparent)]
     Persistence(#[from] SqlitePersistenceError),
     #[error(transparent)]
+    SecretStore(#[from] SecretStoreError),
+    #[error(transparent)]
     DiagnosticBundle(#[from] DiagnosticBundleError),
     #[error(transparent)]
     AssetInstall(#[from] InstallError),
@@ -1330,6 +1382,8 @@ struct LocalAgentRequest {
     provider_id: String,
     #[serde(default = "default_agent_model")]
     model: String,
+    #[serde(default)]
+    allow_network: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1339,6 +1393,8 @@ struct GenerateCreatorDraftRequest {
     requirement: String,
     provider_id: String,
     model: String,
+    #[serde(default)]
+    allow_network: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -2140,6 +2196,7 @@ impl AgentTaskSubmitter for DesktopAutomationAgentSubmitter<'_> {
 impl DesktopAutomationAgentSubmitter<'_> {
     fn execute(&self, task: AutomationAgentTask) -> Result<ProviderAgentOutcome, String> {
         let task_id = task.admission.task.id;
+        let provider_id = task.admission.task.provider_id.clone();
         let providers = desktop_provider_registry(self.state).map_err(|error| error.to_string())?;
         let tool_allowlist = task
             .admission
@@ -2161,7 +2218,8 @@ impl DesktopAutomationAgentSubmitter<'_> {
             512,
             true,
             tool_allowlist,
-            provider_agent_cancellation(self.state, task_id).map_err(|error| error.to_string())?,
+            provider_agent_cancellation(self.state, task_id, &provider_id)
+                .map_err(|error| error.to_string())?,
         )
         .map_err(|error| error.to_string())
     }
@@ -2280,10 +2338,7 @@ fn desktop_automation_agent_policy(
     AgentTaskGatewayPolicy::new(
         AUTOMATION_AGENT_REQUESTER,
         [AgentTaskOrigin::Automation],
-        [
-            DETERMINISTIC_PROVIDER_ID.to_owned(),
-            "provider:ollama-loopback".to_owned(),
-        ],
+        production_agent_provider_allowlist(state)?,
         production_agent_tool_allowlist(state)?,
         DataClassification::Personal,
         AgentAutonomy::ConfirmEach,
@@ -2762,8 +2817,60 @@ struct AgentProviderStatus {
     state: &'static str,
     worker_verified: bool,
     service_reachable: bool,
-    models: Vec<OllamaModel>,
+    locality: &'static str,
+    credential_present: bool,
+    models: Vec<AgentProviderModel>,
     message: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentProviderModel {
+    name: String,
+    size: Option<u64>,
+    modified_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiProviderConfigView {
+    #[serde(flatten)]
+    config: ProviderConfig,
+    credential_present: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpsertOpenAiProviderRequest {
+    id: String,
+    display_name: String,
+    base_url: String,
+    credential_reference: String,
+    default_model: Option<String>,
+    context_window_tokens: u64,
+    max_output_tokens: u64,
+    enabled: bool,
+    revision: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProviderCredentialRequest {
+    provider_id: String,
+    credential: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeleteProviderRequest {
+    provider_id: String,
+    revision: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProviderIdRequest {
+    provider_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2913,16 +3020,15 @@ fn agent_provider_status_inner(
             state: "ready",
             worker_verified: true,
             service_reachable: true,
-            models: vec![OllamaModel {
+            locality: "local",
+            credential_present: true,
+            models: vec![AgentProviderModel {
                 name: DEFAULT_AGENT_MODEL.to_owned(),
-                size: 0,
+                size: Some(0),
                 modified_at: None,
             }],
             message: "内置离线 Provider 可用",
         });
-    }
-    if request.provider_id != "provider:ollama-loopback" {
-        return Err(DesktopError::Agent("Provider is not registered".to_owned()));
     }
     let Some(executable) = &state.ollama_worker else {
         return Err(DesktopError::Agent("Provider is not registered".to_owned()));
@@ -2930,15 +3036,25 @@ fn agent_provider_status_inner(
     if state.startup.mode == StartupMode::Recovery
         || state.safety.snapshot()?.mode == RuntimeMode::Safe
     {
+        let locality = if request.provider_id == "provider:ollama-loopback" {
+            "local"
+        } else {
+            "network"
+        };
         return Ok(AgentProviderStatus {
             spec: "nimora.desktop-agent-provider-status/1",
             provider_id: request.provider_id,
             state: "unavailable",
             worker_verified: true,
             service_reachable: false,
+            locality,
+            credential_present: false,
             models: Vec::new(),
             message: "当前安全模式禁止启动 Provider Worker",
         });
+    }
+    if request.provider_id != "provider:ollama-loopback" {
+        return openai_provider_status(state, executable, request.provider_id);
     }
     let endpoint = OllamaEndpoint::default_ipv4();
     match probe_ollama_worker(executable, endpoint, Duration::from_secs(2)) {
@@ -2952,7 +3068,9 @@ fn agent_provider_status_inner(
             },
             worker_verified: true,
             service_reachable: true,
-            models: probe.models,
+            locality: "local",
+            credential_present: true,
+            models: probe.models.into_iter().map(agent_provider_model).collect(),
             message: "Ollama 服务已响应",
         }),
         Err(_) => Ok(AgentProviderStatus {
@@ -2961,10 +3079,193 @@ fn agent_provider_status_inner(
             state: "unavailable",
             worker_verified: true,
             service_reachable: false,
+            locality: "local",
+            credential_present: true,
             models: Vec::new(),
             message: "Ollama 服务不可用",
         }),
     }
+}
+
+fn openai_provider_status(
+    state: &DesktopState,
+    executable: &Path,
+    provider_id: String,
+) -> Result<AgentProviderStatus, DesktopError> {
+    let config = configured_provider(state, &provider_id)?;
+    if !config.enabled {
+        return Err(DesktopError::Agent("Provider is not registered".to_owned()));
+    }
+    let reference = SecretReference::parse(config.credential_reference.clone())?;
+    let credential_present = state.secret_store.0.presence(&reference)? == SecretPresence::Present;
+    if !credential_present {
+        return Ok(AgentProviderStatus {
+            spec: "nimora.desktop-agent-provider-status/1",
+            provider_id,
+            state: "unavailable",
+            worker_verified: true,
+            service_reachable: false,
+            locality: "network",
+            credential_present: false,
+            models: Vec::new(),
+            message: "请先安全保存 Provider 凭据",
+        });
+    }
+    let resolver = DesktopProviderCredentialResolver(state.secret_store.clone());
+    let credential = resolver
+        .resolve(&config.credential_reference)
+        .map_err(agent_error)?;
+    let endpoint = OpenAiCompatibleEndpoint::new(config.base_url).map_err(agent_error)?;
+    match probe_openai_worker(executable, endpoint, credential, Duration::from_secs(5)) {
+        Ok(probe) => Ok(AgentProviderStatus {
+            spec: "nimora.desktop-agent-provider-status/1",
+            provider_id,
+            state: if probe.models.is_empty() { "unavailable" } else { "ready" },
+            worker_verified: true,
+            service_reachable: true,
+            locality: "network",
+            credential_present: true,
+            models: probe
+                .models
+                .into_iter()
+                .map(|model| AgentProviderModel {
+                    name: model.name,
+                    size: None,
+                    modified_at: None,
+                })
+                .collect(),
+            message: "网络 Provider 已安全响应",
+        }),
+        Err(_) => Ok(AgentProviderStatus {
+            spec: "nimora.desktop-agent-provider-status/1",
+            provider_id,
+            state: "unavailable",
+            worker_verified: true,
+            service_reachable: false,
+            locality: "network",
+            credential_present: true,
+            models: Vec::new(),
+            message: "Provider 连接或认证失败",
+        }),
+    }
+}
+
+fn agent_provider_model(model: OllamaModel) -> AgentProviderModel {
+    AgentProviderModel {
+        name: model.name,
+        size: Some(model.size),
+        modified_at: model.modified_at,
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn list_openai_providers(
+    state: State<'_, DesktopState>,
+) -> Result<Vec<OpenAiProviderConfigView>, DesktopError> {
+    state
+        .provider_configs
+        .list()?
+        .into_iter()
+        .map(|config| {
+            let reference = SecretReference::parse(config.credential_reference.clone())?;
+            let credential_present =
+                state.secret_store.0.presence(&reference)? == SecretPresence::Present;
+            Ok(OpenAiProviderConfigView {
+                config,
+                credential_present,
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn upsert_openai_provider(
+    request: UpsertOpenAiProviderRequest,
+    state: State<'_, DesktopState>,
+) -> Result<ProviderConfig, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let mut config = ProviderConfig::new(
+        request.id,
+        request.display_name,
+        request.base_url,
+        request.credential_reference,
+        request.default_model,
+        request.context_window_tokens,
+        request.max_output_tokens,
+        request.enabled,
+    )?;
+    config.revision = request.revision;
+    state.provider_configs.save(&config).map_err(Into::into)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn set_openai_provider_credential(
+    request: ProviderCredentialRequest,
+    state: State<'_, DesktopState>,
+) -> Result<(), DesktopError> {
+    ensure_normal_mode(&state)?;
+    let config = configured_provider(&state, &request.provider_id)?;
+    let reference = SecretReference::parse(config.credential_reference)?;
+    state
+        .secret_store
+        .0
+        .put(&reference, Zeroizing::new(request.credential))?;
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn delete_openai_provider_credential(
+    request: ProviderIdRequest,
+    state: State<'_, DesktopState>,
+) -> Result<(), DesktopError> {
+    let config = configured_provider(&state, &request.provider_id)?;
+    let reference = SecretReference::parse(config.credential_reference)?;
+    state.secret_store.0.delete(&reference)?;
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn delete_openai_provider(
+    request: DeleteProviderRequest,
+    state: State<'_, DesktopState>,
+) -> Result<bool, DesktopError> {
+    delete_openai_provider_inner(&request, &state)
+}
+
+fn delete_openai_provider_inner(
+    request: &DeleteProviderRequest,
+    state: &DesktopState,
+) -> Result<bool, DesktopError> {
+    if state
+        .active_agent_tasks
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .values()
+        .any(|task| task.provider_id == request.provider_id)
+    {
+        return Err(DesktopError::Agent(
+            "Provider has active Agent tasks".to_owned(),
+        ));
+    }
+    state
+        .provider_configs
+        .delete(&request.provider_id, request.revision)
+        .map_err(Into::into)
+}
+
+fn configured_provider(
+    state: &DesktopState,
+    provider_id: &str,
+) -> Result<ProviderConfig, DesktopError> {
+    state
+        .provider_configs
+        .get(provider_id)?
+        .ok_or_else(|| DesktopError::Agent("Provider is not configured".to_owned()))
 }
 
 #[tauri::command]
@@ -3038,7 +3339,7 @@ fn run_local_agent_inner(
     let providers = desktop_provider_registry(state)?;
     let now_ms = current_time_ms()?;
     let task = admit_desktop_agent_task(state, request.provider_id, now_ms)?;
-    let cancellation = provider_agent_cancellation(state, task.id)?;
+    let cancellation = provider_agent_cancellation(state, task.id, &task.provider_id)?;
     let tool_allowlist = production_agent_tool_allowlist(state)?;
     let outcome = advance_provider_agent(
         &providers,
@@ -3052,7 +3353,7 @@ fn run_local_agent_inner(
             true,
         )],
         512,
-        true,
+        !request.allow_network,
         tool_allowlist,
         cancellation,
     )?;
@@ -3090,10 +3391,7 @@ fn generate_creator_draft_inner(
     let policy = AgentTaskGatewayPolicy::new(
         "desktop:creator-user",
         [AgentTaskOrigin::Desktop],
-        [
-            DETERMINISTIC_PROVIDER_ID.to_owned(),
-            "provider:ollama-loopback".to_owned(),
-        ],
+        production_agent_provider_allowlist(state)?,
         tool_ids.clone(),
         DataClassification::Personal,
         AgentAutonomy::Draft,
@@ -3116,7 +3414,7 @@ fn generate_creator_draft_inner(
         )
         .map_err(agent_error)?
         .task;
-    let cancellation = provider_agent_cancellation(state, task.id)?;
+    let cancellation = provider_agent_cancellation(state, task.id, &task.provider_id)?;
     let outcome = advance_provider_agent(
         &providers,
         state,
@@ -3129,7 +3427,7 @@ fn generate_creator_draft_inner(
             &composition_graph,
         )?,
         4096,
-        true,
+        !request.allow_network,
         tool_ids,
         cancellation,
     )?;
@@ -4489,15 +4787,18 @@ fn resume_auto_mode_turn_inner(
             &tools,
             &backend,
             AutoModeExecutionRequest {
+                provider_context: ProviderExecutionContext {
+                    timeout: Duration::from_mins(2),
+                    cancellation: CancellationFlag::default(),
+                    credential_reference: provider_credential_reference(
+                        state,
+                        &running.task.provider_id,
+                    )?,
+                },
                 turn: running,
                 workspace_root: request.workspace_root,
                 constraints: request.constraints,
                 max_output_tokens: request.max_output_tokens,
-                provider_context: ProviderExecutionContext {
-                    timeout: Duration::from_mins(2),
-                    cancellation: CancellationFlag::default(),
-                    credential_reference: None,
-                },
                 offline: request.offline,
                 data_classification: DataClassification::Personal,
                 maximum_data_classification: DataClassification::Personal,
@@ -4578,10 +4879,7 @@ fn admit_desktop_agent_task(
     let policy = AgentTaskGatewayPolicy::new(
         "desktop:local-user",
         [AgentTaskOrigin::Desktop],
-        [
-            DETERMINISTIC_PROVIDER_ID.to_owned(),
-            "provider:ollama-loopback".to_owned(),
-        ],
+        production_agent_provider_allowlist(state)?,
         tool_ids.clone(),
         DataClassification::Personal,
         AgentAutonomy::ConfirmEach,
@@ -4700,6 +4998,7 @@ fn advance_provider_agent(
     cancellation: CancellationFlag,
 ) -> Result<ProviderAgentOutcome, DesktopError> {
     let task_id = task.id;
+    let credential_reference = provider_credential_reference(state, &task.provider_id)?;
     let mut active_guard = ActiveAgentTaskGuard {
         tasks: &state.active_agent_tasks,
         task_id,
@@ -4718,7 +5017,7 @@ fn advance_provider_agent(
                 context: ProviderExecutionContext {
                     timeout: Duration::from_secs(30),
                     cancellation: cancellation.clone(),
-                    credential_reference: None,
+                    credential_reference,
                 },
                 offline,
                 now_ms,
@@ -4778,12 +5077,22 @@ fn advance_provider_agent(
 fn provider_agent_cancellation(
     state: &DesktopState,
     task_id: Uuid,
+    provider_id: &str,
 ) -> Result<CancellationFlag, DesktopError> {
     let mut tasks = state
         .active_agent_tasks
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?;
-    Ok(tasks.entry(task_id).or_default().clone())
+    let active = tasks.entry(task_id).or_insert_with(|| ActiveAgentTask {
+        provider_id: provider_id.to_owned(),
+        cancellation: CancellationFlag::default(),
+    });
+    if active.provider_id != provider_id {
+        return Err(DesktopError::Agent(
+            "Agent task Provider identity changed".to_owned(),
+        ));
+    }
+    Ok(active.cancellation.clone())
 }
 
 fn record_agent_history(
@@ -5369,13 +5678,13 @@ fn automation_agent_task_id(
 }
 
 fn cancel_automation_agent_task(state: &DesktopState, task_id: Uuid) -> Result<(), DesktopError> {
-    if let Some(cancellation) = state
+    if let Some(active) = state
         .active_agent_tasks
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?
         .remove(&task_id)
     {
-        cancellation.cancel();
+        active.cancellation.cancel();
     }
     if state
         .automation_agent_journal
@@ -5437,8 +5746,68 @@ fn desktop_provider_registry(state: &DesktopState) -> Result<ProviderRegistry, D
         providers
             .register(WorkerOllamaProvider::new(executable, endpoint).map_err(agent_error)?)
             .map_err(agent_error)?;
+        let credential_resolver: Arc<dyn ProviderCredentialResolver> = Arc::new(
+            DesktopProviderCredentialResolver(state.secret_store.clone()),
+        );
+        for config in state
+            .provider_configs
+            .list()?
+            .into_iter()
+            .filter(|config| config.enabled)
+        {
+            register_openai_provider(
+                &mut providers,
+                executable,
+                config,
+                Arc::clone(&credential_resolver),
+            )?;
+        }
     }
     Ok(providers)
+}
+
+fn production_agent_provider_allowlist(
+    state: &DesktopState,
+) -> Result<BTreeSet<String>, DesktopError> {
+    Ok(desktop_provider_registry(state)?
+        .descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.id.clone())
+        .collect())
+}
+
+pub(crate) fn provider_credential_reference(
+    state: &DesktopState,
+    provider_id: &str,
+) -> Result<Option<String>, DesktopError> {
+    Ok(state
+        .provider_configs
+        .list()?
+        .into_iter()
+        .find(|config| config.id == provider_id)
+        .filter(|config| config.enabled)
+        .map(|config| config.credential_reference))
+}
+
+fn register_openai_provider(
+    providers: &mut ProviderRegistry,
+    executable: &Path,
+    config: ProviderConfig,
+    credential_resolver: Arc<dyn ProviderCredentialResolver>,
+) -> Result<(), DesktopError> {
+    let endpoint = OpenAiCompatibleEndpoint::new(config.base_url).map_err(agent_error)?;
+    let provider = WorkerOpenAiCompatibleProvider::new(
+        config.id,
+        config.display_name,
+        executable,
+        endpoint,
+        config.credential_reference,
+        config.context_window_tokens,
+        config.max_output_tokens,
+        credential_resolver,
+    )
+    .map_err(agent_error)?;
+    providers.register(provider).map_err(agent_error)
 }
 
 fn cancel_pending_provider_siblings(
@@ -7374,7 +7743,7 @@ fn cancel_skill_execution_inner(
             .lock()
             .map_err(|_| DesktopError::StatePoisoned)?
             .get(&task_id)
-            .cloned()
+            .map(|active| active.cancellation.clone())
     {
         cancellation.cancel();
     }
@@ -8451,7 +8820,7 @@ fn cancel_active_skill_executions_for_skill(
                 .map_err(|_| DesktopError::StatePoisoned)?
                 .get(&task_id)
         {
-            cancellation.cancel();
+            cancellation.cancellation.cancel();
         }
     }
     Ok(())
@@ -8849,7 +9218,7 @@ fn run_module_agent_task(
         }
         active.agent_task_id = Some(task.id);
     }
-    let cancellation = provider_agent_cancellation(state, task.id)?;
+    let cancellation = provider_agent_cancellation(state, task.id, &task.provider_id)?;
     let outcome = advance_provider_agent(
         &desktop_provider_registry(state)?,
         state,
@@ -9793,6 +10162,11 @@ pub fn run() {
             cancel_automation_run,
             cancel_agent_task,
             agent_provider_status,
+            list_openai_providers,
+            upsert_openai_provider,
+            set_openai_provider_credential,
+            delete_openai_provider_credential,
+            delete_openai_provider,
             agent_history_list,
             delete_agent_history,
             run_local_agent,
@@ -10006,39 +10380,44 @@ fn discover_ollama_worker(app: &AppHandle) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVE_CHARACTER_FILE, ACTIVE_THEME_FILE, ACTIVE_VOICE_FILE, ActiveSkillExecution,
+        ACTIVE_CHARACTER_FILE, ACTIVE_THEME_FILE, ACTIVE_VOICE_FILE, ActiveAgentTask,
+        ActiveSkillExecution,
         AssetInstallReceipt, AutoModeJobStatus, AutomationEventMetrics, AutomationRun,
         AutomationRunOrigin, AutomationTestRequest, BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID,
         BUILTIN_VOICE_ID, CHARACTER_SELECTION, CapabilityBackend, DETERMINISTIC_PROVIDER_ID,
         DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
-        DesktopResolveAutoModeAttemptRequest, DesktopState, ExecutionCancellation,
-        LocalAgentRequest, PendingCreatorApproval, PendingSkillExecution, PetAction,
-        PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
-        ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SkillEventSession, StartupMode,
-        THEME_SELECTION, TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
-        UserProgramRollbackReceipt, VOICE_SELECTION, WindowPolicy, agent_catalog_inner,
-        append_program_scope_diff, approve_automation_run_inner, approve_skill_execution_inner,
+        DesktopProviderCredentialResolver, DesktopResolveAutoModeAttemptRequest,
+        DesktopSecretStore, DesktopState, ExecutionCancellation, LocalAgentRequest,
+        PendingCreatorApproval, PendingSkillExecution, PetAction, PrepareAgentToolRequest,
+        ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest,
+        ResumeAutoModeTurnRequest, SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
+        UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
+        VOICE_SELECTION, WindowPolicy, agent_catalog_inner, append_program_scope_diff,
+        approve_automation_run_inner, approve_skill_execution_inner,
         auto_mode_control_center_inner, automation_agent_messages,
         automation_governance_catalog_inner, cancel_agent_task_inner,
         cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
         cancel_skill_execution_inner, capability_set_diff, confirm_agent_tool_inner,
         confirm_agent_tool_with_registry, consume_creator_approval_from,
         creator_capability_catalog, creator_capability_risk, creator_composition_graph,
-        current_time_ms, default_agent_model, default_agent_provider_id, desktop_tool_registry,
-        diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
-        ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
-        install_generated_theme, install_gltf_character, open_diagnostic_journal,
-        parse_asset_protocol_path, parse_user_program_plan, pause_auto_mode_job_inner,
-        permission_grant, persist_asset_selection, prepare_agent_tool_inner,
-        quiesce_auto_mode_jobs, reject_agent_tool_inner, reject_automation_run_inner,
-        resolve_active_character, resolve_active_theme, resolve_active_voice,
-        resolve_asset_selection, resolve_auto_mode_attempt_inner, resolve_character_renderer,
-        resume_auto_mode_turn_inner, run_live_automation, run_live_automation_event,
-        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
-        screen_coordinate, serve_asset_protocol, skill_capability_names, skill_event_types,
-        stage_creator_package, stop_skill_event_sessions, test_automation, user_program_input,
-        valid_asset_identifier, validate_model_source, validate_package_source,
-        validate_requested_animation_map, verify_capability_gap,
+        current_time_ms, default_agent_model, default_agent_provider_id, desktop_provider_registry,
+        delete_openai_provider_inner, desktop_tool_registry, diagnostic_report,
+        dispatch_skill_commands, ensure_normal_mode,
+        ensure_program_permissions, ensure_user_program_agent_capability,
+        finish_skill_event_session, inspect_asset_catalog, install_generated_theme,
+        install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
+        parse_user_program_plan, pause_auto_mode_job_inner, permission_grant,
+        persist_asset_selection, prepare_agent_tool_inner, quiesce_auto_mode_jobs,
+        reject_agent_tool_inner, reject_automation_run_inner, resolve_active_character,
+        resolve_active_theme, resolve_active_voice, resolve_asset_selection,
+        resolve_auto_mode_attempt_inner, resolve_character_renderer, resume_auto_mode_turn_inner,
+        run_live_automation, run_live_automation_event, run_local_agent_inner,
+        run_skill_agent_task, run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
+        skill_capability_names, skill_event_types, stage_creator_package,
+        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
+        validate_model_source, validate_package_source, validate_requested_animation_map,
+        verify_capability_gap, AgentProviderStatusRequest, DeleteProviderRequest,
+        agent_provider_status_inner,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -10094,6 +10473,7 @@ mod tests {
         time::Duration,
     };
     use uuid::Uuid;
+    use zeroize::Zeroizing;
 
     fn normal_desktop_state() -> (std::path::PathBuf, DesktopState) {
         let root = std::env::temp_dir().join(format!("nimora-agent-state-{}", Uuid::now_v7()));
@@ -10556,6 +10936,138 @@ mod tests {
                 "runtime.health.read".to_owned(),
             ]
         );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn configured_openai_provider_uses_reference_bound_memory_secret() {
+        let (root, mut state) = normal_desktop_state();
+        state.secret_store =
+            DesktopSecretStore(Arc::new(nimora_secret_store::MemorySecretStore::default()));
+        state.ollama_worker = Some(root.join("provider-worker"));
+        let config = nimora_persistence_sqlite::ProviderConfig::new(
+            "provider:openai-compatible:test",
+            "Test Provider",
+            "https://api.example.test",
+            "secret:provider:test",
+            Some("model:test".to_owned()),
+            16_384,
+            2_048,
+            true,
+        )
+        .expect("provider config");
+        state
+            .provider_configs
+            .save(&config)
+            .expect("persist provider config");
+        let reference = nimora_secret_store::SecretReference::parse("secret:provider:test")
+            .expect("secret reference");
+        state
+            .secret_store
+            .0
+            .put(&reference, Zeroizing::new("test-secret".to_owned()))
+            .expect("store secret");
+
+        let registry = desktop_provider_registry(&state).expect("provider registry");
+        let ids = registry
+            .descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id.as_str())
+            .collect::<Vec<_>>();
+        assert!(ids.contains(&"provider:openai-compatible:test"));
+        let resolver = DesktopProviderCredentialResolver(state.secret_store.clone());
+        let secret = nimora_agent_provider_worker::ProviderCredentialResolver::resolve(
+            &resolver,
+            "secret:provider:test",
+        )
+        .expect("resolve worker secret");
+        assert_eq!(format!("{secret:?}"), "WorkerSecret([REDACTED])");
+
+        state
+            .secret_store
+            .0
+            .delete(&reference)
+            .expect("delete secret");
+        assert!(
+            nimora_agent_provider_worker::ProviderCredentialResolver::resolve(
+                &resolver,
+                "secret:provider:test",
+            )
+            .is_err()
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn configured_openai_provider_without_secret_fails_closed_before_probe() {
+        let (root, mut state) = normal_desktop_state();
+        state.secret_store =
+            DesktopSecretStore(Arc::new(nimora_secret_store::MemorySecretStore::default()));
+        state.ollama_worker = Some(root.join("worker-that-must-not-start"));
+        let config = nimora_persistence_sqlite::ProviderConfig::new(
+            "provider:openai-compatible:no-secret",
+            "No Secret",
+            "https://api.example.test",
+            "secret:provider:no-secret",
+            Some("model:test".to_owned()),
+            8_192,
+            1_024,
+            true,
+        )
+        .expect("provider config");
+        state.provider_configs.save(&config).expect("save config");
+
+        let status = agent_provider_status_inner(
+            AgentProviderStatusRequest {
+                provider_id: config.id,
+            },
+            &state,
+        )
+        .expect("stable status");
+        assert_eq!(status.state, "unavailable");
+        assert!(!status.credential_present);
+        assert!(!status.service_reachable);
+        assert!(status.models.is_empty());
+        assert_eq!(status.message, "请先安全保存 Provider 凭据");
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn active_provider_config_cannot_be_deleted() {
+        let (root, state) = normal_desktop_state();
+        let config = nimora_persistence_sqlite::ProviderConfig::new(
+            "provider:openai-compatible:active",
+            "Active Provider",
+            "https://api.example.test",
+            "secret:provider:active",
+            Some("model:test".to_owned()),
+            8_192,
+            1_024,
+            true,
+        )
+        .expect("provider config");
+        let config = state.provider_configs.save(&config).expect("save config");
+        state
+            .active_agent_tasks
+            .lock()
+            .expect("active tasks")
+            .insert(
+                Uuid::now_v7(),
+                ActiveAgentTask {
+                    provider_id: config.id.clone(),
+                    cancellation: CancellationFlag::default(),
+                },
+            );
+
+        let result = delete_openai_provider_inner(
+            &DeleteProviderRequest {
+                provider_id: config.id.clone(),
+                revision: config.revision,
+            },
+            &state,
+        );
+        assert!(result.is_err());
+        assert!(state.provider_configs.get(&config.id).expect("load config").is_some());
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
@@ -11307,7 +11819,13 @@ mod tests {
             .active_agent_tasks
             .lock()
             .expect("task registry")
-            .insert(task.id, child_cancellation.clone());
+            .insert(
+                task.id,
+                ActiveAgentTask {
+                    provider_id: task.provider_id.clone(),
+                    cancellation: child_cancellation.clone(),
+                },
+            );
 
         assert!(cancel_automation_run_inner(&state, run_id).expect("cancel run"));
         assert!(run_cancellation.is_cancelled());
@@ -11536,6 +12054,7 @@ mod tests {
                 prompt: "检查本地能力".to_owned(),
                 provider_id: default_agent_provider_id(),
                 model: default_agent_model(),
+                allow_network: false,
             },
             &state,
         )
@@ -11569,6 +12088,7 @@ mod tests {
                     prompt: "  ".to_owned(),
                     provider_id: default_agent_provider_id(),
                     model: default_agent_model(),
+                    allow_network: false,
                 },
                 &state
             )
@@ -11580,6 +12100,7 @@ mod tests {
                     prompt: "有效任务".to_owned(),
                     provider_id: "provider:not-registered".to_owned(),
                     model: default_agent_model(),
+                    allow_network: false,
                 },
                 &state
             )
@@ -11591,6 +12112,7 @@ mod tests {
                     prompt: "有效任务".to_owned(),
                     provider_id: default_agent_provider_id(),
                     model: " ".to_owned(),
+                    allow_network: false,
                 },
                 &state
             )
@@ -11602,6 +12124,7 @@ mod tests {
                     prompt: "a".repeat(32 * 1024 + 1),
                     provider_id: default_agent_provider_id(),
                     model: default_agent_model(),
+                    allow_network: false,
                 },
                 &state
             )
@@ -12050,8 +12573,12 @@ mod tests {
         )
         .expect("task");
         let task_id = task.id;
-        let cancellation =
-            super::provider_agent_cancellation(&state, task_id).expect("register cancellation");
+        let cancellation = super::provider_agent_cancellation(
+            &state,
+            task_id,
+            "provider:blocking-test",
+        )
+        .expect("register cancellation");
 
         std::thread::scope(|scope| {
             let execution = scope.spawn(|| {
@@ -12097,7 +12624,13 @@ mod tests {
             .active_agent_tasks
             .lock()
             .expect("active tasks")
-            .insert(task_id, cancellation.clone());
+            .insert(
+                task_id,
+                ActiveAgentTask {
+                    provider_id: default_agent_provider_id(),
+                    cancellation: cancellation.clone(),
+                },
+            );
 
         cancel_all_pending_agent_tools(&state).expect("cancel active Agent tasks");
 
@@ -12867,7 +13400,13 @@ mod tests {
             .active_agent_tasks
             .lock()
             .expect("active Agent tasks")
-            .insert(task_id, provider_cancellation.clone());
+            .insert(
+                task_id,
+                ActiveAgentTask {
+                    provider_id: default_agent_provider_id(),
+                    cancellation: provider_cancellation.clone(),
+                },
+            );
 
         assert!(cancel_skill_execution_inner(&state, execution_id).expect("cancel Skill"));
         assert!(worker_cancellation.is_cancelled());
@@ -13263,7 +13802,13 @@ mod tests {
             .active_agent_tasks
             .lock()
             .expect("active Agent tasks")
-            .insert(task_id, provider_cancellation.clone());
+            .insert(
+                task_id,
+                ActiveAgentTask {
+                    provider_id: default_agent_provider_id(),
+                    cancellation: provider_cancellation.clone(),
+                },
+            );
 
         stop_skill_event_sessions(&state).expect("stop Skill event sessions");
 

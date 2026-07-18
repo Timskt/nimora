@@ -5,6 +5,7 @@ use super::{
     ContextCompactionPolicy, DataClassification, DesktopState, Duration, ProviderExecutionContext,
     StartAutoModeJobRequest, Uuid, WorkspaceScanPolicy, auto_mode_jobs, current_time_ms,
     desktop_provider_registry, desktop_tool_backend, desktop_tool_registry,
+    provider_credential_reference,
 };
 use nimora_agent_auto_host::{AutoModeRecoveryService, RecoveredAutoModeTurn};
 use tauri::Manager;
@@ -52,6 +53,8 @@ fn run_inner(
             .map_err(|_| registry_failure())?;
     }
     let mut turn = recover_turn(database_path, request, now_ms)?;
+    let credential_reference = provider_credential_reference(state, &turn.task.provider_id)
+        .map_err(|error| (AutoModeJobStatus::Failed, error.to_string()))?;
     let providers = desktop_provider_registry(state)
         .map_err(|error| (AutoModeJobStatus::Failed, error.to_string()))?;
     let tools = desktop_tool_registry(state)
@@ -85,7 +88,7 @@ fn run_inner(
                 provider_context: ProviderExecutionContext {
                     timeout: Duration::from_mins(2),
                     cancellation: control.cancellation(),
-                    credential_reference: None,
+                    credential_reference: credential_reference.clone(),
                 },
                 offline: request.offline,
                 data_classification: DataClassification::Personal,

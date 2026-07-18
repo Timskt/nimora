@@ -1,12 +1,24 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 桌面 OpenAI-compatible Provider 管理纵切
+
+- 桌面运行时已将 SQLite Provider 配置仓储和 System Secret Store 接入正常启动路径；恢复模式使用隔离的内存配置与密钥实现，不接触主数据库或系统凭据。
+- Provider 凭据只通过配置绑定的精确 Secret Reference 解析，系统密钥返回的 `Zeroizing<String>` 所有权直接移交 Worker payload；任务、IPC 响应、SQLite、日志和 Debug 输出均不包含 Secret 明文。
+- 新增配置列表、CAS 新增/更新、凭据写入、凭据撤销和 CAS 删除命令。Safe/Recovery Mode 禁止配置及凭据写入，凭据撤销保持可用；删除配置与撤销凭据刻意分离，避免伪造 SQLite 与系统密钥库的跨存储事务。
+- 动态 Provider Registry、Agent Admission allowlist、Automation、Creator 与 Module Agent Adapter 均从当前启用配置生成，不再限制为两个硬编码 Provider。活跃 Agent 任务记录精确 Provider ID，对应配置在任务结束前禁止删除。
+- Provider 状态契约已通用化，统一表达 locality、凭据存在性、Worker 验证、服务可达性和可选模型元数据；OpenAI-compatible Probe 通过隔离 Worker 执行，失败只返回稳定状态，不暴露 Endpoint、Header、Secret 或响应正文。
+- 普通 Agent 与 AI Creator 的网络传输改为每次显式授权；默认保持离线，Auto Mode 严格尊重请求中的 `offline`，不再因存在凭据而静默放宽网络策略。
+- Agent 工作区新增“模型连接”视图，提供新增、编辑、启停、密钥写入、凭据撤销、删除确认、数据出境说明、浏览器只读状态及窄屏布局。API Key 不回填，提交后立即清除 React 输入状态。
+- 浏览器预览已完成 DOM 与全页截图检查，确认导航、标题层级、空状态、只读门禁、表单标签和响应式布局可见；真实系统 Keychain 与网络 Probe 仍必须在签名后的 Tauri 桌面环境完成端到端验证。
+- 尚待后续独立纵切：将 Ollama 命名的 Sidecar Manifest 升级为通用 Worker capability manifest、真实桌面跨重启/Keychain 演练、Anthropic 原生协议适配及 Provider 级网络治理指标。
+
 ## 2026-07-19 — OpenAI-compatible 隔离 Worker 子纵切
 
 - `agent-provider-worker` 新增独立 OpenAI-compatible HTTPS 传输模块；公网端点只接受 HTTPS，本地开发服务只接受 literal loopback/localhost HTTP，并拒绝 userinfo、路径、查询和 fragment。
 - 单次 Worker 协议支持 `/v1/models` 与 `/v1/chat/completions`，禁用重定向，限制超时、响应体、模型数、名称和 Tool Call 数；解析文本、Usage、停止原因和 JSON 字符串函数参数，并保留宿主 Request ID。
 - API Key 使用脱敏、Drop 清零的 Worker-only payload；不进入命令行和环境变量。宿主 Adapter 要求任务 Credential Reference 与配置精确绑定，通过受限 Resolver 解析，并在写入 Worker stdin 后清零序列化缓冲区。
 - 非成功响应不读取或回传正文、Endpoint 与 Header；认证、限流、超时和不可用映射为稳定错误。真实独立 Worker 进程测试证明 Bearer Header、模型排序去重、Tool Call/Usage 映射、重定向拒绝和错误脱敏。
-- 本子纵切尚未构成用户可用 Provider：SQLite 配置仓储、System Secret Store 桌面接线、Sidecar capability Manifest、Provider 管理 UI 与 Safe/Recovery Mode 命令门禁仍需继续实现。
+- 本子纵切的 SQLite 配置、System Secret Store 桌面接线、Provider 管理 UI 与 Safe/Recovery Mode 命令门禁已由后续桌面纵切完成；通用 Sidecar capability Manifest 仍需继续实现。
 - 验证：Workspace Clippy `-D warnings` 通过；完整串行 Workspace 测试除 Provider/Skill 两个真实进程监督目标在统一构建中出现一次既有 sidecar 争用外其余通过，随后两个目标分别串行复跑 3/3 与 6/6 通过。
 
 ## 2026-07-18 — Semantic Contract 与有界 Composition Graph 纵切

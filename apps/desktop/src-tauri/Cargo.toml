@@ -32,6 +32,7 @@ nimora-diagnostics-bundle = { path = "../../../crates/diagnostics-bundle" }
 nimora-persistence-sqlite = { path = "../../../crates/persistence-sqlite" }
 nimora-runtime-app = { path = "../../../crates/runtime-app" }
 nimora-runtime-core = { path = "../../../crates/runtime-core" }
+nimora-secret-store = { path = "../../../crates/secret-store" }
 nimora-skill-package = { path = "../../../crates/skill-package" }
 nimora-skill-host = { path = "../../../crates/skill-host" }
 nimora-skill-runtime = { path = "../../../crates/skill-runtime" }
@@ -47,6 +48,7 @@ tauri = { version = "2.11", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-dialog = "2.6"
 thiserror.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

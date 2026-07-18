@@ -17,6 +17,7 @@ export function AiCreatorWorkspace({ disabled }: { disabled: boolean }) {
   const [providerId, setProviderId] = useState("provider:ollama-loopback");
   const [model, setModel] = useState("");
   const [status, setStatus] = useState<AgentProviderStatus | null>(null);
+  const [allowNetwork, setAllowNetwork] = useState(false);
   const [result, setResult] = useState<CreatorDraftResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -48,7 +49,7 @@ export function AiCreatorWorkspace({ disabled }: { disabled: boolean }) {
     setBusy(true);
     setError(null);
     resetReview();
-    try { setResult(await desktopApi.generateCreatorDraft(kind, requirement.trim(), providerId, model.trim())); }
+    try { setResult(await desktopApi.generateCreatorDraft(kind, requirement.trim(), providerId, model.trim(), allowNetwork)); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "AI 草案生成失败"); }
     finally { setBusy(false); }
   }
@@ -120,14 +121,16 @@ export function AiCreatorWorkspace({ disabled }: { disabled: boolean }) {
 
   const draft = result?.draft ?? null;
   const gap = result?.capabilityGap ?? null;
+  const activeProvider = catalog?.providers.find((provider) => provider.id === providerId);
 
   return <section className="ai-creator-workspace">
     <header className="ai-creator-hero"><div><p className="card-label">AI CREATOR / REVIEW PIPELINE</p><h2>把想法变成可验证的扩展草案。</h2><p>模型没有工具、文件或安装权限。能力不足时必须报告结构化缺口，不能发明命令或绕过平台。</p></div><span>Creator Agent · zero tools</span></header>
     <div className="ai-creator-layout"><form className="ai-creator-form" onSubmit={(event) => { event.preventDefault(); void generate(); }}>
       <fieldset><legend>1 · 选择产物类型</legend>{artifactKinds.map((item) => <button className={kind === item.kind ? "selected" : ""} key={item.kind} onClick={() => { setKind(item.kind); resetReview(); }} type="button"><strong>{item.title}</strong><span>{item.detail}</span></button>)}</fieldset>
       <label><span>2 · 描述目标与验收标准</span><textarea onChange={(event) => { setRequirement(event.target.value); resetReview(); }} placeholder="例如：专注计时结束时，让角色庆祝并记录今日完成次数……" value={requirement} /></label>
-      <div className="ai-provider-row"><label><span>Provider</span><select value={providerId} onChange={(event) => { setProviderId(event.target.value); setModel(""); resetReview(); }}>{catalog?.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label><label><span>模型</span><input list="creator-models" value={model} onChange={(event) => { setModel(event.target.value); resetReview(); }} /><datalist id="creator-models">{status?.models.map((item) => <option key={item.name} value={item.name} />)}</datalist></label></div>
-      <button className="primary-button" disabled={busy || disabled || !requirement.trim() || !model.trim() || status?.state !== "ready"} type="submit">{busy ? "正在生成并验证…" : "生成安全草案"}</button>
+      <div className="ai-provider-row"><label><span>Provider</span><select value={providerId} onChange={(event) => { setProviderId(event.target.value); setModel(""); setAllowNetwork(false); resetReview(); }}>{catalog?.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label><label><span>模型</span><input list="creator-models" value={model} onChange={(event) => { setModel(event.target.value); resetReview(); }} /><datalist id="creator-models">{status?.models.map((item) => <option key={item.name} value={item.name} />)}</datalist></label></div>
+      {activeProvider?.locality === "network" && <label className="agent-network-consent"><input checked={allowNetwork} disabled={busy || disabled} type="checkbox" onChange={(event) => setAllowNetwork(event.target.checked)} /><span><strong>允许本次创作请求联网</strong><small>需求与验证上下文将发送到你配置的服务，生成结果仍由本机契约复验。</small></span></label>}
+      <button className="primary-button" disabled={busy || disabled || !requirement.trim() || !model.trim() || status?.state !== "ready" || (activeProvider?.locality === "network" && !allowNetwork)} type="submit">{busy ? "正在生成并验证…" : "生成安全草案"}</button>
       {disabled ? <p className="ai-creator-error">安全或恢复模式下禁止生成。</p> : null}{error ? <p className="ai-creator-error">{error}</p> : null}
     </form><section className="ai-draft-preview" aria-live="polite">
       {gap && result ? <CapabilityGapPreview disabled={busy} gap={gap} onSave={() => void saveGap()} onSubmitProposal={() => void submitProposal()} proposalNotice={proposalNotice} result={result} saveNotice={saveNotice} /> : null}

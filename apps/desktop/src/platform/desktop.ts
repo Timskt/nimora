@@ -57,9 +57,26 @@ export interface AgentProviderStatus {
   state: "ready" | "unavailable";
   workerVerified: boolean;
   serviceReachable: boolean;
-  models: Array<{ name: string; size: number; modifiedAt: string | null }>;
+  locality: "local" | "network";
+  credentialPresent: boolean;
+  models: Array<{ name: string; size: number | null; modifiedAt: string | null }>;
   message: string;
 }
+
+export interface OpenAiProviderConfig {
+  id: string;
+  displayName: string;
+  baseUrl: string;
+  credentialReference: string;
+  defaultModel: string | null;
+  contextWindowTokens: number;
+  maxOutputTokens: number;
+  enabled: boolean;
+  revision: number;
+  credentialPresent: boolean;
+}
+
+export interface UpsertOpenAiProviderRequest extends Omit<OpenAiProviderConfig, "credentialPresent"> {}
 
 export interface LocalAgentResult {
   spec: "nimora.desktop-agent-result/1";
@@ -888,13 +905,18 @@ export interface DesktopApi {
   cancelAgentTask(taskId: string): Promise<boolean>;
   agentCatalog(): Promise<AgentCatalog>;
   agentProviderStatus(providerId: string): Promise<AgentProviderStatus>;
+  listOpenAiProviders(): Promise<OpenAiProviderConfig[]>;
+  upsertOpenAiProvider(request: UpsertOpenAiProviderRequest): Promise<Omit<OpenAiProviderConfig, "credentialPresent">>;
+  setOpenAiProviderCredential(providerId: string, credential: string): Promise<void>;
+  deleteOpenAiProviderCredential(providerId: string): Promise<void>;
+  deleteOpenAiProvider(providerId: string, revision: number): Promise<boolean>;
   agentHistory(limit?: number, before?: { createdAtMs: number; taskId: string }): Promise<AgentHistoryPage>;
   deleteAgentHistory(taskId?: string): Promise<number>;
   skillExecutionHistory(limit?: number, before?: { createdAtMs: number; executionId: string }): Promise<SkillExecutionHistoryPage>;
   deleteSkillExecutionHistory(executionId?: string): Promise<number>;
   cancelSkillExecution(executionId: string): Promise<boolean>;
-  runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
-  generateCreatorDraft(kind: CreatorArtifactKind, requirement: string, providerId: string, model: string): Promise<CreatorDraftResult>;
+  runLocalAgent(prompt: string, providerId?: string, model?: string, allowNetwork?: boolean): Promise<LocalAgentResult>;
+  generateCreatorDraft(kind: CreatorArtifactKind, requirement: string, providerId: string, model: string, allowNetwork?: boolean): Promise<CreatorDraftResult>;
   approveCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>, draftDigest: string): Promise<CreatorDraftApprovalReceipt>;
   installCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>, approvalId: string): Promise<CreatorDraftInstallReceipt>;
   saveCreatorDraft(workspaceRoot: string, kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>, approvalId: string): Promise<CreatorDraftSaveReceipt>;
@@ -1145,10 +1167,17 @@ export function createDesktopApi(
           state: "ready",
           workerVerified: true,
           serviceReachable: true,
+          locality: "local",
+          credentialPresent: true,
           models: [{ name: scripted ? "qwen3:8b" : "model:echo-v1", size: 0, modifiedAt: null }],
           message: scripted ? "预览脚本 Provider 可用" : "内置离线 Provider 可用",
         };
       },
+      async listOpenAiProviders() { return []; },
+      async upsertOpenAiProvider() { throw new Error("desktop-host-required"); },
+      async setOpenAiProviderCredential() { throw new Error("desktop-host-required"); },
+      async deleteOpenAiProviderCredential() { throw new Error("desktop-host-required"); },
+      async deleteOpenAiProvider() { throw new Error("desktop-host-required"); },
       async runLocalAgent(prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") {
         if (prompt.includes("移动") || prompt.includes("工具确认")) {
           previewAgentTask = { id: crypto.randomUUID(), status: "waiting_for_confirmation", providerId: "provider:preview-scripted" };
@@ -1389,13 +1418,18 @@ export function createDesktopApi(
     cancelAgentTask: async (taskId) => await invokeCommand("cancel_agent_task", { taskId }) as boolean,
     agentCatalog: async () => await invokeCommand("agent_catalog") as AgentCatalog,
     agentProviderStatus: async (providerId) => await invokeCommand("agent_provider_status", { request: { providerId } }) as AgentProviderStatus,
+    listOpenAiProviders: async () => await invokeCommand("list_openai_providers") as OpenAiProviderConfig[],
+    upsertOpenAiProvider: async (request) => await invokeCommand("upsert_openai_provider", { request }) as Omit<OpenAiProviderConfig, "credentialPresent">,
+    setOpenAiProviderCredential: async (providerId, credential) => { await invokeCommand("set_openai_provider_credential", { request: { providerId, credential } }); },
+    deleteOpenAiProviderCredential: async (providerId) => { await invokeCommand("delete_openai_provider_credential", { request: { providerId } }); },
+    deleteOpenAiProvider: async (providerId, revision) => await invokeCommand("delete_openai_provider", { request: { providerId, revision } }) as boolean,
     agentHistory: async (limit = 50, before) => await invokeCommand("agent_history_list", { request: { beforeCreatedAtMs: before?.createdAtMs ?? null, beforeTaskId: before?.taskId ?? null, limit } }) as AgentHistoryPage,
     deleteAgentHistory: async (taskId) => (await invokeCommand("delete_agent_history", { request: { taskId: taskId ?? null } }) as { deleted: number }).deleted,
     skillExecutionHistory: async (limit = 50, before) => await invokeCommand("skill_execution_history_list", { request: { beforeCreatedAtMs: before?.createdAtMs ?? null, beforeExecutionId: before?.executionId ?? null, limit } }) as SkillExecutionHistoryPage,
     deleteSkillExecutionHistory: async (executionId) => (await invokeCommand("delete_skill_execution_history", { request: { executionId: executionId ?? null } }) as { deleted: number }).deleted,
     cancelSkillExecution: async (executionId) => await invokeCommand("cancel_skill_execution", { executionId }) as boolean,
-    runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") => await invokeCommand("run_local_agent", { request: { prompt, providerId, model } }) as LocalAgentResult,
-    generateCreatorDraft: async (kind, requirement, providerId, model) => await invokeCommand("generate_creator_draft", { request: { kind, requirement, providerId, model } }) as CreatorDraftResult,
+    runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1", allowNetwork = false) => await invokeCommand("run_local_agent", { request: { prompt, providerId, model, allowNetwork } }) as LocalAgentResult,
+    generateCreatorDraft: async (kind, requirement, providerId, model, allowNetwork = false) => await invokeCommand("generate_creator_draft", { request: { kind, requirement, providerId, model, allowNetwork } }) as CreatorDraftResult,
     approveCreatorDraft: async (kind, requirement, draft, draftDigest) => await invokeCommand("approve_creator_draft", { request: { kind, requirement, draft, draftDigest } }) as CreatorDraftApprovalReceipt,
     installCreatorDraft: async (kind, requirement, draft, approvalId) => await invokeCommand("install_creator_draft", { request: { kind, requirement, draft, approvalId } }) as CreatorDraftInstallReceipt,
     saveCreatorDraft: async (workspaceRoot, kind, requirement, draft, approvalId) => await invokeCommand("save_creator_draft_command", { request: { workspaceRoot, kind, requirement, draft, approvalId } }) as CreatorDraftSaveReceipt,

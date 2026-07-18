@@ -380,7 +380,7 @@ describe("desktop platform adapter", () => {
       ["agent_catalog"],
       ["agent_history_list", { request: { beforeCreatedAtMs: null, beforeTaskId: null, limit: 25 } }],
       ["delete_agent_history", { request: { taskId: "018f0000-0000-7000-8000-000000000007" } }],
-      ["run_local_agent", { request: { prompt: "检查本地能力", providerId: "provider:deterministic-local", model: "model:echo-v1" } }],
+      ["run_local_agent", { request: { prompt: "检查本地能力", providerId: "provider:deterministic-local", model: "model:echo-v1", allowNetwork: false } }],
       ["resume_auto_mode_turn", { request: {
         sessionId: "018f0000-0000-7000-8000-000000000012",
         workspaceRoot: "/workspace",

@@ -10,6 +10,7 @@ use std::{
     str::FromStr,
     time::Duration,
 };
+use zeroize::Zeroizing;
 
 mod host;
 mod openai_compatible;
@@ -67,7 +68,7 @@ pub enum ProviderWorkerResponse {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct WorkerSecret(String);
+pub struct WorkerSecret(Zeroizing<String>);
 
 impl WorkerSecret {
     /// Creates a bounded, non-empty Worker-only secret payload.
@@ -76,7 +77,15 @@ impl WorkerSecret {
     ///
     /// Returns an error when the credential is empty, oversized, or contains NUL.
     pub fn new(value: impl Into<String>) -> Result<Self, ProviderError> {
-        let value = value.into();
+        Self::from_zeroizing(Zeroizing::new(value.into()))
+    }
+
+    /// Adopts an already zeroizing credential without creating another plaintext copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the credential is empty, oversized, or contains NUL.
+    pub fn from_zeroizing(value: Zeroizing<String>) -> Result<Self, ProviderError> {
         if value.is_empty() || value.len() > 64 * 1024 || value.contains('\0') {
             return Err(stable_error(
                 ProviderErrorKind::InvalidRequest,
@@ -94,12 +103,6 @@ impl WorkerSecret {
 impl std::fmt::Debug for WorkerSecret {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("WorkerSecret([REDACTED])")
-    }
-}
-
-impl Drop for WorkerSecret {
-    fn drop(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.0);
     }
 }
 
