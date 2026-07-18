@@ -23,6 +23,7 @@ import {
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { VRM } from "@pixiv/three-vrm";
 import type { CharacterRendererSnapshot, ModelAnimationBinding } from "../platform/desktop";
+import { applyVrmExpression, type VrmExpressionController } from "./vrmExpressions";
 
 export function modelAssetUrl(baseUrl: string, relativePath: string): string {
   const encoded = relativePath.split("/").map(encodeURIComponent).join("/");
@@ -73,6 +74,16 @@ export function resolveModelAnimation(
   }
   const binding = clips[candidate] ?? clips["pet.idle"];
   return binding && available.has(binding.animation) ? binding : null;
+}
+
+export function dispatchModelAction(
+  backend: string,
+  expressionController: VrmExpressionController | null | undefined,
+  playAnimation: ((action: string) => void) | null,
+  action: string,
+): void {
+  if (backend === "vrm") applyVrmExpression(expressionController, action);
+  playAnimation?.(action);
 }
 
 export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProps) {
@@ -188,13 +199,13 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
         camera.position.set(0, radius * 0.12, distance);
         camera.lookAt(0, 0, 0);
         camera.updateProjectionMatrix();
-        const firstAnimation = gltf.animations[0];
         const animationMap = descriptor.animationMap;
-        if (firstAnimation && animationMap) {
+        let playModelAnimation: ((nextAction: string) => void) | null = null;
+        if (gltf.animations.length > 0 && animationMap) {
           mixer = new AnimationMixer(loadedRoot);
           const available = new Set(gltf.animations.map((clip) => clip.name));
           let current: AnimationAction | null = null;
-          playActionRef.current = (nextAction) => {
+          playModelAnimation = (nextAction) => {
             if (reducedMotion.matches || !mixer) return;
             const binding = resolveModelAnimation(
               nextAction,
@@ -214,8 +225,16 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
             current?.fadeOut(0.18);
             current = next;
           };
-          playActionRef.current(latestActionRef.current);
         }
+        playActionRef.current = (nextAction) => {
+          dispatchModelAction(
+            descriptor.backend,
+            vrm?.expressionManager,
+            playModelAnimation,
+            nextAction,
+          );
+        };
+        playActionRef.current(latestActionRef.current);
       },
       undefined,
       fail,
@@ -229,6 +248,7 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
       resizeObserver.disconnect();
       canvas.removeEventListener("webglcontextlost", handleContextLost);
       mixer?.stopAllAction();
+      vrm?.expressionManager?.resetValues();
       playActionRef.current = () => undefined;
       if (loadedRoot) {
         scene.remove(loadedRoot);

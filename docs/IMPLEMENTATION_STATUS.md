@@ -23,7 +23,7 @@
 | Event 与持久 Outbox | 部分实现 | 事务写入、租约、ACK、重试、死信、清理、健康状态和自动化测试 | 具体幂等消费者、跨重启投递恢复、Connector 投递审计 |
 | Sprite 角色与皮肤 | 部分实现 | 严格包契约、安全导入导出、序列/图集真实渲染、动作 fallback | 独立预览实例、命中区编辑、连续切换泄漏与性能门禁 |
 | glTF/GLB 角色 | 部分实现 | 独立 Worker 探测、命名动画报告、可编辑标准动作映射、原子安装、受控协议、Three.js 真渲染、cross-fade、framing、释放与失败回退 | 独立预览、持续切换与 GPU 压测、真实截图和跨平台验证 |
-| VRM 与 Live2D | 部分实现 | VRM 1.0 已实现 GLB 结构/扩展/版本/meta/humanoid 安装复验、`.vrm` Inventory、按需 `@pixiv/three-vrm` Adapter、逐帧物理更新、GPU 资源释放和独立 Bundle Budget；Live2D 因专有 Runtime/许可证尚未接入并由 Installer 提前拒绝 | VRM expression/look-at/动作映射与真实 GPU 长稳；Live2D 许可证感知 Adapter、参数映射、隔离和资源释放测试 |
+| VRM 与 Live2D | 部分实现 | VRM 1.0 已实现 GLB 结构/扩展/版本/meta/humanoid 安装复验、`.vrm` Inventory、按需 `@pixiv/three-vrm` Adapter、固定公共动作到标准 Expression Preset 的安全映射、逐帧物理更新、GPU 资源释放和独立 Bundle Budget；Live2D 因专有 Runtime/许可证尚未接入并由 Installer 提前拒绝 | VRM 用户映射、look-at、lip sync、动作重定向与真实 GPU 长稳；Live2D 许可证感知 Adapter、参数映射、隔离和资源释放测试 |
 | 主题包 | 部分实现 | `nimora.theme/1` 严格 Token、透明色合成后的 WCAG 最低对比度门禁、安装前局部预览、原子安装/激活、显式恢复内置主题、Safe Mode 宿主与 UI 同步回退 | 完成高对比度人工审查、主题编辑器、签名和跨平台视觉验收 |
 | 声音包 | 部分实现 | `nimora.voice/1`、WAV/OGG 头复验、Clip/Cue/字幕/增益预算、安装前预览、原子激活、Quiet Mode 门禁、Safe Mode 静音回退和逐次重开完整性复验 | 声音编辑器、录音/裁剪、混音总线、TTS 映射、许可证元数据和真实设备长稳 |
 | 行为包 | 未实现 | 统一 Asset Manifest 与动作语义规格 | 严格静态子契约、无代码动作图、编辑预览、资源预算、回退和 Renderer 兼容测试 |

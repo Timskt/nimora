@@ -5,6 +5,8 @@
 - Verify VRM 安装必须使用 `.vrm`、`model/gltf-binary`、GLB 2.0、声明的 `VRMC_vrm`、1.0 `specVersion`、meta 与 humanoid；普通 GLB 伪装 VRM、VRM 0.x 和未声明扩展全部拒绝。
 - Verify glTF 只加载 Three 基础图，VRM 才动态加载独立 Runtime；GLTF 依赖图与 VRM 增量分别执行 Bundle Budget，禁止拆块规避总图计费。
 - Verify WebGL Context 丢失、组件卸载和模型切换停止 Mixer/VRM 更新并释放纹理、材质、场景与 Context；第三方模型失败回退内置角色。
+- Verify `pet.click`/`pet.celebrate`、`pet.drag`、`pet.sleep`、`pet.error` 只映射到固定 VRM Preset 且权重归一化；每次切换先 reset，缺失 Preset 或损坏 Manager 不泄漏异常和旧表情。
+- Verify 无 Animation Clip 的合法 VRM 仍可接收 Expression；Reduced Motion 冻结连续 Mixer/VRM 更新但不阻止一次性静态表情投影；`pet.work`、未知动作和厂商私有名称回到 neutral。
 
 > 版本：0.1.0-draft  
 > 更新日期：2026-07-18

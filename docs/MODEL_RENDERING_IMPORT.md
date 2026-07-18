@@ -57,6 +57,8 @@ Nimora 将静态序列帧、2D 骨骼模型和实时 3D 角色视为同等的一
 - Lip Sync 接受归一化音素/viseme 与音量包络；无精确口型时回退开合嘴。
 - Gaze 接受屏幕目标和强度，必须限速，避免眩晕与监视感。
 - VRM 支持 humanoid retarget、expression、look-at、Spring Bone 和 MToon；不支持项必须显式报告。
+- 首个 VRM expression 纵切只接受宿主固定的标准 Preset：`happy`、`sad`、`surprised`、`relaxed`。每次语义动作先清空旧权重，模型缺失 Preset、Manager 损坏或动作无映射时安全回到 neutral；不得把 Manifest 私有名称直接写入模型参数。
+- Expression 是一次性状态投影，不依赖动画帧循环，因此 Reduced Motion 仍可切换静态表情；Mixer、Spring Bone 等连续运动继续尊重 Reduced Motion。
 - Live2D 参数映射保存在角色清单中，不把厂商内部参数泄漏为平台公共契约。
 - 外部摄像头、麦克风、面捕或动捕是独立 Capability，默认关闭并持续显示使用状态。
 
@@ -143,4 +145,4 @@ pnpm deskpet pack build ./character-pack
 
 当前规范化封装已经通过探测的原始 GLB 和用户确认的动作映射，不进行网格重写、纹理转码或许可证扫描；用户填写的许可证只是包元数据，不代表平台完成权利认证。`nimora.animation-map/1` 将平台动作绑定到精确动画名和循环语义，要求 `pet.idle`，限制 64 项并拒绝空白、超长或控制字符名称；宿主还会把每个绑定与安装时最新 Worker 报告中的动画名逐项比对，拒绝绕过 UI 提交的空映射或不存在片段。Pet Overlay 通过 `nimora.renderer/1` 获取验证后的映射，在模型只加载一次的前提下按状态切换 AnimationAction，以 180 ms cross-fade 过渡；一次性动作使用 `LoopOnce` 并停在末帧，循环动作使用 `LoopRepeat`，缺失动作沿 Manifest fallback 回到 `pet.idle`，映射到模型不存在的动画时拒绝播放而非猜测。减少动画偏好下 Mixer 保持暂停。切换或卸载时停止 Mixer、取消帧循环、断开 ResizeObserver 并释放几何体、材质、纹理和 WebGL context，context 丢失则显式回退内置角色。
 
-当前能力包含 GLB 2.0 与严格 VRM 1.0 Renderer，但尚未完成 VRM expression/look-at 公共语义映射，也不代表 Live2D 已启用。Inventory 与容器验证不等于发布者签名认证，许可证字段不等于权利扫描，Three.js WebGLRenderer 也不等于独立 Renderer 进程或 OS/GPU 沙箱。Importer Worker 的进程边界只能隔离崩溃、超时和协议输出，不能证明其无法访问其它 OS 资源。GLTF JSON、VRM 0.x、Live2D 和其它格式仍需各自完整边界，不能据此宣称格式矩阵全部可用。
+当前能力包含 GLB 2.0、严格 VRM 1.0 Renderer，以及固定公共动作到 VRM 标准 Expression Preset 的首个纵切，但尚未完成用户自定义 expression 映射、look-at、lip sync 或 humanoid 动作重定向，也不代表 Live2D 已启用。Inventory 与容器验证不等于发布者签名认证，许可证字段不等于权利扫描，Three.js WebGLRenderer 也不等于独立 Renderer 进程或 OS/GPU 沙箱。Importer Worker 的进程边界只能隔离崩溃、超时和协议输出，不能证明其无法访问其它 OS 资源。GLTF JSON、VRM 0.x、Live2D 和其它格式仍需各自完整边界，不能据此宣称格式矩阵全部可用。

@@ -43,3 +43,5 @@
 | R-034 | Quiet Mode 只改变 UI 状态而未在播放边界阻断音频 | 中 | 高 | 最终 Audio 播放适配器强制门禁；动作成功与音频失败解耦并加入端到端测试 |
 | R-035 | Manifest 宣称支持 Renderer，但 Loader/许可证/格式验证未落地，形成虚假兼容 | 低（VRM 已缓解） | 高 | VRM 1.0 使用 Importer + Installer 双层复验和独立 Runtime；未实现的 Live2D 在 Manifest 边界提前拒绝 |
 | R-036 | 架构边界仅靠文档约定，UI 或领域模块新增原生/Provider 旁路 | 低（直接依赖已门禁） | 高 | UI 原生调用收敛到 Desktop Port；自验证架构脚本和 CI 拒绝 Tauri、SQLite、HTTP Client 与 Provider Worker 的已定义越层依赖；继续建设传递依赖图 |
+| R-037 | Renderer 仅在模型含动画 Clip 时建立动作通道，导致纯 Expression VRM 静默失效 | 低（已缓解） | 高 | 动作通道统一组合可选 Animation 与 Expression Adapter；无 Clip 回归测试证明表情路径独立，Reduced Motion 不阻断静态投影 |
+| R-038 | 第三方模型借私有 Expression 名称扩大宿主语义或制造跨模型不一致 | 低（首纵切已缓解） | 高 | 首纵切仅允许固定 VRM 标准 Preset 并先 reset；未来用户映射必须经版本化 Schema、能力发现、预览和预算门禁，禁止直接参数透传 |

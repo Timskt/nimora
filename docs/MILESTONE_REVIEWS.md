@@ -196,6 +196,15 @@ Actions 分钟：
 - 渲染边界：`@pixiv/three-vrm` 仅在活动 VRM 时动态加载，驱动 MToon/Spring Bone 更新；卸载时深度释放 VRM 场景，失败沿用内置角色回退。
 - 性能边界：Bundle Gate 按依赖图计算 GLTF 基础图，并单独限制 VRM 增量，不能通过代码拆块隐藏真实成本。
 
+## M-2026-07-18 VRM 公共表情语义纵切
+
+- 修正架构缺口：动作分发不再依赖 Animation Clip 存在；只有 Expression 的合法 VRM 同样收到桌宠状态。
+- 依赖方向：公共动作到 VRM Preset 的策略位于纯 TypeScript 模块，Three.js 组件只组合动画与表情 Adapter，避免产品语义嵌入渲染生命周期。
+- 安全与鲁棒性：只允许固定标准 Preset，每次先 reset；缺失 Preset、Manager 异常、未知动作和私有名称均安全降级 neutral。
+- 无障碍语义：Reduced Motion 只冻结连续动画和物理更新，不阻止静态表情状态切换。
+- 自动化证据：桌面前端 40 项测试（含无 Animation Player 的组合分发回归）、TypeScript Build、生产 Bundle Budget 与架构边界门禁通过。
+- 剩余边界：用户自定义映射、look-at、lip sync、humanoid retarget、真实 VRM 样本截图及 GPU 长稳仍未完成。
+
 ## M-2026-07-18 架构边界机器化纠偏
 
 - 不足：目标拓扑与当前实现混写，架构文档仍声称 VRM 未实现并描述不存在的统一 Extension Host；三个 UI 组件直接导入 Tauri，平台 Port 约束只有文字承诺。
