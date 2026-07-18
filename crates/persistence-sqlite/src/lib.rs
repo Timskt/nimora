@@ -1,6 +1,7 @@
 //! `SQLite` persistence adapters for the `Nimora` runtime.
 
 mod agent_goal_store;
+mod auto_mode_store;
 mod automation_agent_journal;
 mod automation_journal;
 mod backup;
@@ -8,6 +9,7 @@ mod skill_approval_journal;
 mod skill_execution_history;
 
 pub use agent_goal_store::{AgentGoalSnapshot, SqliteAgentGoalRepository};
+pub use auto_mode_store::SqliteAutoModeRepository;
 pub use automation_agent_journal::{
     AutomationAgentJournalEntry, AutomationAgentJournalStatus, SqliteAutomationAgentJournal,
 };
@@ -1158,7 +1160,22 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
             schema_version INTEGER NOT NULL,
             payload TEXT NOT NULL,
             PRIMARY KEY (goal_id, revision)
-        );",
+        );
+        CREATE TABLE IF NOT EXISTS auto_mode_session (
+            session_id TEXT PRIMARY KEY,
+            goal_id TEXT NOT NULL REFERENCES agent_goal(goal_id) ON DELETE CASCADE,
+            plan_revision INTEGER NOT NULL CHECK (plan_revision > 0),
+            status TEXT NOT NULL CHECK (status IN ('running', 'paused', 'completed', 'cancelled')),
+            pause_reason TEXT,
+            created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+            updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
+            schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS auto_mode_session_goal_idx
+            ON auto_mode_session(goal_id, updated_at_ms DESC, session_id DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS auto_mode_one_running_per_goal_idx
+            ON auto_mode_session(goal_id) WHERE status = 'running';",
     )?;
     Ok(())
 }
@@ -1388,6 +1405,12 @@ pub enum SqlitePersistenceError {
     AgentGoalNotFound,
     #[error("Agent Goal was changed by another writer")]
     AgentGoalConflict,
+    #[error("Auto Mode session record or request is invalid")]
+    InvalidAutoModeSession,
+    #[error("Auto Mode session was not found")]
+    AutoModeSessionNotFound,
+    #[error("Auto Mode session was changed by another writer")]
+    AutoModeSessionConflict,
     #[error("Automation journal record or state transition is invalid")]
     InvalidAutomationJournal,
     #[error("Automation Agent journal record or state transition is invalid")]
@@ -1412,6 +1435,8 @@ pub enum SqlitePersistenceError {
     UnsupportedAgentHistoryVersion(u32),
     #[error("Agent Goal version {0} is unsupported")]
     UnsupportedAgentGoalVersion(u32),
+    #[error("Auto Mode session version {0} is unsupported")]
+    UnsupportedAutoModeSessionVersion(u32),
     #[error("outbox lease is not owned by this consumer")]
     OutboxLeaseNotOwned,
     #[error("backup or restore request is invalid")]

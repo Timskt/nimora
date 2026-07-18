@@ -35,6 +35,49 @@ fn nimora_with_stdin(arguments: &[&str], input: &[u8]) -> Output {
     child.wait_with_output().expect("wait for nimora")
 }
 
+fn create_auto_mode_session(database_path: &str) -> (String, String) {
+    let created = nimora_with_stdin(
+        &[
+            "ai",
+            "goal",
+            "create",
+            "--database",
+            database_path,
+            "--input",
+            "-",
+        ],
+        br#"{"title":"Supervise","objective":"Run bounded work","steps":["Inspect state"]}"#,
+    );
+    assert!(created.status.success());
+    let created: Value = serde_json::from_slice(&created.stdout).expect("Goal output");
+    let goal_id = created["goal"]["id"].as_str().expect("Goal ID");
+    let started = nimora_with_stdin(
+        &[
+            "ai",
+            "goal",
+            "auto",
+            "start",
+            "--database",
+            database_path,
+            "--goal-id",
+            goal_id,
+            "--input",
+            "-",
+        ],
+        br#"{"maxCycles":4,"maxConcurrency":1,"budget":{"maxSteps":4,"maxToolCalls":2,"maxElapsedMs":10000,"maxInputTokens":1000,"maxOutputTokens":500,"maxCostMicrounits":0},"maximumDataClassification":"personal","toolAllowlist":["pet.state.read"],"workspaceRevision":"git:abc"}"#,
+    );
+    assert!(started.status.success());
+    let started: Value = serde_json::from_slice(&started.stdout).expect("start output");
+    assert_eq!(started["session"]["status"], "running");
+    (
+        goal_id.to_owned(),
+        started["session"]["id"]
+            .as_str()
+            .expect("session ID")
+            .to_owned(),
+    )
+}
+
 #[test]
 fn provider_list_is_machine_readable_and_credential_free() {
     let output = nimora()
@@ -508,5 +551,84 @@ fn goal_cli_persists_revises_and_requires_completion_evidence() {
     let listed: Value = serde_json::from_slice(&listed.stdout).expect("list output");
     assert_eq!(listed["goals"][0]["id"], goal_id);
     assert_eq!(listed["goals"][0]["currentPlanRevision"], 2);
+    let _ = fs::remove_file(database);
+}
+
+#[test]
+fn auto_mode_cli_persists_and_revalidates_resume_bindings() {
+    let database = temporary_database("auto-mode");
+    let database_path = database.to_str().expect("database path");
+    let (_, session_id) = create_auto_mode_session(database_path);
+
+    let paused = nimora()
+        .args([
+            "ai",
+            "goal",
+            "auto",
+            "pause",
+            "--database",
+            database_path,
+            "--session-id",
+            &session_id,
+        ])
+        .output()
+        .expect("pause session");
+    assert!(paused.status.success());
+
+    let rejected = nimora()
+        .args([
+            "ai",
+            "goal",
+            "auto",
+            "resume",
+            "--database",
+            database_path,
+            "--session-id",
+            &session_id,
+            "--workspace-revision",
+            "git:changed",
+        ])
+        .output()
+        .expect("reject changed workspace");
+    assert_eq!(rejected.status.code(), Some(3));
+    assert!(rejected.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&rejected.stderr).expect("JSON error");
+    assert_eq!(error["error"], "auto-mode-input");
+
+    let resumed = nimora()
+        .args([
+            "ai",
+            "goal",
+            "auto",
+            "resume",
+            "--database",
+            database_path,
+            "--session-id",
+            &session_id,
+            "--workspace-revision",
+            "git:abc",
+        ])
+        .output()
+        .expect("resume session");
+    assert!(resumed.status.success());
+    let resumed: Value = serde_json::from_slice(&resumed.stdout).expect("resume output");
+    assert_eq!(resumed["session"]["status"], "running");
+
+    let cancelled = nimora()
+        .args([
+            "ai",
+            "goal",
+            "auto",
+            "cancel",
+            "--database",
+            database_path,
+            "--session-id",
+            &session_id,
+        ])
+        .output()
+        .expect("cancel session");
+    assert!(cancelled.status.success());
+    let cancelled: Value = serde_json::from_slice(&cancelled.stdout).expect("cancel output");
+    assert_eq!(cancelled["session"]["status"], "cancelled");
     let _ = fs::remove_file(database);
 }

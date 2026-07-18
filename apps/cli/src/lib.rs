@@ -2,13 +2,14 @@ use nimora_agent_provider_worker::{OllamaEndpoint, WorkerOllamaProvider, verify_
 use nimora_agent_runtime::{
     AgentAutonomy, AgentBudget, AgentCoordinator, AgentGoal, AgentGoalStatus, AgentPlan,
     AgentPlanStep, AgentPlanStepStatus, AgentTask, AgentTaskGateway, AgentTaskGatewayPolicy,
-    AgentTaskOrigin, AgentTaskRequest, CancellationFlag, DataClassification,
-    DeterministicLocalProvider, ProviderExecutionContext, ProviderMessage, ProviderMessageRole,
-    ProviderRegistry, ProviderStepInput, ProviderStepOutcome,
+    AgentTaskOrigin, AgentTaskRequest, AutoModePauseReason, AutoModePolicy, AutoModeSession,
+    CancellationFlag, DataClassification, DeterministicLocalProvider, ProviderExecutionContext,
+    ProviderMessage, ProviderMessageRole, ProviderRegistry, ProviderStepInput, ProviderStepOutcome,
 };
 use nimora_agent_tools::production_tool_registry;
 use nimora_persistence_sqlite::{
     AgentHistoryRecord, SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
+    SqliteAutoModeRepository,
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -107,6 +108,11 @@ pub fn run(arguments: &[String]) -> Result<String, CliError> {
         ["ai", "goal", "show", rest @ ..] => goal_show(rest)?,
         ["ai", "goal", "plan", "replace", rest @ ..] => goal_plan_replace(rest)?,
         ["ai", "goal", "status", "set", rest @ ..] => goal_status_set(rest)?,
+        ["ai", "goal", "auto", "start", rest @ ..] => goal_auto_start(rest)?,
+        ["ai", "goal", "auto", "status", rest @ ..] => goal_auto_status(rest)?,
+        ["ai", "goal", "auto", "pause", rest @ ..] => goal_auto_pause(rest)?,
+        ["ai", "goal", "auto", "resume", rest @ ..] => goal_auto_resume(rest)?,
+        ["ai", "goal", "auto", "cancel", rest @ ..] => goal_auto_cancel(rest)?,
         ["ai", "run", rest @ ..] => run_task(rest)?,
         _ => return Err(CliError::new("usage", "unsupported command; use --help", 2)),
     };
@@ -129,7 +135,12 @@ fn help() -> Value {
             "nimora ai goal list --database <path> [--limit <1..200>]",
             "nimora ai goal show --database <path> --goal-id <uuid>",
             "nimora ai goal plan replace --database <path> --goal-id <uuid> --input <path|->",
-            "nimora ai goal status set --database <path> --goal-id <uuid> --status <active|paused|completed|cancelled>"
+            "nimora ai goal status set --database <path> --goal-id <uuid> --status <active|paused|completed|cancelled>",
+            "nimora ai goal auto start --database <path> --goal-id <uuid> --input <path|->",
+            "nimora ai goal auto status --database <path> --session-id <uuid>",
+            "nimora ai goal auto pause --database <path> --session-id <uuid>",
+            "nimora ai goal auto resume --database <path> --session-id <uuid> --workspace-revision <revision>",
+            "nimora ai goal auto cancel --database <path> --session-id <uuid>"
         ]
     })
 }
@@ -292,6 +303,17 @@ struct GoalPlanStepInput {
     evidence: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AutoModeStartInput {
+    max_cycles: u32,
+    max_concurrency: u16,
+    budget: AgentBudget,
+    maximum_data_classification: DataClassification,
+    tool_allowlist: Vec<String>,
+    workspace_revision: String,
+}
+
 fn goal_repository(path: &str) -> Result<SqliteAgentGoalRepository, CliError> {
     if path.is_empty() {
         return Err(CliError::new("usage", "database path cannot be empty", 2));
@@ -434,6 +456,199 @@ fn goal_status_set(arguments: &[&str]) -> Result<Value, CliError> {
         .map_err(goal_storage_error)?;
     Ok(
         json!({"spec": "nimora.ai-goal-snapshot/1", "goal": snapshot.goal, "currentPlan": snapshot.current_plan}),
+    )
+}
+
+fn auto_repository(path: &str) -> Result<SqliteAutoModeRepository, CliError> {
+    if path.is_empty() {
+        return Err(CliError::new("usage", "database path cannot be empty", 2));
+    }
+    SqliteAutoModeRepository::open(Path::new(path)).map_err(auto_storage_error)
+}
+
+fn goal_auto_start(arguments: &[&str]) -> Result<Value, CliError> {
+    let (database, goal_id, input_path) = parse_goal_identity_input(arguments)?;
+    let input = read_bounded_json::<AutoModeStartInput>(input_path, "Auto Mode policy")?;
+    let snapshot = goal_repository(database)?
+        .get(goal_id)
+        .map_err(goal_storage_error)?
+        .ok_or_else(|| CliError::new("goal-not-found", "Agent Goal was not found", 5))?;
+    let policy = AutoModePolicy::new(
+        input.max_cycles,
+        input.max_concurrency,
+        input.budget,
+        input.maximum_data_classification,
+        input.tool_allowlist,
+        input.workspace_revision,
+    )
+    .map_err(auto_input_error)?;
+    let session = AutoModeSession::start(
+        &snapshot.goal,
+        &snapshot.current_plan,
+        policy,
+        current_time_ms()?.max(snapshot.goal.updated_at_ms),
+    )
+    .map_err(auto_input_error)?;
+    auto_repository(database)?
+        .create(&session)
+        .map_err(auto_storage_error)?;
+    Ok(json!({"spec": "nimora.ai-auto-mode-session/1", "session": session}))
+}
+
+fn goal_auto_status(arguments: &[&str]) -> Result<Value, CliError> {
+    let (database, session_id) = parse_auto_identity(arguments)?;
+    let session = load_auto_session(database, session_id)?;
+    Ok(json!({"spec": "nimora.ai-auto-mode-session/1", "session": session}))
+}
+
+fn goal_auto_pause(arguments: &[&str]) -> Result<Value, CliError> {
+    let (database, session_id) = parse_auto_identity(arguments)?;
+    let repository = auto_repository(database)?;
+    let mut session = load_auto_session_from(&repository, session_id)?;
+    let previous = session.updated_at_ms;
+    session
+        .pause(
+            AutoModePauseReason::UserRequested,
+            current_time_ms()?.max(previous),
+        )
+        .map_err(auto_input_error)?;
+    repository
+        .update(&session, previous)
+        .map_err(auto_storage_error)?;
+    Ok(json!({"spec": "nimora.ai-auto-mode-session/1", "session": session}))
+}
+
+fn goal_auto_resume(arguments: &[&str]) -> Result<Value, CliError> {
+    let (database, session_id, workspace_revision) = parse_auto_resume(arguments)?;
+    let repository = auto_repository(database)?;
+    let mut session = load_auto_session_from(&repository, session_id)?;
+    let snapshot = goal_repository(database)?
+        .get(session.goal_id)
+        .map_err(goal_storage_error)?
+        .ok_or_else(|| CliError::new("goal-not-found", "Agent Goal was not found", 5))?;
+    let previous = session.updated_at_ms;
+    let fingerprint = session.policy_fingerprint.clone();
+    session
+        .resume(
+            &snapshot.goal,
+            &snapshot.current_plan,
+            workspace_revision,
+            &fingerprint,
+            current_time_ms()?.max(previous),
+        )
+        .map_err(auto_input_error)?;
+    repository
+        .update(&session, previous)
+        .map_err(auto_storage_error)?;
+    Ok(json!({"spec": "nimora.ai-auto-mode-session/1", "session": session}))
+}
+
+fn goal_auto_cancel(arguments: &[&str]) -> Result<Value, CliError> {
+    let (database, session_id) = parse_auto_identity(arguments)?;
+    let repository = auto_repository(database)?;
+    let mut session = load_auto_session_from(&repository, session_id)?;
+    let previous = session.updated_at_ms;
+    session
+        .cancel(current_time_ms()?.max(previous))
+        .map_err(auto_input_error)?;
+    repository
+        .update(&session, previous)
+        .map_err(auto_storage_error)?;
+    Ok(json!({"spec": "nimora.ai-auto-mode-session/1", "session": session}))
+}
+
+fn load_auto_session(database: &str, id: uuid::Uuid) -> Result<AutoModeSession, CliError> {
+    load_auto_session_from(&auto_repository(database)?, id)
+}
+
+fn load_auto_session_from(
+    repository: &SqliteAutoModeRepository,
+    id: uuid::Uuid,
+) -> Result<AutoModeSession, CliError> {
+    repository
+        .get(id)
+        .map_err(auto_storage_error)?
+        .ok_or_else(|| {
+            CliError::new(
+                "auto-session-not-found",
+                "Auto Mode session was not found",
+                5,
+            )
+        })
+}
+
+fn parse_auto_identity<'a>(arguments: &'a [&'a str]) -> Result<(&'a str, uuid::Uuid), CliError> {
+    let mut database = None;
+    let mut session_id = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "--database" if index + 1 < arguments.len() => {
+                database = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--session-id" if index + 1 < arguments.len() => {
+                session_id = Some(parse_session_id(arguments[index + 1])?);
+                index += 2;
+            }
+            _ => return Err(auto_usage_error()),
+        }
+    }
+    Ok((
+        database.ok_or_else(auto_usage_error)?,
+        session_id.ok_or_else(auto_usage_error)?,
+    ))
+}
+
+fn parse_auto_resume<'a>(
+    arguments: &'a [&'a str],
+) -> Result<(&'a str, uuid::Uuid, &'a str), CliError> {
+    let mut database = None;
+    let mut session_id = None;
+    let mut workspace_revision = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "--database" if index + 1 < arguments.len() => {
+                database = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--session-id" if index + 1 < arguments.len() => {
+                session_id = Some(parse_session_id(arguments[index + 1])?);
+                index += 2;
+            }
+            "--workspace-revision" if index + 1 < arguments.len() => {
+                workspace_revision = Some(arguments[index + 1]);
+                index += 2;
+            }
+            _ => return Err(auto_usage_error()),
+        }
+    }
+    Ok((
+        database.ok_or_else(auto_usage_error)?,
+        session_id.ok_or_else(auto_usage_error)?,
+        workspace_revision.ok_or_else(auto_usage_error)?,
+    ))
+}
+
+fn parse_session_id(value: &str) -> Result<uuid::Uuid, CliError> {
+    uuid::Uuid::parse_str(value)
+        .map_err(|_| CliError::new("usage", "Auto Mode session ID is invalid", 2))
+}
+
+fn auto_usage_error() -> CliError {
+    CliError::new("usage", "Auto Mode command arguments are invalid", 2)
+}
+
+fn auto_input_error(_: impl std::fmt::Display) -> CliError {
+    CliError::new("auto-mode-input", "Auto Mode request is invalid", 3)
+}
+
+fn auto_storage_error(_: impl std::fmt::Display) -> CliError {
+    CliError::new(
+        "auto-mode-storage",
+        "Auto Mode storage operation failed",
+        10,
     )
 }
 

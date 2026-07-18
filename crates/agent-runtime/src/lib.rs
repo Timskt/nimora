@@ -6,12 +6,17 @@ use std::{collections::BTreeMap, fmt, str::FromStr, time::Duration};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod auto_mode;
 mod coordinator;
 mod deterministic;
 mod goal;
 mod provider;
 mod task_gateway;
 
+pub use auto_mode::{
+    AutoModeError, AutoModePauseReason, AutoModePolicy, AutoModeSession, AutoModeStatus,
+    AutoModeStepDecision, AutoModeStepRequest, AutoModeUsage,
+};
 pub use coordinator::{
     AgentCoordinator, CoordinatorError, PlannedToolCall, ProviderStepInput, ProviderStepOutcome,
     ProviderToolTurn, ToolStepOutcome,
