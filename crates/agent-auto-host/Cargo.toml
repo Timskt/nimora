@@ -1,0 +1,19 @@
+[package]
+name = "nimora-agent-auto-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nimora-agent-runtime = { path = "../agent-runtime" }
+nimora-agent-workspace-host = { path = "../agent-workspace-host" }
+nimora-persistence-sqlite = { path = "../persistence-sqlite" }
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

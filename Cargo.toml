@@ -3,6 +3,7 @@ members = [
   "apps/cli",
   "crates/agent-runtime",
   "crates/agent-workspace-host",
+  "crates/agent-auto-host",
   "crates/agent-context-admission",
   "crates/module-agent-adapter",
   "crates/skill-runtime",
