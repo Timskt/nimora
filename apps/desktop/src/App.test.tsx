@@ -1,11 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { itemPresentation, keepsakePresentation, navigation, navItemClassName, normalizedPetName, runtimeActivities, voiceGain } from "./App";
+import { itemPresentation, keepsakePresentation, navigation, navItemClassName, normalizedPetName, requestedAgentView, requestedNavigation, runtimeActivities, voiceGain } from "./App";
 import { petInventoryQuantity, petItemPresentation } from "./components/petItems";
 
 describe("navItemClassName", () => {
   it("adds the active state only to the selected destination", () => {
     expect(navItemClassName(true)).toBe("nav-item active");
     expect(navItemClassName(false)).toBe("nav-item");
+  });
+});
+
+describe("requestedNavigation", () => {
+  it("accepts only registered control-center sections", () => {
+    expect(requestedNavigation("?section=Agent&intent=agent_chat")).toBe("Agent");
+    expect(requestedNavigation("?section=%E8%AE%BE%E7%BD%AE")).toBe("设置");
+    expect(requestedNavigation("?section=admin")).toBeNull();
+    expect(requestedNavigation("?section=https%3A%2F%2Fevil.example")).toBeNull();
+  });
+});
+
+describe("requestedAgentView", () => {
+  it("routes task intent to goal control and defaults safely", () => {
+    expect(requestedAgentView("?section=Agent&intent=agent_task")).toBe("control");
+    expect(requestedAgentView("?section=Agent&intent=agent_chat")).toBe("run");
+    expect(requestedAgentView("?intent=unknown")).toBe("run");
   });
 });
 

@@ -13,6 +13,16 @@ const loadAiCreatorWorkspace = () => import("./components/AiCreatorWorkspace").t
 const loadDataProtection = () => import("./components/DataProtection").then((module) => ({ default: module.DataProtection }));
 
 export const navigation = ["概览", "角色", "Agent", "自动化", "扩展", "活动", "设置"] as const;
+type NavigationItem = (typeof navigation)[number];
+
+export function requestedNavigation(search: string): NavigationItem | null {
+  const requested = new URLSearchParams(search).get("section");
+  return navigation.find((item) => item === requested) ?? null;
+}
+
+export function requestedAgentView(search: string): "run" | "control" {
+  return new URLSearchParams(search).get("intent") === "agent_task" ? "control" : "run";
+}
 
 export function navItemClassName(isActive: boolean): string {
   return isActive ? "nav-item active" : "nav-item";
@@ -72,7 +82,8 @@ async function playVerifiedAudio(clip: AssetPreviewAudio): Promise<void> {
 }
 
 export function App() {
-  const [active, setActive] = useState<(typeof navigation)[number]>("概览");
+  const [active, setActive] = useState<NavigationItem>(() => requestedNavigation(window.location.search) ?? "概览");
+  const [agentView, setAgentView] = useState<"run" | "control">(() => requestedAgentView(window.location.search));
   const [quiet, setQuiet] = useState(false);
   const [safeMode, setSafeMode] = useState(false);
   const [recoveryMode, setRecoveryMode] = useState(false);
@@ -102,6 +113,23 @@ export function App() {
     }).catch(() => {
       setNotice("运行时状态暂时不可用");
     });
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void desktopApi.onControlCenterNavigate((destination) => {
+      setActive(destination === "settings" ? "设置" : "Agent");
+      if (destination !== "settings") setAgentView(destination === "agent_task" ? "control" : "run");
+      setNotice(destination === "agent_chat" ? "从桌宠继续聊天" : destination === "agent_task" ? "从桌宠开始任务" : "从桌宠打开设置");
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlisten = dispose;
+    }).catch(() => setNotice("桌宠导航监听暂时不可用"));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   async function renamePet() {
@@ -270,7 +298,7 @@ export function App() {
           </div>
         </section>}
 
-        {active === "角色" ? <LazyWorkspace loader={loadCreatorStudio} name="角色工作室" componentProps={{ onThemeChange: setActiveTheme }} /> : active === "扩展" ? <LazyWorkspace loader={loadAiCreatorWorkspace} name="AI 扩展工坊" componentProps={{ disabled: safeMode || recoveryMode }} /> : active === "Agent" ? <LazyWorkspace loader={loadAgentWorkspace} name="Agent 工作区" componentProps={{ safeMode, recoveryMode, onNotice: updateNotice }} /> : active === "自动化" ? <LazyWorkspace loader={loadAutomationWorkspace} name="自动化工作区" componentProps={{ disabled: safeMode || recoveryMode, onNotice: updateNotice }} /> : active === "设置" ? <LazyWorkspace loader={loadDataProtection} name={recoveryMode ? "数据恢复中心" : "设置与数据保护"} componentProps={{ recoveryMode, onNotice: updateNotice }} /> : <div className="dashboard-grid">
+        {active === "角色" ? <LazyWorkspace loader={loadCreatorStudio} name="角色工作室" componentProps={{ onThemeChange: setActiveTheme }} /> : active === "扩展" ? <LazyWorkspace loader={loadAiCreatorWorkspace} name="AI 扩展工坊" componentProps={{ disabled: safeMode || recoveryMode }} /> : active === "Agent" ? <LazyWorkspace loader={loadAgentWorkspace} name="Agent 工作区" componentProps={{ safeMode, recoveryMode, initialView: agentView, onNotice: updateNotice }} /> : active === "自动化" ? <LazyWorkspace loader={loadAutomationWorkspace} name="自动化工作区" componentProps={{ disabled: safeMode || recoveryMode, onNotice: updateNotice }} /> : active === "设置" ? <LazyWorkspace loader={loadDataProtection} name={recoveryMode ? "数据恢复中心" : "设置与数据保护"} componentProps={{ recoveryMode, onNotice: updateNotice }} /> : <div className="dashboard-grid">
           <section className="pet-stage" aria-labelledby="pet-heading">
             <div className="stage-copy">
               <span className="pill">{notice}</span>

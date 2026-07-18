@@ -180,6 +180,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 const CONTROL_CENTER_LABEL: &str = "control-center";
+const CONTROL_CENTER_NAVIGATE_EVENT: &str = "nimora://control-center-navigate";
 const PET_WINDOW_LABEL: &str = "pet";
 const CHARACTER_RENDERER_CHANGED_EVENT: &str = "nimora://character-renderer-changed";
 const PET_AUTONOMY_CHANGED_EVENT: &str = "nimora://pet-autonomy-changed";
@@ -10553,7 +10554,7 @@ fn publish_tray_failure(app: &AppHandle, action: TrayAction, error: &DesktopErro
     );
 }
 
-fn show_control_center(app: &AppHandle) -> Result<Command, DesktopError> {
+fn show_control_center(app: &AppHandle, source: &'static str) -> Result<Command, DesktopError> {
     let window = app
         .get_webview_window(CONTROL_CENTER_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(CONTROL_CENTER_LABEL.to_owned()))?;
@@ -10564,8 +10565,41 @@ fn show_control_center(app: &AppHandle) -> Result<Command, DesktopError> {
         &app.state::<DesktopState>(),
         "desktop.window.control-center.open",
         "desktop.window.control-center-opened",
-        serde_json::json!({ "source": "tray" }),
+        serde_json::json!({ "source": source }),
     )
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ControlCenterDestination {
+    AgentChat,
+    AgentTask,
+    Settings,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OpenControlCenterRequest {
+    destination: ControlCenterDestination,
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn open_control_center(
+    request: OpenControlCenterRequest,
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+) -> Result<(), DesktopError> {
+    if window.label() != PET_WINDOW_LABEL {
+        return Err(DesktopError::WindowUnavailable(window.label().to_owned()));
+    }
+    show_control_center(&app, "pet")?;
+    app.emit_to(
+        CONTROL_CENTER_LABEL,
+        CONTROL_CENTER_NAVIGATE_EVENT,
+        request.destination,
+    )?;
+    Ok(())
 }
 
 fn restore_pet_interaction(app: &AppHandle) -> Result<Command, DesktopError> {
@@ -10674,7 +10708,7 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
         .on_menu_event(|app, event| {
             let action = TrayAction::from(event.id.as_ref());
             let result = match action {
-                TrayAction::OpenControlCenter => show_control_center(app).map(|_| ()),
+                TrayAction::OpenControlCenter => show_control_center(app, "tray").map(|_| ()),
                 TrayAction::RestoreInteraction => restore_pet_interaction(app).map(|_| ()),
                 TrayAction::EnterSafeMode => {
                     if let Some(state) = app.try_state::<DesktopState>() {
@@ -10702,7 +10736,7 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
         })
         .on_tray_icon_event(|tray, event| {
             if matches!(event, TrayIconEvent::DoubleClick { .. })
-                && let Err(error) = show_control_center(tray.app_handle())
+                && let Err(error) = show_control_center(tray.app_handle(), "tray")
             {
                 publish_tray_failure(tray.app_handle(), TrayAction::OpenControlCenter, &error);
             }
@@ -10815,6 +10849,7 @@ pub fn run() {
             reject_agent_tool,
             drain_runtime_events,
             outbox_snapshot,
+            open_control_center,
             backup_health,
             create_backup,
             request_database_restore,

@@ -20,6 +20,7 @@ export const petCareActions = ["feed", "play", "groom"] as const;
 export type PetCareAction = (typeof petCareActions)[number];
 export const petItemIds = ["berry_bite", "star_ball", "bubble_soap"] as const;
 export type PetItemId = (typeof petItemIds)[number];
+export type ControlCenterDestination = "agent_chat" | "agent_task" | "settings";
 export type CommandRisk = "safe" | "low" | "medium" | "high" | "critical";
 
 export interface DesktopSnapshot {
@@ -948,6 +949,8 @@ export interface DesktopApi {
   onCharacterRendererChanged(handler: () => void): Promise<() => void>;
   onPetAutonomyChanged(handler: () => void): Promise<() => void>;
   onPetVitalsChanged(handler: () => void): Promise<() => void>;
+  onControlCenterNavigate(handler: (destination: ControlCenterDestination) => void): Promise<() => void>;
+  openControlCenter(destination: ControlCenterDestination): Promise<void>;
   snapshot(): Promise<DesktopSnapshot>;
   drainEvents(): Promise<NimoraEvent[]>;
   outboxSnapshot(): Promise<OutboxSnapshot>;
@@ -1188,6 +1191,11 @@ export function createDesktopApi(
       async onCharacterRendererChanged() { return () => undefined; },
       async onPetAutonomyChanged() { return () => undefined; },
       async onPetVitalsChanged() { return () => undefined; },
+      async onControlCenterNavigate() { return () => undefined; },
+      async openControlCenter(destination) {
+        const section = destination === "settings" ? "设置" : "Agent";
+        window.location.assign(`/?section=${encodeURIComponent(section)}&intent=${destination}`);
+      },
       async snapshot() { refreshPreviewRelationship(); return structuredClone(previewSnapshot); },
       async drainEvents() { return []; },
       async outboxSnapshot() { return { pending: 0, leased: 0, delivered: 0, deadLetter: 0 }; },
@@ -1594,6 +1602,10 @@ export function createDesktopApi(
     async onPetVitalsChanged(handler) {
       return await listen("nimora://pet-vitals-changed", handler);
     },
+    async onControlCenterNavigate(handler) {
+      return await listen<ControlCenterDestination>("nimora://control-center-navigate", (event) => handler(event.payload));
+    },
+    openControlCenter: async (destination) => { await invokeCommand("open_control_center", { request: { destination } }); },
     snapshot: async () => await invokeCommand("desktop_snapshot") as DesktopSnapshot,
     drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],
     outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,

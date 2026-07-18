@@ -15,6 +15,7 @@ type PendingControl =
 interface AgentWorkspaceProps {
   safeMode: boolean;
   recoveryMode: boolean;
+  initialView?: "run" | "control";
   onNotice(message: string): void;
 }
 
@@ -50,8 +51,8 @@ export function reasoningPolicyForChoice(choice: ReasoningChoice): ModelReasonin
   return { strategy: choice as "adaptive" | "cost_saver" | "quality_first", requested: "auto", allowAutomaticDowngrade: true };
 }
 
-export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorkspaceProps) {
-  const [view, setView] = useState<"run" | "control" | "providers" | "history">("run");
+export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", onNotice }: AgentWorkspaceProps) {
+  const [view, setView] = useState<"run" | "control" | "providers" | "history">(initialView);
   const [controlCenter, setControlCenter] = useState<DesktopAutoModeControlCenter | null>(null);
   const [pendingControl, setPendingControl] = useState<PendingControl | null>(null);
   const [controlReason, setControlReason] = useState("");
@@ -77,6 +78,8 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
     void refreshCatalog();
     void desktopApi.agentHistory(5).then(setHistory).catch(() => onNotice("Agent 历史暂时不可用"));
   }, [onNotice]);
+
+  useEffect(() => setView(initialView), [initialView]);
 
   useEffect(() => {
     if (view !== "control") return;
