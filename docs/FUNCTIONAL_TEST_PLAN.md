@@ -614,6 +614,17 @@ ID / 标题 / 优先级 / 前置条件
 
 ## 外接 AI 能力开发平台
 
+- Verify AI 对同一目标按设置、组合、Automation、Program、Skill、Connector 和 L4 Proposal 比较，选择最低充分层级并给出不自动化理由。
+- Verify 多模态 Perception Pipeline 对每个来源单独授权，原始音视频默认不持久化，低置信推断不能触发高风险动作。
+- Verify Personal API 只能映射 Registry 中的 Command/Query，声明鉴权、幂等、速率、离线和撤销语义，不能生成任意本地 Handler。
+- Verify Agent Team 中子 Agent 不继承父 Agent 权限，多数投票不能覆盖策略、确定性测试或参数绑定批准。
+- Verify Prompt、Context、Memory 和 Cache Pack 保留来源与数据分类，摘要不冒充原文，跨 Provider 缓存按策略隔离且支持彻底清除。
+- Verify Policy Compiler 输出规则草案和冲突报告；自然语言、聊天同意和模型自评均不能成为授权凭证。
+- Verify Simulation Pack 与生产 Capability 物理隔离，覆盖超时、重复、乱序、部分成功和恢复，测试通过不自动启用生产能力。
+- Verify Asset Build Project 保留来源、许可证和原件，Importer 隔离探测，资产包不能夹带代码或动态加载可信 Handler。
+- Verify 本地分叉升级显示上游、当前本地和新上游三方 Diff，冲突、权限扩大或数据驻留变化失败关闭。
+- Verify Retirement Plan 撤销 Grant、Secret、订阅、调度与缓存，导出和删除传播产生可验证收据。
+
 - Verify 同一用户目标分别存在配置、组合和代码方案时，Creator 返回可比较方案并默认选择最低充分复杂度。
 - Verify Registry 无法表达目标时返回结构化 `CapabilityGap`；未知 Command、私有 IPC、任意系统调用和自生成 Handler 均在写盘与执行前拒绝。
 - Verify `catalog.search/explain` 只暴露调用方获准的能力元数据，不泄露 Secret、内部句柄、未授权模块或数据正文。

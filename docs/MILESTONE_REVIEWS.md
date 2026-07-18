@@ -260,6 +260,14 @@ Actions 分钟：
 - 证据：纯故障注入覆盖全成功、首项失败后继续、多项失败稳定顺序和底层错误不泄漏；架构门禁拒绝协调器依赖 Tauri，Desktop Host 与 Diagnostics Bundle 测试共同验证接线和稳定事件码。
 - 剩余边界：退出 Safe Mode 在领域状态切回 Normal 后仍存在多步恢复失败窗口；必须引入显式 `RecoveryPending/Degraded` 和可重试补偿，不能复用“保持 Safe”的进入语义草率处理。
 
+## M-2026-07-18 外接 AI 原生扩展能力面复核
+
+- 发现：原有 Creator 已覆盖 Program、Skill、Automation 和通用能力工厂，但对感知、个人 API、策略编译、实验、数字孪生、本地分叉与完整退役的产品边界仍分散。
+- 裁决：新增十六类能力面，全部复用四级扩展模型、`CreatorArtifact`、可信 `ArtifactHandler` 与 Capability Gateway；不为新产物建立权限或安装旁路。
+- 安全：补充多模态持续同意、Agent Team 权限不继承、模型不可修改自身评分标准、仿真与生产物理隔离、AI 不持有签名密钥和数字遗产撤权收据。
+- 产品：Creator Studio 从单纯生成器升级为“发现—设计—构建—验证—授权—安装—观察—维护—退役”工作台，并为普通用户、二次元创作者、极客、开发者和团队提供同能力的渐进视图。
+- 实施边界：本里程碑只建立正式工程基线；下一步需逐个实现通用 Gap、Composition、Artifact Handler 和 Simulation 纵切，不能将文档目录误报为可运行功能。
+
 ## M-2026-07-18 AI 辅助扩展草案
 
 - 目标：让外接 AI 帮用户创建 User Program、Skill 与 Automation，同时不继承普通 Agent 的生产 Tool 权限。

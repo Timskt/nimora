@@ -1,5 +1,12 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-18 — 外接 AI 原生扩展能力面基线
+
+- 新增多模态感知、个人 API、个人数据应用、语义映射、协议适配、示教、Agent Team、上下文工程、模型路由、策略编译、数字孪生、实验优化、资产流水线、生态迁移、协作发布与数字遗产共十六类目标能力面。
+- 所有新增产物继续归一到 `CreatorArtifact` 与可信 `ArtifactHandler` 生命周期；Creator AI 只能使用受控 Builder Tool 生成项目或 Patch，不获得 Node、Tauri、文件、数据库、网络、Provider 或 Secret 原生对象。
+- 文档补充了跨能力组合、渐进式 Creator UI、离线与 Safe Mode、预算、取消、未知副作用和完整退役测试门禁。
+- 本条是产品与架构基线，不是功能完成声明；通用 Capability Gap、Composition Planner、CreatorArtifact Handler 和 Simulation Pack 尚未形成真实代码纵切。
+
 ## 2026-07-18 — Automation 资源与 AI 费用治理可观测纵切
 
 - SQLite Governance 新增按 Automation 和 UTC 日桶聚合的隐私安全快照，只返回活跃租约、最近启动时间及 reserved/settled/indeterminate 费用，不暴露任务内容、事件正文或 Provider 数据。
