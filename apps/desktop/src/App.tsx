@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { ProfileManager } from "./components/ProfileManager";
 import { CreatorStudio } from "./components/CreatorStudio";
 import { DataProtection } from "./components/DataProtection";
 import { AgentWorkspace } from "./components/AgentWorkspace";
 import { AutomationWorkspace } from "./components/AutomationWorkspace";
-import type { OutboxSnapshot } from "./platform/desktop";
+import type { ActiveThemeSnapshot, OutboxSnapshot, ThemeDescriptor } from "./platform/desktop";
 import { desktopApi } from "./platform/desktop";
 
 export const navigation = ["概览", "角色", "Agent", "自动化", "扩展", "活动", "设置"] as const;
@@ -20,11 +20,12 @@ export function App() {
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [safetyBusy, setSafetyBusy] = useState(false);
   const [outbox, setOutbox] = useState<OutboxSnapshot | null>(null);
+  const [activeTheme, setActiveTheme] = useState<ActiveThemeSnapshot | null>(null);
   const [notice, setNotice] = useState(desktopApi.native ? "原生运行时已连接" : "浏览器预览模式");
   const updateNotice = useCallback((message: string) => setNotice(message), []);
 
   useEffect(() => {
-    void Promise.all([desktopApi.snapshot(), desktopApi.outboxSnapshot()]).then(([snapshot, nextOutbox]) => {
+    void Promise.all([desktopApi.snapshot(), desktopApi.outboxSnapshot(), desktopApi.activeTheme()]).then(([snapshot, nextOutbox, nextTheme]) => {
       setSafeMode(snapshot.safety.mode === "safe");
       const recovering = snapshot.startup.mode === "recovery";
       setRecoveryMode(recovering);
@@ -33,6 +34,7 @@ export function App() {
         setNotice("主数据库不可用，已进入隔离恢复模式");
       }
       setOutbox(nextOutbox);
+      setActiveTheme(nextTheme);
     }).catch(() => {
       setNotice("运行时状态暂时不可用");
     });
@@ -67,7 +69,7 @@ export function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell theme-${activeTheme?.theme.cornerStyle ?? "rounded"} motion-${activeTheme?.theme.motion ?? "full"}`} data-theme-mode={activeTheme?.theme.mode ?? "light"} style={activeTheme ? themeStyle(activeTheme.theme) : undefined}>
       <aside className="sidebar" aria-label="主导航">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">✦</span>
@@ -130,7 +132,7 @@ export function App() {
           </div>
         </section>}
 
-        {active === "角色" || active === "扩展" ? <CreatorStudio /> : active === "Agent" ? <AgentWorkspace safeMode={safeMode} recoveryMode={recoveryMode} onNotice={updateNotice} /> : active === "自动化" ? <AutomationWorkspace disabled={safeMode || recoveryMode} onNotice={updateNotice} /> : active === "设置" ? <DataProtection recoveryMode={recoveryMode} onNotice={updateNotice} /> : <div className="dashboard-grid">
+        {active === "角色" || active === "扩展" ? <CreatorStudio onThemeChange={setActiveTheme} /> : active === "Agent" ? <AgentWorkspace safeMode={safeMode} recoveryMode={recoveryMode} onNotice={updateNotice} /> : active === "自动化" ? <AutomationWorkspace disabled={safeMode || recoveryMode} onNotice={updateNotice} /> : active === "设置" ? <DataProtection recoveryMode={recoveryMode} onNotice={updateNotice} /> : <div className="dashboard-grid">
           <section className="pet-stage" aria-labelledby="pet-heading">
             <div className="stage-copy">
               <span className="pill">{notice}</span>
@@ -202,6 +204,21 @@ export function App() {
       </section>
     </main>
   );
+}
+
+export function themeStyle(theme: ThemeDescriptor): CSSProperties {
+  return {
+    "--canvas": theme.colors.surface,
+    "--surface": theme.colors.surfaceElevated,
+    "--surface-strong": theme.colors.surfaceElevated,
+    "--ink": theme.colors.text,
+    "--muted": theme.colors.textMuted,
+    "--line": theme.colors.border,
+    "--accent": theme.colors.accent,
+    "--accent-soft": theme.colors.accentSoft,
+    "--success": theme.colors.success,
+    "--danger": theme.colors.danger,
+  } as CSSProperties;
 }
 
 export function runtimeActivities(outbox: OutboxSnapshot | null) {

@@ -200,3 +200,10 @@ Domain Core
 - 聚合契约 `/2` 显式返回 `effectiveStatus` 与 `projectionStale`：前者只取持久化 Session 事实，后者表示进程内 Job 投影尚未收敛。React 不得自行推导或用 Job 覆盖事实状态。
 - Pause、Cancel 与人工对账必须先经过宿主 `ensure_normal_mode` 和 Safe Mode 门禁；浏览器禁用按钮只属于体验防线，不能替代 IPC 授权边界。
 - 人工对账理由在打开数据库前完成非空校验，决议成功后只重新读取事实，不自动重放 Provider、Tool 或外部副作用。
+
+## 主题资产边界
+
+- Theme 是数据驱动的 Asset 子类型，不是 CSS 或前端插件；Asset Installer 负责 Schema、Inventory、媒体类型和颜色白名单验证。
+- Tauri 宿主持有主题选择事实并使用统一 Asset Selection 写锁串行化角色与主题切换；React 只消费 `ActiveThemeSnapshot`，不读文件系统。
+- App Shell 通过固定 Token Adapter 映射主题，安装预览使用独立局部变量作用域，避免未确认资源污染全局状态。
+- 安全模式、损坏选择和复验失败统一回退内置主题。主题故障不得阻止应用启动，也不得削弱权限、恢复和危险状态。

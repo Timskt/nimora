@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { ActiveCharacterSnapshot, AssetCatalogSnapshot, AssetPackageSummary, AssetPreviewReport, ModelAnimationBinding, ModelProbeReport } from "../platform/desktop";
+import type { ActiveCharacterSnapshot, ActiveThemeSnapshot, AssetCatalogSnapshot, AssetPackageSummary, AssetPreviewReport, ModelAnimationBinding, ModelProbeReport, ThemeDescriptor } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const backends = ["Sprite Atlas", "Live2D Cubism", "VRM", "glTF"] as const;
@@ -34,13 +34,14 @@ export function suggestAnimationMap(names: readonly string[]): Record<string, Mo
   return result;
 }
 
-export function CreatorStudio() {
+export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveThemeSnapshot): void }) {
   const [backend, setBackend] = useState<Backend>("Sprite Atlas");
   const [skinTone, setSkinTone] = useState("#d8d0f0");
   const [draftSaved, setDraftSaved] = useState(false);
   const [catalog, setCatalog] = useState<AssetCatalogSnapshot | null>(null);
   const [catalogError, setCatalogError] = useState(false);
   const [activeCharacter, setActiveCharacter] = useState<ActiveCharacterSnapshot | null>(null);
+  const [activeTheme, setActiveTheme] = useState<ActiveThemeSnapshot | null>(null);
   const [activationError, setActivationError] = useState<string | null>(null);
   const [activating, setActivating] = useState<string | null>(null);
   const [pendingImport, setPendingImport] = useState<{ sourcePath: string; report: AssetPreviewReport } | null>(null);
@@ -62,10 +63,11 @@ export function CreatorStudio() {
   const completion = useMemo(() => checks.filter((check) => check.status === "通过").length, []);
 
   useEffect(() => {
-    void Promise.all([desktopApi.assetCatalog(), desktopApi.activeCharacter()])
-      .then(([nextCatalog, nextActiveCharacter]) => {
+    void Promise.all([desktopApi.assetCatalog(), desktopApi.activeCharacter(), desktopApi.activeTheme()])
+      .then(([nextCatalog, nextActiveCharacter, nextActiveTheme]) => {
         setCatalog(nextCatalog);
         setActiveCharacter(nextActiveCharacter);
+        setActiveTheme(nextActiveTheme);
       })
       .catch(() => setCatalogError(true));
   }, []);
@@ -88,6 +90,20 @@ export function CreatorStudio() {
       setActiveCharacter(await desktopApi.activateCharacter(assetId));
     } catch (error) {
       setActivationError(error instanceof Error ? error.message : "角色激活失败");
+    } finally {
+      setActivating(null);
+    }
+  }
+
+  async function activateTheme(assetId: string) {
+    setActivating(assetId);
+    setActivationError(null);
+    try {
+      const nextTheme = await desktopApi.activateTheme(assetId);
+      setActiveTheme(nextTheme);
+      onThemeChange(nextTheme);
+    } catch (error) {
+      setActivationError(error instanceof Error ? error.message : "主题激活失败");
     } finally {
       setActivating(null);
     }
@@ -274,7 +290,9 @@ export function CreatorStudio() {
             <div><dt>渲染后端</dt><dd>{pendingImport.report.summary.rendererBackend ?? "无"}</dd></div>
             <div><dt>包内容</dt><dd>{pendingImport.report.summary.fileCount} 个文件 · {formatBytes(pendingImport.report.summary.totalBytes)}</dd></div>
           </dl>
+          {pendingImport.report.theme ? <ThemePreview theme={pendingImport.report.theme} /> : null}
           {!pendingImport.report.poster ? <p className="asset-preview-warning">资源包未声明静态预览海报；元数据已验证，但安装前无法展示包内视觉内容。</p> : null}
+          {pendingImport.report.theme ? <p className="asset-preview-warning">主题预览只作用于此卡片；主题包不能注入 CSS、脚本、字体或网络资源，也不能改变权限和危险状态语义。</p> : null}
           {pendingImport.report.summary.rendererBackend && !["sprite-sequence", "sprite-atlas"].includes(pendingImport.report.summary.rendererBackend) ? <p className="asset-preview-warning">该后端当前只能验证和安装，Pet Overlay 尚不能真实渲染，将使用内置角色。</p> : null}
           <div className="asset-preview-actions"><button className="text-button" type="button" disabled={importing} onClick={() => setPendingImport(null)}>取消</button><button className="primary-button" type="button" disabled={importing} onClick={() => void confirmInstall()}>{importing ? "正在复验…" : "确认并安装"}</button></div>
         </div> : null}
@@ -333,7 +351,7 @@ export function CreatorStudio() {
         {activeCharacter?.fallbackReason ? <p className="catalog-empty error">已安全回退默认角色：{activeCharacter.fallbackReason}</p> : null}
         {activationError ? <p className="catalog-empty error">{activationError}</p> : null}
         {catalog && catalog.assets.length > 0 ? <ul className="asset-list">
-          {catalog.assets.map((asset) => <AssetCatalogItem asset={asset} active={activeCharacter?.assetId === asset.id} activating={activating === asset.id} key={asset.id} onActivate={activate} />)}
+          {catalog.assets.map((asset) => <AssetCatalogItem asset={asset} active={asset.assetType === "theme" ? activeTheme?.assetId === asset.id : activeCharacter?.assetId === asset.id} activating={activating === asset.id} key={asset.id} onActivateCharacter={activate} onActivateTheme={activateTheme} />)}
         </ul> : null}
         {catalog && catalog.rejected.length > 0 ? <details className="rejected-assets">
           <summary>{catalog.rejected.length} 个资源未通过健康检查</summary>
@@ -362,12 +380,24 @@ export function ModelProbeReportCard({ report }: { report: ModelProbeReport }) {
   </div>;
 }
 
-function AssetCatalogItem({ asset, active, activating, onActivate }: { asset: AssetPackageSummary; active: boolean; activating: boolean; onActivate(assetId: string): Promise<void> }) {
+function ThemePreview({ theme }: { theme: ThemeDescriptor }) {
+  return <div className={`theme-preview theme-${theme.cornerStyle}`} style={themePreviewStyle(theme)}>
+    <div><strong>{theme.mode === "dark" ? "深色主题" : "浅色主题"}</strong><span>{theme.cornerStyle} · {theme.motion === "reduced" ? "减少动态" : "完整动态"}</span></div>
+    <div className="theme-swatches" aria-label="主题语义色板">{Object.entries(theme.colors).map(([token, color]) => <span title={`${token}: ${color}`} style={{ background: color }} key={token} />)}</div>
+    <button type="button">局部按钮预览</button>
+  </div>;
+}
+
+function themePreviewStyle(theme: ThemeDescriptor): CSSProperties {
+  return { "--preview-surface": theme.colors.surfaceElevated, "--preview-text": theme.colors.text, "--preview-muted": theme.colors.textMuted, "--preview-border": theme.colors.border, "--preview-accent": theme.colors.accent, "--preview-accent-soft": theme.colors.accentSoft } as CSSProperties;
+}
+
+function AssetCatalogItem({ asset, active, activating, onActivateCharacter, onActivateTheme }: { asset: AssetPackageSummary; active: boolean; activating: boolean; onActivateCharacter(assetId: string): Promise<void>; onActivateTheme(assetId: string): Promise<void> }) {
   const displayName = assetDisplayName(asset);
   return <li>
     <span className="asset-kind">{asset.assetType.slice(0, 1).toUpperCase()}</span>
     <div><strong>{displayName}</strong><p>{asset.id} · {asset.version}</p></div>
-    {asset.assetType === "character" ? <button className="text-button" type="button" disabled={active || activating} onClick={() => void onActivate(asset.id)}>{active ? "当前角色" : activating ? "验证中…" : "设为角色"}</button> : <span className="asset-backend">{asset.rendererBackend ?? "无渲染后端"}</span>}
+    {asset.assetType === "character" ? <button className="text-button" type="button" disabled={active || activating} onClick={() => void onActivateCharacter(asset.id)}>{active ? "当前角色" : activating ? "验证中…" : "设为角色"}</button> : asset.assetType === "theme" ? <button className="text-button" type="button" disabled={active || activating} onClick={() => void onActivateTheme(asset.id)}>{active ? "当前主题" : activating ? "验证中…" : "设为主题"}</button> : <span className="asset-backend">{asset.rendererBackend ?? "无渲染后端"}</span>}
   </li>;
 }
 

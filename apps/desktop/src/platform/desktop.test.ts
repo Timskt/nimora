@@ -46,7 +46,6 @@ describe("desktop platform adapter", () => {
       checkpointSequence: 1,
       requestFingerprint: "sha256:preview",
       decision: "confirmed_not_executed",
-      actor: "user:preview",
     })).rejects.toThrow("desktop-host-required");
     await expect(api.playAction("celebrate")).resolves.toBeNull();
   });

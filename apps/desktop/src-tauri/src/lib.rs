@@ -26,9 +26,10 @@ use nimora_agent_workspace_host::WorkspaceScanPolicy;
 use nimora_asset_installer::{
     AssetPackageSummary, AssetPreviewReport, AssetRendererDescriptor, GltfCharacterMetadata,
     InstallError, InstallFile, ModelAnimationBinding, RenderAnchor, RenderCanvas, SpriteClips,
-    export_asset_package, inspect_asset_package, inspect_asset_renderer,
-    inspect_asset_source_preview, install_asset_source, install_gltf_character,
-    read_verified_asset_image, read_verified_asset_model, rollback_latest,
+    ThemeCornerStyle, ThemeDescriptor, ThemeMode, ThemeMotion, export_asset_package,
+    inspect_asset_package, inspect_asset_renderer, inspect_asset_source_preview,
+    inspect_asset_theme, install_asset_source, install_gltf_character, read_verified_asset_image,
+    read_verified_asset_model, rollback_latest,
 };
 use nimora_automation_agent_bridge::{
     AdmittedContextSegment, AgentTaskSubmissionError, AgentTaskSubmissionOutcome,
@@ -127,6 +128,9 @@ const CONTROL_CENTER_LABEL: &str = "control-center";
 const BUILTIN_CHARACTER_ID: &str = "builtin.aster";
 const ACTIVE_CHARACTER_SPEC: &str = "nimora.active-character/1";
 const ACTIVE_CHARACTER_FILE: &str = ".active-character.json";
+const BUILTIN_THEME_ID: &str = "builtin.nimora";
+const ACTIVE_THEME_SPEC: &str = "nimora.active-theme/1";
+const ACTIVE_THEME_FILE: &str = ".active-theme.json";
 const PET_WINDOW_LABEL: &str = "pet";
 const CHARACTER_RENDERER_CHANGED_EVENT: &str = "nimora://character-renderer-changed";
 const ASSET_PROTOCOL: &str = "nimora-asset";
@@ -160,7 +164,7 @@ struct DesktopState {
     position_revision: AtomicU64,
     dragging: AtomicBool,
     asset_store: PathBuf,
-    active_character_write: Mutex<()>,
+    active_asset_selection_write: Mutex<()>,
     program_store: PathBuf,
     program_data_store: ProgramDataStore,
     program_permissions: SqliteProgramPermissionRepository,
@@ -430,7 +434,7 @@ impl DesktopState {
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
             asset_store,
-            active_character_write: Mutex::new(()),
+            active_asset_selection_write: Mutex::new(()),
             program_store,
             program_data_store,
             program_permissions: SqliteProgramPermissionRepository::open(database_path)?,
@@ -503,7 +507,7 @@ impl DesktopState {
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
             asset_store,
-            active_character_write: Mutex::new(()),
+            active_asset_selection_write: Mutex::new(()),
             program_store,
             program_data_store,
             program_permissions: SqliteProgramPermissionRepository::in_memory()?,
@@ -727,6 +731,23 @@ enum ActiveCharacterSource {
 struct StoredActiveCharacter {
     spec: String,
     asset_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredActiveTheme {
+    spec: String,
+    asset_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActiveThemeSnapshot {
+    spec: &'static str,
+    asset_id: String,
+    source: ActiveCharacterSource,
+    theme: ThemeDescriptor,
+    fallback_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -4108,6 +4129,111 @@ fn active_character_renderer(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn active_theme(state: State<'_, DesktopState>) -> Result<ActiveThemeSnapshot, DesktopError> {
+    Ok(resolve_active_theme(
+        &state.asset_store,
+        state.safety.snapshot()?.mode,
+    ))
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn activate_theme(
+    state: State<'_, DesktopState>,
+    asset_id: String,
+) -> Result<ActiveThemeSnapshot, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let _write_guard = state
+        .active_asset_selection_write
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    if asset_id != BUILTIN_THEME_ID && !valid_asset_identifier(&asset_id) {
+        return Err(DesktopError::InvalidAssetIdentifier);
+    }
+    if asset_id != BUILTIN_THEME_ID {
+        let summary = inspect_asset_package(&state.asset_store.join(&asset_id))?;
+        if summary.id != asset_id || summary.asset_type != "theme" {
+            return Err(DesktopError::InvalidPackageSource);
+        }
+        inspect_asset_theme(&state.asset_store.join(&asset_id))?;
+    }
+    persist_active_theme(&state.asset_store, &asset_id)?;
+    Ok(resolve_active_theme(
+        &state.asset_store,
+        RuntimeMode::Normal,
+    ))
+}
+
+fn resolve_active_theme(asset_store: &Path, runtime_mode: RuntimeMode) -> ActiveThemeSnapshot {
+    if runtime_mode == RuntimeMode::Safe {
+        return builtin_theme(Some("safe mode uses the built-in theme".to_owned()));
+    }
+    let stored = fs::read(asset_store.join(ACTIVE_THEME_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<StoredActiveTheme>(&bytes).ok())
+        .filter(|stored| stored.spec == ACTIVE_THEME_SPEC);
+    let Some(stored) = stored else {
+        return builtin_theme(None);
+    };
+    if stored.asset_id == BUILTIN_THEME_ID {
+        return builtin_theme(None);
+    }
+    match inspect_asset_theme(&asset_store.join(&stored.asset_id)) {
+        Ok(theme) => ActiveThemeSnapshot {
+            spec: ACTIVE_THEME_SPEC,
+            asset_id: stored.asset_id,
+            source: ActiveCharacterSource::Installed,
+            theme,
+            fallback_reason: None,
+        },
+        Err(error) => builtin_theme(Some(format!("selected theme failed verification: {error}"))),
+    }
+}
+
+fn builtin_theme(fallback_reason: Option<String>) -> ActiveThemeSnapshot {
+    ActiveThemeSnapshot {
+        spec: ACTIVE_THEME_SPEC,
+        asset_id: BUILTIN_THEME_ID.to_owned(),
+        source: ActiveCharacterSource::BuiltIn,
+        theme: ThemeDescriptor {
+            spec: "nimora.theme/1".to_owned(),
+            mode: ThemeMode::Light,
+            colors: std::collections::BTreeMap::from([
+                ("surface".to_owned(), "#f7f5ef".to_owned()),
+                ("surfaceElevated".to_owned(), "#fffdf8".to_owned()),
+                ("text".to_owned(), "#30322c".to_owned()),
+                ("textMuted".to_owned(), "#77786f".to_owned()),
+                ("accent".to_owned(), "#6f61ce".to_owned()),
+                ("accentSoft".to_owned(), "#eeeaff".to_owned()),
+                ("border".to_owned(), "#deddd6".to_owned()),
+                ("success".to_owned(), "#5f875b".to_owned()),
+                ("danger".to_owned(), "#a44f45".to_owned()),
+            ]),
+            corner_style: ThemeCornerStyle::Soft,
+            motion: ThemeMotion::Full,
+        },
+        fallback_reason,
+    }
+}
+
+fn persist_active_theme(asset_store: &Path, asset_id: &str) -> Result<(), DesktopError> {
+    fs::create_dir_all(asset_store)?;
+    let destination = asset_store.join(ACTIVE_THEME_FILE);
+    let temporary = asset_store.join(format!("{ACTIVE_THEME_FILE}.{}.tmp", Uuid::now_v7()));
+    let payload = serde_json::to_vec(&StoredActiveTheme {
+        spec: ACTIVE_THEME_SPEC.to_owned(),
+        asset_id: asset_id.to_owned(),
+    })?;
+    fs::write(&temporary, payload)?;
+    if let Err(error) = fs::rename(&temporary, &destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn activate_character(
     app: AppHandle,
     state: State<'_, DesktopState>,
@@ -4123,7 +4249,7 @@ fn activate_character_inner(
 ) -> Result<ActiveCharacterSnapshot, DesktopError> {
     ensure_normal_mode(state)?;
     let _write_guard = state
-        .active_character_write
+        .active_asset_selection_write
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?;
     if asset_id != BUILTIN_CHARACTER_ID && !valid_asset_identifier(asset_id) {
@@ -7414,6 +7540,8 @@ pub fn run() {
             active_character,
             active_character_renderer,
             activate_character,
+            active_theme,
+            activate_theme,
             preview_asset,
             inspect_model,
             import_model,
@@ -7579,30 +7707,32 @@ fn discover_ollama_worker(app: &AppHandle) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVE_CHARACTER_FILE, ActiveSkillExecution, AssetInstallReceipt, AutoModeJobStatus,
-        AutomationTestRequest, BUILTIN_CHARACTER_ID, CapabilityBackend, DETERMINISTIC_PROVIDER_ID,
-        DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
-        DesktopResolveAutoModeAttemptRequest, DesktopState, ExecutionCancellation,
-        LocalAgentRequest, PendingSkillExecution, PetAction, PrepareAgentToolRequest,
-        ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest,
-        ResumeAutoModeTurnRequest, SkillEventSession, StartupMode, TrayAction,
-        UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
-        WindowPolicy, agent_catalog_inner, approve_skill_execution_inner,
-        auto_mode_control_center_inner, automation_agent_messages, cancel_agent_task_inner,
-        cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
-        cancel_skill_execution_inner, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
-        current_time_ms, default_agent_model, default_agent_provider_id, desktop_tool_registry,
-        diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
+        ACTIVE_CHARACTER_FILE, ACTIVE_THEME_FILE, ActiveSkillExecution, AssetInstallReceipt,
+        AutoModeJobStatus, AutomationTestRequest, BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID,
+        CapabilityBackend, DETERMINISTIC_PROVIDER_ID, DesktopAgentRunStatus,
+        DesktopCapabilityBackend, DesktopError, DesktopResolveAutoModeAttemptRequest, DesktopState,
+        ExecutionCancellation, LocalAgentRequest, PendingSkillExecution, PetAction,
+        PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
+        ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SkillEventSession, StartupMode,
+        TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
+        UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
+        approve_skill_execution_inner, auto_mode_control_center_inner, automation_agent_messages,
+        cancel_agent_task_inner, cancel_all_pending_agent_tools, cancel_auto_mode_job_inner,
+        cancel_automation_run_inner, cancel_skill_execution_inner, confirm_agent_tool_inner,
+        confirm_agent_tool_with_registry, current_time_ms, default_agent_model,
+        default_agent_provider_id, desktop_tool_registry, diagnostic_report,
+        dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
         parse_user_program_plan, pause_auto_mode_job_inner, permission_grant,
-        persist_active_character, prepare_agent_tool_inner, quiesce_auto_mode_jobs,
-        reject_agent_tool_inner, resolve_active_character, resolve_auto_mode_attempt_inner,
-        resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
-        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
-        screen_coordinate, serve_asset_protocol, skill_capability_names, skill_event_types,
-        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
-        validate_model_source, validate_package_source, validate_requested_animation_map,
+        persist_active_character, persist_active_theme, prepare_agent_tool_inner,
+        quiesce_auto_mode_jobs, reject_agent_tool_inner, resolve_active_character,
+        resolve_active_theme, resolve_auto_mode_attempt_inner, resolve_character_renderer,
+        resume_auto_mode_turn_inner, run_live_automation, run_local_agent_inner,
+        run_skill_agent_task, run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
+        skill_capability_names, skill_event_types, stop_skill_event_sessions, test_automation,
+        user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
+        validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -9633,6 +9763,25 @@ mod tests {
         assert!(corrupt.fallback_reason.is_some());
         let safe = resolve_active_character(&root, RuntimeMode::Safe).unwrap();
         assert_eq!(safe.asset_id, BUILTIN_CHARACTER_ID);
+        assert!(safe.fallback_reason.is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn active_theme_defaults_persists_and_falls_back_safely() {
+        let root = std::env::temp_dir().join("nimora-active-theme-fallback");
+        let _ = std::fs::remove_dir_all(&root);
+        let initial = resolve_active_theme(&root, RuntimeMode::Normal);
+        assert_eq!(initial.asset_id, BUILTIN_THEME_ID);
+        assert!(initial.fallback_reason.is_none());
+        persist_active_theme(&root, BUILTIN_THEME_ID).unwrap();
+        let restored = resolve_active_theme(&root, RuntimeMode::Normal);
+        assert_eq!(restored.asset_id, BUILTIN_THEME_ID);
+        std::fs::write(root.join(ACTIVE_THEME_FILE), b"not-json").unwrap();
+        let corrupt = resolve_active_theme(&root, RuntimeMode::Normal);
+        assert_eq!(corrupt.asset_id, BUILTIN_THEME_ID);
+        let safe = resolve_active_theme(&root, RuntimeMode::Safe);
+        assert_eq!(safe.asset_id, BUILTIN_THEME_ID);
         assert!(safe.fallback_reason.is_some());
         std::fs::remove_dir_all(root).unwrap();
     }

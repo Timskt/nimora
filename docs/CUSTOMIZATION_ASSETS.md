@@ -261,3 +261,11 @@ nimora asset sign character.example.mochi.nimora
 - 发布者必须声明是否允许二次创作、商业使用和模型训练。
 - 平台支持下架、撤销签名、侵权申诉和已购用户保留策略。
 - 资源评分应包含兼容性、性能和可访问性标签，不只展示人气。
+
+## 15. Theme Asset 运行契约
+
+- `nimora.theme/1` 只接受 `surface`、`surfaceElevated`、`text`、`textMuted`、`accent`、`accentSoft`、`border`、`success`、`danger` 九个精确语义 Token，颜色仅允许 `#RRGGBB` 或 `#RRGGBBAA`。
+- Theme Manifest 必须声明受完整性清单保护的 `entrypoints.theme`；非 Theme 包不得声明该入口，未知字段、额外 Token、CSS、URL、字体和脚本全部拒绝。
+- Creator Studio 在安装前只对局部卡片应用经过验证的 Token；用户确认前不得修改全局界面。
+- 激活选择使用原子文件替换；每次读取重新验证已安装包。选择损坏、包缺失或 Safe Mode 启动时立即回退内置主题并返回原因。
+- Theme 只能改变视觉呈现，不能改变权限、危险、错误、离线和恢复模式语义，也不能获得宿主对象或能力网关。

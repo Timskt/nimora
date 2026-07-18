@@ -120,6 +120,39 @@ pub struct AssetPreviewImage {
 pub struct AssetPreviewReport {
     pub summary: AssetPackageSummary,
     pub poster: Option<AssetPreviewImage>,
+    pub theme: Option<ThemeDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThemeDescriptor {
+    pub spec: String,
+    pub mode: ThemeMode,
+    pub colors: BTreeMap<String, String>,
+    pub corner_style: ThemeCornerStyle,
+    pub motion: ThemeMotion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeMode {
+    Light,
+    Dark,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeCornerStyle {
+    Soft,
+    Rounded,
+    Compact,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeMotion {
+    Full,
+    Reduced,
 }
 
 #[derive(Debug)]
@@ -143,6 +176,7 @@ struct ValidatedAssetPackage {
     files: Vec<InstallFile>,
     media_types: BTreeMap<PathBuf, String>,
     preview_poster: Option<PathBuf>,
+    theme: Option<ThemeDescriptor>,
     integrity_path: PathBuf,
     integrity_bytes: Vec<u8>,
 }
@@ -190,6 +224,7 @@ struct AssetEntrypoints {
     model: Option<PathBuf>,
     hitboxes: Option<PathBuf>,
     preview_poster: Option<PathBuf>,
+    theme: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -517,6 +552,18 @@ pub fn inspect_asset_package(source_root: &Path) -> Result<AssetPackageSummary, 
     Ok(load_asset_package(source_root)?.summary)
 }
 
+/// Returns a verified Theme descriptor without exposing package paths.
+///
+/// # Errors
+///
+/// Returns an error when the package is not a Theme or its descriptor is invalid.
+pub fn inspect_asset_theme(source_root: &Path) -> Result<ThemeDescriptor, InstallError> {
+    let package = load_asset_package(source_root)?;
+    package.theme.ok_or_else(|| {
+        InstallError::InvalidMetadata("asset package is not a usable theme".to_owned())
+    })
+}
+
 /// Opens and verifies an expanded package directory or a `.nimora` archive
 /// without changing the asset store.
 ///
@@ -545,6 +592,7 @@ pub fn inspect_asset_source_preview(source: &Path) -> Result<AssetPreviewReport,
     Ok(AssetPreviewReport {
         summary: package.summary,
         poster,
+        theme: package.theme,
     })
 }
 
@@ -961,6 +1009,7 @@ fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, Insta
     let integrity: AssetIntegrityDocument = serde_json::from_slice(&integrity_bytes)
         .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
     let renderer = load_asset_renderer(source_root, &manifest, &integrity.files)?;
+    let theme = load_theme_descriptor(source_root, &manifest, &integrity.files)?;
     let preview_poster = manifest
         .entrypoints
         .as_ref()
@@ -1012,6 +1061,7 @@ fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, Insta
         files,
         media_types,
         preview_poster,
+        theme,
         integrity_path: integrity_path.to_path_buf(),
         integrity_bytes,
     })
@@ -1181,6 +1231,67 @@ fn load_model_animation_map(
     }
     validate_model_animation_bindings(&animation_map.clips)?;
     Ok(Some(animation_map))
+}
+
+fn load_theme_descriptor(
+    source_root: &Path,
+    manifest: &AssetManifestHeader,
+    inventory: &[AssetIntegrityFile],
+) -> Result<Option<ThemeDescriptor>, InstallError> {
+    let path = manifest
+        .entrypoints
+        .as_ref()
+        .and_then(|entrypoints| entrypoints.theme.as_ref());
+    if manifest.asset_type != "theme" {
+        if path.is_some() {
+            return Err(InstallError::InvalidMetadata(
+                "only theme assets may declare a theme entrypoint".to_owned(),
+            ));
+        }
+        return Ok(None);
+    }
+    let path = path.ok_or_else(|| {
+        InstallError::InvalidMetadata("theme asset requires entrypoints.theme".to_owned())
+    })?;
+    let path = safe_relative_path(path)?;
+    require_inventory_media(inventory, path, &["application/json"])?;
+    let descriptor: ThemeDescriptor = serde_json::from_slice(&read_metadata(source_root, path)?)
+        .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    validate_theme_descriptor(&descriptor)?;
+    Ok(Some(descriptor))
+}
+
+fn validate_theme_descriptor(theme: &ThemeDescriptor) -> Result<(), InstallError> {
+    const REQUIRED: [&str; 9] = [
+        "surface",
+        "surfaceElevated",
+        "text",
+        "textMuted",
+        "accent",
+        "accentSoft",
+        "border",
+        "success",
+        "danger",
+    ];
+    let valid_color = |value: &str| {
+        matches!(value.len(), 7 | 9)
+            && value.starts_with('#')
+            && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+    };
+    if theme.spec != "nimora.theme/1"
+        || theme.colors.len() != REQUIRED.len()
+        || REQUIRED.iter().any(|token| {
+            !theme
+                .colors
+                .get(*token)
+                .is_some_and(|value| valid_color(value))
+        })
+    {
+        return Err(InstallError::InvalidMetadata(
+            "theme descriptor violates nimora.theme/1".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn valid_action_id(value: &str) -> bool {
@@ -1733,6 +1844,19 @@ mod tests {
 
     fn write_preview_package(root: &Path, poster: &[u8]) {
         fs::create_dir_all(root.join("preview")).unwrap();
+        fs::create_dir_all(root.join("themes")).unwrap();
+        let theme = serde_json::to_vec(&serde_json::json!({
+            "spec": "nimora.theme/1",
+            "mode": "light",
+            "colors": {
+                "surface": "#f7f5ef", "surfaceElevated": "#fffdf8", "text": "#30322c",
+                "textMuted": "#77786f", "accent": "#6f61ce", "accentSoft": "#eeeaff",
+                "border": "#deddd6", "success": "#5f875b", "danger": "#a44f45"
+            },
+            "cornerStyle": "soft",
+            "motion": "full"
+        }))
+        .unwrap();
         let manifest = serde_json::to_vec(&serde_json::json!({
             "spec": "nimora.asset/1",
             "id": "theme.example.preview",
@@ -1742,7 +1866,7 @@ mod tests {
             "publisher": "publisher.example",
             "license": "MIT",
             "engines": { "nimora": ">=0.1.0" },
-            "entrypoints": { "previewPoster": "preview/poster.png" },
+            "entrypoints": { "previewPoster": "preview/poster.png", "theme": "themes/theme.json" },
             "capabilities": [],
             "fallbacks": {},
             "locales": ["en"],
@@ -1751,6 +1875,7 @@ mod tests {
         .unwrap();
         fs::write(root.join(MANIFEST_FILE), &manifest).unwrap();
         fs::write(root.join("preview/poster.png"), poster).unwrap();
+        fs::write(root.join("themes/theme.json"), &theme).unwrap();
         let integrity = serde_json::to_vec(&serde_json::json!({
             "files": [
                 {
@@ -1764,9 +1889,15 @@ mod tests {
                     "sha256": sha256(poster),
                     "bytes": poster.len(),
                     "mediaType": "image/png"
+                },
+                {
+                    "path": "themes/theme.json",
+                    "sha256": sha256(&theme),
+                    "bytes": theme.len(),
+                    "mediaType": "application/json"
                 }
             ],
-            "totalBytes": manifest.len() + poster.len()
+            "totalBytes": manifest.len() + poster.len() + theme.len()
         }))
         .unwrap();
         fs::write(root.join("integrity.json"), integrity).unwrap();
@@ -1893,7 +2024,36 @@ mod tests {
         assert_eq!(poster.media_type, "image/png");
         assert_eq!((poster.width, poster.height), (1, 1));
         assert_eq!(poster.bytes, ONE_PIXEL_PNG);
+        let theme = inspect_asset_theme(&root).unwrap();
+        assert_eq!(theme.spec, "nimora.theme/1");
+        assert_eq!(theme.colors["accent"], "#6f61ce");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_theme_css_injection_and_unknown_tokens() {
+        let mut colors = BTreeMap::from([
+            ("surface".to_owned(), "#f7f5ef".to_owned()),
+            ("surfaceElevated".to_owned(), "#fffdf8".to_owned()),
+            ("text".to_owned(), "#30322c".to_owned()),
+            ("textMuted".to_owned(), "#77786f".to_owned()),
+            ("accent".to_owned(), "url(file:///secret)".to_owned()),
+            ("accentSoft".to_owned(), "#eeeaff".to_owned()),
+            ("border".to_owned(), "#deddd6".to_owned()),
+            ("success".to_owned(), "#5f875b".to_owned()),
+            ("danger".to_owned(), "#a44f45".to_owned()),
+        ]);
+        let theme = ThemeDescriptor {
+            spec: "nimora.theme/1".to_owned(),
+            mode: ThemeMode::Light,
+            colors: colors.clone(),
+            corner_style: ThemeCornerStyle::Soft,
+            motion: ThemeMotion::Full,
+        };
+        assert!(validate_theme_descriptor(&theme).is_err());
+        colors.insert("customCss".to_owned(), "#000000".to_owned());
+        let unknown = ThemeDescriptor { colors, ..theme };
+        assert!(validate_theme_descriptor(&unknown).is_err());
     }
 
     #[test]

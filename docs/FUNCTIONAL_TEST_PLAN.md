@@ -513,3 +513,11 @@ ID / 标题 / 优先级 / 前置条件
 - Verify Safe Mode and Recovery Mode reject Pause/Cancel at the IPC application-service boundary and leave the complete Job snapshot byte-for-byte unchanged.
 - Verify `None`, empty, and whitespace-only reconciliation reasons fail before any persistence lookup or write.
 - Verify control-center `/2` reports persisted `effectiveStatus` separately from `projectionStale`; UI shows a convergence warning and never retries an external operation because a projection is stale.
+
+## Theme Asset 安全与体验
+
+- Verify Theme 缺少入口、错误媒体类型、缺失/额外 Token、非法 Hex、未知字段、CSS/URL/脚本注入均在安装前拒绝且不改变活动主题。
+- Verify 安装前预览只作用于 Creator Studio 卡片；取消或安装失败后 App Shell Token 保持不变。
+- Verify Theme 激活后全局 Token 一致，选择记录原子持久化，重启后重新复验；包缺失或损坏时回退内置主题并显示原因。
+- Verify Safe Mode 始终使用内置主题且拒绝激活写入；Recovery Mode 拒绝主题切换且选择文件不变化。
+- Verify 浅色、深色、高对比度和减少动画在 720px、宽屏、200% 缩放和键盘路径下可辨识，危险态不被主题弱化。

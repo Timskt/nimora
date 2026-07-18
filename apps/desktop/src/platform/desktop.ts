@@ -333,6 +333,59 @@ export interface AssetPreviewImage {
 export interface AssetPreviewReport {
   summary: AssetPackageSummary;
   poster: AssetPreviewImage | null;
+  theme: ThemeDescriptor | null;
+}
+
+export interface ThemeDescriptor {
+  spec: "nimora.theme/1";
+  mode: "light" | "dark";
+  colors: {
+    surface: string;
+    surfaceElevated: string;
+    text: string;
+    textMuted: string;
+    accent: string;
+    accentSoft: string;
+    border: string;
+    success: string;
+    danger: string;
+  };
+  cornerStyle: "soft" | "rounded" | "compact";
+  motion: "full" | "reduced";
+}
+
+export interface ActiveThemeSnapshot {
+  spec: "nimora.active-theme/1";
+  assetId: string;
+  source: "built-in" | "installed";
+  theme: ThemeDescriptor;
+  fallbackReason: string | null;
+}
+
+function builtInThemeSnapshot(): ActiveThemeSnapshot {
+  return {
+    spec: "nimora.active-theme/1",
+    assetId: "builtin.nimora",
+    source: "built-in",
+    fallbackReason: null,
+    theme: {
+      spec: "nimora.theme/1",
+      mode: "light",
+      colors: {
+        surface: "#EEEDE8",
+        surfaceElevated: "#FFFEFA",
+        text: "#292B27",
+        textMuted: "#777A72",
+        accent: "#5D7351",
+        accentSoft: "#E7EEE2",
+        border: "#DDDED8",
+        success: "#52744E",
+        danger: "#A34848",
+      },
+      cornerStyle: "rounded",
+      motion: "full",
+    },
+  };
 }
 
 export interface AssetCatalogSnapshot {
@@ -598,6 +651,8 @@ export interface DesktopApi {
   activeCharacter(): Promise<ActiveCharacterSnapshot>;
   activeCharacterRenderer(): Promise<CharacterRendererSnapshot>;
   activateCharacter(assetId: string): Promise<ActiveCharacterSnapshot>;
+  activeTheme(): Promise<ActiveThemeSnapshot>;
+  activateTheme(assetId: string): Promise<ActiveThemeSnapshot>;
   previewAsset(request: InstallAssetRequest): Promise<AssetPreviewReport | null>;
   exportAsset(request: ExportAssetRequest): Promise<AssetPackageSummary | null>;
   inspectModel(request: InspectModelRequest): Promise<ModelProbeReport | null>;
@@ -923,6 +978,8 @@ export function createDesktopApi(
         };
       },
       async activateCharacter(assetId) { return { assetId, source: assetId === "builtin.aster" ? "built-in" : "installed", fallbackReason: null }; },
+      async activeTheme() { return builtInThemeSnapshot(); },
+      async activateTheme() { return builtInThemeSnapshot(); },
       async previewAsset() { return null; },
       async exportAsset() { return null; },
       async inspectModel() { return null; },
@@ -1029,6 +1086,8 @@ export function createDesktopApi(
     activeCharacter: async () => await invokeCommand("active_character") as ActiveCharacterSnapshot,
     activeCharacterRenderer: async () => await invokeCommand("active_character_renderer") as CharacterRendererSnapshot,
     activateCharacter: async (assetId) => await invokeCommand("activate_character", { assetId }) as ActiveCharacterSnapshot,
+    activeTheme: async () => await invokeCommand("active_theme") as ActiveThemeSnapshot,
+    activateTheme: async (assetId) => await invokeCommand("activate_theme", { assetId }) as ActiveThemeSnapshot,
     previewAsset: async (request) => await invokeCommand("preview_asset", { request }) as AssetPreviewReport,
     exportAsset: async (request) => await invokeCommand("export_asset", { request }) as AssetPackageSummary,
     inspectModel: async (request) => await invokeCommand("inspect_model", { request }) as ModelProbeReport,

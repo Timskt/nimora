@@ -164,3 +164,11 @@ Actions 分钟：
 - 一致性：控制中心契约升级为 `/2`，由宿主返回持久化 `effectiveStatus` 和 `projectionStale`，UI 明示收敛状态且绝不自动重试未知外部操作。
 - 证据：Normal Pause→Cancel 升级、Safe/Recovery 零状态变化、空理由持久化前拒绝、31 项前端测试、TypeScript，以及浏览器宽屏截图与语义树均通过。
 - 边界：浏览器只验证预览只读态；真实 Tauri 的鼠标、键盘、跨重启对账和操作系统级辅助技术仍必须单独验收。
+
+## M-2026-07-18 安全主题资产纵切
+
+- 不足：统一 Asset Manifest 过去没有 Theme 严格子契约，任意 CSS 式主题会形成注入面；角色专用选择锁命名也错误暗示不能扩展。
+- 修正：新增 `nimora.theme/1` 九 Token 白名单、完整性复验、安装前局部预览、原子激活记录和 Safe Mode/损坏包回退；选择写锁泛化为 Asset Selection。
+- UI：App Shell 只映射固定 CSS Variables，支持深浅模式、三档圆角和减少动态；主题不能控制权限、危险、错误或恢复语义。
+- 证据：Asset Installer 30 项、Desktop Host 90 项中的主题回退测试、前端 31 项、TypeScript 生产构建与 Bundle Budget 通过。
+- 边界：签名 Registry、高对比度自动检查、主题编辑器与真实 Tauri 深色跨平台截图仍未完成，不提前标记完整主题生态。
