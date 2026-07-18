@@ -6,6 +6,7 @@ mod auto_mode_store;
 mod automation_agent_journal;
 mod automation_journal;
 mod backup;
+mod context_cache_store;
 mod skill_approval_journal;
 mod skill_execution_history;
 mod workspace_snapshot_store;
@@ -22,6 +23,9 @@ pub use automation_journal::{
 pub use backup::{
     BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, PendingRestore,
     apply_pending_restore,
+};
+pub use context_cache_store::{
+    ContextCachePolicy, SqliteContextCacheRepository, StoredContextCacheEntry,
 };
 pub use skill_approval_journal::{
     SkillApprovalJournalEntry, SkillApprovalJournalStatus, SqliteSkillApprovalJournal,
@@ -1194,6 +1198,7 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
             ON auto_mode_checkpoint(goal_id, updated_at_ms DESC, session_id DESC);",
     )?;
     ensure_workspace_snapshot_schema(connection)?;
+    ensure_context_cache_schema(connection)?;
     Ok(())
 }
 
@@ -1211,6 +1216,32 @@ fn ensure_workspace_snapshot_schema(connection: &Connection) -> Result<(), Sqlit
         );
         CREATE INDEX IF NOT EXISTS agent_workspace_snapshot_latest_idx
             ON agent_workspace_snapshot(session_id, revision DESC);",
+    )?;
+    Ok(())
+}
+
+fn ensure_context_cache_schema(connection: &Connection) -> Result<(), SqlitePersistenceError> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS agent_context_cache (
+            cache_key TEXT PRIMARY KEY,
+            provider_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            workspace_fingerprint TEXT NOT NULL,
+            plan_revision INTEGER NOT NULL CHECK (plan_revision > 0),
+            data_classification TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+            expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms > created_at_ms),
+            last_accessed_at_ms INTEGER NOT NULL CHECK (last_accessed_at_ms >= created_at_ms),
+            payload_bytes INTEGER NOT NULL CHECK (payload_bytes > 0),
+            schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS agent_context_cache_lru_idx
+            ON agent_context_cache(last_accessed_at_ms, cache_key);
+        CREATE INDEX IF NOT EXISTS agent_context_cache_workspace_idx
+            ON agent_context_cache(workspace_fingerprint, cache_key);
+        CREATE INDEX IF NOT EXISTS agent_context_cache_expiry_idx
+            ON agent_context_cache(expires_at_ms, cache_key);",
     )?;
     Ok(())
 }
@@ -1454,6 +1485,10 @@ pub enum SqlitePersistenceError {
     InvalidWorkspaceSnapshot,
     #[error("Workspace snapshot was changed by another writer")]
     WorkspaceSnapshotConflict,
+    #[error("Context cache record or request is invalid")]
+    InvalidContextCache,
+    #[error("Context cache schema version {0} is unsupported")]
+    UnsupportedContextCacheVersion(u32),
     #[error("Automation journal record or state transition is invalid")]
     InvalidAutomationJournal,
     #[error("Automation Agent journal record or state transition is invalid")]

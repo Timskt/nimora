@@ -318,6 +318,7 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-087 | Workspace 快照持久版本链 | SQLite 仅允许 revision 1 创建；后继 revision、parent fingerprint、root fingerprint 和前序 fingerprint 必须 CAS 匹配，读取时索引元数据与 Payload 不一致、未知版本或陈旧追加均 fail-closed | P0 |
 | AGT-088 | Auto Mode 启动真实扫描绑定 | `goal auto start` 只接受 `workspaceRoot`，由宿主扫描 revision 1、持久化快照并将 Policy 绑定其 fingerprint；调用方不能提交自定义 workspace revision | P0 |
 | AGT-089 | Auto Mode 恢复漂移阻断 | `resume --workspace-root` 对相同根与相同内容成功恢复；根变化立即拒绝，内容变化持久化绑定旧 fingerprint 的后继快照并返回 `workspace-changed`，Session 保持 paused | P0 |
+| AGT-090 | 持久 Context Cache 隔离治理 | SQLite Cache 命中必须复验内容地址、Provider、模型、Plan、Workspace、数据等级、TTL 与索引/Payload；过期项删除，容量超限按稳定 LRU 淘汰，旧 Workspace 可显式整体失效且不影响其他分区 | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |

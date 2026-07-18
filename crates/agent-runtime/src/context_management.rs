@@ -95,7 +95,12 @@ pub struct CompactedContext {
 }
 
 impl CompactedContext {
-    fn validate(&self) -> Result<(), ContextManagementError> {
+    /// Revalidates the content-addressed identity and protocol accounting.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when persisted or transported context was modified.
+    pub fn validate(&self) -> Result<(), ContextManagementError> {
         let expected_key = context_cache_key(
             &self.provider_id,
             &self.model,
