@@ -22,6 +22,7 @@ members = [
   "crates/capability-contract",
   "crates/asset-installer",
   "crates/model-importer",
+  "crates/system-context",
   "crates/user-code-policy",
   "crates/user-code-host",
   "crates/user-code-gateway",

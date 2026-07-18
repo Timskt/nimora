@@ -922,3 +922,11 @@ ID / 标题 / 优先级 / 前置条件
 - Provider 失败、用户拒绝工具和任务取消分别验证失败/取消映射；终态不得永久覆盖睡眠、需求、情绪或自主行为。
 - 关闭控制中心、禁用 Provider、断网及故意丢弃事件，验证桌宠仍可独立启动、拖动、喂食、玩耍、梳理、回家和打开菜单；事件发布失败不得使 Agent 任务失败。
 - 在浏览器 Preview 和 Tauri 双窗口验证协议；Payload 严格只有 `spec/status/taskId/updatedAtMs`，未知状态、额外字段、畸形时间戳和错误版本必须在运行时被丢弃。
+
+### PET-077 系统情境策略领域边界
+
+- 验证 `screen_share` 即使遇到普通 `force_visible` 仍优先隐藏，且决策不携带窗口标题、进程名或捕获内容。
+- 验证 `force_visible` 可覆盖游戏、全屏和免打扰，`force_hidden` 可覆盖普通自动状态，Safe Mode 始终强制可见并恢复交互。
+- 验证信号最长 30 秒、同来源时间不可倒退、过期后自动回到 Profile 基础策略；休眠和 Adapter 崩溃不得造成永久隐藏。
+- 验证 Sensor 只能产生策略事实，不能依赖 Tauri、Pet Repository、Profile Service 或直接调用窗口 API。
+- 原生 Adapter 与 Desktop Coordinator 完成前，本用例只证明领域策略，不得据此宣称 macOS/Windows 自动感知已完成。
