@@ -490,3 +490,4 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-114 | 在途取消确定性 | Provider/Tool 在途收到 Pause/Cancel 后，只有可证明未产生副作用或已原子提交的结果可写确定终态；其余 Attempt 与 Job 标记 `indeterminate`，不得自动重放 | P0 |
 | AGT-115 | Job 启动契约 | 原生 Start 原子保留 Session 并立即返回 Starting 快照，默认每批 8 Turn、512 输出 Token、离线执行；浏览器预览稳定拒绝 `desktop-host-required` | P0 |
 | AGT-116 | 控制竞争记账 | 批次执行期间进入 `pausing/cancelling` 后，已原子提交的 Turn、Cache Hit 与 Checkpoint 仍单调写入快照，再执行终态收敛 | P0 |
+| AGT-117 | 有界退出排空 | 应用退出向全部活跃 Job 取消并通过 Condvar 最多等待 2 秒；正常终态唤醒排空，超时统一隔离为 `indeterminate/shutdown-timeout`，迟到 Runner 不得覆盖且 Session 可重新启动 | P0 |

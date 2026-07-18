@@ -139,6 +139,7 @@ const MAX_PENDING_SKILL_EXECUTIONS: usize = 32;
 const SKILL_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
 const SKILL_EVENT_QUEUE_CAPACITY: usize = 32;
 const SKILL_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const AUTO_MODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const AUTOMATION_AGENT_REQUESTER: &str = "automation:desktop";
 
 #[derive(Debug)]
@@ -7403,6 +7404,17 @@ pub fn run() {
             let state = app.state::<DesktopState>();
             if let Ok(now_ms) = current_time_ms() {
                 let _ = state.auto_mode_jobs.request_cancel_all(now_ms);
+                if matches!(
+                    state
+                        .auto_mode_jobs
+                        .wait_for_idle(AUTO_MODE_SHUTDOWN_TIMEOUT),
+                    Ok(false)
+                ) {
+                    let isolation_time = current_time_ms().unwrap_or(now_ms);
+                    let _ = state
+                        .auto_mode_jobs
+                        .mark_active_indeterminate(isolation_time, "shutdown-timeout");
+                }
             }
         }
     });

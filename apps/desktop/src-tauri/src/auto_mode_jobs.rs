@@ -3,9 +3,10 @@ use serde::Serialize;
 use std::{
     collections::HashMap,
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicU8, Ordering},
     },
+    time::Duration,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -118,6 +119,7 @@ struct AutoModeJobRegistryState {
 #[derive(Debug, Default)]
 pub struct AutoModeJobSupervisor {
     state: Mutex<AutoModeJobRegistryState>,
+    idle: Condvar,
 }
 
 impl AutoModeJobSupervisor {
@@ -300,6 +302,52 @@ impl AutoModeJobSupervisor {
         Ok(snapshots)
     }
 
+    /// Waits for all active runners to publish a terminal snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry is unavailable.
+    pub fn wait_for_idle(&self, timeout: Duration) -> Result<bool, AutoModeJobError> {
+        let state = self.state.lock().map_err(|_| AutoModeJobError::Poisoned)?;
+        let (state, _) = self
+            .idle
+            .wait_timeout_while(state, timeout, |state| !state.active_sessions.is_empty())
+            .map_err(|_| AutoModeJobError::Poisoned)?;
+        Ok(state.active_sessions.is_empty())
+    }
+
+    /// Isolates every runner that failed to converge before a bounded shutdown deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry is unavailable, inconsistent, or time moves backwards.
+    pub fn mark_active_indeterminate(
+        &self,
+        now_ms: u64,
+        error_code: &str,
+    ) -> Result<Vec<AutoModeJobSnapshot>, AutoModeJobError> {
+        let mut state = self.state.lock().map_err(|_| AutoModeJobError::Poisoned)?;
+        let active_job_ids = state.active_sessions.values().copied().collect::<Vec<_>>();
+        let mut snapshots = Vec::with_capacity(active_job_ids.len());
+        for job_id in &active_job_ids {
+            let record = state
+                .jobs
+                .get_mut(job_id)
+                .ok_or(AutoModeJobError::RegistryCorrupt)?;
+            if now_ms < record.snapshot.updated_at_ms {
+                return Err(AutoModeJobError::TimeMovedBackwards);
+            }
+            record.snapshot.status = AutoModeJobStatus::Indeterminate;
+            record.snapshot.error_code = Some(error_code.to_owned());
+            record.snapshot.updated_at_ms = now_ms;
+            snapshots.push(record.snapshot.clone());
+        }
+        state.active_sessions.clear();
+        snapshots.sort_unstable_by_key(|snapshot| snapshot.started_at_ms);
+        self.idle.notify_all();
+        Ok(snapshots)
+    }
+
     /// Records a terminal outcome and releases the session for a later job.
     ///
     /// # Errors
@@ -336,7 +384,10 @@ impl AutoModeJobSupervisor {
             record.snapshot.session_id
         };
         state.active_sessions.remove(&session_id);
-        Ok(state.jobs[&job_id].snapshot.clone())
+        let snapshot = state.jobs[&job_id].snapshot.clone();
+        drop(state);
+        self.idle.notify_all();
+        Ok(snapshot)
     }
 
     fn request_control(
@@ -406,6 +457,7 @@ pub enum AutoModeJobError {
 #[cfg(test)]
 mod tests {
     use super::{AutoModeJobControl, AutoModeJobError, AutoModeJobStatus, AutoModeJobSupervisor};
+    use std::{sync::Arc, thread, time::Duration};
     use uuid::Uuid;
 
     #[test]
@@ -512,5 +564,47 @@ mod tests {
         assert_eq!(progress.turns_executed, 2);
         assert_eq!(progress.cache_hits, 1);
         assert_eq!(progress.checkpoint_sequence, 7);
+    }
+
+    #[test]
+    fn bounded_wait_observes_runner_terminal_notification() {
+        let supervisor = Arc::new(AutoModeJobSupervisor::default());
+        let (job, _) = supervisor.start(Uuid::now_v7(), 100).expect("job");
+        supervisor.mark_running(job.job_id, 101).expect("running");
+        let runner = Arc::clone(&supervisor);
+        let thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(10));
+            runner
+                .finish(job.job_id, AutoModeJobStatus::Cancelled, None, None, 102)
+                .expect("finish");
+        });
+
+        assert!(
+            supervisor
+                .wait_for_idle(Duration::from_secs(1))
+                .expect("wait")
+        );
+        thread.join().expect("runner join");
+    }
+
+    #[test]
+    fn shutdown_timeout_isolates_active_jobs_and_rejects_late_finish() {
+        let supervisor = AutoModeJobSupervisor::default();
+        let session_id = Uuid::now_v7();
+        let (job, _) = supervisor.start(session_id, 100).expect("job");
+        supervisor.mark_running(job.job_id, 101).expect("running");
+
+        assert!(!supervisor.wait_for_idle(Duration::ZERO).expect("timeout"));
+        let isolated = supervisor
+            .mark_active_indeterminate(102, "shutdown-timeout")
+            .expect("isolate");
+
+        assert_eq!(isolated[0].status, AutoModeJobStatus::Indeterminate);
+        assert_eq!(isolated[0].error_code.as_deref(), Some("shutdown-timeout"));
+        assert_eq!(
+            supervisor.finish(job.job_id, AutoModeJobStatus::Cancelled, None, None, 103),
+            Err(AutoModeJobError::InvalidTransition)
+        );
+        supervisor.start(session_id, 104).expect("replacement");
     }
 }
