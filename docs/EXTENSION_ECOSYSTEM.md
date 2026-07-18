@@ -50,7 +50,7 @@ any → upgrading → activated | rolled-back
 
 当前 `crates/skill-runtime` 已实现宿主无关生命周期核心：`nimora.skill/1` Manifest 严格校验、命名空间 Contribution、精确版本与精确 Capability 授权、激活快照、暂停撤销、显式崩溃恢复、五分钟三次崩溃 quarantine、用户显式解除隔离和非活跃卸载。`crates/skill-host` 与 `crates/skill-worker` 已实现版本化 JSONL 协议、每次激活独立进程、清空环境、取消、截止时间、输出预算和真实 Boa JavaScript Worker；启动前必须取得当前 Active Skill 的精确 Manifest 租约，单独持有一个语法合法的 Manifest 不能启动 Worker。Worker 只生成 Command 与 Agent Task 结构化请求计划，不持有 Provider、Gateway 或原生对象。超时、进程崩溃、协议与输出违规会进入生命周期崩溃计数并同步撤销 Contribution，宿主取消不误计为崩溃。
 
-`crates/skill-package` 与 Desktop 已实现原子安装、宿主生成完整性锁、完整库存与 SHA-256 复验、旧 active 备份和回滚，以及安装目录、持久授权状态和 Runtime Host 的桌面管理 IPC。安装、升级和回滚均不自动授权；授权精确绑定 `skill_id + version + capabilities`，启用与授权分离。正常启动重新复验包与持久状态后重建 Host，损坏、丢失或状态不匹配的 Skill 不恢复；Recovery Mode 使用隔离目录、内存状态和空 Host。Desktop `execute_skill` 已通过真实独立 Worker 执行复验源码，绑定 Activated Manifest 租约，并把 Agent Task 计划接入统一 Module Adapter；任何 Command 计划在共享 Registry 完成前 fail-closed。尚未实现跨文件系统与 SQLite 的崩溃一致性 Journal、发布者签名、操作系统级 CPU/内存沙箱、Skill Command Registry/Gateway 接线、执行取消与持久回执、管理 UI。
+`crates/skill-package` 与 Desktop 已实现原子安装、宿主生成完整性锁、完整库存与 SHA-256 复验、旧 active 备份和回滚，以及安装目录、持久授权状态和 Runtime Host 的桌面管理 IPC。安装、升级和回滚均不自动授权；授权精确绑定 `skill_id + version + capabilities`，启用与授权分离。正常启动重新复验包与持久状态后重建 Host，损坏、丢失或状态不匹配的 Skill 不恢复；Recovery Mode 使用隔离目录、内存状态和空 Host。Desktop `execute_skill` 已通过真实独立 Worker 执行复验源码，绑定 Activated Manifest 租约，把 Agent Task 计划接入统一 Module Adapter，并将 Manifest 精确 `commandAllowlist` 中注册为 Safe/Low 的命令经整批预检后送入共享 Capability Gateway；未知、未声明和 Medium 以上命令在任何副作用前整批拒绝。尚未实现跨文件系统与 SQLite 的崩溃一致性 Journal、发布者签名、操作系统级 CPU/内存沙箱、Medium+ Command 参数绑定批准、执行取消与持久回执、管理 UI。
 
 ## 4. Capability 与 Permission
 

@@ -68,7 +68,8 @@ use nimora_skill_runtime::{
     SkillCapability, SkillError, SkillGrant, SkillHost, SkillManifest, SkillStatus,
 };
 use nimora_user_code_gateway::{
-    CapabilityBackend, CapabilityGateway, CapabilityResponse, GatewayEnvelope, GatewayError,
+    CapabilityBackend, CapabilityGateway, CapabilityRequest, CapabilityResponse, GatewayEnvelope,
+    GatewayError, ModuleGatewayPolicy,
 };
 use nimora_user_code_host::{WorkerConfig, WorkerMessage, WorkerProcess};
 use nimora_user_code_package::{
@@ -696,6 +697,7 @@ struct ExecuteSkillRequest {
 struct SkillExecutionReceipt {
     execution_id: Uuid,
     skill_id: String,
+    command_results: Vec<CapabilityResponse>,
     agent_results: Vec<DesktopAgentRunResult>,
 }
 
@@ -892,8 +894,8 @@ enum DesktopError {
     SkillAuthorizationRequired,
     #[error("installed Skill does not match its persisted exact-version state")]
     SkillStateMismatch,
-    #[error("Skill command plans are unavailable until the shared Command Registry is active")]
-    SkillCommandRegistryUnavailable,
+    #[error("Skill command is not registered or requires explicit approval: {0}")]
+    SkillCommandNotAutoExecutable(String),
     #[error(transparent)]
     Automation(#[from] AutomationError),
     #[error("user program execution was not found")]
@@ -3894,7 +3896,7 @@ fn execute_skill_inner(
     ensure_normal_mode(state)?;
     let installed = load_installed_skill(&state.skill_store, &request.skill_id)?;
     let execution_id = Uuid::now_v7();
-    let output = {
+    let (output, command_allowlist) = {
         let mut host = state
             .skill_host
             .lock()
@@ -3903,6 +3905,7 @@ fn execute_skill_inner(
         if manifest != *installed.manifest.manifest() {
             return Err(DesktopError::SkillStateMismatch);
         }
+        let command_allowlist = manifest.command_allowlist.clone();
         let worker_request = SkillWorkerMessage::Run {
             protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
             execution_id: execution_id.to_string(),
@@ -3918,9 +3921,10 @@ fn execute_skill_inner(
         )?;
         let response =
             worker.wait_recording_failure(&mut host, &request.skill_id, current_time_ms()?)?;
-        terminal_skill_worker_output(response)?
+        (terminal_skill_worker_output(response)?, command_allowlist)
     };
-    ensure_skill_command_registry(output.commands.len())?;
+    let command_results =
+        dispatch_skill_commands(state, execution_id, &command_allowlist, output.commands)?;
     let requester = state
         .skill_host
         .lock()
@@ -3939,15 +3943,66 @@ fn execute_skill_inner(
     Ok(SkillExecutionReceipt {
         execution_id,
         skill_id: request.skill_id,
+        command_results,
         agent_results,
     })
 }
 
-fn ensure_skill_command_registry(command_count: usize) -> Result<(), DesktopError> {
-    if command_count == 0 {
-        Ok(())
-    } else {
-        Err(DesktopError::SkillCommandRegistryUnavailable)
+fn dispatch_skill_commands(
+    state: &DesktopState,
+    execution_id: Uuid,
+    allowlist: &BTreeSet<String>,
+    commands: Vec<nimora_skill_host::SkillCommandRequest>,
+) -> Result<Vec<CapabilityResponse>, DesktopError> {
+    for command in &commands {
+        let risk = skill_command_risk(&command.command_id).ok_or_else(|| {
+            DesktopError::SkillCommandNotAutoExecutable(command.command_id.clone())
+        })?;
+        if !allowlist.contains(&command.command_id)
+            || !matches!(risk, CommandRisk::Safe | CommandRisk::Low)
+        {
+            return Err(DesktopError::SkillCommandNotAutoExecutable(
+                command.command_id.clone(),
+            ));
+        }
+    }
+    let trace_id = Uuid::now_v7();
+    let policy = ModuleGatewayPolicy {
+        execution_id,
+        trace_id,
+        read_capabilities: BTreeSet::new(),
+        commands: allowlist.clone(),
+    };
+    let gateway = CapabilityGateway::new(DesktopCapabilityBackend { state });
+    commands
+        .into_iter()
+        .enumerate()
+        .map(|(index, command)| {
+            gateway
+                .dispatch_module(
+                    &policy,
+                    GatewayEnvelope {
+                        execution_id: execution_id.to_string(),
+                        trace_id: trace_id.to_string(),
+                        idempotency_key: Some(format!("skill:{execution_id}:{index}")),
+                        request: CapabilityRequest::InvokeCommand {
+                            command: command.command_id,
+                            arguments: command.arguments,
+                        },
+                    },
+                )
+                .map_err(DesktopError::from)
+        })
+        .collect()
+}
+
+fn skill_command_risk(command: &str) -> Option<CommandRisk> {
+    match command {
+        "safe.pet.animate" => Some(CommandRisk::Safe),
+        "safe.pet.move" => Some(CommandRisk::Low),
+        "safe.profile.switch" | "safe.character.switch" => Some(CommandRisk::Medium),
+        "safe.program.execute" => Some(CommandRisk::High),
+        _ => None,
     }
 }
 
@@ -6059,13 +6114,13 @@ mod tests {
         WindowPolicy, agent_catalog_inner, automation_agent_messages, cancel_agent_task_inner,
         cancel_all_pending_agent_tools, cancel_automation_run_inner, confirm_agent_tool_inner,
         confirm_agent_tool_with_registry, default_agent_model, default_agent_provider_id,
-        diagnostic_report, ensure_normal_mode, ensure_program_permissions,
-        ensure_skill_command_registry, ensure_user_program_agent_capability, inspect_asset_catalog,
-        install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
-        parse_user_program_plan, permission_grant, persist_active_character,
-        prepare_agent_tool_inner, reject_agent_tool_inner, resolve_active_character,
-        resolve_character_renderer, run_live_automation, run_local_agent_inner,
-        run_skill_agent_task, run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
+        diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
+        ensure_user_program_agent_capability, inspect_asset_catalog, install_gltf_character,
+        open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
+        permission_grant, persist_active_character, prepare_agent_tool_inner,
+        reject_agent_tool_inner, resolve_active_character, resolve_character_renderer,
+        run_live_automation, run_local_agent_inner, run_skill_agent_task,
+        run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
         skill_capability_names, test_automation, user_program_input, valid_asset_identifier,
         validate_model_source, validate_package_source, validate_requested_animation_map,
     };
@@ -6090,7 +6145,7 @@ mod tests {
         SqliteAutomationJournal, SqliteProgramPermissionRepository,
     };
     use nimora_runtime_core::{Event, EventSource, Position, RuntimeMode};
-    use nimora_skill_host::{SkillAgentTaskRequest, SkillContextSegment};
+    use nimora_skill_host::{SkillAgentTaskRequest, SkillCommandRequest, SkillContextSegment};
     use nimora_skill_package::install_skill_atomically;
     use nimora_skill_runtime::{SkillCapability, SkillManifest, SkillStatus};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
@@ -6135,6 +6190,7 @@ mod tests {
             entrypoint: "dist/main.js".to_owned(),
             capabilities: BTreeSet::from([SkillCapability::InvokeCommands]),
             activation_events: BTreeSet::from(["onStartup".to_owned()]),
+            command_allowlist: BTreeSet::from(["safe.pet.animate".to_owned()]),
             contributions: nimora_skill_runtime::SkillContributions::default(),
         };
         let manifest_bytes = serde_json::to_vec(&manifest).expect("manifest bytes");
@@ -8081,12 +8137,50 @@ mod tests {
     }
 
     #[test]
-    fn skill_commands_fail_closed_before_shared_registry_dispatch() {
-        ensure_skill_command_registry(0).expect("empty command plan");
+    fn skill_commands_dispatch_only_declared_low_risk_registry_entries() {
+        let (root, state) = normal_desktop_state();
+        let results = dispatch_skill_commands(
+            &state,
+            Uuid::now_v7(),
+            &BTreeSet::from(["safe.pet.animate".to_owned()]),
+            vec![SkillCommandRequest {
+                command_id: "safe.pet.animate".to_owned(),
+                arguments: serde_json::json!({"action": "celebrate"}),
+            }],
+        )
+        .expect("registered Skill command");
+        assert_eq!(results.len(), 1);
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn skill_command_batch_preflights_before_any_side_effect() {
+        let (root, state) = normal_desktop_state();
+        let before = state.runtime.snapshot().expect("pet snapshot");
         assert!(matches!(
-            ensure_skill_command_registry(1),
-            Err(DesktopError::SkillCommandRegistryUnavailable)
+            dispatch_skill_commands(
+                &state,
+                Uuid::now_v7(),
+                &BTreeSet::from([
+                    "safe.pet.animate".to_owned(),
+                    "safe.profile.switch".to_owned(),
+                ]),
+                vec![
+                    SkillCommandRequest {
+                        command_id: "safe.pet.animate".to_owned(),
+                        arguments: serde_json::json!({"action": "celebrate"}),
+                    },
+                    SkillCommandRequest {
+                        command_id: "safe.profile.switch".to_owned(),
+                        arguments: serde_json::json!({"profileId": "profile:default"}),
+                    },
+                ],
+            ),
+            Err(DesktopError::SkillCommandNotAutoExecutable(command))
+                if command == "safe.profile.switch"
         ));
+        assert_eq!(state.runtime.snapshot().expect("pet snapshot"), before);
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]

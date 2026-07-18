@@ -180,6 +180,7 @@ mod tests {
                 SkillCapability::InvokeCommands,
             ]),
             activation_events: BTreeSet::from(["onStartup".to_owned()]),
+            command_allowlist: BTreeSet::from(["safe.pet.animate".to_owned()]),
             contributions: SkillContributions {
                 commands: Vec::new(),
                 agent_tasks: true,
@@ -216,6 +217,7 @@ mod tests {
         restricted
             .capabilities
             .remove(&SkillCapability::InvokeCommands);
+        restricted.command_allowlist.clear();
         assert!(matches!(
             evaluate_activation(
                 &restricted,

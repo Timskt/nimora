@@ -8,6 +8,7 @@ pub const SKILL_SPEC: &str = "nimora.skill/1";
 const MAX_CAPABILITIES: usize = 64;
 const MAX_ACTIVATION_EVENTS: usize = 64;
 const MAX_COMMANDS: usize = 128;
+const MAX_COMMAND_ALLOWLIST: usize = 64;
 const CRASH_WINDOW_MS: u64 = 5 * 60 * 1_000;
 const CRASH_QUARANTINE_THRESHOLD: usize = 3;
 
@@ -32,6 +33,8 @@ pub struct SkillManifest {
     pub capabilities: BTreeSet<SkillCapability>,
     #[serde(default)]
     pub activation_events: BTreeSet<String>,
+    #[serde(default)]
+    pub command_allowlist: BTreeSet<String>,
     #[serde(default)]
     pub contributions: SkillContributions,
 }
@@ -158,6 +161,7 @@ pub fn validate_manifest(manifest: SkillManifest) -> Result<ValidatedSkillManife
     }
     if manifest.capabilities.len() > MAX_CAPABILITIES
         || manifest.activation_events.len() > MAX_ACTIVATION_EVENTS
+        || manifest.command_allowlist.len() > MAX_COMMAND_ALLOWLIST
         || manifest.contributions.commands.len() > MAX_COMMANDS
     {
         return Err(SkillError::LimitExceeded);
@@ -168,6 +172,13 @@ pub fn validate_manifest(manifest: SkillManifest) -> Result<ValidatedSkillManife
         .any(|event| !valid_activation_event(event, &manifest.id))
     {
         return Err(SkillError::InvalidActivationEvent);
+    }
+    if manifest
+        .command_allowlist
+        .iter()
+        .any(|command| !command.starts_with("safe.") || !valid_qualified_id(command))
+    {
+        return Err(SkillError::InvalidContribution);
     }
     let mut command_ids = BTreeSet::new();
     for command in &manifest.contributions.commands {
@@ -180,7 +191,7 @@ pub fn validate_manifest(manifest: SkillManifest) -> Result<ValidatedSkillManife
             return Err(SkillError::InvalidContribution);
         }
     }
-    if (!manifest.contributions.commands.is_empty()
+    if ((!manifest.contributions.commands.is_empty() || !manifest.command_allowlist.is_empty())
         && !manifest
             .capabilities
             .contains(&SkillCapability::InvokeCommands))
@@ -485,6 +496,7 @@ mod tests {
                 "onStartup".to_owned(),
                 "onCommand:studio.example.focus.start".to_owned(),
             ]),
+            command_allowlist: BTreeSet::from(["safe.pet.animate".to_owned()]),
             contributions: SkillContributions {
                 commands: vec![SkillCommandContribution {
                     id: "studio.example.focus.start".to_owned(),
@@ -521,6 +533,26 @@ mod tests {
         assert_eq!(
             validate_manifest(foreign),
             Err(SkillError::InvalidActivationEvent)
+        );
+    }
+
+    #[test]
+    fn command_allowlist_requires_safe_names_and_explicit_capability() {
+        let mut missing_capability = manifest();
+        missing_capability.contributions.commands.clear();
+        missing_capability
+            .capabilities
+            .remove(&SkillCapability::InvokeCommands);
+        assert_eq!(
+            validate_manifest(missing_capability),
+            Err(SkillError::MissingCapability)
+        );
+
+        let mut unsafe_name = manifest();
+        unsafe_name.command_allowlist = BTreeSet::from(["internal.pet.delete".to_owned()]);
+        assert_eq!(
+            validate_manifest(unsafe_name),
+            Err(SkillError::InvalidContribution)
         );
     }
 

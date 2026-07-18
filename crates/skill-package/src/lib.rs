@@ -332,6 +332,7 @@ fn validate_skill_id(skill_id: &str) -> Result<(), SkillPackageError> {
         entrypoint: "main.js".to_owned(),
         capabilities: BTreeSet::default(),
         activation_events: BTreeSet::default(),
+        command_allowlist: BTreeSet::default(),
         contributions: SkillContributions::default(),
     })?;
     Ok(())
@@ -351,6 +352,7 @@ mod tests {
             entrypoint: "dist/main.js".to_owned(),
             capabilities: BTreeSet::from([SkillCapability::InvokeCommands]),
             activation_events: BTreeSet::from(["onStartup".to_owned()]),
+            command_allowlist: BTreeSet::from(["safe.pet.animate".to_owned()]),
             contributions: SkillContributions::default(),
         }
     }
