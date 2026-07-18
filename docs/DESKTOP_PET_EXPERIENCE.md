@@ -51,6 +51,8 @@ Needs → Mood → Intent → Action Plan → Renderer Semantics → Adapter Ani
 
 照料采用独立的 `PetCareAction` 语义，而不是把喂食伪装成动画。Feed 恢复 Energy 并小幅增加 Mood/Affinity，Play 消耗少量 Energy 换取较高 Mood/Affinity，Groom 提升 Mood 与关系；所有结果在 0–100 饱和。照料拥有 30 秒宿主时间冷却、防止误触和脚本刷值，Drag 具有绝对优先级；合法照料可以安全中止自主动作并进入短暂互动反馈。Overlay 与控制中心提供同一三种操作，Safe/Recovery Mode 失败关闭，浏览器预览只模拟 UI，不冒充原生持久化完成。
 
+生命值会影响行为而不制造惩罚性打扰：Energy ≤ 25 时下一次自主行为稳定优先 Rest；Energy 充足但 Mood ≤ 25 时优先温和的 Observe/互动反馈；其余状态继续按持久序列确定性轮换。Energy 优先级高于 Mood，防止疲惫角色仍被迫活跃。Idle 情绪同步派生为 Sleepy、Sad 或 Neutral，但不会覆盖 Drag、Work、Interact 等活动状态。Overlay 只在悬浮/键盘聚焦气泡中表达需求，不发送系统通知、不自动调用 AI、不访问网络；内置角色提供困倦和低落视觉细节，第三方 Renderer 继续消费统一 Sleep/Interact 行为语义。
+
 ## 4. 经典桌宠能力
 
 ### 4.1 直接互动

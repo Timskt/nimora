@@ -175,6 +175,23 @@ pub struct Pet {
 }
 
 impl Pet {
+    const LOW_VITAL_THRESHOLD: u8 = 25;
+
+    fn idle_emotion(&self) -> Emotion {
+        if self.energy <= Self::LOW_VITAL_THRESHOLD {
+            Emotion::Sleepy
+        } else if self.mood <= Self::LOW_VITAL_THRESHOLD {
+            Emotion::Sad
+        } else {
+            Emotion::Neutral
+        }
+    }
+
+    fn enter_idle(&mut self) {
+        self.state = PetState::Idle;
+        self.emotion = self.idle_emotion();
+    }
+
     /// Creates a pet with safe default state and vitals.
     ///
     /// # Errors
@@ -238,8 +255,7 @@ impl Pet {
         if self.state != PetState::Interacting {
             return Err(PetError::InvalidTransition);
         }
-        self.state = PetState::Idle;
-        self.emotion = Emotion::Neutral;
+        self.enter_idle();
         Ok(())
     }
 
@@ -267,8 +283,7 @@ impl Pet {
             return Err(PetError::InvalidTransition);
         }
         self.move_to(position)?;
-        self.state = PetState::Idle;
-        self.emotion = Emotion::Neutral;
+        self.enter_idle();
         Ok(())
     }
 
@@ -292,8 +307,12 @@ impl Pet {
     }
 
     pub fn apply_action(&mut self, action: PetAction) {
+        if action == PetAction::Idle {
+            self.enter_idle();
+            return;
+        }
         (self.state, self.emotion) = match action {
-            PetAction::Idle => (PetState::Idle, Emotion::Neutral),
+            PetAction::Idle => unreachable!("idle action returned above"),
             PetAction::Walk => (PetState::Walking, Emotion::Happy),
             PetAction::Sleep => (PetState::Sleeping, Emotion::Sleepy),
             PetAction::Work => (PetState::Working, Emotion::Focused),
@@ -303,6 +322,9 @@ impl Pet {
 
     pub fn set_energy(&mut self, energy: i16) {
         self.energy = u8::try_from(energy.clamp(0, 100)).unwrap_or_default();
+        if self.state == PetState::Idle {
+            self.emotion = self.idle_emotion();
+        }
     }
 
     #[must_use]
@@ -329,6 +351,9 @@ impl Pet {
         self.energy = self.energy.saturating_sub(energy_loss);
         self.mood = self.mood.saturating_sub(mood_loss);
         self.last_vitals_update_ms = now_ms;
+        if self.state == PetState::Idle {
+            self.emotion = self.idle_emotion();
+        }
     }
 
     /// Applies one direct care action while enforcing user-state priority and cooldown.
@@ -377,8 +402,7 @@ impl Pet {
             self.state,
             PetState::Dragged | PetState::Interacting | PetState::Recovering
         ) {
-            self.state = PetState::Idle;
-            self.emotion = Emotion::Neutral;
+            self.enter_idle();
             return true;
         }
         false
@@ -419,10 +443,16 @@ impl Pet {
         if now_ms < self.autonomy.next_due_ms {
             return PetAutonomyDecision::Noop;
         }
-        let (intent, action) = match self.autonomy.sequence % 3 {
-            0 => (PetIntent::Observe, PetAction::Celebrate),
-            1 => (PetIntent::Explore, PetAction::Walk),
-            _ => (PetIntent::Rest, PetAction::Sleep),
+        let (intent, action) = if self.energy <= Self::LOW_VITAL_THRESHOLD {
+            (PetIntent::Rest, PetAction::Sleep)
+        } else if self.mood <= Self::LOW_VITAL_THRESHOLD {
+            (PetIntent::Observe, PetAction::Celebrate)
+        } else {
+            match self.autonomy.sequence % 3 {
+                0 => (PetIntent::Observe, PetAction::Celebrate),
+                1 => (PetIntent::Explore, PetAction::Walk),
+                _ => (PetIntent::Rest, PetAction::Sleep),
+            }
         };
         PetAutonomyDecision::Start { intent, action }
     }
@@ -514,6 +544,50 @@ mod tests {
         pet.apply_autonomy_decision(finished, policy, 115);
         assert_eq!(pet.state, PetState::Idle);
         assert_eq!(pet.autonomy.next_due_ms, 135);
+    }
+
+    #[test]
+    fn low_vitals_prioritize_rest_then_gentle_attention() {
+        let policy = PetAutonomyPolicy::default();
+        let mut tired = Pet::new("Aster").expect("valid pet");
+        tired.energy = 25;
+        tired.mood = 10;
+        tired.autonomy.next_due_ms = 100;
+        assert_eq!(
+            tired.autonomy_decision(policy, 100),
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Rest,
+                action: PetAction::Sleep,
+            }
+        );
+
+        let mut unhappy = Pet::new("Aster").expect("valid pet");
+        unhappy.energy = 80;
+        unhappy.mood = 25;
+        unhappy.autonomy.next_due_ms = 100;
+        assert_eq!(
+            unhappy.autonomy_decision(policy, 100),
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Observe,
+                action: PetAction::Celebrate,
+            }
+        );
+    }
+
+    #[test]
+    fn idle_emotion_tracks_vitals_without_overwriting_active_states() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.set_energy(25);
+        assert_eq!(pet.emotion, Emotion::Sleepy);
+        pet.apply_action(PetAction::Work);
+        pet.set_energy(10);
+        assert_eq!(pet.emotion, Emotion::Focused);
+        pet.apply_action(PetAction::Idle);
+        assert_eq!(pet.emotion, Emotion::Sleepy);
+        pet.energy = 80;
+        pet.mood = 20;
+        pet.apply_action(PetAction::Idle);
+        assert_eq!(pet.emotion, Emotion::Sad);
     }
 
     #[test]

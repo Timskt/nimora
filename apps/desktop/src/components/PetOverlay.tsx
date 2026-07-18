@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction, PetCareAction } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 import { RendererErrorBoundary } from "./RendererErrorBoundary";
+import { petStatusMessage } from "./petPresentation";
 import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
 
 const GltfRenderer = lazy(async () => {
@@ -29,7 +30,7 @@ export function PetOverlay() {
       setSnapshot(value);
       setRenderer(descriptor);
       setRendererFailed(false);
-      setMessage(desktopApi.native ? "本地运行" : "浏览器预览");
+      setMessage(desktopApi.native ? petStatusMessage(value.pet) : "浏览器预览");
     }).catch(() => {
       if (disposed) return;
       setMessage("角色资源不可用，已使用内置角色");
@@ -50,7 +51,10 @@ export function PetOverlay() {
       });
       void desktopApi.onPetAutonomyChanged(() => {
         void desktopApi.snapshot().then((value) => {
-          if (!disposed) setSnapshot(value);
+          if (!disposed) {
+            setSnapshot(value);
+            setMessage(petStatusMessage(value.pet));
+          }
         });
       }).then((disposeListener) => {
         if (disposed) disposeListener();
@@ -60,7 +64,10 @@ export function PetOverlay() {
       });
       void desktopApi.onPetVitalsChanged(() => {
         void desktopApi.snapshot().then((value) => {
-          if (!disposed) setSnapshot(value);
+          if (!disposed) {
+            setSnapshot(value);
+            setMessage(petStatusMessage(value.pet));
+          }
         });
       }).then((disposeListener) => {
         if (disposed) disposeListener();
@@ -151,7 +158,7 @@ export function PetOverlay() {
             />
           )
         ) : (
-          <span className={`overlay-pet ${snapshot?.pet.state ?? "idle"}`} aria-hidden="true">
+          <span className={`overlay-pet ${snapshot?.pet.state ?? "idle"} emotion-${snapshot?.pet.emotion ?? "neutral"}`} aria-hidden="true">
             <i className="overlay-ear left" /><i className="overlay-ear right" />
             <i className="overlay-star">✦</i>
             <i className="overlay-eye left" /><i className="overlay-eye right" />
