@@ -24,6 +24,7 @@ describe("CapabilityGapPreview", () => {
         platformProposalRequired: true,
       },
       catalogDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      compositionGraphDigest: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
       compositionPlan: {
         spec: "nimora.capability-composition-plan/1",
         catalogDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -41,6 +42,7 @@ describe("CapabilityGapPreview", () => {
     expect(markup).toContain("perception.camera.observe");
     expect(markup).toContain("需要平台提案");
     expect(markup).toContain("宿主目录已核验");
+    expect(markup).toContain("语义组合图");
     expect(markup).toContain("未证明自然语言目标不存在其他组合路径");
     expect(markup).not.toContain("批准此权限与行为审查");
     expect(markup).not.toContain("原子安装");

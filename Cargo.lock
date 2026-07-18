@@ -2247,6 +2247,7 @@ name = "nimora-agent-tools"
 version = "0.1.0"
 dependencies = [
  "nimora-agent-runtime",
+ "nimora-capability-contract",
  "nimora-runtime-core",
  "nimora-user-code-gateway",
  "serde_json",
@@ -2314,6 +2315,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nimora-capability-contract"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "nimora-cli"
 version = "0.1.0"
 dependencies = [
@@ -2332,6 +2342,7 @@ name = "nimora-creator-composition"
 version = "0.1.0"
 dependencies = [
  "nimora-agent-runtime",
+ "nimora-capability-contract",
  "nimora-runtime-core",
  "serde",
  "serde_json",
@@ -2364,6 +2375,7 @@ dependencies = [
  "nimora-automation-agent-bridge",
  "nimora-automation-capability-bridge",
  "nimora-automation-runtime",
+ "nimora-capability-contract",
  "nimora-creator-composition",
  "nimora-creator-draft",
  "nimora-diagnostics-bundle",
@@ -2483,6 +2495,7 @@ dependencies = [
 name = "nimora-skill-runtime"
 version = "0.1.0"
 dependencies = [
+ "nimora-capability-contract",
  "nimora-runtime-core",
  "serde",
  "serde_json",

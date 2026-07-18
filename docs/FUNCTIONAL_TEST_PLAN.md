@@ -565,6 +565,13 @@ ID / 标题 / 优先级 / 前置条件
 
 ## AI 辅助扩展创作
 
+- Contract-test `nimora.capability-semantic-contract/1` 拒绝未知字段、非法/重复/未排序语义 ID、空输出、零成本与越界成本；序列化不得含 Backend、Schema、路径、Secret 或运行时对象。
+- Verify Composition Graph 摘要对节点增删和语义变化敏感，篡改摘要失败关闭；搜索硬限制节点 256、深度 8、状态 2048、请求项 32，且从不执行 Tool。
+- Verify 有界 Planner 在同一输入下稳定选择最低成本、最少步骤、字典序确定路径，并强制前置条件、数据等级、副作用、离线和总成本约束。
+- Verify 内建 Tool 与 Semantic Contract 精确一一对应；新增 Tool 缺少契约或多出孤立契约时测试失败。
+- Verify Skill 省略 `composition` 时保持兼容但不进入语义图；显式契约 ID/effect 不匹配、冒充平台输出或字段不规范时安装拒绝。
+- Verify 激活 Skill 的已验证契约进入实时图，暂停后立即撤销并改变摘要；Creator Gap UI 同时显示 Catalog 与 Graph 摘要且不宣称自然语言目标已获证明。
+
 - Verify Creator Agent 固定使用 `Draft` autonomy、空 Tool allowlist、调用深度 1，且只允许已登记的本地 Provider；模型 Tool Call 必须 fail closed。
 - Verify可信 System instruction 与 Personal/Untrusted 用户需求使用独立消息，模型输出永远按不可信输入处理。
 - Verify Markdown 包裹、未知字段、类型不匹配、非法 Manifest、权限说明缺失/额外/重复均拒绝，错误不回显模型原文。

@@ -1,3 +1,6 @@
+use nimora_capability_contract::{
+    CapabilitySemanticContract, validate_capability_semantic_contract,
+};
 use nimora_runtime_core::CommandRisk;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -74,6 +77,8 @@ pub struct SkillAgentToolContribution {
     pub output_schema: Value,
     pub base_risk: CommandRisk,
     pub effect: SkillAgentToolEffect,
+    #[serde(default)]
+    pub composition: Option<CapabilitySemanticContract>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,6 +238,7 @@ pub fn validate_manifest(manifest: SkillManifest) -> Result<ValidatedSkillManife
             || !valid_tool_schema(&tool.input_schema)
             || !valid_tool_schema(&tool.output_schema)
             || !tool_ids.insert(tool.id.as_str())
+            || !valid_agent_tool_composition(tool, &manifest.id)
         {
             return Err(SkillError::InvalidContribution);
         }
@@ -260,6 +266,29 @@ pub fn validate_manifest(manifest: SkillManifest) -> Result<ValidatedSkillManife
         return Err(SkillError::MissingCapability);
     }
     Ok(ValidatedSkillManifest(manifest))
+}
+
+fn valid_agent_tool_composition(tool: &SkillAgentToolContribution, skill_id: &str) -> bool {
+    tool.composition.as_ref().is_none_or(|contract| {
+        validate_capability_semantic_contract(contract).is_ok()
+            && contract.capability_id == tool.id
+            && contract.effect
+                == match tool.effect {
+                    SkillAgentToolEffect::ReversibleWrite => {
+                        nimora_capability_contract::CapabilityEffect::ReversibleWrite
+                    }
+                    SkillAgentToolEffect::IrreversibleWrite => {
+                        nimora_capability_contract::CapabilityEffect::IrreversibleWrite
+                    }
+                    SkillAgentToolEffect::ExternalSideEffect => {
+                        nimora_capability_contract::CapabilityEffect::ExternalSideEffect
+                    }
+                }
+            && contract
+                .produces
+                .iter()
+                .all(|semantic_type| semantic_type.starts_with(&format!("{skill_id}.")))
+    })
 }
 
 impl SkillHost {
@@ -543,6 +572,10 @@ mod tests {
         SkillCommandContribution, SkillContributions, SkillError, SkillGrant, SkillHost,
         SkillManifest, SkillStatus, validate_manifest,
     };
+    use nimora_capability_contract::{
+        CapabilityDataClass, CapabilityEffect, CapabilitySemanticContract,
+        CapabilitySemanticDeclaration,
+    };
     use nimora_runtime_core::CommandRisk;
     use serde_json::json;
     use std::collections::BTreeSet;
@@ -603,8 +636,38 @@ mod tests {
             output_schema: json!({"type": "object"}),
             base_risk: CommandRisk::Low,
             effect: SkillAgentToolEffect::ReversibleWrite,
+            composition: None,
         }];
         assert!(validate_manifest(manifest.clone()).is_ok());
+
+        let mut composed = manifest.clone();
+        composed.contributions.agent_tools[0].composition = Some(
+            CapabilitySemanticContract::new(
+                "studio.example.focus.start-tool",
+                CapabilitySemanticDeclaration {
+                    requires: vec!["pet.action-id".to_owned()],
+                    produces: vec!["studio.example.focus.session-state".to_owned()],
+                    preconditions: Vec::new(),
+                    data_classes: vec![CapabilityDataClass::Internal],
+                    effect: CapabilityEffect::ReversibleWrite,
+                    cost_units: 10,
+                    offline_available: true,
+                },
+            )
+            .expect("composition contract"),
+        );
+        assert!(validate_manifest(composed.clone()).is_ok());
+
+        let mut impersonated = composed;
+        impersonated.contributions.agent_tools[0]
+            .composition
+            .as_mut()
+            .expect("composition")
+            .produces = vec!["pet.state".to_owned()];
+        assert_eq!(
+            validate_manifest(impersonated),
+            Err(SkillError::InvalidContribution)
+        );
 
         let mut missing_capability = manifest.clone();
         missing_capability

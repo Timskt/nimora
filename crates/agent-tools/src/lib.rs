@@ -1,6 +1,10 @@
 use nimora_agent_runtime::{
     AgentRuntimeError, ToolBackend, ToolDescriptor, ToolEffect, ToolInvocation, ToolRegistry,
 };
+use nimora_capability_contract::{
+    CapabilityContractError, CapabilityDataClass, CapabilityEffect, CapabilitySemanticContract,
+    CapabilitySemanticDeclaration,
+};
 use nimora_runtime_core::CommandRisk;
 use nimora_user_code_gateway::{
     AgentGatewayPolicy, CapabilityBackend, CapabilityGateway, CapabilityRequest,
@@ -148,6 +152,150 @@ pub fn production_tool_descriptors() -> Result<Vec<ToolDescriptor>, AgentRuntime
             ToolEffect::ReversibleWrite,
         )?,
     ])
+}
+
+/// Returns explicit semantic contracts for every built-in production Tool.
+///
+/// These declarations are maintained by the trusted host and never inferred from Tool schemas or
+/// model-authored descriptions.
+///
+/// # Errors
+///
+/// Returns an error if a built-in declaration violates the semantic contract.
+pub fn production_capability_semantic_contracts()
+-> Result<Vec<CapabilitySemanticContract>, CapabilityContractError> {
+    [
+        semantic(
+            PET_STATE_READ,
+            &[],
+            &["pet.state"],
+            CapabilityEffect::ReadOnly,
+            5,
+        ),
+        semantic(
+            PET_ACTION_CATALOG_READ,
+            &[],
+            &["pet.action-catalog", "pet.action-id"],
+            CapabilityEffect::ReadOnly,
+            5,
+        ),
+        semantic(
+            PROFILE_STATE_READ,
+            &[],
+            &["profile.active-state", "profile.profile-id"],
+            CapabilityEffect::ReadOnly,
+            5,
+        ),
+        semantic(
+            PROFILE_ACTIVE_SWITCH,
+            &["profile.profile-id"],
+            &["profile.active-state"],
+            CapabilityEffect::ReversibleWrite,
+            15,
+        ),
+        semantic(
+            CHARACTER_STATE_READ,
+            &[],
+            &["character.active-state"],
+            CapabilityEffect::ReadOnly,
+            5,
+        ),
+        semantic_with_preconditions(
+            CHARACTER_ACTIVE_SWITCH,
+            &["character.asset-id"],
+            &["character.active-state"],
+            &["asset.installed", "asset.integrity-verified"],
+            CapabilityEffect::ReversibleWrite,
+            20,
+        ),
+        semantic(
+            ASSET_CATALOG_READ,
+            &[],
+            &["asset.catalog-snapshot", "character.asset-id"],
+            CapabilityEffect::ReadOnly,
+            10,
+        ),
+        semantic(
+            PROGRAM_CATALOG_READ,
+            &[],
+            &["program.execution-request", "program.installed-catalog"],
+            CapabilityEffect::ReadOnly,
+            10,
+        ),
+        semantic_with_preconditions(
+            PROGRAM_EXECUTE,
+            &["program.execution-request"],
+            &["program.execution-result"],
+            &["program.integrity-verified", "program.permission-granted"],
+            CapabilityEffect::ExternalSideEffect,
+            50,
+        ),
+        semantic(
+            RUNTIME_HEALTH_READ,
+            &[],
+            &["runtime.health-snapshot"],
+            CapabilityEffect::ReadOnly,
+            5,
+        ),
+        semantic(
+            AUTOMATION_DEFINITION_VALIDATE,
+            &["automation.definition", "automation.event-sample"],
+            &["automation.validation-result"],
+            CapabilityEffect::ReadOnly,
+            20,
+        ),
+        semantic(
+            PET_ANIMATION_PLAY,
+            &["pet.action-id"],
+            &["pet.animation-state"],
+            CapabilityEffect::ReversibleWrite,
+            10,
+        ),
+        semantic(
+            PET_POSITION_MOVE,
+            &["pet.position-coordinates"],
+            &["pet.position-state"],
+            CapabilityEffect::ReversibleWrite,
+            10,
+        ),
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn semantic(
+    capability_id: &str,
+    requires: &[&str],
+    produces: &[&str],
+    effect: CapabilityEffect,
+    cost_units: u32,
+) -> Result<CapabilitySemanticContract, CapabilityContractError> {
+    semantic_with_preconditions(capability_id, requires, produces, &[], effect, cost_units)
+}
+
+fn semantic_with_preconditions(
+    capability_id: &str,
+    requires: &[&str],
+    produces: &[&str],
+    preconditions: &[&str],
+    effect: CapabilityEffect,
+    cost_units: u32,
+) -> Result<CapabilitySemanticContract, CapabilityContractError> {
+    CapabilitySemanticContract::new(
+        capability_id,
+        CapabilitySemanticDeclaration {
+            requires: requires.iter().map(|value| (*value).to_owned()).collect(),
+            produces: produces.iter().map(|value| (*value).to_owned()).collect(),
+            preconditions: preconditions
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
+            data_classes: vec![CapabilityDataClass::Internal],
+            effect,
+            cost_units,
+            offline_available: true,
+        },
+    )
 }
 
 fn character_switch_descriptor() -> Result<ToolDescriptor, AgentRuntimeError> {
@@ -411,4 +559,24 @@ fn required_argument<'a>(arguments: &'a Value, key: &str) -> Result<&'a Value, S
         .as_object()
         .and_then(|object| object.get(key))
         .ok_or_else(|| format!("missing required argument: {key}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_builtin_tool_has_one_matching_semantic_contract() {
+        let descriptor_ids = production_tool_descriptors()
+            .expect("descriptors")
+            .into_iter()
+            .map(|descriptor| descriptor.id.to_string())
+            .collect::<BTreeSet<_>>();
+        let contract_ids = production_capability_semantic_contracts()
+            .expect("semantic contracts")
+            .into_iter()
+            .map(|contract| contract.capability_id)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(descriptor_ids, contract_ids);
+    }
 }

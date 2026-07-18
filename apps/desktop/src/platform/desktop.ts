@@ -98,6 +98,7 @@ export interface CreatorDraftResult {
     platformProposalRequired: boolean;
   } | null;
   catalogDigest: string;
+  compositionGraphDigest: string;
   compositionPlan: {
     spec: "nimora.capability-composition-plan/1";
     catalogDigest: string;

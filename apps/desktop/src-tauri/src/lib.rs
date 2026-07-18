@@ -49,7 +49,9 @@ use nimora_agent_runtime::{
     ProviderResponse, ProviderStepInput, ProviderStepOutcome, ProviderToolTurn, ToolAdmission,
     ToolApproval, ToolDescriptor, ToolEffect, ToolInvocation, ToolRegistry, ToolStepOutcome,
 };
-use nimora_agent_tools::{GatewayToolBackend, production_tool_registry};
+use nimora_agent_tools::{
+    GatewayToolBackend, production_capability_semantic_contracts, production_tool_registry,
+};
 use nimora_agent_workspace_host::WorkspaceScanPolicy;
 use nimora_asset_installer::{
     AssetPackageSummary, AssetPreviewAudio, AssetPreviewReport, AssetRendererDescriptor,
@@ -70,7 +72,8 @@ use nimora_automation_runtime::{
     AutomationExecutionContext, AutomationRun, RunControl, RunMode, Uncancelled,
 };
 use nimora_creator_composition::{
-    CapabilityCatalogSnapshot, CapabilityCompositionPlan, CompositionError, plan_exact_capabilities,
+    CapabilityCatalogSnapshot, CapabilityCompositionGraph, CapabilityCompositionPlan,
+    CompositionError, plan_exact_capabilities,
 };
 use nimora_creator_draft::{
     CapabilityGap, CreatorArtifactKind, CreatorDraft, CreatorDraftError, CreatorDraftRequest,
@@ -1342,6 +1345,7 @@ struct DesktopCreatorDraftResult {
     draft: Option<CreatorDraft>,
     capability_gap: Option<CapabilityGap>,
     catalog_digest: String,
+    composition_graph_digest: String,
     composition_plan: Option<CapabilityCompositionPlan>,
     usage: nimora_agent_runtime::ProviderUsage,
     finish_reason: nimora_agent_runtime::ProviderFinishReason,
@@ -3057,6 +3061,7 @@ fn generate_creator_draft_inner(
     }
     let draft_request = CreatorDraftRequest::new(request.kind, request.requirement)?;
     let creator_catalog = creator_capability_catalog(state)?;
+    let composition_graph = creator_composition_graph(state)?;
     let providers = desktop_provider_registry(state)?;
     let now_ms = current_time_ms()?;
     let tool_ids = BTreeSet::new();
@@ -3134,6 +3139,7 @@ fn generate_creator_draft_inner(
         draft,
         capability_gap,
         catalog_digest: creator_catalog.digest,
+        composition_graph_digest: composition_graph.digest,
         composition_plan,
         usage: response.usage,
         finish_reason: response.finish_reason,
@@ -3167,6 +3173,26 @@ fn creator_capability_catalog(
         .cloned()
         .collect::<Vec<_>>();
     CapabilityCatalogSnapshot::from_tool_descriptors(descriptors).map_err(Into::into)
+}
+
+fn creator_composition_graph(
+    state: &DesktopState,
+) -> Result<CapabilityCompositionGraph, DesktopError> {
+    let live_ids = production_agent_tool_allowlist(state)?;
+    let mut contracts = production_capability_semantic_contracts()
+        .map_err(|error| DesktopError::Agent(error.to_string()))?;
+    let host = state
+        .skill_host
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    contracts.extend(
+        host.active_contributions()
+            .into_iter()
+            .flat_map(|skill| skill.agent_tools)
+            .filter_map(|tool| tool.composition)
+            .filter(|contract| live_ids.contains(&contract.capability_id)),
+    );
+    CapabilityCompositionGraph::new(contracts).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -9782,9 +9808,9 @@ mod tests {
         cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
         cancel_skill_execution_inner, capability_set_diff, confirm_agent_tool_inner,
         confirm_agent_tool_with_registry, consume_creator_approval_from,
-        creator_capability_catalog, creator_capability_risk, current_time_ms, default_agent_model,
-        default_agent_provider_id, desktop_tool_registry, diagnostic_report,
-        dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
+        creator_capability_catalog, creator_capability_risk, creator_composition_graph,
+        current_time_ms, default_agent_model, default_agent_provider_id, desktop_tool_registry,
+        diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
         parse_user_program_plan, pause_auto_mode_job_inner, permission_grant,
@@ -9811,6 +9837,10 @@ mod tests {
     use nimora_automation_agent_bridge::AdmittedContextSegment;
     use nimora_automation_agent_bridge::{
         AgentTaskSubmissionOutcome, AgentTaskSubmitter, AutomationAgentTask,
+    };
+    use nimora_capability_contract::{
+        CapabilityDataClass, CapabilityEffect, CapabilitySemanticContract,
+        CapabilitySemanticDeclaration,
     };
     use nimora_creator_draft::CapabilityGap;
     use nimora_diagnostics_bundle::{
@@ -12704,6 +12734,21 @@ mod tests {
                     output_schema: json!({"type": "object"}),
                     base_risk: CommandRisk::Low,
                     effect: SkillAgentToolEffect::ReversibleWrite,
+                    composition: Some(
+                        CapabilitySemanticContract::new(
+                            format!("{skill_id}.wave"),
+                            CapabilitySemanticDeclaration {
+                                requires: vec!["pet.action-id".to_owned()],
+                                produces: vec![format!("{skill_id}.wave-state")],
+                                preconditions: Vec::new(),
+                                data_classes: vec![CapabilityDataClass::Internal],
+                                effect: CapabilityEffect::ReversibleWrite,
+                                cost_units: 10,
+                                offline_available: true,
+                            },
+                        )
+                        .expect("semantic contract"),
+                    ),
                 }],
                 agent_tasks: false,
             },
@@ -12826,6 +12871,34 @@ mod tests {
     }
 
     #[test]
+    fn creator_composition_graph_tracks_only_live_validated_skill_contracts() {
+        let (root, state) = normal_desktop_state();
+        let skill_id = activate_test_skill_agent_tool(&state);
+        let graph = creator_composition_graph(&state).expect("Creator composition graph");
+        assert!(
+            graph
+                .contracts
+                .iter()
+                .any(|contract| contract.capability_id == format!("{skill_id}.wave"))
+        );
+        state
+            .skill_host
+            .lock()
+            .expect("Skill Host")
+            .suspend(skill_id)
+            .expect("suspend Skill");
+        let revoked = creator_composition_graph(&state).expect("revoked composition graph");
+        assert_ne!(graph.digest, revoked.digest);
+        assert!(
+            revoked
+                .contracts
+                .iter()
+                .all(|contract| contract.capability_id != format!("{skill_id}.wave"))
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
     fn creator_gap_verification_rejects_registered_capabilities() {
         let (root, state) = normal_desktop_state();
         let catalog = creator_capability_catalog(&state).expect("Creator catalog");
@@ -12905,6 +12978,7 @@ mod tests {
                     output_schema: json!({"type": "object"}),
                     base_risk: CommandRisk::Low,
                     effect: SkillAgentToolEffect::ReversibleWrite,
+                    composition: None,
                 }],
                 agent_tasks: false,
             },

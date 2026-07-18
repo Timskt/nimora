@@ -20,6 +20,7 @@ nimora-agent-auto-host = { path = "../../../crates/agent-auto-host" }
 nimora-agent-runtime = { path = "../../../crates/agent-runtime" }
 nimora-agent-workspace-host = { path = "../../../crates/agent-workspace-host" }
 nimora-agent-tools = { path = "../../../crates/agent-tools" }
+nimora-capability-contract = { path = "../../../crates/capability-contract" }
 nimora-automation-agent-bridge = { path = "../../../crates/automation-agent-bridge" }
 nimora-automation-capability-bridge = { path = "../../../crates/automation-capability-bridge" }
 nimora-automation-runtime = { path = "../../../crates/automation-runtime" }

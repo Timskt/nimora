@@ -18,6 +18,7 @@ members = [
   "crates/diagnostics-bundle",
   "crates/creator-draft",
   "crates/creator-composition",
+  "crates/capability-contract",
   "crates/asset-installer",
   "crates/model-importer",
   "crates/user-code-policy",

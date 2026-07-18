@@ -1,5 +1,14 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-18 — Semantic Contract 与有界 Composition Graph 纵切
+
+- 新增纯基础 crate `capability-contract`，定义严格 `nimora.capability-semantic-contract/1`：精确 capability ID、排序去重的 `requires/produces/preconditions`、数据等级、副作用、成本单位和离线可用性；未知字段、空输出、非法命名、非规范顺序和越界成本失败关闭。
+- `creator-composition` 新增摘要绑定的 `nimora.capability-composition-graph/1` 与 `nimora.capability-semantic-plan/1`，在节点 256、深度 8、扩展状态 2048 和请求项 32 的硬上限内执行确定性最低成本搜索；搜索只读契约，不执行 Tool，也不从 Schema、标题、描述或模型文本推断语义。
+- 内建生产 Tool 现在都有显式宿主维护的语义契约，一致性测试证明 Tool ID 与 Contract ID 一一对应；Character、Program 等路径显式声明安装、完整性和授权前置条件。
+- Skill Agent Tool Contribution 可选携带语义契约，旧 Manifest 保持兼容；安装前复验 Contract ID、effect 和输出命名空间，第三方 Skill 不能冒充平台语义事实。
+- Desktop 从同一实时 Tool Registry 合并内建契约与当前激活 Skill 的已验证契约；Skill 暂停后图节点立即撤销且摘要变化。Creator 结果与 Gap UI 投影组合图摘要，并明确该摘要尚不证明模型把自然语言目标映射到了正确语义输出。
+- 当前已实现机器级语义路径搜索基础层，但 Gap Schema 尚未接收严格 `requiredSemanticOutputs/availableSemanticInputs`，因此现有 Gap 仍只执行 Exact-ID 结论；在模型候选字段、宿主复验和持久报告升级落地前，不得宣称自然语言 Capability Gap 已由图搜索证明。
+
 ## 2026-07-18 — Creator Catalog Snapshot 与精确组合核验纵切
 
 - 新增独立纯 Rust `creator-composition`：从生产 `ToolRegistry` 投影只有宿主复验 ID 与 effect、无第三方标题/描述、无 Schema、无 Backend、无原生对象的有界 `nimora.capability-catalog-snapshot/1`，按能力 ID 稳定排序并生成 SHA-256 摘要；内建工具与当前已激活 Skill Agent Tool Contribution 使用同一动态目录事实。
@@ -14,7 +23,7 @@
 - `creator-draft` 在同一有界 JSON 信任边界解析 Draft 或 Gap，验证字段白名单、文本预算、能力命名、数量、重复项和替代方案；Gap 永远不能进入 Draft 的检查、批准或安装函数。
 - Desktop Host 使用 `outcome`、互斥 `draft/capabilityGap` 投影；Creator Studio 为 Gap 提供独立警示界面，不渲染权限批准、原子安装或 Draft Workspace 保存入口。
 - 用户可将经过复验的 Gap 原子保存为 `.nimora-drafts/capability-gap-<uuid>.json` 项目事实；报告只有结构化数据，无源码、运行 Grant、Secret 或宿主路径回传，Safe/Recovery 下仍可导出恢复资料。
-- Creator Contract 8 项、Desktop Host 129 项、Frontend 42 项测试通过；当前已实现真实动态 Catalog 的精确 ID 确定性核验，但尚未实现语义级 Composition Graph，也未实现 Gap 到 L4 Proposal 的评审工作流。
+- Creator Contract 8 项、Desktop Host 129 项、Frontend 42 项测试通过；该纵切当时只实现真实动态 Catalog 的精确 ID 确定性核验，Gap 到 L4 Proposal 的评审工作流仍未实现。
 
 ## 2026-07-18 — 外接 AI 原生扩展能力面基线
 

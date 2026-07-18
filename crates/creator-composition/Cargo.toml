@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 nimora-agent-runtime = { path = "../agent-runtime" }
+nimora-capability-contract = { path = "../capability-contract" }
 nimora-runtime-core = { path = "../runtime-core" }
 serde.workspace = true
 serde_json.workspace = true
