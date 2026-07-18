@@ -54,7 +54,9 @@ Agent Runtime 已新增 Provider 无关的推理策略领域契约，统一 `aut
 
 桌面 Tauri 宿主已接入 `agent-auto-host` 的持久单轮 Facade，并复用现有生产 Provider Registry、动态 Skill Tool Registry、Gateway Tool Backend 与 Capability Gateway。版本化 IPC 和 TypeScript 平台层支持显式 Session、Workspace、约束、输出预算与离线策略；Safe Mode、Recovery Mode 和非法预算均在 Provider 前 fail-closed。当前仍是用户触发的一次 Resume + 单轮执行，后台有界监督循环、桌面 Goal/Plan/Attempt UI、不确定 Attempt 对账和网络数据出境确认尚未闭环，因此 AI Agent 与 CLI 领域继续标记为“部分实现”。
 
-宿主无关的有界 Loop Facade 已实现连续 Continue、终态停止、业务暂停停止、Workspace Drift 停止和 `1..=256` 批次公平让出；真实 SQLite 测试证明两轮 Tool continuation 到完成、单轮让出后 Running/Checkpoint 保持，以及非法上限在 Provider 前拒绝。Tauri 后台任务注册表、跨批次续调、用户暂停/取消与关闭时收敛仍未接入。
+宿主无关的有界 Loop Facade 已实现连续 Continue、终态停止、业务暂停停止、Workspace Drift 停止和 `1..=256` 批次公平让出；真实 SQLite 测试证明两轮 Tool continuation 到完成、单轮让出后 Running/Checkpoint 保持，以及非法上限在 Provider 前拒绝。
+
+桌面宿主现已新增独立 `auto_mode_jobs` Application Service 核心：使用单一互斥注册状态原子维护 Job 与活跃 Session 索引，保证同一 Session 只有一个活跃 Job；版本化快照记录状态、累计 Turn/Cache Hit、Checkpoint、暂停原因、错误码和时间；Pause/Cancel 使用共享原子控制信号，Cancel 可覆盖未收敛 Pause；终态释放 Session 但保留可查询快照。严格 Clippy 与单元测试已覆盖唯一性、控制传播、单调批次计数、终态释放和历史快照。该核心尚未接入 `DesktopState`、Tauri IPC、`AutoModeLoopService` 运行线程、持久 Pause/Cancel 原子提交与应用退出收敛，因此不得描述为桌面后台 Auto Mode 已完成。
 
 Auto Host 已进一步实现显式恢复原子提交：Session timestamp 与 Checkpoint sequence 双 CAS 在同一 SQLite Immediate 事务中将 Session/Task 同时恢复为 `running`，任一竞争整体回滚，且不触发 Provider/Tool、不复用 Approval。尚未完成的是恢复后的单轮执行结果持久提交、每轮 Workspace 重扫、持久 Cache Host Loop 接入与系统密钥加密。
 
