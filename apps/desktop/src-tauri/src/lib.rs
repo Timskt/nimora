@@ -207,6 +207,58 @@ const AUTOMATION_EVENT_QUEUE_CAPACITY: usize = 32;
 const AUTOMATION_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const AUTO_MODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const AUTOMATION_AGENT_REQUESTER: &str = "automation:desktop";
+const PET_WANDER_FRAMES: i32 = 12;
+const PET_WANDER_FRAME_DURATION: Duration = Duration::from_millis(25);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PhysicalArea {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+fn plan_wander_target(
+    current: tauri::PhysicalPosition<i32>,
+    window_size: tauri::PhysicalSize<u32>,
+    monitor: PhysicalArea,
+    sequence: u64,
+) -> tauri::PhysicalPosition<i32> {
+    const HORIZONTAL_MARGIN: i64 = 16;
+    const TOP_MARGIN: i64 = 24;
+    const BOTTOM_MARGIN: i64 = 48;
+    const HORIZONTAL_STEP: i64 = 140;
+    const VERTICAL_STEP: i64 = 32;
+
+    let minimum_x = i64::from(monitor.x).saturating_add(HORIZONTAL_MARGIN);
+    let minimum_y = i64::from(monitor.y).saturating_add(TOP_MARGIN);
+    let maximum_x = i64::from(monitor.x)
+        .saturating_add(i64::from(monitor.width))
+        .saturating_sub(i64::from(window_size.width))
+        .saturating_sub(HORIZONTAL_MARGIN)
+        .max(minimum_x);
+    let maximum_y = i64::from(monitor.y)
+        .saturating_add(i64::from(monitor.height))
+        .saturating_sub(i64::from(window_size.height))
+        .saturating_sub(BOTTOM_MARGIN)
+        .max(minimum_y);
+    let direction = if sequence.is_multiple_of(2) { 1 } else { -1 };
+    let vertical_direction = if (sequence / 2).is_multiple_of(2) {
+        1
+    } else {
+        -1
+    };
+    let x = i64::from(current.x)
+        .saturating_add(HORIZONTAL_STEP * direction)
+        .clamp(minimum_x, maximum_x);
+    let y = i64::from(current.y)
+        .saturating_add(VERTICAL_STEP * vertical_direction)
+        .clamp(minimum_y, maximum_y);
+    tauri::PhysicalPosition::new(
+        i32::try_from(x).unwrap_or(if x.is_negative() { i32::MIN } else { i32::MAX }),
+        i32::try_from(y).unwrap_or(if y.is_negative() { i32::MIN } else { i32::MAX }),
+    )
+}
 
 #[derive(Debug)]
 struct DesktopState {
@@ -10605,6 +10657,7 @@ fn start_pet_autonomy(app: AppHandle) {
                 .safety
                 .snapshot()
                 .is_ok_and(|snapshot| snapshot.mode == RuntimeMode::Normal);
+            let before = state.runtime.snapshot().ok();
             if normal
                 && let Ok(now_ms) = current_time_ms()
                 && matches!(
@@ -10615,10 +10668,68 @@ fn start_pet_autonomy(app: AppHandle) {
                 )
             {
                 let _ = app.emit_to(PET_WINDOW_LABEL, PET_AUTONOMY_CHANGED_EVENT, ());
+                if before.is_some_and(|pet| pet.state != nimora_runtime_core::PetState::Walking)
+                    && state
+                        .runtime
+                        .snapshot()
+                        .is_ok_and(|pet| pet.state == nimora_runtime_core::PetState::Walking)
+                {
+                    let _ = execute_pet_wander(&app);
+                }
             }
             std::thread::sleep(Duration::from_secs(1));
         }
     });
+}
+
+fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
+    let window = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
+    let current = window.outer_position()?;
+    let window_size = window.outer_size()?;
+    let monitor = window
+        .current_monitor()?
+        .ok_or_else(|| DesktopError::WindowUnavailable("current-monitor".to_owned()))?;
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let sequence = app
+        .state::<DesktopState>()
+        .runtime
+        .snapshot()?
+        .autonomy
+        .sequence;
+    let target = plan_wander_target(
+        current,
+        window_size,
+        PhysicalArea {
+            x: monitor_position.x,
+            y: monitor_position.y,
+            width: monitor_size.width,
+            height: monitor_size.height,
+        },
+        sequence,
+    );
+    for frame in 1..=PET_WANDER_FRAMES {
+        let state = app.state::<DesktopState>();
+        if state.dragging.load(Ordering::Acquire)
+            || state.safety.snapshot()?.mode != RuntimeMode::Normal
+            || state.runtime.snapshot()?.state != nimora_runtime_core::PetState::Walking
+        {
+            break;
+        }
+        let interpolate = |start: i32, end: i32| {
+            let delta = i64::from(end) - i64::from(start);
+            let value = i64::from(start) + delta * i64::from(frame) / i64::from(PET_WANDER_FRAMES);
+            i32::try_from(value).unwrap_or(start)
+        };
+        window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+            interpolate(current.x, target.x),
+            interpolate(current.y, target.y),
+        )))?;
+        std::thread::sleep(PET_WANDER_FRAME_DURATION);
+    }
+    Ok(())
 }
 
 fn discover_agent_provider_worker(app: &AppHandle) -> Option<PathBuf> {
@@ -10658,7 +10769,7 @@ mod tests {
         DesktopCapabilityBackend, DesktopError, DesktopProviderCredentialResolver,
         DesktopResolveAutoModeAttemptRequest, DesktopSecretStore, DesktopState,
         ExecutionCancellation, LocalAgentRequest, PendingCreatorApproval, PendingSkillExecution,
-        PetAction, PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
+        PetAction, PhysicalArea, PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
         ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SkillEventSession, StartupMode,
         THEME_SELECTION, TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
         UserProgramRollbackReceipt, VOICE_SELECTION, WindowPolicy, agent_catalog_inner,
@@ -10675,7 +10786,7 @@ mod tests {
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_generated_theme, install_gltf_character, open_diagnostic_journal,
         parse_asset_protocol_path, parse_user_program_plan, pause_auto_mode_job_inner,
-        permission_grant, persist_asset_selection, prepare_agent_tool_inner,
+        permission_grant, persist_asset_selection, plan_wander_target, prepare_agent_tool_inner,
         quiesce_auto_mode_jobs, reject_agent_tool_inner, reject_automation_run_inner,
         resolve_active_character, resolve_active_theme, resolve_active_voice,
         resolve_asset_selection, resolve_auto_mode_attempt_inner, resolve_character_renderer,
@@ -13051,6 +13162,54 @@ mod tests {
     fn accepts_finite_screen_coordinates() {
         assert_eq!(screen_coordinate(42.6).expect("valid coordinate"), 43);
         assert_eq!(screen_coordinate(-12.4).expect("valid coordinate"), -12);
+    }
+
+    #[test]
+    fn wander_target_stays_inside_negative_coordinate_monitor() {
+        let target = plan_wander_target(
+            tauri::PhysicalPosition::new(-500, 300),
+            tauri::PhysicalSize::new(260, 300),
+            PhysicalArea {
+                x: -1920,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            2,
+        );
+        assert_eq!(target, tauri::PhysicalPosition::new(-360, 268));
+        assert!(target.x >= -1904);
+        assert!(target.x <= -276);
+        assert!(target.y >= 24);
+        assert!(target.y <= 732);
+    }
+
+    #[test]
+    fn wander_target_clamps_at_monitor_edges() {
+        let right = plan_wander_target(
+            tauri::PhysicalPosition::new(900, 700),
+            tauri::PhysicalSize::new(260, 300),
+            PhysicalArea {
+                x: 0,
+                y: 0,
+                width: 1200,
+                height: 900,
+            },
+            2,
+        );
+        assert_eq!(right, tauri::PhysicalPosition::new(924, 552));
+        let left = plan_wander_target(
+            tauri::PhysicalPosition::new(20, 20),
+            tauri::PhysicalSize::new(260, 300),
+            PhysicalArea {
+                x: 0,
+                y: 0,
+                width: 1200,
+                height: 900,
+            },
+            3,
+        );
+        assert_eq!(left, tauri::PhysicalPosition::new(16, 24));
     }
 
     #[test]
