@@ -180,7 +180,7 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - Installation builds a standard manifest, theme payload and SHA-256 inventory, then reuses the atomic Asset Installer; it never grants capabilities and never activates the theme automatically.
 - Creator Studio renders a token-scoped, inert preview card instead of injecting generated CSS into the application theme. The review and install copy distinguishes permissionless theme upgrades from executable artifact reauthorization.
 - Focused evidence covers generated-package verification, low-contrast rejection, metadata control-character and length rejection, installed-version diff, two-file Workspace persistence, isolated preview rendering and TypeScript correctness.
-- Connector, Agent Profile, Persona Pack, Widget and other documented AI-native outputs remain proposals until each has a production Runtime, deterministic validator, install lifecycle and tests; Creator must return a capability gap rather than fabricate them.
+- Connector, Agent Profile, Persona Pack, Widget, Browser Workflow, Spatial Presence Profile, Identity Profile, Purchase Draft, Temporal Goal Graph, Federated Evaluation Pack, Adapter Training Project, Device Continuity Plan and other documented AI-native outputs remain proposals until each has a production Runtime, deterministic validator, install lifecycle and tests; Creator must return a capability gap rather than fabricate them.
 
 ## 2026-07-18 — AI-generated core Profile vertical slice
 
