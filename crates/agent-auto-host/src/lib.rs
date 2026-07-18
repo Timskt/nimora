@@ -8,10 +8,10 @@ use nimora_agent_runtime::{
 };
 use nimora_agent_workspace_host::{WorkspaceHostError, WorkspaceScanPolicy, WorkspaceScanner};
 use nimora_persistence_sqlite::{
-    ContextCachePolicy, SqliteAgentGoalRepository, SqliteAutoModeCheckpointRepository,
-    SqliteAutoModeCommitRepository, SqliteAutoModeRepository, SqliteContextCacheRepository,
-    SqlitePersistenceError, SqliteWorkspaceSnapshotRepository, StoredContextCacheEntry,
-    StoredWorkspaceSnapshot,
+    AutoModeTurnAttempt, AutoModeTurnAttemptStatus, ContextCachePolicy, SqliteAgentGoalRepository,
+    SqliteAutoModeCheckpointRepository, SqliteAutoModeCommitRepository, SqliteAutoModeRepository,
+    SqliteAutoModeTurnAttemptRepository, SqliteContextCacheRepository, SqlitePersistenceError,
+    SqliteWorkspaceSnapshotRepository, StoredContextCacheEntry, StoredWorkspaceSnapshot,
 };
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -162,6 +162,34 @@ impl AutoModeTurnCommitService {
         }
     }
 
+    /// Persists a non-reclaimable attempt before any Provider or Tool invocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for stale state, duplicate execution, or invalid request identity.
+    pub fn begin(
+        &self,
+        turn: &RecoveredAutoModeTurn,
+        request_fingerprint: impl Into<String>,
+        now_ms: u64,
+    ) -> Result<AutoModeTurnAttempt, AutoModeTurnCommitError> {
+        if turn.session.status != AutoModeStatus::Running
+            || turn.task.status != AgentTaskStatus::Running
+            || now_ms < turn.session.updated_at_ms
+        {
+            return Err(AutoModeTurnCommitError::InvalidOutcomeState);
+        }
+        SqliteAutoModeTurnAttemptRepository::open(&self.database_path)?
+            .begin(
+                turn.session.id,
+                turn.checkpoint_sequence,
+                turn.session.updated_at_ms,
+                request_fingerprint,
+                now_ms,
+            )
+            .map_err(AutoModeTurnCommitError::Persistence)
+    }
+
     /// Durably couples a post-Provider turn to its session and checkpoint versions.
     ///
     /// A persistence error after a Provider or Tool call is deliberately classified as
@@ -173,13 +201,13 @@ impl AutoModeTurnCommitService {
     /// Returns an error for invalid outcome state or an indeterminate atomic commit.
     pub fn commit(
         &self,
+        attempt: &AutoModeTurnAttempt,
         mut turn: RecoveredAutoModeTurn,
         outcome: AutoModeTurnOutcome,
-        expected_session_updated_at_ms: u64,
         now_ms: u64,
     ) -> Result<CommittedAutoModeTurn, AutoModeTurnCommitError> {
         if now_ms < turn.session.updated_at_ms
-            || expected_session_updated_at_ms > turn.session.updated_at_ms
+            || attempt.expected_session_updated_at_ms > turn.session.updated_at_ms
         {
             return Err(AutoModeTurnCommitError::InvalidOutcomeState);
         }
@@ -242,13 +270,21 @@ impl AutoModeTurnCommitService {
         SqliteAutoModeCommitRepository::open(&self.database_path)
             .and_then(|mut repository| {
                 repository.commit_turn(
+                    attempt,
                     &turn.session,
-                    expected_session_updated_at_ms,
+                    attempt.expected_session_updated_at_ms,
                     &checkpoint,
                     previous_checkpoint_sequence,
                 )
             })
-            .map_err(AutoModeTurnCommitError::CommitIndeterminate)?;
+            .map_err(|source| {
+                if let Ok(repository) =
+                    SqliteAutoModeTurnAttemptRepository::open(&self.database_path)
+                {
+                    let _ = repository.mark_indeterminate(attempt, now_ms);
+                }
+                AutoModeTurnCommitError::CommitIndeterminate(source)
+            })?;
         Ok(match committed {
             CommittedAutoModeTurnKind::Continue => CommittedAutoModeTurn::Continue(Box::new(turn)),
             CommittedAutoModeTurnKind::Paused => CommittedAutoModeTurn::Paused(Box::new(turn)),
@@ -272,6 +308,8 @@ pub enum AutoModeTurnCommitError {
     InvalidOutcomeState,
     #[error("Auto Mode turn commit is indeterminate and must not be replayed automatically")]
     CommitIndeterminate(#[source] SqlitePersistenceError),
+    #[error(transparent)]
+    Persistence(#[from] SqlitePersistenceError),
 }
 
 #[derive(Debug, Clone)]
@@ -309,6 +347,13 @@ impl AutoModeRecoveryService {
             .ok_or(AutoModeRecoveryError::SessionNotFound)?;
         if session.status != AutoModeStatus::Paused {
             return Err(AutoModeRecoveryError::SessionNotPaused);
+        }
+        let attempts = SqliteAutoModeTurnAttemptRepository::open(&self.database_path)?;
+        if let Some(attempt) = attempts.get(session_id)? {
+            if attempt.status == AutoModeTurnAttemptStatus::Active {
+                attempts.mark_indeterminate(&attempt, now_ms)?;
+            }
+            return Err(AutoModeRecoveryError::IndeterminateTurnAttempt);
         }
         let goal = SqliteAgentGoalRepository::open(&self.database_path)?
             .get(session.goal_id)?
@@ -540,6 +585,8 @@ pub enum AutoModeRecoveryError {
     WorkspaceChanged,
     #[error("Auto Mode checkpoint task cannot be safely paused")]
     UnsafeTaskState,
+    #[error("Auto Mode has an indeterminate Provider or Tool attempt requiring inspection")]
+    IndeterminateTurnAttempt,
     #[error(transparent)]
     Persistence(#[from] SqlitePersistenceError),
     #[error(transparent)]
@@ -889,7 +936,16 @@ mod tests {
             .recover(session_id, &workspace, 1_100)
             .expect("recover");
         let mut running = recovery.commit_resume(recovered, 1_101).expect("resume");
-        let expected_session_updated_at_ms = running.session.updated_at_ms;
+        let commit_service = AutoModeTurnCommitService::new(&database);
+        let attempt = commit_service
+            .begin(&running, "sha256:request-one", 1_101)
+            .expect("begin attempt");
+        assert!(matches!(
+            commit_service.begin(&running, "sha256:request-two", 1_101),
+            Err(AutoModeTurnCommitError::Persistence(
+                SqlitePersistenceError::AutoModeTurnAttemptConflict
+            ))
+        ));
         running
             .session
             .evaluate_step(
@@ -918,21 +974,16 @@ mod tests {
                 false,
             )],
         };
-        let committed = AutoModeTurnCommitService::new(&database)
-            .commit(
-                running,
-                outcome.clone(),
-                expected_session_updated_at_ms,
-                1_102,
-            )
+        let committed = commit_service
+            .commit(&attempt, running, outcome.clone(), 1_102)
             .expect("commit turn");
         let CommittedAutoModeTurn::Continue(committed) = committed else {
             panic!("turn must continue");
         };
         assert_eq!(committed.checkpoint_sequence, 3);
         assert_eq!(committed.messages.len(), 2);
-        let error = AutoModeTurnCommitService::new(&database)
-            .commit(replay, outcome, expected_session_updated_at_ms, 1_102)
+        let error = commit_service
+            .commit(&attempt, replay, outcome, 1_102)
             .expect_err("stale Provider result must not replay");
         assert!(matches!(
             error,
@@ -959,7 +1010,10 @@ mod tests {
             .recover(session_id, &workspace, 1_100)
             .expect("recover");
         let mut running = recovery.commit_resume(recovered, 1_101).expect("resume");
-        let expected_session_updated_at_ms = running.session.updated_at_ms;
+        let commit_service = AutoModeTurnCommitService::new(&database);
+        let attempt = commit_service
+            .begin(&running, "sha256:terminal-request", 1_101)
+            .expect("begin attempt");
         running
             .task
             .transition(AgentTaskStatus::Succeeded, 1_102)
@@ -976,11 +1030,11 @@ mod tests {
                 cost_microunits: 0,
             },
         };
-        let committed = AutoModeTurnCommitService::new(&database)
+        let committed = commit_service
             .commit(
+                &attempt,
                 running,
                 AutoModeTurnOutcome::Completed { response },
-                expected_session_updated_at_ms,
                 1_102,
             )
             .expect("commit completion");
@@ -1002,6 +1056,44 @@ mod tests {
                 .status,
             AutoModeStatus::Completed
         );
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn crash_left_attempt_is_quarantined_without_releasing_continuation() {
+        let (database, workspace, session_id) = fixture();
+        let recovery = AutoModeRecoveryService::new(&database, WorkspaceScanPolicy::default());
+        let recovered = recovery
+            .recover(session_id, &workspace, 1_100)
+            .expect("recover");
+        let running = recovery.commit_resume(recovered, 1_101).expect("resume");
+        let attempt = AutoModeTurnCommitService::new(&database)
+            .begin(&running, "sha256:crash-left-request", 1_102)
+            .expect("begin attempt");
+        SqliteAutoModeRepository::open(&database)
+            .expect("sessions")
+            .pause_running_after_restart(1_103)
+            .expect("restart pause");
+
+        let error = recovery
+            .recover(session_id, &workspace, 1_104)
+            .expect_err("indeterminate attempt must block continuation");
+        assert!(matches!(
+            error,
+            AutoModeRecoveryError::IndeterminateTurnAttempt
+        ));
+        let stored = SqliteAutoModeTurnAttemptRepository::open(&database)
+            .expect("attempts")
+            .get(session_id)
+            .expect("attempt")
+            .expect("stored attempt");
+        assert_eq!(stored.id, attempt.id);
+        assert_eq!(stored.status, AutoModeTurnAttemptStatus::Indeterminate);
+        assert!(matches!(
+            recovery.recover(session_id, &workspace, 1_105),
+            Err(AutoModeRecoveryError::IndeterminateTurnAttempt)
+        ));
         fs::remove_file(database).expect("database cleanup");
         fs::remove_dir_all(workspace).expect("workspace cleanup");
     }

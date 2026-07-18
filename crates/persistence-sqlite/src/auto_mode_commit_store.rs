@@ -1,4 +1,4 @@
-use crate::StoredWorkspaceSnapshot;
+use crate::{AutoModeTurnAttempt, AutoModeTurnAttemptStatus, StoredWorkspaceSnapshot};
 use crate::{SqlitePersistenceError, prepare_connection};
 use nimora_agent_runtime::{
     AgentTaskStatus, AutoModeCheckpoint, AutoModePauseReason, AutoModeSession, AutoModeStatus,
@@ -200,6 +200,7 @@ impl SqliteAutoModeCommitRepository {
     /// Returns an error for invalid lifecycle coupling or stale session/checkpoint versions.
     pub fn commit_turn(
         &mut self,
+        attempt: &AutoModeTurnAttempt,
         session: &AutoModeSession,
         previous_session_updated_at_ms: u64,
         checkpoint: &AutoModeCheckpoint,
@@ -217,7 +218,11 @@ impl SqliteAutoModeCommitRepository {
                 | (AutoModeStatus::Paused, AgentTaskStatus::Paused)
                 | (AutoModeStatus::Completed, AgentTaskStatus::Succeeded)
         );
-        if !coupled
+        if attempt.status != AutoModeTurnAttemptStatus::Active
+            || attempt.session_id != session.id
+            || attempt.checkpoint_sequence != previous_checkpoint_sequence
+            || attempt.expected_session_updated_at_ms != previous_session_updated_at_ms
+            || !coupled
             || checkpoint.sequence != previous_checkpoint_sequence.saturating_add(1)
             || !checkpoint.matches_bindings(
                 session.id,
@@ -266,7 +271,19 @@ impl SqliteAutoModeCommitRepository {
                 to_i64(previous_checkpoint_sequence)?,
             ],
         )?;
-        if session_changed != 1 || checkpoint_changed != 1 {
+        let attempt_changed = transaction.execute(
+            "DELETE FROM auto_mode_turn_attempt WHERE session_id = ?1 AND attempt_id = ?2
+                AND checkpoint_sequence = ?3 AND expected_session_updated_at_ms = ?4
+                AND request_fingerprint = ?5 AND status = 'active'",
+            params![
+                attempt.session_id.to_string(),
+                attempt.id.to_string(),
+                to_i64(attempt.checkpoint_sequence)?,
+                to_i64(attempt.expected_session_updated_at_ms)?,
+                attempt.request_fingerprint,
+            ],
+        )?;
+        if session_changed != 1 || checkpoint_changed != 1 || attempt_changed != 1 {
             return Err(SqlitePersistenceError::AutoModeCommitConflict);
         }
         transaction.commit()?;

@@ -4,6 +4,7 @@ mod agent_goal_store;
 mod auto_mode_checkpoint_store;
 mod auto_mode_commit_store;
 mod auto_mode_store;
+mod auto_mode_turn_attempt_store;
 mod automation_agent_journal;
 mod automation_journal;
 mod backup;
@@ -16,6 +17,9 @@ pub use agent_goal_store::{AgentGoalSnapshot, SqliteAgentGoalRepository};
 pub use auto_mode_checkpoint_store::SqliteAutoModeCheckpointRepository;
 pub use auto_mode_commit_store::SqliteAutoModeCommitRepository;
 pub use auto_mode_store::SqliteAutoModeRepository;
+pub use auto_mode_turn_attempt_store::{
+    AutoModeTurnAttempt, AutoModeTurnAttemptStatus, SqliteAutoModeTurnAttemptRepository,
+};
 pub use automation_agent_journal::{
     AutomationAgentJournalEntry, AutomationAgentJournalStatus, SqliteAutomationAgentJournal,
 };
@@ -1199,8 +1203,30 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
         CREATE INDEX IF NOT EXISTS auto_mode_checkpoint_goal_idx
             ON auto_mode_checkpoint(goal_id, updated_at_ms DESC, session_id DESC);",
     )?;
+    ensure_auto_mode_turn_attempt_schema(connection)?;
     ensure_workspace_snapshot_schema(connection)?;
     ensure_context_cache_schema(connection)?;
+    Ok(())
+}
+
+fn ensure_auto_mode_turn_attempt_schema(
+    connection: &Connection,
+) -> Result<(), SqlitePersistenceError> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS auto_mode_turn_attempt (
+            session_id TEXT PRIMARY KEY,
+            attempt_id TEXT NOT NULL UNIQUE,
+            checkpoint_sequence INTEGER NOT NULL CHECK (checkpoint_sequence > 0),
+            expected_session_updated_at_ms INTEGER NOT NULL CHECK (expected_session_updated_at_ms >= 0),
+            request_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('active', 'indeterminate')),
+            started_at_ms INTEGER NOT NULL CHECK (started_at_ms >= 0),
+            updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= started_at_ms),
+            FOREIGN KEY (session_id) REFERENCES auto_mode_session(session_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS auto_mode_turn_attempt_status_idx
+            ON auto_mode_turn_attempt(status, updated_at_ms, session_id);",
+    )?;
     Ok(())
 }
 
@@ -1485,6 +1511,10 @@ pub enum SqlitePersistenceError {
     AutoModeCheckpointConflict,
     #[error("Auto Mode session or checkpoint was changed by another writer")]
     AutoModeCommitConflict,
+    #[error("Auto Mode turn attempt record or request is invalid")]
+    InvalidAutoModeTurnAttempt,
+    #[error("Auto Mode turn attempt is stale or already exists")]
+    AutoModeTurnAttemptConflict,
     #[error("Workspace snapshot record or request is invalid")]
     InvalidWorkspaceSnapshot,
     #[error("Workspace snapshot was changed by another writer")]
