@@ -59,6 +59,13 @@
 | 可信代理与对外委托 | 为代订、代购、预约、客服或企业流程生成受限委托凭证、谈判边界和人工接管协议 | Delegation Contract；金额/对象/期限硬限制、身份披露、不可抵赖回执和随时撤销 |
 | 数字内容真实性 | 为生成或编辑的图片、语音、角色、文档和视频附加来源、编辑链与真实性声明 | Provenance Manifest；内容凭证、原始来源哈希、隐私裁剪、版权策略和导出时保留标记 |
 | API 与协议逆向辅助 | 从用户有权使用的文档、Schema、抓包样本或设备描述生成兼容 Adapter 和测试夹具 | Adapter Research Project；授权来源、净室边界、协议模糊测试、速率限制且禁止规避访问控制 |
+| 用户专属能力 API | 把多个已授权模块能力封装成稳定命令、表单、CLI 或本地 API，例如“进入直播模式” | Capability Facade；只能引用 Registry 中的精确能力 ID，声明权限并集、补偿、预算和版本，不得转授原生对象 |
+| 能力虚拟化与兼容替身 | 为同一语义能力生成多 Provider、多设备或离线/在线实现选择器，例如云端 TTS、本地 TTS 与字幕降级 | Capability Virtualization Profile；统一语义契约、确定性路由、健康探测、行为差异和 fail-closed 降级 |
+| 时间与情境智能 | 从用户明确授权的日历、活跃窗口、设备状态、专注模式和作息生成有期限的情境规则与预测建议 | Context Policy / Temporal Graph；来源窗口可见、过期失效、禁止隐性画像、主动动作受冷却和打扰预算约束 |
+| 跨设备连续性 | 生成桌面、移动端、浏览器、可穿戴和家庭设备之间的任务交接、状态同步与能力降级策略 | Handoff Profile；设备身份、端到端加密、冲突解决、最小同步字段、离线队列和远程撤权 |
+| 事件与合成环境 | 根据真实契约生成不触发生产副作用的事件流、时间推进、设备状态和外部服务替身 | Simulation World / Event Fixture；现实与仿真强标识、固定随机种子、虚拟时钟、零真实 Secret 和零生产出口 |
+| 能力可解释层 | 自动生成“为什么调用、用了什么数据、为何需要权限、失败后发生什么”的用户说明与开发者 Trace | Explanation Pack；说明必须由宿主执行事实和审计记录复验，禁止用 AI 推测覆盖真实状态 |
+| 个人协议翻译器 | 把自然语言、快捷键、手势、MIDI、语音、无障碍输入或外部事件映射到受控语义命令 | Interaction Mapping；消歧预览、冲突检测、速率限制、可撤销绑定和紧急停用 |
 
 ## 3. 扩展“扩展系统本身”
 
@@ -82,6 +89,28 @@
 5. **维护者**：依据版本、遥测和故障证据升级、迁移、修复、回滚并提交发布候选。
 
 参与深度不是权限等级。即使处于 Auto Mode，AI 也不能自行签发 Capability、读取 Secret、扩大数据范围、关闭安全策略或绕过不可自动批准的风险类别。
+
+### 3.2 调用其它模块能力的正式方式
+
+用户外接 AI 生成的 Program、Skill、Automation、Connector、Agent、CLI Contribution、Widget 和 Capability Facade 可以调用其它模块公开的能力，但调用目标必须是宿主 Registry 中存在的版本化语义能力，而不是模块内部函数或运行时对象：
+
+```text
+AI proposal
+  -> exact capability IDs + semantic inputs/outputs
+  -> Composition Planner
+  -> permission/data-flow/effect/cost diff
+  -> user or policy approval
+  -> Capability Gateway
+  -> module adapter
+  -> bounded result + audit receipt
+```
+
+- AI 只能选择或组合目录中的能力，不得把自然语言名称、Prompt 文本或 JSON Schema 猜测当作能力存在证明。
+- 模块只暴露窄 DTO、稳定语义类型、风险、数据分类、离线语义、成本和取消规则；不暴露 Node、Tauri、文件句柄、数据库连接、网络 Client、Provider Client 或 Secret 明文。
+- 组合产物声明 `requires`、`produces`、`preconditions`、副作用、补偿、幂等键和总预算；宿主基于实时目录进行确定性复验。
+- Skill 或 Connector 停用、撤权、升级、崩溃隔离或租约过期后，其贡献能力立即从组合图撤销；已保存组合进入 `degraded`，不得暗中改走更高权限路径。
+- AI 可生成 Capability Facade，但 Facade 不创造权限；其有效权限、数据出口和最高风险始终是全部底层路径的保守并集。
+- 找不到路径时返回结构化 Capability Gap；AI 可以生成平台提案、Adapter 工程或安全替代方案，但不能伪造未知命令或直接安装新的信任根。
 
 ## 4. 组合项目
 

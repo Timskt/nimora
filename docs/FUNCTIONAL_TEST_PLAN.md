@@ -577,6 +577,14 @@ ID / 标题 / 优先级 / 前置条件
 - Verify User Program 与 Skill 的每个 JavaScript 文件都由对应独立 Worker 的显式 `Validate/Validated` 协议检查；包含顶层 `throw` 的合法语法通过且不执行，非法语法返回逐文件失败。
 - Verify Skill 草案检查校验协议版本、Execution ID 和 Manifest，但安装前不要求 Active Skill Lease；正式 `Run` 仍必须精确匹配 Active Lease 与 Activation Event。
 - Verify UI 检查报告使用 `nimora.creator-draft-check/1`，逐文件区分 passed/failed；未通过检查时保存按钮不可用，绕过 UI 直接调用保存 IPC 仍失败关闭。
+- Verify AI 生成的 Capability Facade 只能引用实时 Registry 中的精确能力 ID；未知、停用、撤权或租约过期能力使 Facade 安装或运行失败关闭。
+- Verify Facade 的权限、数据出口、最高风险和成本为全部可达底层路径的保守并集，AI 声称更低风险不能覆盖宿主计算结果。
+- Verify Composition Planner 只读取已验证语义契约，不从标题、描述、Prompt 或 JSON Schema 猜测 `requires`、`produces` 和前置条件。
+- Verify 在线/离线、多 Provider 与多设备虚拟化使用同一语义契约；降级路径增加权限、扩大数据范围或改变不可逆副作用时不得自动切换。
+- Verify Skill/Connector 停用、升级、崩溃隔离、撤权或租约过期后，其组合图节点立即撤销，已保存组合显示 `degraded` 且不暗中选择高权限替代。
+- Verify Simulation World 使用虚拟时钟、固定随机种子和合成 Secret 引用；任何真实 Connector、生产 Gateway 或外部副作用调用都使测试失败。
+- Verify Explanation Pack 的调用原因、数据范围、授权和结果可由审计收据逐项复验；AI 推测与真实 Trace 冲突时只展示宿主事实。
+- Verify Interaction Mapping 的自然语言、快捷键、手势、MIDI 和语音绑定均需消歧预览、冲突检测、速率限制、可撤销和紧急停用。
 - Verify Automation 草案复用生产 Engine 的确定性校验且不会伪装成 JavaScript Worker 检查；检查、保存、安装和启用状态在 UI 中不可混淆。
 - Verify User Program `Sandbox/Sandboxed` 在独立进程执行顶层代码但不要求返回值可 JSON 化；声明函数的脚本通过，顶层异常失败，Node/Tauri/文件/网络等原生对象仍不可用。
 - Verify Skill 行为沙箱只返回记录的命令与 Agent Task 数量，不调用 Capability Gateway、Provider 或模块 Backend；使用临时精确 Manifest Lease 仅满足 Worker Admission，绝不持久化或继承为安装授权。
