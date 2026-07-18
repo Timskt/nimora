@@ -1493,6 +1493,8 @@ enum DesktopError {
     Safety(#[from] SafetyServiceError),
     #[error("operation failed ({primary}); native window policy rollback also failed ({rollback})")]
     NativePolicyRollback { primary: String, rollback: String },
+    #[error("pet rename failed ({primary}); native window title rollback also failed ({rollback})")]
+    NativeIdentityRollback { primary: String, rollback: String },
     #[error("character activation failed ({primary}); selection rollback also failed ({rollback})")]
     CharacterActivationRollback { primary: String, rollback: String },
     #[error(transparent)]
@@ -6820,7 +6822,27 @@ fn rename_pet(
     name: String,
 ) -> Result<Command, DesktopError> {
     ensure_normal_mode(&state)?;
-    let command = state.runtime.rename_pet(name)?;
+    let target = Pet::normalize_name(name).map_err(RuntimeError::from)?;
+    let previous = state.runtime.snapshot()?.name;
+    let window = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
+    let command = match run_reversible_transition(
+        previous,
+        target.clone(),
+        |_, title| window.set_title(&title),
+        || state.runtime.rename_pet(target),
+    ) {
+        Ok(command) => command,
+        Err(ReversibleTransitionError::NativeApply(error)) => return Err(error.into()),
+        Err(ReversibleTransitionError::Commit(primary)) => return Err(primary.into()),
+        Err(ReversibleTransitionError::Rollback { primary, rollback }) => {
+            return Err(DesktopError::NativeIdentityRollback {
+                primary: primary.to_string(),
+                rollback: rollback.to_string(),
+            });
+        }
+    };
     let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
     let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
     Ok(command)
@@ -10591,9 +10613,10 @@ fn schedule_position_persistence(app: AppHandle) {
 
 fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
     let policy = current_window_policy(&app.state::<DesktopState>())?;
+    let snapshot = app.state::<DesktopState>().runtime.snapshot()?;
     let window =
         WebviewWindowBuilder::new(app, PET_WINDOW_LABEL, WebviewUrl::App("/?view=pet".into()))
-            .title("Aster")
+            .title(&snapshot.name)
             .inner_size(260.0, 300.0)
             .min_inner_size(180.0, 210.0)
             .resizable(false)
@@ -10603,7 +10626,7 @@ fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
             .skip_taskbar(true)
             .shadow(false)
             .build()?;
-    let position = app.state::<DesktopState>().runtime.snapshot()?.position;
+    let position = snapshot.position;
     window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
         screen_coordinate(position.x)?,
         screen_coordinate(position.y)?,

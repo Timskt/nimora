@@ -280,10 +280,7 @@ impl Pet {
     /// Returns [`PetError::InvalidName`] when the trimmed name is empty or
     /// longer than 64 Unicode scalar values.
     pub fn new(name: impl Into<String>) -> Result<Self, PetError> {
-        let name = name.into().trim().to_owned();
-        if name.is_empty() || name.chars().count() > 64 {
-            return Err(PetError::InvalidName);
-        }
+        let name = Self::normalize_name(name)?;
         Ok(Self {
             id: PetId::new(),
             name,
@@ -360,12 +357,22 @@ impl Pet {
     /// Returns [`PetError::InvalidName`] when the normalized name is empty or exceeds 64
     /// Unicode scalar values.
     pub fn rename(&mut self, name: impl Into<String>) -> Result<(), PetError> {
+        self.name = Self::normalize_name(name)?;
+        Ok(())
+    }
+
+    /// Normalizes and validates a companion name for domain and native host surfaces.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PetError::InvalidName`] when the trimmed name is empty or exceeds 64
+    /// Unicode scalar values.
+    pub fn normalize_name(name: impl Into<String>) -> Result<String, PetError> {
         let name = name.into().trim().to_owned();
         if name.is_empty() || name.chars().count() > 64 {
             return Err(PetError::InvalidName);
         }
-        self.name = name;
-        Ok(())
+        Ok(name)
     }
 
     /// Enters the semantic pointer-interaction state.

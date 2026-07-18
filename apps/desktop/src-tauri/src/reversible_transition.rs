@@ -15,9 +15,10 @@ pub(crate) fn run_reversible_transition<Policy, Output, NativeError, CommitError
     commit: impl FnOnce() -> Result<Output, CommitError>,
 ) -> Result<Output, ReversibleTransitionError<NativeError, CommitError>>
 where
-    Policy: Copy,
+    Policy: Clone,
 {
-    apply_native(previous, target).map_err(ReversibleTransitionError::NativeApply)?;
+    apply_native(previous.clone(), target.clone())
+        .map_err(ReversibleTransitionError::NativeApply)?;
     match commit() {
         Ok(output) => Ok(output),
         Err(primary) => match apply_native(target, previous) {
