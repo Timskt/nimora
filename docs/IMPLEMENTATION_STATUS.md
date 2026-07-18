@@ -216,7 +216,7 @@
 
 | 领域 | 当前状态 | 已有证据 | 必须继续闭环的缺口 |
 |---|---|---|---|
-| 桌宠窗口与交互 | 部分实现 | Tauri 透明双窗口、拖拽、置顶、穿透、托盘、安全模式、Click/Drag FSM、经典互动、四项低压力 Needs、背包、纪念、持久身份与家位置；Core 权威派生五级关系阶段；Presentation Profile 从窗口创建阶段隐藏并暂停自主互动，可见性与 Profile 使用可逆原生事务；Safe Mode/托盘提供确定性恢复 | 系统全屏、屏幕共享、游戏与免打扰自动感知 Adapter，真正径向布局、更多角色响应、任务协作成长、Windows/macOS 多屏/DPI、WebView 崩溃恢复与 8 小时长稳验证 |
+| 桌宠窗口与交互 | 部分实现 | Tauri 透明双窗口、拖拽、置顶、穿透、托盘、安全模式、Click/Drag FSM、可访问六向径向菜单、经典互动、四项低压力 Needs、背包、纪念、持久身份与家位置；Core 权威派生五级关系阶段；Presentation Profile 从窗口创建阶段隐藏并暂停自主互动，可见性与 Profile 使用可逆原生事务；Safe Mode/托盘提供确定性恢复 | 系统全屏、屏幕共享、游戏与免打扰自动感知 Adapter，更多角色响应、任务协作成长、Windows/macOS 多屏/DPI、WebView 崩溃恢复与 8 小时长稳验证 |
 | UI 与设计系统 | 部分实现 | Control Center、Creator Studio、Overlay、Token 与组件样式、前端单测、生产构建；目标控制中心宽屏截图与语义树已验证 | 键盘完整路径、读屏实机、200% 缩放、关键状态视觉回归、跨平台像素审查 |
 | Profile 与离线状态 | 部分实现 | 唯一 SQLite Schema、离线 Profile、Online Backup 调度与原子恢复、损坏数据库隔离启动、统一写门禁、恢复 UI；Profile 切换与进入/退出 Safe Mode 共用 Tauri-free 可逆原生事务协调器；进入 Safe Mode 后使用独立 fail-closed 协调器全尝试 Auto Mode、用户程序、Skill、Agent、策略缓存和 Renderer 收敛，失败保持 Safe 并写固定 Security 诊断；Backup Service 统一手动/定时备份、健康状态、错误收敛和恢复请求；诊断服务统一版本、运行状态和 fail-closed 隐私声明，支持脱敏导出；Rust/TS 故障测试与 Chrome 实测 | 退出 Safe Mode 的 `RecoveryPending/Degraded` 恢复补偿状态、休眠与时钟异常、恢复模式真实桌面截图、跨平台真机故障注入、人工数据提取与跨设备备份 |
 | Event 与持久 Outbox | 部分实现 | 事务写入、租约、ACK、重试、死信、清理、健康状态和自动化测试 | 具体幂等消费者、跨重启投递恢复、Connector 投递审计 |

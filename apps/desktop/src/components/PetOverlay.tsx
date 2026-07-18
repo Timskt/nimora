@@ -14,6 +14,7 @@ import {
 } from "./petGesture";
 import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
 import { petInventoryQuantity, petItemPresentation } from "./petItems";
+import { nextMenuItemIndex } from "./petMenu";
 
 const GltfRenderer = lazy(async () => {
   const module = await import("./GltfRenderer");
@@ -26,7 +27,7 @@ export function PetOverlay() {
   const [rendererFailed, setRendererFailed] = useState(false);
   const [message, setMessage] = useState("正在醒来…");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [menuPage, setMenuPage] = useState<"root" | "inventory" | "rename">("root");
+  const [menuPage, setMenuPage] = useState<"root" | "more" | "inventory" | "rename">("root");
   const [nameDraft, setNameDraft] = useState("");
   const gestureTrail = useRef<PetGestureTrail | null>(null);
   const dragging = useRef(false);
@@ -251,6 +252,15 @@ export function PetOverlay() {
     setMessage("想做什么呢？");
   }
 
+  function handleMenuKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = nextMenuItemIndex(Math.max(0, current), items.length, event.key);
+    if (next === null) return;
+    event.preventDefault();
+    items[next]?.focus();
+  }
+
   function handlePointerDown(event: React.PointerEvent<HTMLButtonElement>) {
     if (event.button !== 0) return;
     setMenuOpen(false);
@@ -383,15 +393,21 @@ export function PetOverlay() {
         <span className="overlay-shadow" aria-hidden="true" />
       </button>
       {menuOpen ? (
-        <div ref={menu} className={`overlay-pet-menu${menuPage === "inventory" ? " inventory-page" : menuPage === "rename" ? " rename-page" : ""}`} role={menuPage === "rename" ? "dialog" : "menu"} aria-label={menuPage === "inventory" ? "随身背包" : menuPage === "rename" ? "修改伙伴名字" : "宠物菜单"}>
+        <div ref={menu} className={`overlay-pet-menu ${menuPage}-page`} role={menuPage === "rename" ? "dialog" : "menu"} aria-label={menuPage === "inventory" ? "随身背包" : menuPage === "rename" ? "修改伙伴名字" : menuPage === "more" ? "更多宠物操作" : "宠物径向菜单"} onKeyDown={handleMenuKeyDown}>
           {menuPage === "root" ? (
+            <div className="radial-menu-items">
+              <button className="radial-item radial-1" type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("feed"); }}><span>◒</span><b>喂食</b></button>
+              <button className="radial-item radial-2" type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("play"); }}><span>✧</span><b>玩耍</b></button>
+              <button className="radial-item radial-3" type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("groom"); }}><span>♢</span><b>梳理</b></button>
+              <button className="radial-item radial-4" type="button" role="menuitem" onClick={() => setMenuPage("inventory")}><span>▣</span><b>背包</b><small>{petInventoryQuantity(snapshot?.pet.inventory ?? [])}</small></button>
+              <button className="radial-item radial-5" type="button" role="menuitem" onClick={() => { setMenuOpen(false); void returnHome(); }}><span>⌂</span><b>回家</b></button>
+              <button className="radial-item radial-6" type="button" role="menuitem" onClick={() => setMenuPage("more")}><span>•••</span><b>更多</b></button>
+              <button className="radial-close" type="button" role="menuitem" aria-label="关闭宠物菜单" onClick={() => { setMenuOpen(false); petButton.current?.focus(); }}>×</button>
+            </div>
+          ) : menuPage === "more" ? (
             <>
-              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("feed"); }}><span>◒</span>喂食</button>
-              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("play"); }}><span>✧</span>玩耍</button>
-              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("groom"); }}><span>♢</span>梳理</button>
-              <button type="button" role="menuitem" onClick={() => setMenuPage("inventory")}><span>▣</span>背包<small>{petInventoryQuantity(snapshot?.pet.inventory ?? [])}</small></button>
+              <button className="inventory-back" type="button" role="menuitem" onClick={() => setMenuPage("root")}><span>‹</span>返回径向菜单</button>
               <button type="button" role="menuitem" onClick={() => { setNameDraft(snapshot?.pet.name ?? "Aster"); setMenuPage("rename"); }}><span>✎</span>改名字</button>
-              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void returnHome(); }}><span>⌂</span>回家</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void setHome(); }}><span>⌖</span>这里设为家</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("sleep"); }}><span>☾</span>休息</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void toggleClickThrough(); }}><span>⌁</span>鼠标穿透</button>
@@ -412,7 +428,7 @@ export function PetOverlay() {
           </form>}
         </div>
       ) : null}
-      <div className="overlay-actions" aria-label="宠物快捷操作">
+      {!menuOpen ? <div className="overlay-actions" aria-label="宠物快捷操作">
         <button type="button" onClick={() => void care("feed")} aria-label={`给 ${snapshot?.pet.name ?? "Aster"} 喂食`}>◒</button>
         <button type="button" onClick={() => void care("play")} aria-label={`陪 ${snapshot?.pet.name ?? "Aster"} 玩耍`}>✧</button>
         <button type="button" onClick={() => void care("groom")} aria-label={`为 ${snapshot?.pet.name ?? "Aster"} 梳理`}>♢</button>
@@ -423,7 +439,7 @@ export function PetOverlay() {
         >✦</button>
         <button type="button" onClick={() => void play("sleep")} aria-label={`让 ${snapshot?.pet.name ?? "Aster"} 休息`}>☾</button>
         <button type="button" onClick={() => void toggleClickThrough()} aria-label="切换鼠标穿透">⌁</button>
-      </div>
+      </div> : null}
     </main>
   );
 }
