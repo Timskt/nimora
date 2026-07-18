@@ -1087,6 +1087,7 @@ const previewProfiles: ProfileSnapshot = {
       mode: "companion",
       alwaysOnTop: true,
       clickThrough: false,
+      edgeSnap: true,
       soundEnabled: true,
       proactiveFrequency: 25,
     },

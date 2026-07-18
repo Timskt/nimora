@@ -37,6 +37,8 @@ pub struct ProfilePolicy {
     pub mode: ProfileMode,
     pub always_on_top: Option<bool>,
     pub click_through: Option<bool>,
+    #[serde(default)]
+    pub edge_snap: Option<bool>,
     pub sound_enabled: Option<bool>,
     pub proactive_frequency: Option<u8>,
 }
@@ -48,6 +50,7 @@ impl ProfilePolicy {
             mode: ProfileMode::Companion,
             always_on_top: Some(true),
             click_through: Some(false),
+            edge_snap: Some(true),
             sound_enabled: Some(true),
             proactive_frequency: Some(25),
         }
@@ -59,6 +62,7 @@ impl ProfilePolicy {
             mode: override_policy.mode,
             always_on_top: override_policy.always_on_top.or(defaults.always_on_top),
             click_through: override_policy.click_through.or(defaults.click_through),
+            edge_snap: override_policy.edge_snap.or(defaults.edge_snap),
             sound_enabled: override_policy.sound_enabled.or(defaults.sound_enabled),
             proactive_frequency: override_policy
                 .proactive_frequency
@@ -131,6 +135,7 @@ mod tests {
             mode: ProfileMode::Companion,
             always_on_top: Some(true),
             click_through: Some(false),
+            edge_snap: Some(true),
             sound_enabled: Some(true),
             proactive_frequency: Some(25),
         };
@@ -138,6 +143,7 @@ mod tests {
             mode: ProfileMode::Work,
             always_on_top: None,
             click_through: Some(true),
+            edge_snap: None,
             sound_enabled: None,
             proactive_frequency: Some(200),
         };
@@ -145,6 +151,7 @@ mod tests {
         assert_eq!(merged.always_on_top, Some(true));
         assert_eq!(merged.mode, ProfileMode::Work);
         assert_eq!(merged.click_through, Some(true));
+        assert_eq!(merged.edge_snap, Some(true));
         assert_eq!(merged.proactive_frequency, Some(100));
     }
 

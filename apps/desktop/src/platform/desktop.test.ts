@@ -308,6 +308,7 @@ describe("desktop platform adapter", () => {
       mode: "focus" as const,
       alwaysOnTop: true,
       clickThrough: false,
+      edgeSnap: true,
       soundEnabled: true,
       proactiveFrequency: 10,
     };

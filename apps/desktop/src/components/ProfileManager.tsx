@@ -6,6 +6,7 @@ const initialPolicy: ProfilePolicy = {
   mode: "companion",
   alwaysOnTop: true,
   clickThrough: false,
+  edgeSnap: true,
   soundEnabled: true,
   proactiveFrequency: 25,
 };
@@ -110,6 +111,7 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
                   {profileModeLabel(profile.policy.mode)}
                   {profile.policy.alwaysOnTop === false ? " · 普通窗口" : " · 保持置顶"}
                   {profile.policy.soundEnabled === false ? " · 静音" : " · 声音开启"}
+                  {profile.policy.edgeSnap === false ? " · 自由摆放" : " · 桌边吸附"}
                   {` · ${proactiveFrequencyLabel(profile.policy.proactiveFrequency ?? 25)}`}
                 </p>
               </div>
@@ -147,6 +149,14 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
                 <option key={mode.value} value={mode.value}>{mode.label}</option>
               ))}
             </select>
+          </label>
+          <label className="profile-check">
+            <input
+              type="checkbox"
+              checked={policy.edgeSnap ?? true}
+              onChange={(event) => setPolicy({ ...policy, edgeSnap: event.target.checked })}
+            />
+            拖动后吸附桌面边缘
           </label>
           <label className="profile-check">
             <input

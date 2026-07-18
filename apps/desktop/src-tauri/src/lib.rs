@@ -213,6 +213,7 @@ const AUTO_MODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const AUTOMATION_AGENT_REQUESTER: &str = "automation:desktop";
 const PET_WANDER_FRAMES: i32 = 12;
 const PET_WANDER_FRAME_DURATION: Duration = Duration::from_millis(25);
+const PET_EDGE_SNAP_THRESHOLD: i64 = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PhysicalArea {
@@ -277,6 +278,47 @@ fn recover_visible_position(
         i32::try_from(x).unwrap_or(current.x),
         i32::try_from(y).unwrap_or(current.y),
     ))
+}
+
+fn plan_edge_snap_position(
+    current: tauri::PhysicalPosition<i32>,
+    window_size: tauri::PhysicalSize<u32>,
+    monitor: PhysicalArea,
+) -> tauri::PhysicalPosition<i32> {
+    let (minimum_x, minimum_y, maximum_x, maximum_y) = safe_position_bounds(window_size, monitor);
+    let current_x = i64::from(current.x).clamp(minimum_x, maximum_x);
+    let current_y = i64::from(current.y).clamp(minimum_y, maximum_y);
+    let horizontal = [(current_x - minimum_x).abs(), (maximum_x - current_x).abs()];
+    let vertical = [(current_y - minimum_y).abs(), (maximum_y - current_y).abs()];
+    let nearest_horizontal = horizontal[0].min(horizontal[1]);
+    let nearest_vertical = vertical[0].min(vertical[1]);
+    let (x, y) = if nearest_horizontal <= PET_EDGE_SNAP_THRESHOLD
+        && nearest_horizontal <= nearest_vertical
+    {
+        (
+            if horizontal[0] <= horizontal[1] {
+                minimum_x
+            } else {
+                maximum_x
+            },
+            current_y,
+        )
+    } else if nearest_vertical <= PET_EDGE_SNAP_THRESHOLD {
+        (
+            current_x,
+            if vertical[0] <= vertical[1] {
+                minimum_y
+            } else {
+                maximum_y
+            },
+        )
+    } else {
+        (current_x, current_y)
+    };
+    tauri::PhysicalPosition::new(
+        i32::try_from(x).unwrap_or(current.x),
+        i32::try_from(y).unwrap_or(current.y),
+    )
 }
 
 fn plan_wander_target(
@@ -6729,9 +6771,32 @@ fn finish_pet_drag(
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
     let position = window.outer_position()?;
+    let target = if active_profile_policy(&state.profiles.snapshot()?)?
+        .edge_snap
+        .unwrap_or(true)
+    {
+        let window_size = window.outer_size()?;
+        window.current_monitor()?.map_or(position, |monitor| {
+            plan_edge_snap_position(
+                position,
+                window_size,
+                PhysicalArea {
+                    x: monitor.position().x,
+                    y: monitor.position().y,
+                    width: monitor.size().width,
+                    height: monitor.size().height,
+                },
+            )
+        })
+    } else {
+        position
+    };
+    if target != position {
+        window.set_position(tauri::Position::Physical(target))?;
+    }
     let command = state.runtime.drop_pet(Position {
-        x: f64::from(position.x),
-        y: f64::from(position.y),
+        x: f64::from(target.x),
+        y: f64::from(target.y),
     })?;
     state.dragging.store(false, Ordering::Release);
     Ok(command)
@@ -10217,11 +10282,15 @@ fn ensure_safe_mode_inactive(state: &DesktopState) -> Result<(), DesktopError> {
 }
 
 fn active_window_policy(snapshot: &ProfileSnapshot) -> Result<WindowPolicy, DesktopError> {
+    Ok(WindowPolicy::from_profile(active_profile_policy(snapshot)?))
+}
+
+fn active_profile_policy(snapshot: &ProfileSnapshot) -> Result<&ProfilePolicy, DesktopError> {
     snapshot
         .profiles
         .iter()
         .find(|profile| profile.id == snapshot.active_profile_id)
-        .map(|profile| WindowPolicy::from_profile(&profile.policy))
+        .map(|profile| &profile.policy)
         .ok_or(ProfileServiceError::ActiveProfileMissing.into())
 }
 
@@ -10931,17 +11000,17 @@ mod tests {
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_generated_theme, install_gltf_character, open_diagnostic_journal,
         parse_asset_protocol_path, parse_user_program_plan, pause_auto_mode_job_inner,
-        permission_grant, persist_asset_selection, pet_autonomy_policy, plan_wander_target,
-        prepare_agent_tool_inner, quiesce_auto_mode_jobs, recover_visible_position,
-        reject_agent_tool_inner, reject_automation_run_inner, resolve_active_character,
-        resolve_active_theme, resolve_active_voice, resolve_asset_selection,
-        resolve_auto_mode_attempt_inner, resolve_character_renderer, resume_auto_mode_turn_inner,
-        run_live_automation, run_live_automation_event, run_local_agent_inner,
-        run_skill_agent_task, run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
-        skill_capability_names, skill_event_types, stage_creator_package,
-        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
-        validate_model_source, validate_package_source, validate_requested_animation_map,
-        verify_capability_gap,
+        permission_grant, persist_asset_selection, pet_autonomy_policy, plan_edge_snap_position,
+        plan_wander_target, prepare_agent_tool_inner, quiesce_auto_mode_jobs,
+        recover_visible_position, reject_agent_tool_inner, reject_automation_run_inner,
+        resolve_active_character, resolve_active_theme, resolve_active_voice,
+        resolve_asset_selection, resolve_auto_mode_attempt_inner, resolve_character_renderer,
+        resume_auto_mode_turn_inner, run_live_automation, run_live_automation_event,
+        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
+        screen_coordinate, serve_asset_protocol, skill_capability_names, skill_event_types,
+        stage_creator_package, stop_skill_event_sessions, test_automation, user_program_input,
+        valid_asset_identifier, validate_model_source, validate_package_source,
+        validate_requested_animation_map, verify_capability_gap,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -13359,6 +13428,44 @@ mod tests {
     }
 
     #[test]
+    fn edge_snap_uses_nearest_safe_edge_within_threshold() {
+        let monitor = PhysicalArea {
+            x: 0,
+            y: 0,
+            width: 1200,
+            height: 900,
+        };
+        let window = tauri::PhysicalSize::new(260, 300);
+        assert_eq!(
+            plan_edge_snap_position(tauri::PhysicalPosition::new(30, 300), window, monitor),
+            tauri::PhysicalPosition::new(16, 300)
+        );
+        assert_eq!(
+            plan_edge_snap_position(tauri::PhysicalPosition::new(900, 545), window, monitor),
+            tauri::PhysicalPosition::new(900, 552)
+        );
+        assert_eq!(
+            plan_edge_snap_position(tauri::PhysicalPosition::new(500, 300), window, monitor),
+            tauri::PhysicalPosition::new(500, 300)
+        );
+    }
+
+    #[test]
+    fn edge_snap_handles_corners_and_negative_monitor_coordinates() {
+        let target = plan_edge_snap_position(
+            tauri::PhysicalPosition::new(-1900, -90),
+            tauri::PhysicalSize::new(260, 300),
+            PhysicalArea {
+                x: -1920,
+                y: -120,
+                width: 1920,
+                height: 1080,
+            },
+        );
+        assert_eq!(target, tauri::PhysicalPosition::new(-1904, -90));
+    }
+
+    #[test]
     fn visibility_recovery_returns_fully_offscreen_pet_to_primary_monitor() {
         let monitors = [
             PhysicalArea {
@@ -14916,6 +15023,7 @@ mod tests {
             mode: nimora_runtime_core::ProfileMode::Companion,
             always_on_top: Some(false),
             click_through: None,
+            edge_snap: None,
             sound_enabled: None,
             proactive_frequency: None,
         };

@@ -95,6 +95,7 @@ export const profilePolicySchema = z.object({
   mode: profileModeSchema,
   alwaysOnTop: z.boolean().nullable(),
   clickThrough: z.boolean().nullable(),
+  edgeSnap: z.boolean().nullable().optional(),
   soundEnabled: z.boolean().nullable(),
   proactiveFrequency: z.number().int().min(0).max(100).nullable(),
 });
