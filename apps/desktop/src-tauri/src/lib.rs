@@ -48,11 +48,11 @@ use nimora_agent_runtime::{
     AgentAutonomy, AgentBudget, AgentCoordinator, AgentTask, AgentTaskGateway,
     AgentTaskGatewayPolicy, AgentTaskOrigin, AgentTaskRequest, AgentTaskStatus,
     AutoModePauseReason, AutoModeStatus, BaseRiskEvaluator, CancellationFlag,
-    ContextCompactionPolicy, DataClassification, DeterministicLocalProvider, PlannedToolCall,
-    ProviderError, ProviderErrorKind, ProviderExecutionContext, ProviderMessage,
+    ContextCompactionPolicy, DataClassification, DeterministicLocalProvider, ModelReasoningPolicy,
+    PlannedToolCall, ProviderError, ProviderErrorKind, ProviderExecutionContext, ProviderMessage,
     ProviderMessageRole, ProviderRegistry, ProviderResponse, ProviderStepInput,
-    ProviderStepOutcome, ProviderToolTurn, ToolAdmission, ToolApproval, ToolDescriptor, ToolEffect,
-    ToolInvocation, ToolRegistry, ToolStepOutcome,
+    ProviderStepOutcome, ProviderToolTurn, ReasoningEffort, ReasoningMapping, ToolAdmission,
+    ToolApproval, ToolDescriptor, ToolEffect, ToolInvocation, ToolRegistry, ToolStepOutcome,
 };
 use nimora_agent_tools::{
     GatewayToolBackend, production_capability_semantic_contracts, production_tool_registry,
@@ -332,6 +332,7 @@ struct PendingProviderAgent {
     model: String,
     messages: Vec<ProviderMessage>,
     max_output_tokens: u64,
+    reasoning: Option<ReasoningMapping>,
     offline: bool,
     tool_allowlist: BTreeSet<String>,
     turn: ProviderToolTurn,
@@ -1434,6 +1435,8 @@ struct LocalAgentRequest {
     model: String,
     #[serde(default)]
     allow_network: bool,
+    #[serde(default)]
+    reasoning_policy: Option<ModelReasoningPolicy>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1603,6 +1606,8 @@ struct ResumeAutoModeTurnRequest {
     max_output_tokens: u64,
     #[serde(default = "default_true")]
     offline: bool,
+    #[serde(default)]
+    reasoning_policy: Option<ModelReasoningPolicy>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1616,6 +1621,8 @@ struct StartAutoModeJobRequest {
     max_output_tokens: u64,
     #[serde(default = "default_true")]
     offline: bool,
+    #[serde(default)]
+    reasoning_policy: Option<ModelReasoningPolicy>,
     #[serde(default = "default_auto_mode_batch_turns")]
     max_turns_per_batch: u16,
 }
@@ -2266,6 +2273,7 @@ impl DesktopAutomationAgentSubmitter<'_> {
             task.model,
             messages,
             512,
+            None,
             true,
             tool_allowlist,
             provider_agent_cancellation(self.state, task_id, &provider_id)
@@ -3490,6 +3498,11 @@ fn run_local_agent_inner(
         return Err(DesktopError::SafeModeActive);
     }
     let providers = desktop_provider_registry(state)?;
+    let reasoning = resolve_provider_reasoning(
+        state,
+        &request.provider_id,
+        request.reasoning_policy.as_ref(),
+    )?;
     let now_ms = current_time_ms()?;
     let task = admit_desktop_agent_task(state, request.provider_id, now_ms)?;
     let cancellation = provider_agent_cancellation(state, task.id, &task.provider_id)?;
@@ -3506,6 +3519,7 @@ fn run_local_agent_inner(
             true,
         )],
         512,
+        reasoning,
         !request.allow_network,
         tool_allowlist,
         cancellation,
@@ -3580,6 +3594,7 @@ fn generate_creator_draft_inner(
             &composition_graph,
         )?,
         4096,
+        None,
         !request.allow_network,
         tool_ids,
         cancellation,
@@ -4917,6 +4932,11 @@ fn resume_auto_mode_turn_inner(
     let running = recovery
         .commit_resume(recovered, now_ms)
         .map_err(agent_error)?;
+    let reasoning = resolve_provider_reasoning(
+        state,
+        &running.task.provider_id,
+        request.reasoning_policy.as_ref(),
+    )?;
     let task_id = running.task.id;
     let trace_id = running.task.trace_id;
     let providers = desktop_provider_registry(state)?;
@@ -4941,6 +4961,7 @@ fn resume_auto_mode_turn_inner(
             &tools,
             &backend,
             AutoModeExecutionRequest {
+                reasoning,
                 provider_context: ProviderExecutionContext {
                     timeout: Duration::from_mins(2),
                     cancellation: CancellationFlag::default(),
@@ -5147,6 +5168,7 @@ fn advance_provider_agent(
     model: String,
     mut messages: Vec<ProviderMessage>,
     max_output_tokens: u64,
+    reasoning: Option<ReasoningMapping>,
     offline: bool,
     tool_allowlist: BTreeSet<String>,
     cancellation: CancellationFlag,
@@ -5168,6 +5190,7 @@ fn advance_provider_agent(
                 model: model.clone(),
                 messages: messages.clone(),
                 max_output_tokens,
+                reasoning: reasoning.clone(),
                 context: ProviderExecutionContext {
                     timeout: Duration::from_secs(30),
                     cancellation: cancellation.clone(),
@@ -5204,6 +5227,7 @@ fn advance_provider_agent(
             model,
             messages,
             max_output_tokens,
+            reasoning,
             offline,
             tool_allowlist,
             cancellation,
@@ -5217,6 +5241,7 @@ fn advance_provider_agent(
         model,
         messages,
         max_output_tokens,
+        reasoning,
         offline,
         tool_allowlist,
         turn,
@@ -5331,6 +5356,7 @@ fn register_provider_confirmations(
     model: String,
     messages: Vec<ProviderMessage>,
     max_output_tokens: u64,
+    reasoning: Option<ReasoningMapping>,
     offline: bool,
     tool_allowlist: BTreeSet<String>,
     turn: ProviderToolTurn,
@@ -5348,6 +5374,7 @@ fn register_provider_confirmations(
         model,
         messages,
         max_output_tokens,
+        reasoning,
         offline,
         tool_allowlist,
         turn,
@@ -5736,6 +5763,7 @@ fn confirm_provider_agent_tool(
     let model = session_guard.model.clone();
     let messages = session_guard.messages.clone();
     let max_output_tokens = session_guard.max_output_tokens;
+    let reasoning = session_guard.reasoning.clone();
     let offline = session_guard.offline;
     let tool_allowlist = session_guard.tool_allowlist.clone();
     let cancellation = session_guard.cancellation.clone();
@@ -5747,6 +5775,7 @@ fn confirm_provider_agent_tool(
         model,
         messages,
         max_output_tokens,
+        reasoning,
         offline,
         tool_allowlist,
         cancellation,
@@ -5941,6 +5970,31 @@ pub(crate) fn provider_credential_reference(
         .find(|config| config.id == provider_id)
         .filter(|config| config.enabled)
         .map(|config| config.credential_reference))
+}
+
+fn resolve_provider_reasoning(
+    state: &DesktopState,
+    provider_id: &str,
+    policy: Option<&ModelReasoningPolicy>,
+) -> Result<Option<ReasoningMapping>, DesktopError> {
+    let Some(policy) = policy else {
+        return Ok(None);
+    };
+    let config = state
+        .provider_configs
+        .list()?
+        .into_iter()
+        .find(|config| config.enabled && config.id == provider_id)
+        .ok_or_else(|| {
+            DesktopError::Agent("selected Provider does not declare reasoning support".to_owned())
+        })?;
+    let mapping = config.reasoning.ok_or_else(|| {
+        DesktopError::Agent("selected Provider does not declare reasoning support".to_owned())
+    })?;
+    mapping
+        .resolve(policy, ReasoningEffort::Medium)
+        .map(Some)
+        .map_err(Into::into)
 }
 
 pub(crate) fn context_cache_key(state: &DesktopState) -> Result<ContextCacheKey, DesktopError> {
@@ -9404,6 +9458,7 @@ fn run_module_agent_task(
         admitted.model,
         admitted.messages,
         512,
+        None,
         true,
         BTreeSet::new(),
         cancellation,
@@ -12268,6 +12323,7 @@ mod tests {
                 prompt: "检查本地能力".to_owned(),
                 provider_id: default_agent_provider_id(),
                 model: default_agent_model(),
+                reasoning_policy: None,
                 allow_network: false,
             },
             &state,
@@ -12302,6 +12358,7 @@ mod tests {
                     prompt: "  ".to_owned(),
                     provider_id: default_agent_provider_id(),
                     model: default_agent_model(),
+                    reasoning_policy: None,
                     allow_network: false,
                 },
                 &state
@@ -12314,6 +12371,7 @@ mod tests {
                     prompt: "有效任务".to_owned(),
                     provider_id: "provider:not-registered".to_owned(),
                     model: default_agent_model(),
+                    reasoning_policy: None,
                     allow_network: false,
                 },
                 &state
@@ -12326,6 +12384,7 @@ mod tests {
                     prompt: "有效任务".to_owned(),
                     provider_id: default_agent_provider_id(),
                     model: " ".to_owned(),
+                    reasoning_policy: None,
                     allow_network: false,
                 },
                 &state
@@ -12338,6 +12397,7 @@ mod tests {
                     prompt: "a".repeat(32 * 1024 + 1),
                     provider_id: default_agent_provider_id(),
                     model: default_agent_model(),
+                    reasoning_policy: None,
                     allow_network: false,
                 },
                 &state
@@ -12356,6 +12416,7 @@ mod tests {
                 workspace_root: root.clone(),
                 constraints: Vec::new(),
                 max_output_tokens: 0,
+                reasoning_policy: None,
                 offline: true,
             },
             &state,
@@ -12379,6 +12440,7 @@ mod tests {
                 workspace_root: root.clone(),
                 constraints: Vec::new(),
                 max_output_tokens: 512,
+                reasoning_policy: None,
                 offline: true,
             },
             &state,
@@ -12513,6 +12575,7 @@ mod tests {
                 true,
             )],
             128,
+            None,
             true,
             BTreeSet::from(["pet.position.move".to_owned()]),
             CancellationFlag::default(),
@@ -12572,6 +12635,7 @@ mod tests {
                 true,
             )],
             128,
+            None,
             true,
             BTreeSet::from(["runtime.health.read".to_owned()]),
             CancellationFlag::default(),
@@ -12618,6 +12682,7 @@ mod tests {
                 true,
             )],
             128,
+            None,
             true,
             BTreeSet::from(["pet.position.move".to_owned()]),
             CancellationFlag::default(),
@@ -12805,6 +12870,7 @@ mod tests {
                         true,
                     )],
                     512,
+                    None,
                     true,
                     BTreeSet::new(),
                     cancellation,

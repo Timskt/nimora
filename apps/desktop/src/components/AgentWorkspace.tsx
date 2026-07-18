@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { desktopApi, type AgentCatalog, type AgentHistoryPage, type AgentProviderStatus, type AgentToolResult, type DesktopAutoModeControlCenter, type LocalAgentResult } from "../platform/desktop";
+import { desktopApi, type AgentCatalog, type AgentHistoryPage, type AgentProviderStatus, type AgentToolResult, type ConcreteReasoningEffort, type DesktopAutoModeControlCenter, type LocalAgentResult, type ModelReasoningPolicy } from "../platform/desktop";
 
 const ProviderSettings = lazy(async () => {
   const module = await import("./ProviderSettings");
@@ -41,6 +41,15 @@ export function providerStatusLabel(status: AgentProviderStatus | null): string 
   return status.providerId === "provider:deterministic-local" ? "可用" : "服务在线";
 }
 
+type ReasoningChoice = "adaptive" | "cost_saver" | "quality_first" | `fixed:${ConcreteReasoningEffort}`;
+
+export function reasoningPolicyForChoice(choice: ReasoningChoice): ModelReasoningPolicy {
+  if (choice.startsWith("fixed:")) {
+    return { strategy: "fixed", requested: choice.slice(6) as ConcreteReasoningEffort, allowAutomaticDowngrade: false };
+  }
+  return { strategy: choice as "adaptive" | "cost_saver" | "quality_first", requested: "auto", allowAutomaticDowngrade: true };
+}
+
 export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorkspaceProps) {
   const [view, setView] = useState<"run" | "control" | "providers" | "history">("run");
   const [controlCenter, setControlCenter] = useState<DesktopAutoModeControlCenter | null>(null);
@@ -54,6 +63,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
   const [result, setResult] = useState<LocalAgentResult | null>(null);
   const [providerStatus, setProviderStatus] = useState<AgentProviderStatus | null>(null);
   const [allowNetwork, setAllowNetwork] = useState(false);
+  const [reasoningChoice, setReasoningChoice] = useState<ReasoningChoice>("adaptive");
   const [busy, setBusy] = useState(false);
   const [toolBusy, setToolBusy] = useState(false);
   const [toolResult, setToolResult] = useState<AgentToolResult | null>(null);
@@ -61,6 +71,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
   const [history, setHistory] = useState<AgentHistoryPage | null>(null);
   const activeProviderId = result?.task.providerId ?? providerId;
   const activeProvider = catalog?.providers.find((provider) => provider.id === activeProviderId);
+  const reasoningCapabilities = activeProvider?.capabilities.reasoning;
 
   useEffect(() => {
     void refreshCatalog();
@@ -148,7 +159,13 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
     setBusy(true);
     setTurnCancelled(false);
     try {
-      const next = await desktopApi.runLocalAgent(prompt.trim(), providerId, model.trim(), allowNetwork);
+      const next = await desktopApi.runLocalAgent(
+        prompt.trim(),
+        providerId,
+        model.trim(),
+        allowNetwork,
+        reasoningCapabilities ? reasoningPolicyForChoice(reasoningChoice) : null,
+      );
       setResult(next);
       if (next.status === "completed") await refreshHistory();
       onNotice(allowNetwork ? "网络 Agent 任务已完成" : "离线 Agent 任务已完成");
@@ -283,8 +300,9 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
 
       <form className="agent-composer" onSubmit={(event) => { event.preventDefault(); void run(); }}>
         <div className="agent-runtime-controls">
-          <label><span>Provider</span><select aria-label="Agent Provider" disabled={busy} value={providerId} onChange={(event) => { const nextProviderId = event.target.value; setProviderId(nextProviderId); setModel(defaultModelForProvider(nextProviderId)); setAllowNetwork(false); }}>{catalog?.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
+          <label><span>Provider</span><select aria-label="Agent Provider" disabled={busy} value={providerId} onChange={(event) => { const nextProviderId = event.target.value; setProviderId(nextProviderId); setModel(defaultModelForProvider(nextProviderId)); setAllowNetwork(false); setReasoningChoice("adaptive"); }}>{catalog?.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.displayName}</option>)}</select></label>
           <label><span>模型</span><input aria-label="Agent 模型" disabled={busy} list="agent-provider-models" maxLength={128} value={model} onChange={(event) => setModel(event.target.value)} /><datalist id="agent-provider-models">{providerStatus?.models.map((item) => <option key={item.name} value={item.name} />)}</datalist></label>
+          {reasoningCapabilities && <label><span>思考强度</span><select aria-label="Agent 思考强度" disabled={busy} value={reasoningChoice} onChange={(event) => setReasoningChoice(event.target.value as ReasoningChoice)}><option value="adaptive">自动 · 均衡</option><option value="cost_saver">节省 · 更快</option><option value="quality_first">极致 · 最深入</option>{reasoningCapabilities.supportedEfforts.map((effort) => <option key={effort} value={`fixed:${effort}`}>{({ minimal: "最少", low: "轻量", medium: "均衡", high: "深入", very_high: "很深入", maximum: "极致" } as const)[effort]} · 固定</option>)}</select><small>固定等级不自动降级；能力映射版本由宿主验证。</small></label>}
         </div>
         {activeProvider?.locality === "network" && <label className="agent-network-consent"><input checked={allowNetwork} disabled={busy} type="checkbox" onChange={(event) => setAllowNetwork(event.target.checked)} /><span><strong>允许本次请求联网</strong><small>任务内容将发送到你配置的第三方服务；模块能力仍受本机网关约束。</small></span></label>}
         <textarea value={prompt} maxLength={32768} onChange={(event) => setPrompt(event.target.value)} aria-label="Agent 任务内容" />
@@ -294,7 +312,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
 
     <aside className="agent-inspector" aria-label="Agent 运行检查器">
       <div className="inspector-title"><div><p className="card-label">运行检查器</p><h3>能力与边界</h3></div><span>{catalog?.tools.length ?? 0} tools</span></div>
-      <div className="provider-tile"><span className="provider-glyph">⌁</span><div><strong>{activeProvider?.name ?? activeProviderId}</strong><p>{activeProvider?.locality === "network" ? "网络 Provider · 受数据策略约束" : "本地 Provider · 可离线运行"}</p></div><i>{providerStatusLabel(providerStatus)}</i></div>
+      <div className="provider-tile"><span className="provider-glyph">⌁</span><div><strong>{activeProvider?.displayName ?? activeProviderId}</strong><p>{activeProvider?.locality === "network" ? "网络 Provider · 受数据策略约束" : "本地 Provider · 可离线运行"}{reasoningCapabilities ? ` · ${reasoningCapabilities.supportedEfforts.length} 档推理` : " · 标准推理"}</p></div><i>{providerStatusLabel(providerStatus)}</i></div>
       <div className="boundary-note"><strong>{safeMode ? "安全模式已启用" : recoveryMode ? "恢复模式已启用" : "确认策略正常"}</strong><p>写操作与外部副作用始终要求绑定实际参数的批准。</p></div>
       <div className="tool-catalog"><p className="card-label">模块工具</p>{catalog?.tools.map((tool) => <article key={tool.id}><span>{tool.effect === "read_only" ? "R" : "W"}</span><div><strong>{tool.title}</strong><code>{tool.id}</code></div><button className={tool.effect === "read_only" ? "read-only" : "approval"} disabled={toolBusy || safeMode || recoveryMode} onClick={() => void prepareTool(tool.id)} type="button">{agentToolAccessLabel(tool.effect)}</button></article>)}</div>
       <section className="agent-history" aria-labelledby="agent-history-heading">

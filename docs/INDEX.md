@@ -36,6 +36,8 @@ Provider、Connector、缓存与授权材料的系统密钥存储、非敏感引
 
 Coding Agent 竞品能力吸收、持久 Goal、无人值守预授权和模型推理策略分别以 [`AGENT_COMPETITIVE_DESIGN.md`](AGENT_COMPETITIVE_DESIGN.md)、[`AUTO_AUTHORIZATION.md`](AUTO_AUTHORIZATION.md) 与 [`MODEL_REASONING_POLICY.md`](MODEL_REASONING_POLICY.md) 为实现基线。
 
+原生桌宠必须以类似经典 QQ 宠物的独立桌面生命体为产品核心，而不是普通聊天窗口；窗口模型、自主行为、照料成长、环境互动、离线能力和真机验收统一以 [`DESKTOP_PET_EXPERIENCE.md`](DESKTOP_PET_EXPERIENCE.md) 为基线。
+
 阶段性方向校准、偏差纠正、GitHub Actions 分钟复核与下一纵切硬验收统一记录在 [`MILESTONE_REVIEWS.md`](MILESTONE_REVIEWS.md)，不得只存在于对话或提交说明中。
 
 ## 2. 规范用词

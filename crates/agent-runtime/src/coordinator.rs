@@ -1,7 +1,8 @@
 use super::{
     AgentRuntimeError, AgentTask, AgentTaskStatus, ProviderError, ProviderExecutionContext,
     ProviderFinishReason, ProviderMessage, ProviderRegistry, ProviderRequest, ProviderResponse,
-    ToolAdmission, ToolApproval, ToolBackend, ToolInvocation, ToolRegistry, ToolRiskEvaluator,
+    ReasoningMapping, ToolAdmission, ToolApproval, ToolBackend, ToolInvocation, ToolRegistry,
+    ToolRiskEvaluator,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -117,6 +118,7 @@ pub struct ProviderStepInput {
     pub model: String,
     pub messages: Vec<ProviderMessage>,
     pub max_output_tokens: u64,
+    pub reasoning: Option<ReasoningMapping>,
     pub context: ProviderExecutionContext,
     pub offline: bool,
     pub now_ms: u64,
@@ -164,7 +166,7 @@ impl<'a, R: ToolRiskEvaluator> AgentCoordinator<'a, R> {
         if task.status == AgentTaskStatus::Pending {
             task.transition(AgentTaskStatus::Planning, input.now_ms)?;
         }
-        let request = ProviderRequest::new(
+        let mut request = ProviderRequest::new(
             task.id,
             task.trace_id,
             task.provider_id.clone(),
@@ -173,6 +175,9 @@ impl<'a, R: ToolRiskEvaluator> AgentCoordinator<'a, R> {
             self.tools.descriptors().into_iter().cloned().collect(),
             input.max_output_tokens,
         )?;
+        if let Some(reasoning) = input.reasoning {
+            request = request.with_reasoning(reasoning);
+        }
         let response = self
             .providers
             .complete(&request, input.context, input.offline)?;
@@ -263,7 +268,11 @@ mod tests {
     };
     use nimora_runtime_core::CommandRisk;
     use serde_json::json;
-    use std::{collections::BTreeSet, time::Duration};
+    use std::{
+        collections::BTreeSet,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
     #[derive(Debug)]
     struct ToolCallingProvider {
@@ -311,6 +320,38 @@ mod tests {
             _timeout: Duration,
         ) -> Result<Value, String> {
             Ok(json!({"moduleAccepted": invocation.arguments}))
+        }
+    }
+
+    #[derive(Debug)]
+    struct ReasoningCaptureProvider {
+        descriptor: ProviderDescriptor,
+        captured: Arc<Mutex<Option<ReasoningMapping>>>,
+    }
+
+    impl ProviderAdapter for ReasoningCaptureProvider {
+        fn descriptor(&self) -> &ProviderDescriptor {
+            &self.descriptor
+        }
+
+        fn complete(
+            &self,
+            request: &ProviderRequest,
+            _context: &ProviderExecutionContext,
+        ) -> Result<ProviderResponse, ProviderError> {
+            *self.captured.lock().expect("capture") = request.reasoning.clone();
+            Ok(ProviderResponse {
+                spec: "nimora.agent-provider-response/1".to_owned(),
+                request_id: request.request_id,
+                content: "done".to_owned(),
+                tool_calls: Vec::new(),
+                finish_reason: ProviderFinishReason::Completed,
+                usage: ProviderUsage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cost_microunits: 0,
+                },
+            })
         }
     }
 
@@ -370,6 +411,7 @@ mod tests {
                 true,
             )],
             max_output_tokens: 128,
+            reasoning: None,
             context: ProviderExecutionContext {
                 timeout: Duration::from_secs(5),
                 cancellation: CancellationFlag::default(),
@@ -398,6 +440,60 @@ mod tests {
             ToolAdmission::ConfirmationRequired { .. }
         ));
         assert_eq!(task.usage.tool_calls, 0);
+    }
+
+    #[test]
+    fn provider_step_forwards_validated_reasoning_mapping_to_adapter() {
+        let captured = Arc::new(Mutex::new(None));
+        let descriptor = ProviderDescriptor::new(
+            "provider:reasoning",
+            "Reasoning Provider",
+            ProviderLocality::Network,
+            4_096,
+            1_024,
+            ProviderCapabilities {
+                supported: BTreeSet::new(),
+                reasoning: Some(
+                    crate::ProviderReasoningCapabilities::new(
+                        BTreeSet::from([crate::ReasoningEffort::High]),
+                        "vendor-reasoning/1",
+                    )
+                    .expect("reasoning capabilities"),
+                ),
+            },
+        )
+        .expect("descriptor");
+        let mut providers = ProviderRegistry::default();
+        providers
+            .register(ReasoningCaptureProvider {
+                descriptor,
+                captured: Arc::clone(&captured),
+            })
+            .expect("provider");
+        let tools = ToolRegistry::default();
+        let mut task = AgentTask::new(
+            AgentTaskOrigin::Desktop,
+            "desktop:user",
+            "provider:reasoning",
+            AgentBudget::default(),
+            1_000,
+        )
+        .expect("task");
+        let mapping = ReasoningMapping::new(
+            crate::ReasoningEffort::High,
+            crate::ReasoningEffort::High,
+            "provider-high",
+            "vendor-reasoning/1",
+        )
+        .expect("mapping");
+        let mut request = input();
+        request.reasoning = Some(mapping.clone());
+        request.offline = false;
+        let outcome = AgentCoordinator::new(&providers, &tools)
+            .provider_step(&mut task, request)
+            .expect("provider step");
+        assert!(matches!(outcome, ProviderStepOutcome::Completed { .. }));
+        assert_eq!(*captured.lock().expect("capture"), Some(mapping));
     }
 
     #[test]

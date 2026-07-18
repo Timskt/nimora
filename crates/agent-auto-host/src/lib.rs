@@ -6,8 +6,8 @@ use nimora_agent_runtime::{
     AutoModeTurnOutcome, AutoModeTurnSupervisor, CompactedContext, ContextAnchor,
     ContextCompactionPolicy, ContextCompactor, ContextManagementError, DataClassification,
     ProviderExecutionContext, ProviderMessage, ProviderMessageRole, ProviderRegistry,
-    ProviderStepInput, ToolBackend, ToolDescriptor, ToolRegistry, ToolRiskEvaluator,
-    WorkspaceSnapshot,
+    ProviderStepInput, ReasoningMapping, ToolBackend, ToolDescriptor, ToolRegistry,
+    ToolRiskEvaluator, WorkspaceSnapshot,
 };
 use nimora_agent_workspace_host::{WorkspaceHostError, WorkspaceScanPolicy, WorkspaceScanner};
 use nimora_persistence_sqlite::{
@@ -135,6 +135,7 @@ pub struct AutoModeExecutionRequest {
     pub workspace_root: PathBuf,
     pub constraints: Vec<String>,
     pub max_output_tokens: u64,
+    pub reasoning: Option<ReasoningMapping>,
     pub provider_context: ProviderExecutionContext,
     pub offline: bool,
     pub data_classification: DataClassification,
@@ -227,7 +228,7 @@ impl AutoModeExecutionService {
             });
         };
         let mut turn = *turn;
-        let anchor = context_anchor(&turn, request.constraints);
+        let anchor = context_anchor(&turn, request.constraints, request.reasoning.clone());
         let descriptors = tools.descriptors().into_iter().cloned().collect::<Vec<_>>();
         let prepared = self.context.compact_or_load(
             &turn.task,
@@ -247,6 +248,7 @@ impl AutoModeExecutionService {
             model: prepared.context.model,
             messages: prepared.context.messages,
             max_output_tokens: request.max_output_tokens,
+            reasoning: request.reasoning,
             context: request.provider_context,
             offline: request.offline,
             now_ms: request.now_ms,
@@ -270,7 +272,11 @@ impl AutoModeExecutionService {
     }
 }
 
-fn context_anchor(turn: &RecoveredAutoModeTurn, constraints: Vec<String>) -> ContextAnchor {
+fn context_anchor(
+    turn: &RecoveredAutoModeTurn,
+    constraints: Vec<String>,
+    reasoning: Option<ReasoningMapping>,
+) -> ContextAnchor {
     ContextAnchor {
         goal: turn.goal.objective.clone(),
         constraints,
@@ -289,7 +295,7 @@ fn context_anchor(turn: &RecoveredAutoModeTurn, constraints: Vec<String>) -> Con
             .collect(),
         workspace_fingerprint: turn.workspace.fingerprint.clone(),
         plan_revision: turn.plan.revision,
-        reasoning: None,
+        reasoning,
     }
 }
 
@@ -315,6 +321,7 @@ pub struct AutoModeLoopRequest {
     pub workspace_root: PathBuf,
     pub constraints: Vec<String>,
     pub max_output_tokens: u64,
+    pub reasoning: Option<ReasoningMapping>,
     pub provider_context: ProviderExecutionContext,
     pub offline: bool,
     pub data_classification: DataClassification,
@@ -388,6 +395,7 @@ impl AutoModeLoopService {
                     workspace_root: request.workspace_root.clone(),
                     constraints: request.constraints.clone(),
                     max_output_tokens: request.max_output_tokens,
+                    reasoning: request.reasoning.clone(),
                     provider_context: request.provider_context.clone(),
                     offline: request.offline,
                     data_classification: request.data_classification,
@@ -1302,6 +1310,7 @@ mod tests {
             workspace_root: workspace_root.to_path_buf(),
             constraints: vec!["Do not invent evidence".to_owned()],
             max_output_tokens: 128,
+            reasoning: None,
             provider_context: ProviderExecutionContext {
                 timeout: Duration::from_secs(5),
                 cancellation: CancellationFlag::default(),
@@ -1324,6 +1333,7 @@ mod tests {
             workspace_root: workspace.to_path_buf(),
             constraints: vec!["stay offline".to_owned()],
             max_output_tokens: 32,
+            reasoning: None,
             provider_context: ProviderExecutionContext {
                 timeout: Duration::from_secs(1),
                 cancellation: CancellationFlag::default(),
@@ -1769,6 +1779,31 @@ mod tests {
             )
             .expect("isolated model");
         assert!(!other_model.cache_hit);
+        let reasoning_anchor = ContextAnchor {
+            reasoning: Some(
+                ReasoningMapping::new(
+                    nimora_agent_runtime::ReasoningEffort::High,
+                    nimora_agent_runtime::ReasoningEffort::High,
+                    "provider-high",
+                    "vendor-reasoning/1",
+                )
+                .expect("reasoning mapping"),
+            ),
+            ..anchor
+        };
+        let other_reasoning = service
+            .compact_or_load(
+                &recovered.task,
+                &recovered.model,
+                &recovered.messages,
+                &[],
+                &reasoning_anchor,
+                DataClassification::Personal,
+                DataClassification::Personal,
+                1_104,
+            )
+            .expect("reasoning-isolated context");
+        assert!(!other_reasoning.cache_hit);
         fs::remove_file(database).expect("database cleanup");
         fs::remove_dir_all(workspace).expect("workspace cleanup");
     }

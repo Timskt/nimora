@@ -1,12 +1,14 @@
 # Nimora 全量实现状态与证据矩阵
 
-## 2026-07-19 — Provider 推理能力与缓存隔离可信核心
+## 2026-07-19 — 运行级 Provider 推理策略纵切
 
 - Provider Descriptor 新增显式、版本化推理能力声明；`auto` 不能伪装为 Provider 具体能力，空集合和非法 Mapping Version 在注册前拒绝。
 - Provider Request 可绑定宿主解析后的 requested/actual/provider value/mapping version；Registry 在 Adapter 与任何计费副作用前复验声明、实际等级和版本，未声明能力、越界等级及版本漂移均失败关闭。
 - Compacted Context 与持久 Context Cache 的内容寻址身份纳入完整推理映射，不同等级、Provider 参数或映射版本不会错误共享缓存；旧无推理上下文保持可读取兼容。
-- Runtime 41 项、Auto Host 20 项、Persistence 79 项以及 Provider Worker 的单元、真实子进程、Ollama/OpenAI-compatible HTTP 契约测试通过。
-- 本纵切是可信核心而非 UI 完成声明；真实 Adapter 映射、Auto Loop 策略解析、持久默认配置、桌面与 CLI 选择器和审计展示仍待后续纵切。
+- OpenAI-compatible 持久 `effort -> provider value` 配置现由 Desktop 宿主解析为一次运行级 Mapping；普通 Agent、Auto Mode 单轮、后台 Loop、工具确认续跑、Context Anchor 和真实 Provider Request 保持同一 Mapping，Worker 仅接收 Provider value。
+- Agent Workspace 仅对 Descriptor 明确声明能力的 Provider 展示“自动、节省、极致”和具体固定等级；固定等级不静默降级，Browser Preview 不伪造能力。前端目录同时改为使用 Rust 的真实 `displayName/capabilities` 契约。
+- Runtime 42 项、Auto Host 20 项、Persistence 81 项、Desktop 142 项和 Frontend 48 项测试通过；生产构建与分包预算通过。新增测试直接捕获 Adapter 前的 Mapping、验证 Provider value/version 解析、推理变化缓存隔离和三条 IPC 策略传输。
+- 尚待后续独立纵切：Anthropic/本地 Adapter 映射、动态 Adaptive 推荐、持久默认策略、CLI 选择器和完整审计展示。
 
 ## 2026-07-19 — 真实桌面启动迁移与 macOS Keychain 演练
 
@@ -146,7 +148,7 @@
 
 | 领域 | 当前状态 | 已有证据 | 必须继续闭环的缺口 |
 |---|---|---|---|
-| 桌宠窗口与交互 | 部分实现 | Tauri 透明双窗口、拖拽、置顶、穿透、托盘、安全模式、Click/Drag FSM 与 Rust 测试 | Windows/macOS 真机冒烟、多屏/DPI、WebView 崩溃恢复、长稳验证 |
+| 桌宠窗口与交互 | 部分实现 | Tauri 透明双窗口、拖拽、置顶、穿透、托盘、安全模式、Click/Drag FSM 与 Rust 测试；`DESKTOP_PET_EXPERIENCE.md` 已确立经典 QQ 宠物式独立桌面生命体基线 | 自主行为与 Needs/Mood/Intent 分层状态机、手势仲裁、照料成长、桌边漫游/吸附、环境降扰、离线 24 小时、Windows/macOS 多屏/DPI、WebView 崩溃恢复与 8 小时长稳验证 |
 | UI 与设计系统 | 部分实现 | Control Center、Creator Studio、Overlay、Token 与组件样式、前端单测、生产构建；目标控制中心宽屏截图与语义树已验证 | 键盘完整路径、读屏实机、200% 缩放、关键状态视觉回归、跨平台像素审查 |
 | Profile 与离线状态 | 部分实现 | 唯一 SQLite Schema、离线 Profile、Online Backup 调度与原子恢复、损坏数据库隔离启动、统一写门禁、恢复 UI；Profile 切换与进入/退出 Safe Mode 共用 Tauri-free 可逆原生事务协调器；进入 Safe Mode 后使用独立 fail-closed 协调器全尝试 Auto Mode、用户程序、Skill、Agent、策略缓存和 Renderer 收敛，失败保持 Safe 并写固定 Security 诊断；Backup Service 统一手动/定时备份、健康状态、错误收敛和恢复请求；诊断服务统一版本、运行状态和 fail-closed 隐私声明，支持脱敏导出；Rust/TS 故障测试与 Chrome 实测 | 退出 Safe Mode 的 `RecoveryPending/Degraded` 恢复补偿状态、休眠与时钟异常、恢复模式真实桌面截图、跨平台真机故障注入、人工数据提取与跨设备备份 |
 | Event 与持久 Outbox | 部分实现 | 事务写入、租约、ACK、重试、死信、清理、健康状态和自动化测试 | 具体幂等消费者、跨重启投递恢复、Connector 投递审计 |

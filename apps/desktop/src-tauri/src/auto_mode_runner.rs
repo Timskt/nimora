@@ -5,7 +5,7 @@ use super::{
     ContextCompactionPolicy, DataClassification, DesktopState, Duration, ProviderExecutionContext,
     StartAutoModeJobRequest, Uuid, WorkspaceScanPolicy, auto_mode_jobs, context_cache_key,
     current_time_ms, desktop_provider_registry, desktop_tool_backend, desktop_tool_registry,
-    provider_credential_reference,
+    provider_credential_reference, resolve_provider_reasoning,
 };
 use nimora_agent_auto_host::{AutoModeRecoveryService, RecoveredAutoModeTurn};
 use tauri::Manager;
@@ -46,13 +46,9 @@ fn run_inner(
         )
     })?;
     let now_ms = current_time_ms().map_err(|_| time_failure())?;
-    if control.requested() == AutoModeJobControl::Continue {
-        state
-            .auto_mode_jobs
-            .mark_running(job_id, now_ms)
-            .map_err(|_| registry_failure())?;
-    }
+    mark_job_running(state, job_id, control, now_ms)?;
     let mut turn = recover_turn(database_path, request, now_ms)?;
+    let reasoning = resolve_auto_mode_reasoning(state, request, &turn)?;
     let credential_reference = provider_credential_reference(state, &turn.task.provider_id)
         .map_err(|error| (AutoModeJobStatus::Failed, error.to_string()))?;
     let providers = desktop_provider_registry(state)
@@ -86,6 +82,7 @@ fn run_inner(
                 workspace_root: request.workspace_root.clone(),
                 constraints: request.constraints.clone(),
                 max_output_tokens: request.max_output_tokens,
+                reasoning: reasoning.clone(),
                 provider_context: ProviderExecutionContext {
                     timeout: Duration::from_mins(2),
                     cancellation: control.cancellation(),
@@ -153,6 +150,34 @@ fn recover_turn(
     recovery
         .commit_resume(recovered, now_ms)
         .map_err(|error| (AutoModeJobStatus::Failed, error.to_string()))
+}
+
+fn mark_job_running(
+    state: &DesktopState,
+    job_id: Uuid,
+    control: &auto_mode_jobs::AutoModeJobControlHandle,
+    now_ms: u64,
+) -> Result<(), (AutoModeJobStatus, String)> {
+    if control.requested() == AutoModeJobControl::Continue {
+        state
+            .auto_mode_jobs
+            .mark_running(job_id, now_ms)
+            .map_err(|_| registry_failure())?;
+    }
+    Ok(())
+}
+
+fn resolve_auto_mode_reasoning(
+    state: &DesktopState,
+    request: &StartAutoModeJobRequest,
+    turn: &RecoveredAutoModeTurn,
+) -> Result<Option<nimora_agent_runtime::ReasoningMapping>, (AutoModeJobStatus, String)> {
+    resolve_provider_reasoning(
+        state,
+        &turn.task.provider_id,
+        request.reasoning_policy.as_ref(),
+    )
+    .map_err(|error| (AutoModeJobStatus::Failed, error.to_string()))
 }
 
 fn context_cache_policy() -> Result<ContextCachePolicy, (AutoModeJobStatus, String)> {

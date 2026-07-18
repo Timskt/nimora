@@ -1144,6 +1144,7 @@ fn execute_with_sidecar(
                     true,
                 )],
                 max_output_tokens: input.max_output_tokens,
+                reasoning: None,
                 context: ProviderExecutionContext {
                     timeout: Duration::from_secs(30),
                     cancellation: CancellationFlag::default(),

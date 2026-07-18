@@ -249,6 +249,7 @@ describe("desktop platform adapter", () => {
       : null);
     const startDragging = vi.fn(async () => undefined);
     const api = createDesktopApi(true, invoke, startDragging);
+    const reasoningPolicy = { strategy: "fixed", requested: "high", allowAutomaticDowngrade: false } as const;
     await api.automationGovernanceCatalog();
     await api.automationCostReconciliationCatalog();
     await api.reconcileAutomationCost({
@@ -268,14 +269,16 @@ describe("desktop platform adapter", () => {
     await api.agentCatalog();
     await api.agentHistory(25);
     await api.deleteAgentHistory("018f0000-0000-7000-8000-000000000007");
-    await api.runLocalAgent("检查本地能力");
+    await api.runLocalAgent("检查本地能力", undefined, undefined, false, reasoningPolicy);
     await api.resumeAutoModeTurn({
       sessionId: "018f0000-0000-7000-8000-000000000012",
       workspaceRoot: "/workspace",
+      reasoningPolicy,
     });
     await api.startAutoModeJob({
       sessionId: "018f0000-0000-7000-8000-000000000012",
       workspaceRoot: "/workspace",
+      reasoningPolicy,
     });
     await api.autoModeControlCenter();
     await api.autoModeAttemptDetail("018f0000-0000-7000-8000-000000000012");
@@ -405,12 +408,13 @@ describe("desktop platform adapter", () => {
       ["agent_catalog"],
       ["agent_history_list", { request: { beforeCreatedAtMs: null, beforeTaskId: null, limit: 25 } }],
       ["delete_agent_history", { request: { taskId: "018f0000-0000-7000-8000-000000000007" } }],
-      ["run_local_agent", { request: { prompt: "检查本地能力", providerId: "provider:deterministic-local", model: "model:echo-v1", allowNetwork: false } }],
+      ["run_local_agent", { request: { prompt: "检查本地能力", providerId: "provider:deterministic-local", model: "model:echo-v1", allowNetwork: false, reasoningPolicy } }],
       ["resume_auto_mode_turn", { request: {
         sessionId: "018f0000-0000-7000-8000-000000000012",
         workspaceRoot: "/workspace",
         constraints: [],
         maxOutputTokens: 512,
+        reasoningPolicy,
         offline: true,
       } }],
       ["start_auto_mode_job", { request: {
@@ -418,6 +422,7 @@ describe("desktop platform adapter", () => {
         workspaceRoot: "/workspace",
         constraints: [],
         maxOutputTokens: 512,
+        reasoningPolicy,
         offline: true,
         maxTurnsPerBatch: 8,
       } }],

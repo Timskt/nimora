@@ -340,6 +340,7 @@ mod tests {
                 true,
             )],
             max_output_tokens: 128,
+            reasoning: None,
             context: ProviderExecutionContext {
                 timeout: Duration::from_secs(5),
                 cancellation: CancellationFlag::default(),

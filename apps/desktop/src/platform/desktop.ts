@@ -47,8 +47,33 @@ export interface AgentToolDescriptor {
 
 export interface AgentCatalog {
   spec: "nimora.desktop-agent-catalog/1";
-  providers: Array<{ id: string; name: string; locality: "local" | "network" }>;
+  providers: AgentProviderDescriptor[];
   tools: AgentToolDescriptor[];
+}
+
+export type ReasoningEffort = "auto" | ConcreteReasoningEffort;
+export type ReasoningStrategy = "adaptive" | "quality_first" | "cost_saver" | "fixed";
+
+export interface ModelReasoningPolicy {
+  strategy: ReasoningStrategy;
+  requested: ReasoningEffort;
+  allowAutomaticDowngrade: boolean;
+}
+
+export interface AgentProviderDescriptor {
+  spec: "nimora.agent-provider/1";
+  id: string;
+  displayName: string;
+  locality: "local" | "network";
+  contextWindowTokens: number;
+  maxOutputTokens: number;
+  capabilities: {
+    supported: Array<"streaming" | "structured_tool_calls" | "cancellation" | "usage_reporting">;
+    reasoning?: {
+      supportedEfforts: ConcreteReasoningEffort[];
+      mappingVersion: string;
+    };
+  };
 }
 
 export interface AgentProviderStatus {
@@ -245,6 +270,7 @@ export interface ResumeAutoModeTurnRequest {
   workspaceRoot: string;
   constraints?: string[];
   maxOutputTokens?: number;
+  reasoningPolicy?: ModelReasoningPolicy | null;
   offline?: boolean;
 }
 
@@ -948,7 +974,7 @@ export interface DesktopApi {
   skillExecutionHistory(limit?: number, before?: { createdAtMs: number; executionId: string }): Promise<SkillExecutionHistoryPage>;
   deleteSkillExecutionHistory(executionId?: string): Promise<number>;
   cancelSkillExecution(executionId: string): Promise<boolean>;
-  runLocalAgent(prompt: string, providerId?: string, model?: string, allowNetwork?: boolean): Promise<LocalAgentResult>;
+  runLocalAgent(prompt: string, providerId?: string, model?: string, allowNetwork?: boolean, reasoningPolicy?: ModelReasoningPolicy | null): Promise<LocalAgentResult>;
   generateCreatorDraft(kind: CreatorArtifactKind, requirement: string, providerId: string, model: string, allowNetwork?: boolean): Promise<CreatorDraftResult>;
   approveCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>, draftDigest: string): Promise<CreatorDraftApprovalReceipt>;
   installCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>, approvalId: string): Promise<CreatorDraftInstallReceipt>;
@@ -1155,8 +1181,8 @@ export function createDesktopApi(
         return {
           spec: "nimora.desktop-agent-catalog/1",
           providers: [
-            { id: "provider:deterministic-local", name: "Deterministic local diagnostic", locality: "local" },
-            { id: "provider:preview-scripted", name: "Preview scripted tool provider", locality: "local" },
+            { spec: "nimora.agent-provider/1", id: "provider:deterministic-local", displayName: "Deterministic local diagnostic", locality: "local", contextWindowTokens: 4096, maxOutputTokens: 1024, capabilities: { supported: ["usage_reporting"] } },
+            { spec: "nimora.agent-provider/1", id: "provider:preview-scripted", displayName: "Preview scripted tool provider", locality: "local", contextWindowTokens: 4096, maxOutputTokens: 1024, capabilities: { supported: ["structured_tool_calls", "usage_reporting"] } },
           ],
           tools: [
             { id: "asset.catalog.read", title: "Read asset catalog", description: "Reads installed character assets and active selection.", baseRisk: "safe", effect: "read_only" },
@@ -1465,7 +1491,7 @@ export function createDesktopApi(
     skillExecutionHistory: async (limit = 50, before) => await invokeCommand("skill_execution_history_list", { request: { beforeCreatedAtMs: before?.createdAtMs ?? null, beforeExecutionId: before?.executionId ?? null, limit } }) as SkillExecutionHistoryPage,
     deleteSkillExecutionHistory: async (executionId) => (await invokeCommand("delete_skill_execution_history", { request: { executionId: executionId ?? null } }) as { deleted: number }).deleted,
     cancelSkillExecution: async (executionId) => await invokeCommand("cancel_skill_execution", { executionId }) as boolean,
-    runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1", allowNetwork = false) => await invokeCommand("run_local_agent", { request: { prompt, providerId, model, allowNetwork } }) as LocalAgentResult,
+    runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1", allowNetwork = false, reasoningPolicy = null) => await invokeCommand("run_local_agent", { request: { prompt, providerId, model, allowNetwork, reasoningPolicy } }) as LocalAgentResult,
     generateCreatorDraft: async (kind, requirement, providerId, model, allowNetwork = false) => await invokeCommand("generate_creator_draft", { request: { kind, requirement, providerId, model, allowNetwork } }) as CreatorDraftResult,
     approveCreatorDraft: async (kind, requirement, draft, draftDigest) => await invokeCommand("approve_creator_draft", { request: { kind, requirement, draft, draftDigest } }) as CreatorDraftApprovalReceipt,
     installCreatorDraft: async (kind, requirement, draft, approvalId) => await invokeCommand("install_creator_draft", { request: { kind, requirement, draft, approvalId } }) as CreatorDraftInstallReceipt,
@@ -1481,6 +1507,7 @@ export function createDesktopApi(
         workspaceRoot: request.workspaceRoot,
         constraints: request.constraints ?? [],
         maxOutputTokens: request.maxOutputTokens ?? 512,
+        reasoningPolicy: request.reasoningPolicy ?? null,
         offline: request.offline ?? true,
       },
     }) as DesktopAutoModeTurnResult,
@@ -1490,6 +1517,7 @@ export function createDesktopApi(
         workspaceRoot: request.workspaceRoot,
         constraints: request.constraints ?? [],
         maxOutputTokens: request.maxOutputTokens ?? 512,
+        reasoningPolicy: request.reasoningPolicy ?? null,
         offline: request.offline ?? true,
         maxTurnsPerBatch: request.maxTurnsPerBatch ?? 8,
       },

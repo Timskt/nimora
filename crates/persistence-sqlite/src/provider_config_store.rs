@@ -1,5 +1,7 @@
 use crate::{SqlitePersistenceError, prepare_connection};
-use nimora_agent_runtime::{ProviderReasoningCapabilities, ReasoningEffort};
+use nimora_agent_runtime::{
+    ModelReasoningPolicy, ProviderReasoningCapabilities, ReasoningEffort, ReasoningMapping,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path, sync::Mutex};
@@ -42,6 +44,36 @@ impl ProviderReasoningConfig {
         validate_reasoning(self)?;
         ProviderReasoningCapabilities::new(
             self.effort_values.keys().copied().collect(),
+            self.mapping_version.clone(),
+        )
+        .map_err(|_| SqlitePersistenceError::InvalidProviderConfig)
+    }
+
+    /// Resolves a provider-neutral policy into the exact persisted vendor value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the policy is unsupported or the mapping is invalid.
+    pub fn resolve(
+        &self,
+        policy: &ModelReasoningPolicy,
+        adaptive_recommendation: ReasoningEffort,
+    ) -> Result<ReasoningMapping, SqlitePersistenceError> {
+        validate_reasoning(self)?;
+        let actual = policy
+            .resolve(
+                &self.effort_values.keys().copied().collect(),
+                adaptive_recommendation,
+            )
+            .map_err(|_| SqlitePersistenceError::InvalidProviderConfig)?;
+        let provider_value = self
+            .effort_values
+            .get(&actual)
+            .ok_or(SqlitePersistenceError::InvalidProviderConfig)?;
+        ReasoningMapping::new(
+            policy.requested,
+            actual,
+            provider_value.clone(),
             self.mapping_version.clone(),
         )
         .map_err(|_| SqlitePersistenceError::InvalidProviderConfig)
@@ -484,5 +516,35 @@ mod tests {
                 Err(SqlitePersistenceError::InvalidProviderConfig)
             ));
         }
+    }
+
+    #[test]
+    fn resolves_runtime_reasoning_policy_against_persisted_provider_values() {
+        let configured = ProviderReasoningConfig {
+            effort_values: BTreeMap::from([
+                (ReasoningEffort::Low, "provider-low".to_owned()),
+                (ReasoningEffort::Medium, "provider-balanced".to_owned()),
+                (ReasoningEffort::High, "provider-deep".to_owned()),
+            ]),
+            mapping_version: "vendor-reasoning/7".to_owned(),
+        };
+        let adaptive = configured
+            .resolve(&ModelReasoningPolicy::default(), ReasoningEffort::Medium)
+            .expect("adaptive mapping");
+        assert_eq!(adaptive.requested, ReasoningEffort::Auto);
+        assert_eq!(adaptive.actual, ReasoningEffort::Medium);
+        assert_eq!(adaptive.provider_value, "provider-balanced");
+        assert_eq!(adaptive.mapping_version, "vendor-reasoning/7");
+        assert!(!adaptive.downgraded);
+
+        let unsupported = ModelReasoningPolicy {
+            strategy: nimora_agent_runtime::ReasoningStrategy::Fixed,
+            requested: ReasoningEffort::Maximum,
+            allow_automatic_downgrade: false,
+        };
+        assert!(matches!(
+            configured.resolve(&unsupported, ReasoningEffort::Medium),
+            Err(SqlitePersistenceError::InvalidProviderConfig)
+        ));
     }
 }
