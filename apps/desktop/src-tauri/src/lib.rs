@@ -15,11 +15,11 @@ use nimora_agent_provider_worker::{
 use nimora_agent_runtime::{
     AgentAutonomy, AgentBudget, AgentCoordinator, AgentTask, AgentTaskGateway,
     AgentTaskGatewayPolicy, AgentTaskOrigin, AgentTaskRequest, AgentTaskStatus,
-    AutoModePauseReason, BaseRiskEvaluator, CancellationFlag, ContextCompactionPolicy,
-    DataClassification, DeterministicLocalProvider, PlannedToolCall, ProviderExecutionContext,
-    ProviderMessage, ProviderMessageRole, ProviderRegistry, ProviderResponse, ProviderStepInput,
-    ProviderStepOutcome, ProviderToolTurn, ToolAdmission, ToolApproval, ToolDescriptor, ToolEffect,
-    ToolInvocation, ToolRegistry, ToolStepOutcome,
+    AutoModePauseReason, AutoModeStatus, BaseRiskEvaluator, CancellationFlag,
+    ContextCompactionPolicy, DataClassification, DeterministicLocalProvider, PlannedToolCall,
+    ProviderExecutionContext, ProviderMessage, ProviderMessageRole, ProviderRegistry,
+    ProviderResponse, ProviderStepInput, ProviderStepOutcome, ProviderToolTurn, ToolAdmission,
+    ToolApproval, ToolDescriptor, ToolEffect, ToolInvocation, ToolRegistry, ToolStepOutcome,
 };
 use nimora_agent_tools::{GatewayToolBackend, production_tool_registry};
 use nimora_agent_workspace_host::WorkspaceScanPolicy;
@@ -54,13 +54,14 @@ use nimora_module_agent_adapter::{
     ModuleAgentRequest,
 };
 use nimora_persistence_sqlite::{
-    AgentHistoryRecord, AutomationAgentJournalEntry, AutomationAgentJournalStatus,
-    AutomationJournalEntry, AutomationRunStart, BackupCoordinator, BackupHealth, BackupPolicy,
-    BackupRecord, ContextCachePolicy, DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant,
-    SkillApprovalJournalEntry, SkillApprovalJournalStatus, SkillExecutionHistoryRecord,
-    SkillExecutionHistoryStatus, SkillStateRecord, SqliteAgentHistoryRepository,
-    SqliteAutomationAgentJournal, SqliteAutomationJournal, SqliteOutboxRepository,
-    SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
+    AgentHistoryRecord, AutoModeTurnAttemptStatus, AutomationAgentJournalEntry,
+    AutomationAgentJournalStatus, AutomationJournalEntry, AutomationRunStart, BackupCoordinator,
+    BackupHealth, BackupPolicy, BackupRecord, ContextCachePolicy, DATABASE_VERSION, OutboxSnapshot,
+    ProgramPermissionGrant, SkillApprovalJournalEntry, SkillApprovalJournalStatus,
+    SkillExecutionHistoryRecord, SkillExecutionHistoryStatus, SkillStateRecord,
+    SqliteAgentHistoryRepository, SqliteAutoModeCheckpointRepository, SqliteAutoModeRepository,
+    SqliteAutoModeTurnAttemptRepository, SqliteAutomationAgentJournal, SqliteAutomationJournal,
+    SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
     SqliteProgramPermissionRepository, SqliteSkillApprovalJournal, SqliteSkillExecutionHistory,
     SqliteSkillStateRepository, apply_pending_restore, verify_database_file,
 };
@@ -413,6 +414,7 @@ impl DesktopState {
         let skill_approval_journal = SqliteSkillApprovalJournal::open(database_path)?;
         skill_approval_journal.recover(current_time_ms()?)?;
         let skill_execution_history = SqliteSkillExecutionHistory::open(database_path)?;
+        let auto_mode_jobs = restore_auto_mode_jobs(database_path, current_time_ms()?)?;
         Ok(Self {
             native_app,
             database_path: Some(database_path.to_path_buf()),
@@ -450,7 +452,7 @@ impl DesktopState {
             skill_event_sessions: Mutex::new(HashMap::new()),
             active_agent_tasks: Mutex::new(HashMap::new()),
             active_automation_runs: Mutex::new(HashMap::new()),
-            auto_mode_jobs: AutoModeJobSupervisor::default(),
+            auto_mode_jobs,
             execution_controller: ExecutionController::default(),
             ollama_worker,
             startup: StartupStatus {
@@ -532,6 +534,57 @@ impl DesktopState {
             },
         })
     }
+}
+
+fn restore_auto_mode_jobs(
+    database_path: &Path,
+    now_ms: u64,
+) -> Result<AutoModeJobSupervisor, DesktopError> {
+    let sessions = SqliteAutoModeRepository::open(database_path)?;
+    sessions.pause_running_after_restart(now_ms)?;
+    let checkpoints = SqliteAutoModeCheckpointRepository::open(database_path)?;
+    let attempts = SqliteAutoModeTurnAttemptRepository::open(database_path)?;
+    let supervisor = AutoModeJobSupervisor::default();
+    for session in sessions.list_recoverable(256)? {
+        let mut attempt = attempts.get(session.id)?;
+        let restarted = session.status == AutoModeStatus::Paused
+            && session.pause_reason == Some(AutoModePauseReason::Restarted);
+        if !restarted && attempt.is_none() {
+            continue;
+        }
+        if let Some(active) = attempt
+            .as_mut()
+            .filter(|attempt| attempt.status == AutoModeTurnAttemptStatus::Active)
+        {
+            attempts.mark_indeterminate(active, now_ms)?;
+            active.status = AutoModeTurnAttemptStatus::Indeterminate;
+            active.updated_at_ms = now_ms;
+        }
+        let checkpoint_sequence = checkpoints
+            .get(session.id)?
+            .map_or(0, |checkpoint| checkpoint.sequence);
+        let has_attempt = attempt.is_some();
+        supervisor
+            .import_terminal(AutoModeJobSnapshot {
+                spec: "nimora.desktop-auto-mode-job/1",
+                job_id: session.id,
+                session_id: session.id,
+                status: if has_attempt {
+                    AutoModeJobStatus::Indeterminate
+                } else {
+                    AutoModeJobStatus::Paused
+                },
+                turns_executed: 0,
+                cache_hits: 0,
+                checkpoint_sequence,
+                pause_reason: restarted.then(|| "restarted".to_owned()),
+                error_code: has_attempt.then(|| "restart-attempt-indeterminate".to_owned()),
+                started_at_ms: session.created_at_ms,
+                updated_at_ms: attempt.map_or(session.updated_at_ms, |value| value.updated_at_ms),
+            })
+            .map_err(agent_error)?;
+    }
+    Ok(supervisor)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2019,6 +2072,14 @@ fn auto_mode_job_status(
     state: State<'_, DesktopState>,
 ) -> Result<AutoModeJobSnapshot, DesktopError> {
     state.auto_mode_jobs.snapshot(job_id).map_err(agent_error)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn auto_mode_job_history(
+    state: State<'_, DesktopState>,
+) -> Result<Vec<AutoModeJobSnapshot>, DesktopError> {
+    state.auto_mode_jobs.snapshots().map_err(agent_error)
 }
 
 #[tauri::command]
@@ -7117,6 +7178,7 @@ pub fn run() {
             resume_auto_mode_turn,
             start_auto_mode_job,
             auto_mode_job_status,
+            auto_mode_job_history,
             pause_auto_mode_job,
             cancel_auto_mode_job,
             prepare_agent_tool,
@@ -7335,11 +7397,12 @@ mod tests {
         validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
-        AgentBudget, AgentTask, AgentTaskOrigin, AgentTaskStatus, CancellationFlag,
-        DataClassification, ProviderAdapter, ProviderCapabilities, ProviderCapability,
-        ProviderDescriptor, ProviderError, ProviderErrorKind, ProviderExecutionContext,
-        ProviderFinishReason, ProviderLocality, ProviderMessage, ProviderMessageRole,
-        ProviderRegistry, ProviderRequest, ProviderResponse, ProviderToolCall, ProviderUsage,
+        AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
+        AgentTaskStatus, AutoModePolicy, AutoModeSession, CancellationFlag, DataClassification,
+        ProviderAdapter, ProviderCapabilities, ProviderCapability, ProviderDescriptor,
+        ProviderError, ProviderErrorKind, ProviderExecutionContext, ProviderFinishReason,
+        ProviderLocality, ProviderMessage, ProviderMessageRole, ProviderRegistry, ProviderRequest,
+        ProviderResponse, ProviderToolCall, ProviderUsage,
     };
     use nimora_asset_installer::{GltfCharacterMetadata, InstallFile, ModelAnimationBinding};
     use nimora_automation_agent_bridge::AdmittedContextSegment;
@@ -7352,8 +7415,8 @@ mod tests {
     use nimora_persistence_sqlite::{
         AutomationAgentJournalEntry, AutomationAgentJournalStatus, AutomationJournalStatus,
         AutomationRunStart, BackupCoordinator, BackupPolicy, SkillApprovalJournalEntry,
-        SkillExecutionHistoryStatus, SkillStateRecord, SqliteAutomationJournal,
-        SqliteProgramPermissionRepository,
+        SkillExecutionHistoryStatus, SkillStateRecord, SqliteAgentGoalRepository,
+        SqliteAutoModeRepository, SqliteAutomationJournal, SqliteProgramPermissionRepository,
     };
     use nimora_runtime_core::{CommandRisk, Event, EventSource, Position, RuntimeMode};
     use nimora_skill_host::{
@@ -7393,6 +7456,72 @@ mod tests {
         )
         .expect("normal desktop state");
         (root, state)
+    }
+
+    #[test]
+    fn desktop_restart_rebuilds_paused_auto_mode_job_projection() {
+        let root = std::env::temp_dir().join(format!("nimora-auto-restart-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).expect("fixture directory");
+        let database = root.join("runtime.sqlite3");
+        let plan = AgentPlan::new(
+            Uuid::now_v7(),
+            vec![AgentPlanStep::new("Inspect").expect("step")],
+            "initial",
+            1_000,
+        )
+        .expect("plan");
+        let goal = AgentGoal::new("Recover", "Resume safely", &plan, 1_000).expect("goal");
+        let policy = AutoModePolicy::new(
+            4,
+            1,
+            AgentBudget {
+                max_steps: 4,
+                max_tool_calls: 2,
+                max_elapsed_ms: 10_000,
+                max_input_tokens: 1_000,
+                max_output_tokens: 500,
+                max_cost_microunits: 0,
+            },
+            DataClassification::Personal,
+            ["pet.state.read".to_owned()],
+            "git:abc",
+        )
+        .expect("policy");
+        let session = AutoModeSession::start(&goal, &plan, policy, 1_000).expect("session");
+        SqliteAgentGoalRepository::open(&database)
+            .expect("goals")
+            .create(&goal, &plan)
+            .expect("create goal");
+        SqliteAutoModeRepository::open(&database)
+            .expect("sessions")
+            .create(&session)
+            .expect("create session");
+
+        let state = DesktopState::open(
+            None,
+            &database,
+            root.join("assets"),
+            root.join("programs"),
+            BackupCoordinator::new(&database, root.join("backups"), BackupPolicy::default()),
+            PersistentDiagnosticJournal::in_memory(),
+            None,
+        )
+        .expect("restart");
+        let history = state.auto_mode_jobs.snapshots().expect("history");
+
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].job_id, session.id);
+        assert_eq!(history[0].status, AutoModeJobStatus::Paused);
+        assert_eq!(history[0].pause_reason.as_deref(), Some("restarted"));
+        assert!(
+            state
+                .auto_mode_jobs
+                .active_snapshots()
+                .expect("active")
+                .is_empty()
+        );
+        drop(state);
+        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     fn install_test_skill(state: &DesktopState) -> SkillManifest {

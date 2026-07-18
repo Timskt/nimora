@@ -242,6 +242,8 @@ nimora ai history delete --database <path> (--task-id <uuid>|--all)
 
 Yield 边界的宿主 Pause/Cancel 现已具备独立原子提交：此时没有活跃 Turn Attempt，因此使用 Session timestamp 与 Checkpoint sequence 双 CAS 同步转换 Session、Task 和 Checkpoint，而不是制造虚假 Attempt。Pause 固定记录 `user_requested`；Cancel 保留 `Cancelled` Task 的终态 Checkpoint；竞争控制只能有一个胜者。桌面 Job Supervisor 已提供单 Session 唯一性、单调快照、Provider 取消令牌、状态/暂停/取消 IPC、活跃任务枚举与退出全量取消。后台 Runner 必须在干净 Yield 边界复用持久控制服务；Provider/Tool 在途取消只表示宿主已请求停止，不证明远端零副作用，Attempt 未能确定提交时必须进入 `indeterminate`，禁止用内存 Job 的 `paused/cancelled` 覆盖未知事实。
 
+桌面正常启动现执行持久 Job 投影重建：SQLite Running Session 先转为 `paused/restarted`，任何遗留 Active Attempt 再永久隔离为 `indeterminate`；内存 Supervisor 仅导入终态历史，不占用 Session、不创建 Runner、不调用 Provider/Tool。`auto_mode_job_history` 返回当前进程产生和重启恢复的统一快照；浏览器预览继续稳定拒绝该宿主能力。可恢复集合使用专门查询并带硬上限，超过上限启动失败进入恢复路径，禁止因普通历史过多而静默漏掉旧 Attempt。
+
 桌面 Control Center 已提供 Agent 一级入口。工作台从宿主读取与 CLI、Provider 请求相同的十项生产 Tool Catalog，明确区分只读能力与必须确认的可逆写能力，并显示本地、无凭据、零费用边界。当前对话路径为 `provider:deterministic-local` 的确定性离线诊断单步，返回真实 Task、Finish Reason 与 Usage；它不伪装成通用对话模型，也不会自行产生 Tool Call。
 
 工作台提供生产 Tool Catalog 的真实执行验证入口：只读工具经 Tool Registry 和共享 Capability Gateway 立即执行；写工具由 Rust 宿主生成参数绑定的 Invocation 与 Approval，并仅在 UI 展示实际 Tool ID、参数、风险和期限。Approval 不交给前端，宿主最多持有 32 个待确认项，5 分钟过期，确认或拒绝时一次性移除后再处理，因此不能换参、重放或在执行失败后隐式重试。进入 Safe Mode 会撤销全部待确认项；Recovery Mode 不允许创建或确认工具调用。

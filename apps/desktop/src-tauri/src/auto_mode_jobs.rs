@@ -123,6 +123,51 @@ pub struct AutoModeJobSupervisor {
 }
 
 impl AutoModeJobSupervisor {
+    /// Returns all retained snapshots in deterministic newest-first order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry is unavailable.
+    pub fn snapshots(&self) -> Result<Vec<AutoModeJobSnapshot>, AutoModeJobError> {
+        let state = self.state.lock().map_err(|_| AutoModeJobError::Poisoned)?;
+        let mut snapshots = state
+            .jobs
+            .values()
+            .map(|record| record.snapshot.clone())
+            .collect::<Vec<_>>();
+        snapshots.sort_unstable_by(|left, right| {
+            right
+                .updated_at_ms
+                .cmp(&left.updated_at_ms)
+                .then_with(|| right.job_id.cmp(&left.job_id))
+        });
+        Ok(snapshots)
+    }
+
+    /// Imports a terminal projection reconstructed from persistent facts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-terminal or duplicate projection, or unavailable registry.
+    pub fn import_terminal(&self, snapshot: AutoModeJobSnapshot) -> Result<(), AutoModeJobError> {
+        if !snapshot.status.is_terminal() {
+            return Err(AutoModeJobError::InvalidTransition);
+        }
+        let mut state = self.state.lock().map_err(|_| AutoModeJobError::Poisoned)?;
+        if state.jobs.contains_key(&snapshot.job_id) {
+            return Err(AutoModeJobError::InvalidTransition);
+        }
+        state.jobs.insert(
+            snapshot.job_id,
+            AutoModeJobRecord {
+                snapshot,
+                control: Arc::new(AtomicU8::new(CONTROL_CONTINUE)),
+                cancellation: CancellationFlag::default(),
+            },
+        );
+        Ok(())
+    }
+
     /// Returns retained snapshots for all currently active jobs.
     ///
     /// # Errors
@@ -456,7 +501,10 @@ pub enum AutoModeJobError {
 
 #[cfg(test)]
 mod tests {
-    use super::{AutoModeJobControl, AutoModeJobError, AutoModeJobStatus, AutoModeJobSupervisor};
+    use super::{
+        AutoModeJobControl, AutoModeJobError, AutoModeJobSnapshot, AutoModeJobStatus,
+        AutoModeJobSupervisor,
+    };
     use std::{sync::Arc, thread, time::Duration};
     use uuid::Uuid;
 
@@ -506,6 +554,33 @@ mod tests {
             completed
         );
         supervisor.start(session_id, 104).expect("replacement job");
+    }
+
+    #[test]
+    fn imports_terminal_restart_projection_without_reserving_session() {
+        let supervisor = AutoModeJobSupervisor::default();
+        let session_id = Uuid::now_v7();
+        let projection = AutoModeJobSnapshot {
+            spec: "nimora.desktop-auto-mode-job/1",
+            job_id: session_id,
+            session_id,
+            status: AutoModeJobStatus::Paused,
+            turns_executed: 0,
+            cache_hits: 0,
+            checkpoint_sequence: 7,
+            pause_reason: Some("restarted".to_owned()),
+            error_code: None,
+            started_at_ms: 100,
+            updated_at_ms: 200,
+        };
+
+        supervisor
+            .import_terminal(projection.clone())
+            .expect("import");
+
+        assert_eq!(supervisor.snapshots().expect("history"), vec![projection]);
+        assert!(supervisor.active_snapshots().expect("active").is_empty());
+        supervisor.start(session_id, 201).expect("new run allowed");
     }
 
     #[test]

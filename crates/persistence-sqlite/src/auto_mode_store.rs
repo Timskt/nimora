@@ -10,6 +10,46 @@ pub struct SqliteAutoModeRepository {
 }
 
 impl SqliteAutoModeRepository {
+    /// Lists sessions that require a restart projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bounded result would be truncated, or storage is corrupt.
+    pub fn list_recoverable(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<AutoModeSession>, SqlitePersistenceError> {
+        if limit == 0 || limit > 256 {
+            return Err(SqlitePersistenceError::InvalidAutoModeSession);
+        }
+        let connection = self.lock()?;
+        let query_limit = i64::try_from(limit.saturating_add(1))
+            .map_err(|_| SqlitePersistenceError::InvalidAutoModeSession)?;
+        let ids = {
+            let mut statement = connection.prepare(
+                "SELECT session_id FROM auto_mode_session
+                 WHERE (status = 'paused' AND pause_reason = 'restarted') OR EXISTS (
+                    SELECT 1 FROM auto_mode_turn_attempt
+                    WHERE auto_mode_turn_attempt.session_id = auto_mode_session.session_id
+                 )
+                 ORDER BY updated_at_ms DESC, session_id DESC LIMIT ?1",
+            )?;
+            statement
+                .query_map([query_limit], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        if ids.len() > limit {
+            return Err(SqlitePersistenceError::InvalidAutoModeSession);
+        }
+        ids.into_iter()
+            .map(|id| {
+                let id = Uuid::parse_str(&id)
+                    .map_err(|_| SqlitePersistenceError::InvalidAutoModeSession)?;
+                load(&connection, id)?.ok_or(SqlitePersistenceError::AutoModeSessionNotFound)
+            })
+            .collect()
+    }
+
     /// Opens or creates a persistent Auto Mode session store.
     ///
     /// # Errors

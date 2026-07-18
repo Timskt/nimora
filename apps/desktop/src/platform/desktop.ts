@@ -514,6 +514,7 @@ export interface DesktopApi {
   resumeAutoModeTurn(request: ResumeAutoModeTurnRequest): Promise<DesktopAutoModeTurnResult>;
   startAutoModeJob(request: StartAutoModeJobRequest): Promise<DesktopAutoModeJobSnapshot>;
   autoModeJobStatus(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
+  autoModeJobHistory(): Promise<DesktopAutoModeJobSnapshot[]>;
   pauseAutoModeJob(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
   cancelAutoModeJob(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
   prepareAgentTool(toolId: string, argumentsValue: Record<string, unknown>): Promise<AgentToolResult>;
@@ -766,6 +767,9 @@ export function createDesktopApi(
       async autoModeJobStatus() {
         throw new Error("desktop-host-required");
       },
+      async autoModeJobHistory() {
+        throw new Error("desktop-host-required");
+      },
       async pauseAutoModeJob() {
         throw new Error("desktop-host-required");
       },
@@ -909,6 +913,7 @@ export function createDesktopApi(
       },
     }) as DesktopAutoModeJobSnapshot,
     autoModeJobStatus: async (jobId) => await invokeCommand("auto_mode_job_status", { jobId }) as DesktopAutoModeJobSnapshot,
+    autoModeJobHistory: async () => await invokeCommand("auto_mode_job_history") as DesktopAutoModeJobSnapshot[],
     pauseAutoModeJob: async (jobId) => await invokeCommand("pause_auto_mode_job", { jobId }) as DesktopAutoModeJobSnapshot,
     cancelAutoModeJob: async (jobId) => await invokeCommand("cancel_auto_mode_job", { jobId }) as DesktopAutoModeJobSnapshot,
     prepareAgentTool: async (toolId, argumentsValue) => await invokeCommand("prepare_agent_tool", { request: { toolId, arguments: argumentsValue } }) as AgentToolResult,

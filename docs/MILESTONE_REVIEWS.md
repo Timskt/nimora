@@ -55,7 +55,53 @@
 - 常规提交不触发手动跨平台矩阵；后台线程、退出生命周期或平台 API 出现真实平台风险时，才在里程碑提交后手动运行一次。
 - 不通过削弱安全、契约或发布验证节省分钟；应优先采用路径过滤、并发取消、依赖缓存和失败快速终止。
 
-## 3. 后续回顾模板
+## 3. M-2026-07-18 后台 Auto Mode 与崩溃恢复
+
+### 触发原因
+
+- 后台 Job 已形成可演示纵切，并累计超过五个生产提交。
+- 新增 `start/status/pause/cancel/history` 公开桌面契约，必须复核跨重启语义。
+
+### 完成证据
+
+- 独立 Runner 直接装配有界 Auto Host Loop；Supervisor 保证单 Session 唯一、控制传播、单调进度与终态释放。
+- Exit 与 Safe Mode 使用统一有界排空；超时分别隔离为 `shutdown-timeout` 和 `safe-mode-timeout`，迟到 Runner 不能覆盖终态。
+- 正常启动把崩溃遗留 Running Session 原子转为 `paused/restarted`，Active Attempt 转为 `indeterminate`；恢复投影不占用 Session、不创建线程且不触发 Provider/Tool。
+- 专用可恢复查询不会被普通历史挤出；超过 256 条时失败关闭，不静默漏掉未决 Attempt。
+- 真实 SQLite 跨桌面状态重启测试、仓储测试、Supervisor 测试、严格 Clippy、TypeScript 与生产构建构成当前证据链。
+
+### 偏差与纠正
+
+- 原入口文件承载约 300 行 Runner 编排，已提取为显式依赖的独立模块并删除临时超长函数豁免。
+- Safe Mode 最初只取消 Provider、Skill 与用户程序，遗漏后台 Auto Job；现已纳入统一排空协议。
+- 最初恢复方案按最近 256 条普通历史扫描，可能漏掉更老 Attempt；已改为专用可恢复集合并检测溢出。
+- Job 投影不是事实源，不能反向覆盖 Session/Checkpoint/Attempt，也不能被描述为自动续跑。
+
+### 安全、离线与稳定性
+
+- 恢复完全读取本地 SQLite，不需要网络；任何未证明的外部结果永久进入人工对账状态。
+- Recovery Mode 使用空 Supervisor 并拒绝新 Job；数据库异常不会降级为内存自动执行。
+- 退出等待有界，不因 Provider 卡死永久阻塞桌面关闭。
+
+### UI 与无障碍
+
+- 宿主历史契约已具备，但 Goal/Plan/Attempt/Job Control Center 尚未完成，`indeterminate` 也没有可操作的人工对账界面。
+- 浏览器预览继续拒绝伪造宿主 Job；真实交互、键盘路径、读屏状态播报和桌面截图仍需后续纵切证明。
+
+### Actions 分钟
+
+- 本里程碑继续本地全量验证后单次推送，不手动触发 macOS/Windows 矩阵。
+- `GltfRenderer` 大块警告与本纵切无关，登记后独立处理，避免混合提交和重复 CI。
+
+### 下一纵切硬验收
+
+1. 为 `indeterminate` Attempt 提供只读详情、明确风险解释与参数绑定的人工对账命令。
+2. 对账只能选择“确认未执行后重试”或“确认已执行并接受结果”等受约束决议，禁止删除证据后直接续跑。
+3. 决议必须原子更新 Attempt、Session、Task 与 Checkpoint，并保留不可变审计事件。
+4. Goal/Plan/Attempt/Job 控制中心展示恢复历史、暂停原因、预算、Checkpoint 和下一安全动作。
+5. 浏览器完成视觉预览，真实 Tauri 完成宿主交互与跨重启端到端验证。
+
+## 4. 后续回顾模板
 
 ```text
 里程碑：
