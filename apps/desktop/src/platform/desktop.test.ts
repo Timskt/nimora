@@ -172,6 +172,28 @@ describe("desktop platform adapter", () => {
     expect(restarted.pendingTools).toHaveLength(2);
   });
 
+  it("maps inert capability gap persistence to its dedicated host command", async () => {
+    const invoke = vi.fn(async () => ({
+      spec: "nimora.capability-gap-save/1",
+      reportId: "capability-gap-018f0000-0000-7000-8000-000000000032",
+      relativeFile: ".nimora-drafts/capability-gap-018f0000-0000-7000-8000-000000000032.json",
+    }));
+    const api = createDesktopApi(true, invoke);
+    const capabilityGap = {
+      spec: "nimora.capability-gap/1" as const,
+      title: "Missing camera capability",
+      summary: "The Registry cannot express the requested outcome.",
+      requestedOutcome: "Observe a user-approved gesture.",
+      missingCapabilities: [{ capability: "perception.camera.observe", reason: "No adapter exists.", requiredOperations: ["Produce a bounded gesture event."] }],
+      closestAlternatives: [],
+      platformProposalRequired: true,
+    };
+
+    await api.saveCapabilityGap("/workspace", capabilityGap);
+
+    expect(invoke).toHaveBeenCalledWith("save_capability_gap_command", { request: { workspaceRoot: "/workspace", capabilityGap } });
+  });
+
   it("maps typed calls to the Tauri command contract", async () => {
     const invoke = vi.fn(async (command: string) => command === "delete_agent_history"
       ? { spec: "nimora.desktop-agent-history-delete/1", deleted: 1 }

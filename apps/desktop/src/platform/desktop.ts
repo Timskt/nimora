@@ -75,6 +75,7 @@ export type CreatorArtifactKind = "user-program" | "skill" | "automation";
 
 export interface CreatorDraftResult {
   spec: "nimora.desktop-creator-draft/1";
+  outcome: "draft" | "capability-gap";
   task: { id: string; status: string; providerId: string };
   draft: {
     spec: "nimora.creator-draft/1";
@@ -86,7 +87,16 @@ export interface CreatorDraftResult {
       manifest: Record<string, unknown>;
       files: Array<{ path: string; source: string }>;
     });
-  };
+  } | null;
+  capabilityGap: {
+    spec: "nimora.capability-gap/1";
+    title: string;
+    summary: string;
+    requestedOutcome: string;
+    missingCapabilities: Array<{ capability: string; reason: string; requiredOperations: string[] }>;
+    closestAlternatives: Array<{ kind: CreatorArtifactKind; title: string; tradeoff: string }>;
+    platformProposalRequired: boolean;
+  } | null;
   usage: { inputTokens: number; outputTokens: number; costMicrounits: number };
   finishReason: string;
 }
@@ -96,6 +106,12 @@ export interface CreatorDraftSaveReceipt {
   artifactId: string;
   relativeDirectory: string;
   filesWritten: number;
+}
+
+export interface CapabilityGapSaveReceipt {
+  spec: "nimora.capability-gap-save/1";
+  reportId: string;
+  relativeFile: string;
 }
 
 export interface CreatorDraftCheckReport {
@@ -807,10 +823,11 @@ export interface DesktopApi {
   cancelSkillExecution(executionId: string): Promise<boolean>;
   runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
   generateCreatorDraft(kind: CreatorArtifactKind, requirement: string, providerId: string, model: string): Promise<CreatorDraftResult>;
-  approveCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"], draftDigest: string): Promise<CreatorDraftApprovalReceipt>;
-  installCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"], approvalId: string): Promise<CreatorDraftInstallReceipt>;
-  saveCreatorDraft(workspaceRoot: string, kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"], approvalId: string): Promise<CreatorDraftSaveReceipt>;
-  checkCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"]): Promise<CreatorDraftCheckReport>;
+  approveCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>, draftDigest: string): Promise<CreatorDraftApprovalReceipt>;
+  installCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>, approvalId: string): Promise<CreatorDraftInstallReceipt>;
+  saveCreatorDraft(workspaceRoot: string, kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>, approvalId: string): Promise<CreatorDraftSaveReceipt>;
+  saveCapabilityGap(workspaceRoot: string, capabilityGap: NonNullable<CreatorDraftResult["capabilityGap"]>): Promise<CapabilityGapSaveReceipt>;
+  checkCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>): Promise<CreatorDraftCheckReport>;
   resumeAutoModeTurn(request: ResumeAutoModeTurnRequest): Promise<DesktopAutoModeTurnResult>;
   startAutoModeJob(request: StartAutoModeJobRequest): Promise<DesktopAutoModeJobSnapshot>;
   autoModeJobStatus(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
@@ -1082,6 +1099,9 @@ export function createDesktopApi(
       async saveCreatorDraft() {
         throw new Error("desktop-host-required");
       },
+      async saveCapabilityGap() {
+        throw new Error("desktop-host-required");
+      },
       async approveCreatorDraft() {
         throw new Error("desktop-host-required");
       },
@@ -1295,6 +1315,7 @@ export function createDesktopApi(
     approveCreatorDraft: async (kind, requirement, draft, draftDigest) => await invokeCommand("approve_creator_draft", { request: { kind, requirement, draft, draftDigest } }) as CreatorDraftApprovalReceipt,
     installCreatorDraft: async (kind, requirement, draft, approvalId) => await invokeCommand("install_creator_draft", { request: { kind, requirement, draft, approvalId } }) as CreatorDraftInstallReceipt,
     saveCreatorDraft: async (workspaceRoot, kind, requirement, draft, approvalId) => await invokeCommand("save_creator_draft_command", { request: { workspaceRoot, kind, requirement, draft, approvalId } }) as CreatorDraftSaveReceipt,
+    saveCapabilityGap: async (workspaceRoot, capabilityGap) => await invokeCommand("save_capability_gap_command", { request: { workspaceRoot, capabilityGap } }) as CapabilityGapSaveReceipt,
     checkCreatorDraft: async (kind, requirement, draft) => await invokeCommand("check_creator_draft", { request: { kind, requirement, draft } }) as CreatorDraftCheckReport,
     resumeAutoModeTurn: async (request) => await invokeCommand("resume_auto_mode_turn", {
       request: {

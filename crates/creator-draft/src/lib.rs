@@ -8,10 +8,14 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const CREATOR_DRAFT_SPEC: &str = "nimora.creator-draft/1";
+pub const CAPABILITY_GAP_SPEC: &str = "nimora.capability-gap/1";
 const MAX_REQUIREMENT_BYTES: usize = 16 * 1024;
 const MAX_TITLE_BYTES: usize = 128;
 const MAX_SUMMARY_BYTES: usize = 2 * 1024;
 const MAX_PERMISSION_REASON_BYTES: usize = 512;
+const MAX_GAP_ITEMS: usize = 16;
+const MAX_GAP_OPERATIONS: usize = 16;
+const MAX_GAP_ALTERNATIVES: usize = 8;
 const MAX_FILES: usize = 32;
 const MAX_FILE_BYTES: usize = 256 * 1024;
 const MAX_TOTAL_FILE_BYTES: usize = 1024 * 1024;
@@ -76,6 +80,40 @@ pub struct CreatorDraft {
     pub artifact: CreatorArtifact,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CapabilityGapItem {
+    pub capability: String,
+    pub reason: String,
+    pub required_operations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CapabilityGapAlternative {
+    pub kind: CreatorArtifactKind,
+    pub title: String,
+    pub tradeoff: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CapabilityGap {
+    pub spec: String,
+    pub title: String,
+    pub summary: String,
+    pub requested_outcome: String,
+    pub missing_capabilities: Vec<CapabilityGapItem>,
+    pub closest_alternatives: Vec<CapabilityGapAlternative>,
+    pub platform_proposal_required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CreatorProposal {
+    Draft(Box<CreatorDraft>),
+    CapabilityGap(CapabilityGap),
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CreatorArtifact {
@@ -119,16 +157,47 @@ pub enum CreatorDraftError {
     InvalidFiles,
     #[error("creator draft artifact failed its production contract")]
     InvalidArtifact,
+    #[error("creator capability gap is invalid")]
+    InvalidCapabilityGap,
 }
 
 /// Builds the trusted instruction supplied separately from user requirements.
 #[must_use]
 pub fn creator_system_instruction(kind: CreatorArtifactKind) -> String {
     format!(
-        "You generate a Nimora {} draft. Return exactly one JSON object with spec '{CREATOR_DRAFT_SPEC}', title, summary, permissionExplanations, and artifact. Do not return Markdown, commands, paths outside the draft, secrets, network instructions, package-manager commands, or prose outside JSON. The artifact kind must be '{}'. Every declared capability must have exactly one permission explanation and no undeclared capability may be explained. Generated source may only use the Nimora sandbox API; it must not access Node, Tauri, process, filesystem, network, databases, or provider objects.",
+        "You generate a Nimora {} draft. Return exactly one JSON object. When the requested outcome is fully expressible by registered Nimora capabilities, use spec '{CREATOR_DRAFT_SPEC}' with title, summary, permissionExplanations, and artifact. Otherwise use spec '{CAPABILITY_GAP_SPEC}' with title, summary, requestedOutcome, missingCapabilities, closestAlternatives, and platformProposalRequired; never invent commands, capabilities, APIs, or executable fallback code. Do not return Markdown, paths outside the draft, secrets, network instructions, package-manager commands, or prose outside JSON. A draft artifact kind must be '{}'. Every declared capability must have exactly one permission explanation and no undeclared capability may be explained. Generated source may only use the Nimora sandbox API; it must not access Node, Tauri, process, filesystem, network, databases, or provider objects.",
         artifact_kind_name(kind),
         artifact_kind_name(kind)
     )
+}
+
+/// Parses either an installable draft or a non-executable capability gap.
+///
+/// # Errors
+///
+/// Returns a stable error for malformed, oversized, or contract-invalid output.
+pub fn parse_creator_proposal(
+    request: &CreatorDraftRequest,
+    model_output: &str,
+) -> Result<CreatorProposal, CreatorDraftError> {
+    validate_model_output_envelope(request, model_output)?;
+    let value = serde_json::from_str::<serde_json::Value>(model_output)
+        .map_err(|_| CreatorDraftError::InvalidJson)?;
+    match value.get("spec").and_then(serde_json::Value::as_str) {
+        Some(CREATOR_DRAFT_SPEC) => {
+            let draft = serde_json::from_value::<CreatorDraft>(value)
+                .map_err(|_| CreatorDraftError::InvalidJson)?;
+            validate_creator_draft(request, &draft)?;
+            Ok(CreatorProposal::Draft(Box::new(draft)))
+        }
+        Some(CAPABILITY_GAP_SPEC) => {
+            let gap = serde_json::from_value::<CapabilityGap>(value)
+                .map_err(|_| CreatorDraftError::InvalidJson)?;
+            validate_capability_gap(&gap)?;
+            Ok(CreatorProposal::CapabilityGap(gap))
+        }
+        _ => Err(CreatorDraftError::InvalidJson),
+    }
 }
 
 /// Parses untrusted model output and validates it against production contracts.
@@ -140,6 +209,17 @@ pub fn parse_creator_draft(
     request: &CreatorDraftRequest,
     model_output: &str,
 ) -> Result<CreatorDraft, CreatorDraftError> {
+    validate_model_output_envelope(request, model_output)?;
+    let draft = serde_json::from_str::<CreatorDraft>(model_output)
+        .map_err(|_| CreatorDraftError::InvalidJson)?;
+    validate_creator_draft(request, &draft)?;
+    Ok(draft)
+}
+
+fn validate_model_output_envelope(
+    request: &CreatorDraftRequest,
+    model_output: &str,
+) -> Result<(), CreatorDraftError> {
     if request.spec != CREATOR_DRAFT_SPEC {
         return Err(CreatorDraftError::InvalidRequest);
     }
@@ -151,10 +231,61 @@ pub fn parse_creator_draft(
     {
         return Err(CreatorDraftError::InvalidJson);
     }
-    let draft = serde_json::from_str::<CreatorDraft>(model_output)
-        .map_err(|_| CreatorDraftError::InvalidJson)?;
-    validate_creator_draft(request, &draft)?;
-    Ok(draft)
+    Ok(())
+}
+
+/// Revalidates a structured capability gap received across a trust boundary.
+///
+/// # Errors
+///
+/// Rejects empty, oversized, duplicate, control-bearing, or executable-looking entries.
+pub fn validate_capability_gap(gap: &CapabilityGap) -> Result<(), CreatorDraftError> {
+    if gap.spec != CAPABILITY_GAP_SPEC
+        || validate_text(&gap.title, MAX_TITLE_BYTES).is_err()
+        || validate_text(&gap.summary, MAX_SUMMARY_BYTES).is_err()
+        || validate_text(&gap.requested_outcome, MAX_SUMMARY_BYTES).is_err()
+        || gap.missing_capabilities.is_empty()
+        || gap.missing_capabilities.len() > MAX_GAP_ITEMS
+        || gap.closest_alternatives.len() > MAX_GAP_ALTERNATIVES
+    {
+        return Err(CreatorDraftError::InvalidCapabilityGap);
+    }
+    let mut capabilities = BTreeSet::new();
+    for item in &gap.missing_capabilities {
+        if !valid_capability_name(&item.capability)
+            || !capabilities.insert(item.capability.as_str())
+            || validate_text(&item.reason, MAX_PERMISSION_REASON_BYTES).is_err()
+            || item.required_operations.is_empty()
+            || item.required_operations.len() > MAX_GAP_OPERATIONS
+        {
+            return Err(CreatorDraftError::InvalidCapabilityGap);
+        }
+        let mut operations = BTreeSet::new();
+        for operation in &item.required_operations {
+            if validate_text(operation, MAX_PERMISSION_REASON_BYTES).is_err()
+                || !operations.insert(operation.as_str())
+            {
+                return Err(CreatorDraftError::InvalidCapabilityGap);
+            }
+        }
+    }
+    for alternative in &gap.closest_alternatives {
+        if validate_text(&alternative.title, MAX_TITLE_BYTES).is_err()
+            || validate_text(&alternative.tradeoff, MAX_PERMISSION_REASON_BYTES).is_err()
+        {
+            return Err(CreatorDraftError::InvalidCapabilityGap);
+        }
+    }
+    Ok(())
+}
+
+fn valid_capability_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.split('.').count() >= 2
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
+        })
 }
 
 /// Revalidates a structured draft received across a trust boundary.
@@ -453,5 +584,75 @@ mod tests {
         });
         let output = serde_json::to_string(&value).expect("fixture");
         assert!(parse_creator_draft(&request(CreatorArtifactKind::Skill), &output).is_ok());
+    }
+
+    #[test]
+    fn parses_a_bounded_non_executable_capability_gap() {
+        let output = serde_json::to_string(&json!({
+            "spec": CAPABILITY_GAP_SPEC,
+            "title": "Missing camera observation capability",
+            "summary": "The selected artifact cannot observe camera frames through the current Registry.",
+            "requestedOutcome": "React when a user-approved gesture is observed.",
+            "missingCapabilities": [{
+                "capability": "perception.camera.observe",
+                "reason": "No registered Creator capability exposes consent-bound camera observations.",
+                "requiredOperations": ["Observe a bounded, user-approved gesture event without retaining frames."]
+            }],
+            "closestAlternatives": [{
+                "kind": "automation",
+                "title": "Use a manual gesture command",
+                "tradeoff": "Requires the user to trigger the interaction explicitly."
+            }],
+            "platformProposalRequired": true
+        }))
+        .expect("gap");
+
+        let proposal = parse_creator_proposal(&request(CreatorArtifactKind::Automation), &output)
+            .expect("proposal");
+        assert!(matches!(proposal, CreatorProposal::CapabilityGap(_)));
+        assert_eq!(
+            parse_creator_draft(&request(CreatorArtifactKind::Automation), &output),
+            Err(CreatorDraftError::InvalidJson)
+        );
+    }
+
+    #[test]
+    fn capability_gap_rejects_unknown_fields_duplicates_and_command_like_ids() {
+        let base = json!({
+            "spec": CAPABILITY_GAP_SPEC,
+            "title": "Missing capability",
+            "summary": "The Registry cannot express the requested behavior.",
+            "requestedOutcome": "Run an unsupported operation.",
+            "missingCapabilities": [{
+                "capability": "device.robot.control",
+                "reason": "No registered device adapter exists.",
+                "requiredOperations": ["Send a bounded simulated motion request."]
+            }],
+            "closestAlternatives": [],
+            "platformProposalRequired": true
+        });
+        for invalid in [
+            {
+                let mut value = base.clone();
+                value["command"] = json!("shell.exec");
+                value
+            },
+            {
+                let mut value = base.clone();
+                value["missingCapabilities"][0]["capability"] = json!("shell exec");
+                value
+            },
+            {
+                let mut value = base.clone();
+                value["missingCapabilities"] = json!([
+                    value["missingCapabilities"][0].clone(),
+                    value["missingCapabilities"][0].clone()
+                ]);
+                value
+            },
+        ] {
+            let output = serde_json::to_string(&invalid).expect("invalid gap");
+            assert!(parse_creator_proposal(&request(CreatorArtifactKind::Skill), &output).is_err());
+        }
     }
 }

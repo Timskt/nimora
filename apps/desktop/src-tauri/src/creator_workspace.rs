@@ -2,7 +2,10 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path};
 
-use nimora_creator_draft::{CreatorArtifact, CreatorDraft, CreatorDraftError, CreatorDraftFile};
+use nimora_creator_draft::{
+    CapabilityGap, CreatorArtifact, CreatorDraft, CreatorDraftError, CreatorDraftFile,
+    validate_capability_gap,
+};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -15,6 +18,14 @@ pub struct CreatorDraftSaveReceipt {
     pub artifact_id: String,
     pub relative_directory: String,
     pub files_written: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityGapSaveReceipt {
+    pub spec: &'static str,
+    pub report_id: String,
+    pub relative_file: String,
 }
 
 #[derive(Debug, Error)]
@@ -71,6 +82,36 @@ pub fn save_creator_draft(
         artifact_id: artifact_id.clone(),
         relative_directory: format!("{DRAFTS_DIRECTORY}/{artifact_id}"),
         files_written,
+    })
+}
+
+pub fn save_capability_gap(
+    workspace_root: &Path,
+    gap: &CapabilityGap,
+    operation_id: &str,
+) -> Result<CapabilityGapSaveReceipt, CreatorWorkspaceError> {
+    validate_capability_gap(gap)?;
+    validate_segment(operation_id)?;
+    let root = fs::canonicalize(workspace_root).map_err(|_| CreatorWorkspaceError::InvalidRoot)?;
+    if !root.is_dir()
+        || fs::symlink_metadata(&root)
+            .map_err(|_| CreatorWorkspaceError::InvalidRoot)?
+            .file_type()
+            .is_symlink()
+    {
+        return Err(CreatorWorkspaceError::InvalidRoot);
+    }
+    let drafts_root = root.join(DRAFTS_DIRECTORY);
+    create_or_verify_directory(&drafts_root)?;
+    let report_id = format!("capability-gap-{operation_id}");
+    let file_name = format!("{report_id}.json");
+    let destination = drafts_root.join(&file_name);
+    let bytes = serde_json::to_vec_pretty(gap).map_err(|_| CreatorWorkspaceError::Io)?;
+    write_new(&destination, &bytes)?;
+    Ok(CapabilityGapSaveReceipt {
+        spec: "nimora.capability-gap-save/1",
+        report_id,
+        relative_file: format!("{DRAFTS_DIRECTORY}/{file_name}"),
     })
 }
 
@@ -221,6 +262,36 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             CreatorWorkspaceError::AlreadyExists.to_string()
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn saves_a_validated_capability_gap_as_an_inert_report() {
+        let root = fixture_root();
+        let gap = serde_json::from_value(json!({
+            "spec": "nimora.capability-gap/1",
+            "title": "Missing camera capability",
+            "summary": "The Registry cannot express this outcome.",
+            "requestedOutcome": "Observe a user-approved gesture.",
+            "missingCapabilities": [{
+                "capability": "perception.camera.observe",
+                "reason": "No consent-bound observation capability is registered.",
+                "requiredOperations": ["Produce a bounded gesture event without retaining frames."]
+            }],
+            "closestAlternatives": [],
+            "platformProposalRequired": true
+        }))
+        .expect("gap");
+        let receipt =
+            save_capability_gap(&root, &gap, "018f0000-0000-7000-8000-000000000032").expect("save");
+        assert_eq!(receipt.spec, "nimora.capability-gap-save/1");
+        assert!(root.join(&receipt.relative_file).is_file());
+        assert_eq!(
+            save_capability_gap(&root, &gap, "018f0000-0000-7000-8000-000000000032")
+                .unwrap_err()
+                .to_string(),
+            CreatorWorkspaceError::Io.to_string()
         );
         fs::remove_dir_all(root).expect("cleanup");
     }

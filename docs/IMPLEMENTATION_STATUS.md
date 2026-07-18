@@ -1,5 +1,13 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-18 — Creator Capability Gap 真实纵切
+
+- Creator 模型输出新增并列的严格 `nimora.capability-gap/1` 契约；目标无法由当前 Registry 表达时，模型只能返回缺失能力、所需操作、最低替代和平台提案需求，不能发明 Command、API 或可执行回退代码。
+- `creator-draft` 在同一有界 JSON 信任边界解析 Draft 或 Gap，验证字段白名单、文本预算、能力命名、数量、重复项和替代方案；Gap 永远不能进入 Draft 的检查、批准或安装函数。
+- Desktop Host 使用 `outcome`、互斥 `draft/capabilityGap` 投影；Creator Studio 为 Gap 提供独立警示界面，不渲染权限批准、原子安装或 Draft Workspace 保存入口。
+- 用户可将经过复验的 Gap 原子保存为 `.nimora-drafts/capability-gap-<uuid>.json` 项目事实；报告只有结构化数据，无源码、运行 Grant、Secret 或宿主路径回传，Safe/Recovery 下仍可导出恢复资料。
+- Creator Contract 8 项、Desktop Host 126 项、Frontend 42 项测试通过；当前尚未实现基于真实 Capability Catalog 的确定性 Composition Planner，也未实现 Gap 到 L4 Proposal 的评审工作流。
+
 ## 2026-07-18 — 外接 AI 原生扩展能力面基线
 
 - 新增多模态感知、个人 API、个人数据应用、语义映射、协议适配、示教、Agent Team、上下文工程、模型路由、策略编译、数字孪生、实验优化、资产流水线、生态迁移、协作发布与数字遗产共十六类目标能力面。

@@ -614,6 +614,10 @@ ID / 标题 / 优先级 / 前置条件
 
 ## 外接 AI 能力开发平台
 
+- Verify Provider 返回 `nimora.creator-draft/1` 或 `nimora.capability-gap/1` 之外的 Schema、混合 Draft/Gap 字段、Markdown、额外字段、重复能力和非法能力 ID 均失败关闭。
+- Verify Capability Gap 只包含结构化目标、缺失能力、所需操作、替代方案和平台提案标志；不能进入 Draft 检查、批准、安装或执行路径。
+- Verify Gap UI 明确标记 `NON-EXECUTABLE`，显示机器尚未验证的缺口事实，不出现批准和安装入口；报告保存仅写入用户选择 Workspace。
+- Verify Gap 报告使用不可覆盖原子文件、拒绝符号链接和非法 Workspace，响应只返回相对文件名且不泄露绝对路径。
 - Verify AI 对同一目标按设置、组合、Automation、Program、Skill、Connector 和 L4 Proposal 比较，选择最低充分层级并给出不自动化理由。
 - Verify 多模态 Perception Pipeline 对每个来源单独授权，原始音视频默认不持久化，低置信推断不能触发高风险动作。
 - Verify Personal API 只能映射 Registry 中的 Command/Query，声明鉴权、幂等、速率、离线和撤销语义，不能生成任意本地 Handler。

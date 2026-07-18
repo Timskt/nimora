@@ -19,7 +19,10 @@ use asset_selection::{
     persist_asset_selection, resolve_asset_selection,
 };
 use backup_service::BackupService;
-use creator_workspace::{CreatorDraftSaveReceipt, CreatorWorkspaceError, save_creator_draft};
+use creator_workspace::{
+    CapabilityGapSaveReceipt, CreatorDraftSaveReceipt, CreatorWorkspaceError, save_capability_gap,
+    save_creator_draft,
+};
 use diagnostic_report::{
     DiagnosticReportFacts, DiagnosticSafetyMode, DiagnosticStartupMode, build_diagnostic_report,
 };
@@ -67,8 +70,8 @@ use nimora_automation_runtime::{
     AutomationExecutionContext, AutomationRun, RunControl, RunMode, Uncancelled,
 };
 use nimora_creator_draft::{
-    CreatorArtifactKind, CreatorDraft, CreatorDraftError, CreatorDraftRequest,
-    creator_system_instruction, parse_creator_draft, validate_creator_draft,
+    CapabilityGap, CreatorArtifactKind, CreatorDraft, CreatorDraftError, CreatorDraftRequest,
+    CreatorProposal, creator_system_instruction, parse_creator_proposal, validate_creator_draft,
 };
 use nimora_diagnostics_bundle::{
     DiagnosticBundleError, DiagnosticBundleReceipt, DiagnosticBundleSelection, DiagnosticComponent,
@@ -1329,8 +1332,10 @@ struct GenerateCreatorDraftRequest {
 #[serde(rename_all = "camelCase")]
 struct DesktopCreatorDraftResult {
     spec: &'static str,
+    outcome: &'static str,
     task: AgentTask,
-    draft: CreatorDraft,
+    draft: Option<CreatorDraft>,
+    capability_gap: Option<CapabilityGap>,
     usage: nimora_agent_runtime::ProviderUsage,
     finish_reason: nimora_agent_runtime::ProviderFinishReason,
 }
@@ -1343,6 +1348,13 @@ struct SaveCreatorDraftRequest {
     requirement: String,
     draft: CreatorDraft,
     approval_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SaveCapabilityGapRequest {
+    workspace_root: PathBuf,
+    capability_gap: CapabilityGap,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3099,11 +3111,17 @@ fn generate_creator_draft_inner(
             "creator draft cannot wait for tool confirmation".to_owned(),
         ));
     };
-    let draft = parse_creator_draft(&draft_request, &response.content)?;
+    let proposal = parse_creator_proposal(&draft_request, &response.content)?;
+    let (outcome, draft, capability_gap) = match proposal {
+        CreatorProposal::Draft(draft) => ("draft", Some(*draft), None),
+        CreatorProposal::CapabilityGap(gap) => ("capability-gap", None, Some(gap)),
+    };
     Ok(DesktopCreatorDraftResult {
         spec: "nimora.desktop-creator-draft/1",
+        outcome,
         task,
         draft,
+        capability_gap,
         usage: response.usage,
         finish_reason: response.finish_reason,
     })
@@ -3133,6 +3151,19 @@ fn save_creator_draft_command(
         &request.workspace_root,
         &request.draft,
         &current_time_ms()?.to_string(),
+    )
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn save_capability_gap_command(
+    request: SaveCapabilityGapRequest,
+) -> Result<CapabilityGapSaveReceipt, DesktopError> {
+    save_capability_gap(
+        &request.workspace_root,
+        &request.capability_gap,
+        &Uuid::now_v7().to_string(),
     )
     .map_err(Into::into)
 }
@@ -9483,6 +9514,7 @@ pub fn run() {
             run_local_agent,
             generate_creator_draft,
             save_creator_draft_command,
+            save_capability_gap_command,
             check_creator_draft,
             approve_creator_draft,
             install_creator_draft,

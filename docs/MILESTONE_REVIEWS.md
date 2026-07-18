@@ -268,6 +268,15 @@ Actions 分钟：
 - 产品：Creator Studio 从单纯生成器升级为“发现—设计—构建—验证—授权—安装—观察—维护—退役”工作台，并为普通用户、二次元创作者、极客、开发者和团队提供同能力的渐进视图。
 - 实施边界：本里程碑只建立正式工程基线；下一步需逐个实现通用 Gap、Composition、Artifact Handler 和 Simulation 纵切，不能将文档目录误报为可运行功能。
 
+## M-2026-07-18 Creator Capability Gap 纵切
+
+- 问题：原 Creator 只能接受三类可安装 Draft；Registry 无法表达目标时只能报通用解析错误，模型容易被诱导发明能力或让用户误以为生成失败等于需求无效。
+- 裁决：Draft Schema 保持不变，新增并列且不可执行的 `nimora.capability-gap/1`；宿主响应显式互斥，Gap 不能复用任何批准、保存 Draft 或安装通道。
+- 持久事实：Gap 可在用户选择的 Workspace 中原子保存为唯一 UUID 报告，保留换模型接力和未来平台提案依据；不需要运行授权，也不包含源码或 Secret。
+- UI：缺失能力、必要操作、替代方案和平台提案需求使用警示语义展示，明确说明不能执行；仅提供“保存缺口报告”。
+- 证据：Creator Contract 8 项、Desktop Host 126 项、Frontend 42 项测试覆盖严格解析、重复/非法能力、原子保存、符号链接、IPC 映射和无批准安装入口。
+- 下一缺口：当前 Gap 仍由无 Tool Creator 模型根据受信指令提出，尚未用最小 Catalog Slice 做确定性存在性核验；下一纵切必须引入 Catalog Snapshot 与 Composition Planner，不能把模型判断升级为宿主事实。
+
 ## M-2026-07-18 AI 辅助扩展草案
 
 - 目标：让外接 AI 帮用户创建 User Program、Skill 与 Automation，同时不继承普通 Agent 的生产 Tool 权限。
