@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { desktopApi, type AgentCatalog, type AgentProviderStatus, type CreatorArtifactKind, type CreatorDraftApprovalReceipt, type CreatorDraftCheckReport, type CreatorDraftResult } from "../platform/desktop";
 import { CapabilityProposalGovernance } from "./CapabilityProposalGovernance";
 
@@ -6,6 +6,7 @@ const artifactKinds: Array<{ kind: CreatorArtifactKind; title: string; detail: s
   { kind: "user-program", title: "用户程序", detail: "用受限 Nimora API 编排交互与逻辑" },
   { kind: "skill", title: "Skill", detail: "创建可复用、可审查的扩展能力" },
   { kind: "automation", title: "自动化", detail: "把事件、条件与可补偿动作组合起来" },
+  { kind: "theme", title: "主题皮肤", detail: "生成经过对比度校验的视觉令牌与主题包" },
 ];
 
 export function AiCreatorWorkspace({ disabled }: { disabled: boolean }) {
@@ -86,7 +87,7 @@ export function AiCreatorWorkspace({ disabled }: { disabled: boolean }) {
     setBusy(true); setError(null); setSaveNotice(null); setInstallNotice(null);
     try {
       const receipt = await desktopApi.installCreatorDraft(kind, requirement.trim(), result.draft, approval.approvalId);
-      setInstallNotice(`${receipt.artifactId} ${receipt.version} 已原子安装${receipt.replacedPrevious ? "并保留上一版本" : ""}；当前未授权、未启用`);
+      setInstallNotice(`${receipt.artifactId} ${receipt.version} 已原子安装${receipt.replacedPrevious ? "并保留上一版本" : ""}；${kind === "theme" ? "当前未激活" : "当前未授权、未启用"}`);
       setApproval(null);
     } catch (reason) { setApproval(null); setError(reason instanceof Error ? reason.message : "草案安装失败，请重新审查并批准"); }
     finally { setBusy(false); }
@@ -129,10 +130,31 @@ export function AiCreatorWorkspace({ disabled }: { disabled: boolean }) {
       {disabled ? <p className="ai-creator-error">安全或恢复模式下禁止生成。</p> : null}{error ? <p className="ai-creator-error">{error}</p> : null}
     </form><section className="ai-draft-preview" aria-live="polite">
       {gap && result ? <CapabilityGapPreview disabled={busy} gap={gap} onSave={() => void saveGap()} onSubmitProposal={() => void submitProposal()} proposalNotice={proposalNotice} result={result} saveNotice={saveNotice} /> : null}
-      {draft ? <><div className="ai-draft-heading"><div><small>CONTRACT-VALIDATED DRAFT</small><h3>{draft.title}</h3></div><i>{installNotice ? "已安装 · 未启用" : "尚未安装"}</i></div><p>{draft.summary}</p><h4>权限说明</h4>{draft.permissionExplanations.length ? draft.permissionExplanations.map((item) => <article key={item.capability}><code>{item.capability}</code><span>{item.reason}</span></article>) : <p className="ai-empty">无需声明能力</p>}<h4>结构化产物</h4><pre>{JSON.stringify(draft.artifact, null, 2)}</pre>{checkReport ? <div className={`ai-check-report ${checkReport.status}`}><strong>{checkReport.status === "passed" ? "独立审查通过" : "独立审查未通过"}</strong>{checkReport.proposedVersion ? <span className="ai-version-diff">{checkReport.installedVersion ? `升级 ${checkReport.installedVersion} → ${checkReport.proposedVersion}` : `首次安装 ${checkReport.proposedVersion}`}{checkReport.requiresReauthorization ? " · 安装后必须重新授权" : ""}</span> : null}<span>最高风险：{checkReport.highestRisk}</span>{checkReport.permissionDiff.length ? checkReport.permissionDiff.map((item) => <span className={`ai-permission-diff ${item.risk} ${item.change}`} key={`${item.change}:${item.capability}`}><b>{item.change === "added" ? "新增" : item.change === "removed" ? "移除" : "范围变化"} · {item.risk}</b><code>{item.capability}</code>{item.reason}</span>) : <span>权限与作用域未发生变化</span>}{checkReport.checks.map((check) => <span key={`${check.id}:${check.file ?? "artifact"}`}>{check.status === "passed" ? "✓" : "!"} {check.id === "sandbox-behavior" ? "行为沙箱" : check.id === "javascript-syntax" ? "语法" : "生产契约"} · {check.file ? `${check.file} · ` : ""}{check.message}</span>)}</div> : null}{approval ? <p className="ai-approval-notice">一次性批准已签发 · {new Date(approval.expiresAtMs).toLocaleTimeString()} 前有效；保存或安装会消费它</p> : null}<div className="ai-draft-actions"><small>{result ? `${result.usage.inputTokens + result.usage.outputTokens} tokens · ${result.finishReason}` : ""}</small><div><button disabled={busy || disabled} onClick={() => void checkDraft()} type="button">{checkReport?.status === "passed" ? "重新运行审查" : "运行独立审查"}</button><button disabled={busy || disabled || checkReport?.status !== "passed" || Boolean(approval)} onClick={() => void approveDraft()} type="button">{approval ? "已批准一次" : "批准此权限与行为审查"}</button><button disabled={busy || disabled || !approval || approval.draftDigest !== checkReport?.draftDigest || Boolean(saveNotice) || Boolean(installNotice)} onClick={() => void saveDraft()} type="button">{saveNotice ? "已保存" : "保存到 Workspace"}</button><button className="ai-install-button" disabled={busy || disabled || !approval || approval.draftDigest !== checkReport?.draftDigest || Boolean(saveNotice) || Boolean(installNotice)} onClick={() => void installDraft()} type="button">{installNotice ? "已安装" : checkReport?.installedVersion ? "原子升级（重新授权）" : "原子安装（不启用）"}</button></div></div>{saveNotice ? <p className="ai-save-notice">{saveNotice}</p> : null}{installNotice ? <p className="ai-install-notice">{installNotice}</p> : null}</> : null}
+      {draft ? <><div className="ai-draft-heading"><div><small>CONTRACT-VALIDATED DRAFT</small><h3>{draft.title}</h3></div><i>{installNotice ? draft.artifact.kind === "theme" ? "已安装 · 未激活" : "已安装 · 未启用" : "尚未安装"}</i></div><p>{draft.summary}</p><h4>权限说明</h4>{draft.permissionExplanations.length ? draft.permissionExplanations.map((item) => <article key={item.capability}><code>{item.capability}</code><span>{item.reason}</span></article>) : <p className="ai-empty">无需声明能力</p>}{draft.artifact.kind === "theme" ? <ThemeDraftPreview metadata={draft.artifact.metadata} /> : null}<h4>结构化产物</h4><pre>{JSON.stringify(draft.artifact, null, 2)}</pre>{checkReport ? <div className={`ai-check-report ${checkReport.status}`}><strong>{checkReport.status === "passed" ? "独立审查通过" : "独立审查未通过"}</strong>{checkReport.proposedVersion ? <span className="ai-version-diff">{checkReport.installedVersion ? `升级 ${checkReport.installedVersion} → ${checkReport.proposedVersion}` : `首次安装 ${checkReport.proposedVersion}`}{checkReport.requiresReauthorization ? " · 安装后必须重新授权" : ""}</span> : null}<span>最高风险：{checkReport.highestRisk}</span>{checkReport.permissionDiff.length ? checkReport.permissionDiff.map((item) => <span className={`ai-permission-diff ${item.risk} ${item.change}`} key={`${item.change}:${item.capability}`}><b>{item.change === "added" ? "新增" : item.change === "removed" ? "移除" : "范围变化"} · {item.risk}</b><code>{item.capability}</code>{item.reason}</span>) : <span>权限与作用域未发生变化</span>}{checkReport.checks.map((check) => <span key={`${check.id}:${check.file ?? "artifact"}`}>{check.status === "passed" ? "✓" : "!"} {check.id === "sandbox-behavior" ? "行为沙箱" : check.id === "javascript-syntax" ? "语法" : "生产契约"} · {check.file ? `${check.file} · ` : ""}{check.message}</span>)}</div> : null}{approval ? <p className="ai-approval-notice">一次性批准已签发 · {new Date(approval.expiresAtMs).toLocaleTimeString()} 前有效；保存或安装会消费它</p> : null}<div className="ai-draft-actions"><small>{result ? `${result.usage.inputTokens + result.usage.outputTokens} tokens · ${result.finishReason}` : ""}</small><div><button disabled={busy || disabled} onClick={() => void checkDraft()} type="button">{checkReport?.status === "passed" ? "重新运行审查" : "运行独立审查"}</button><button disabled={busy || disabled || checkReport?.status !== "passed" || Boolean(approval)} onClick={() => void approveDraft()} type="button">{approval ? "已批准一次" : "批准此权限与行为审查"}</button><button disabled={busy || disabled || !approval || approval.draftDigest !== checkReport?.draftDigest || Boolean(saveNotice) || Boolean(installNotice)} onClick={() => void saveDraft()} type="button">{saveNotice ? "已保存" : "保存到 Workspace"}</button><button className="ai-install-button" disabled={busy || disabled || !approval || approval.draftDigest !== checkReport?.draftDigest || Boolean(saveNotice) || Boolean(installNotice)} onClick={() => void installDraft()} type="button">{installNotice ? "已安装" : draft.artifact.kind === "theme" ? checkReport?.installedVersion ? "原子升级" : "原子安装（不激活）" : checkReport?.installedVersion ? "原子升级（重新授权）" : "原子安装（不启用）"}</button></div></div>{saveNotice ? <p className="ai-save-notice">{saveNotice}</p> : null}{installNotice ? <p className="ai-install-notice">{installNotice}</p> : null}</> : null}
       {!result ? <div className="ai-empty-state"><span>✦</span><h3>等待一份经过验证的草案</h3><p>可表达的目标会显示 Manifest 与权限；能力不足时会显示不可执行的结构化缺口。</p></div> : null}
     </section></div>
     <CapabilityProposalGovernance disabled={disabled} />
+  </section>;
+}
+
+export function ThemeDraftPreview({ metadata }: { metadata: Extract<NonNullable<CreatorDraftResult["draft"]>["artifact"], { kind: "theme" }>["metadata"] }) {
+  const { colors } = metadata.theme;
+  const style = {
+    "--preview-surface": colors.surface,
+    "--preview-elevated": colors.surfaceElevated,
+    "--preview-text": colors.text,
+    "--preview-muted": colors.textMuted,
+    "--preview-accent": colors.accent,
+    "--preview-accent-soft": colors.accentSoft,
+    "--preview-border": colors.border,
+    "--preview-success": colors.success,
+    "--preview-danger": colors.danger,
+  } as CSSProperties;
+  const displayName = metadata.name["zh-CN"] ?? metadata.name.en ?? Object.values(metadata.name)[0] ?? metadata.id;
+  return <section className="ai-theme-preview" data-corner={metadata.theme.cornerStyle} style={style}>
+    <header><div><small>ISOLATED THEME PREVIEW</small><h4>{displayName}</h4></div><span>{metadata.theme.mode} · {metadata.theme.motion} motion</span></header>
+    <div className="ai-theme-preview-card"><strong>让桌面伙伴更像你</strong><p>Surface、文字、边框与强调色均来自已验证令牌。</p><div><button type="button">Accent</button><i>Success</i><em>Danger</em></div></div>
+    <footer><span>Elevated surface</span><code>{metadata.theme.cornerStyle}</code><small>安装不会自动改变当前主题</small></footer>
   </section>;
 }
 

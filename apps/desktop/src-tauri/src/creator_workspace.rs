@@ -606,6 +606,7 @@ fn artifact_id(draft: &CreatorDraft) -> String {
         CreatorArtifact::UserProgram { manifest, .. } => manifest.id.clone(),
         CreatorArtifact::Skill { manifest, .. } => manifest.id.clone(),
         CreatorArtifact::Automation { definition } => definition.id.clone(),
+        CreatorArtifact::Theme { metadata } => metadata.id.clone(),
     }
 }
 
@@ -624,6 +625,12 @@ fn write_draft(root: &Path, draft: &CreatorDraft) -> Result<usize, CreatorWorksp
             let bytes =
                 serde_json::to_vec_pretty(definition).map_err(|_| CreatorWorkspaceError::Io)?;
             write_new(&root.join("automation.json"), &bytes)?;
+            count += 1;
+        }
+        CreatorArtifact::Theme { metadata } => {
+            let bytes =
+                serde_json::to_vec_pretty(metadata).map_err(|_| CreatorWorkspaceError::Io)?;
+            write_new(&root.join("theme.json"), &bytes)?;
             count += 1;
         }
     }
@@ -756,6 +763,37 @@ mod tests {
         .expect("draft")
     }
 
+    fn theme_draft() -> CreatorDraft {
+        serde_json::from_value(json!({
+            "spec": "nimora.creator-draft/1",
+            "title": "Aurora theme",
+            "summary": "A validated accessible theme draft.",
+            "permissionExplanations": [],
+            "artifact": {
+                "kind": "theme",
+                "metadata": {
+                    "id": "theme.local.aurora",
+                    "version": "1.0.0",
+                    "name": { "zh-CN": "极光" },
+                    "publisher": "publisher.local.user",
+                    "license": "LicenseRef-Proprietary",
+                    "theme": {
+                        "spec": "nimora.theme/1", "mode": "light",
+                        "colors": {
+                            "surface": "#f7f5ef", "surfaceElevated": "#fffdf8",
+                            "text": "#30322c", "textMuted": "#77786f",
+                            "accent": "#6f61ce", "accentSoft": "#eeeaff",
+                            "border": "#deddd6", "success": "#5f875b",
+                            "danger": "#a44f45"
+                        },
+                        "cornerStyle": "soft", "motion": "full"
+                    }
+                }
+            }
+        }))
+        .expect("theme draft")
+    }
+
     fn gap_proof_fixture() -> (
         CapabilityGap,
         CapabilityCatalogSnapshot,
@@ -820,6 +858,22 @@ mod tests {
                 .to_string(),
             CreatorWorkspaceError::AlreadyExists.to_string()
         );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn atomically_saves_theme_metadata_with_the_creator_envelope() {
+        let root = fixture_root();
+        let receipt = save_creator_draft(&root, &theme_draft(), "theme-save").expect("save");
+        assert_eq!(receipt.files_written, 2);
+        let destination = root.join(&receipt.relative_directory);
+        assert!(destination.join("nimora-draft.json").is_file());
+        let metadata: serde_json::Value = serde_json::from_slice(
+            &fs::read(destination.join("theme.json")).expect("theme metadata"),
+        )
+        .expect("theme metadata JSON");
+        assert_eq!(metadata["id"], "theme.local.aurora");
+        assert_eq!(metadata["theme"]["spec"], "nimora.theme/1");
         fs::remove_dir_all(root).expect("cleanup");
     }
 

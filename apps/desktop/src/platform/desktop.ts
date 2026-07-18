@@ -71,7 +71,7 @@ export interface LocalAgentResult {
   pendingTools: AgentToolResult[];
 }
 
-export type CreatorArtifactKind = "user-program" | "skill" | "automation";
+export type CreatorArtifactKind = "user-program" | "skill" | "automation" | "theme";
 
 export interface CreatorDraftResult {
   spec: "nimora.desktop-creator-draft/1";
@@ -86,6 +86,16 @@ export interface CreatorDraftResult {
       kind: "user-program" | "skill";
       manifest: Record<string, unknown>;
       files: Array<{ path: string; source: string }>;
+    } | {
+      kind: "theme";
+      metadata: {
+        id: string;
+        version: string;
+        name: Record<string, string>;
+        publisher: string;
+        license: string;
+        theme: ThemeDescriptor;
+      };
     });
   } | null;
   capabilityGap: {

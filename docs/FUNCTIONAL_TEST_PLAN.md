@@ -543,6 +543,9 @@ ID / 标题 / 优先级 / 前置条件
 
 ## Theme Asset 安全与体验
 
+- Verify 外接 AI 可生成 `theme` Creator Draft；只接受 `theme.local.*`、严格版本/发布者/许可证、本地化名称、固定九 Token 和空权限说明，未知字段或发布者命名空间覆盖失败关闭。
+- Verify Theme Draft 经独立审查重新执行颜色格式与 WCAG 门禁，批准摘要绑定完整元数据；保存写出结构化主题草案，安装生成 Manifest、Theme 与 SHA-256 Inventory，并复用 Asset 原子安装和版本备份。
+- Verify AI Theme 安装不会自动激活、不会继承 Creator Agent 权限；升级识别已安装版本但不提示无意义的“重新授权”，用户仍须从主题选择界面显式激活。
 - Verify Theme 缺少入口、错误媒体类型、缺失/额外 Token、非法 Hex、未知字段、CSS/URL/脚本注入均在安装前拒绝且不改变活动主题。
 - Verify 安装前预览只作用于 Creator Studio 卡片；取消或安装失败后 App Shell Token 保持不变。
 - Verify Theme 激活后全局 Token 一致，选择记录原子持久化，重启后重新复验；包缺失或损坏时回退内置主题并显示原因。

@@ -61,7 +61,8 @@ use nimora_asset_installer::{
     RenderCanvas, SpriteClips, ThemeCornerStyle, ThemeDescriptor, ThemeMode, ThemeMotion,
     VoiceDescriptor, export_asset_package, inspect_asset_package, inspect_asset_renderer,
     inspect_asset_source_preview, inspect_asset_theme, inspect_asset_voice, install_asset_source,
-    install_gltf_character, read_asset_voice_clip, rollback_latest,
+    install_generated_theme, install_gltf_character, read_asset_voice_clip, rollback_latest,
+    validate_generated_theme_metadata,
 };
 use nimora_automation_agent_bridge::{
     AGENT_TASK_RUN_COMMAND, AdmittedContextSegment, AgentTaskSubmissionError,
@@ -3498,6 +3499,18 @@ fn install_creator_draft(
                 enabled: false,
             })
         }
+        nimora_creator_draft::CreatorArtifact::Theme { metadata } => {
+            let result = install_generated_theme(&state.asset_store, &metadata)?;
+            Ok(CreatorDraftInstallReceipt {
+                spec: "nimora.creator-draft-install/1",
+                artifact_kind: CreatorArtifactKind::Theme,
+                artifact_id: result.asset_id,
+                version: result.version,
+                replaced_previous: result.install.backup_path.is_some(),
+                authorized: true,
+                enabled: false,
+            })
+        }
     }
 }
 
@@ -3630,6 +3643,15 @@ fn check_creator_draft_inner(
         nimora_creator_draft::CreatorArtifact::Skill { manifest, files } => {
             checks.extend(check_creator_skill_behavior(app, manifest, files)?);
         }
+        nimora_creator_draft::CreatorArtifact::Theme { metadata } => {
+            validate_generated_theme_metadata(metadata)?;
+            checks.push(CreatorDraftCheck {
+                id: "theme-accessibility",
+                status: "passed",
+                file: Some("theme/theme.json".to_owned()),
+                message: "主题令牌、颜色格式与最低对比度校验通过".to_owned(),
+            });
+        }
     }
     let status = if checks.iter().all(|check| check.status == "passed") {
         "passed"
@@ -3650,7 +3672,11 @@ fn check_creator_draft_inner(
         status,
         draft_digest: creator_draft_digest(draft)?,
         highest_risk,
-        requires_reauthorization: installed_version.is_some(),
+        requires_reauthorization: installed_version.is_some()
+            && !matches!(
+                draft.artifact,
+                nimora_creator_draft::CreatorArtifact::Theme { .. }
+            ),
         installed_version,
         proposed_version,
         permission_diff,
@@ -3712,6 +3738,21 @@ fn creator_permission_diff(
                 diff,
                 installed_version: installed.as_ref().map(|item| item.version.clone()),
                 proposed_version: Some(manifest.version.clone()),
+            })
+        }
+        nimora_creator_draft::CreatorArtifact::Theme { metadata } => {
+            let installed = match inspect_asset_package(&state.asset_store.join(&metadata.id)) {
+                Ok(summary) if summary.asset_type == "theme" && summary.id == metadata.id => {
+                    Some(summary)
+                }
+                Ok(_) => return Err(DesktopError::InvalidPackageSource),
+                Err(InstallError::SourceNotDirectory) => None,
+                Err(error) => return Err(error.into()),
+            };
+            Ok(CreatorPermissionReview {
+                diff: Vec::new(),
+                installed_version: installed.as_ref().map(|item| item.version.clone()),
+                proposed_version: Some(metadata.version.clone()),
             })
         }
     }
@@ -9939,18 +9980,18 @@ mod tests {
         current_time_ms, default_agent_model, default_agent_provider_id, desktop_tool_registry,
         diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
-        install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
-        parse_user_program_plan, pause_auto_mode_job_inner, permission_grant,
-        persist_asset_selection, prepare_agent_tool_inner, quiesce_auto_mode_jobs,
-        reject_agent_tool_inner, reject_automation_run_inner, resolve_active_character,
-        resolve_active_theme, resolve_active_voice, resolve_asset_selection,
-        resolve_auto_mode_attempt_inner, resolve_character_renderer, resume_auto_mode_turn_inner,
-        run_live_automation, run_live_automation_event, run_local_agent_inner,
-        run_skill_agent_task, run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
-        skill_capability_names, skill_event_types, stage_creator_package,
-        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
-        validate_model_source, validate_package_source, validate_requested_animation_map,
-        verify_capability_gap,
+        install_generated_theme, install_gltf_character, open_diagnostic_journal,
+        parse_asset_protocol_path, parse_user_program_plan, pause_auto_mode_job_inner,
+        permission_grant, persist_asset_selection, prepare_agent_tool_inner,
+        quiesce_auto_mode_jobs, reject_agent_tool_inner, reject_automation_run_inner,
+        resolve_active_character, resolve_active_theme, resolve_active_voice,
+        resolve_asset_selection, resolve_auto_mode_attempt_inner, resolve_character_renderer,
+        resume_auto_mode_turn_inner, run_live_automation, run_live_automation_event,
+        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
+        screen_coordinate, serve_asset_protocol, skill_capability_names, skill_event_types,
+        stage_creator_package, stop_skill_event_sessions, test_automation, user_program_input,
+        valid_asset_identifier, validate_model_source, validate_package_source,
+        validate_requested_animation_map, verify_capability_gap,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -13902,5 +13943,51 @@ mod tests {
         assert!(review.diff.iter().any(|item| {
             item.capability == "automation-behavior" && item.change == "scope-changed"
         }));
+    }
+
+    #[test]
+    fn creator_theme_review_uses_verified_asset_baseline_without_permissions() {
+        let (_root, state) = normal_desktop_state();
+        let draft = serde_json::from_value::<nimora_creator_draft::CreatorDraft>(json!({
+            "spec": "nimora.creator-draft/1",
+            "title": "Aurora theme",
+            "summary": "Installs a local accessible theme.",
+            "permissionExplanations": [],
+            "artifact": {
+                "kind": "theme",
+                "metadata": {
+                    "id": "theme.local.creator-aurora",
+                    "version": "2.0.0",
+                    "name": { "zh-CN": "极光" },
+                    "publisher": "publisher.local.user",
+                    "license": "LicenseRef-Proprietary",
+                    "theme": {
+                        "spec": "nimora.theme/1",
+                        "mode": "light",
+                        "colors": {
+                            "surface": "#f7f5ef", "surfaceElevated": "#fffdf8",
+                            "text": "#30322c", "textMuted": "#77786f",
+                            "accent": "#6f61ce", "accentSoft": "#eeeaff",
+                            "border": "#deddd6", "success": "#5f875b",
+                            "danger": "#a44f45"
+                        },
+                        "cornerStyle": "soft",
+                        "motion": "full"
+                    }
+                }
+            }
+        }))
+        .expect("theme draft");
+        let nimora_creator_draft::CreatorArtifact::Theme { metadata } = &draft.artifact else {
+            panic!("theme fixture");
+        };
+        let mut previous = metadata.clone();
+        previous.version = "1.0.0".to_owned();
+        install_generated_theme(&state.asset_store, &previous).expect("installed baseline");
+
+        let review = super::creator_permission_diff(&state, &draft).expect("review");
+        assert_eq!(review.installed_version.as_deref(), Some("1.0.0"));
+        assert_eq!(review.proposed_version.as_deref(), Some("2.0.0"));
+        assert!(review.diff.is_empty());
     }
 }

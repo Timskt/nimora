@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CapabilityGapPreview } from "./AiCreatorWorkspace";
+import { CapabilityGapPreview, ThemeDraftPreview } from "./AiCreatorWorkspace";
 import { CapabilityProposalGovernance } from "./CapabilityProposalGovernance";
 import type { CreatorDraftResult } from "../platform/desktop";
 
@@ -59,6 +59,36 @@ describe("CapabilityGapPreview", () => {
     expect(markup).not.toContain("原子安装");
     expect(markup).toContain("保存缺口报告");
     expect(markup).not.toContain("保存到 Workspace");
+  });
+});
+
+describe("ThemeDraftPreview", () => {
+  it("renders validated tokens inside an inert local preview", () => {
+    const markup = renderToStaticMarkup(<ThemeDraftPreview metadata={{
+      id: "theme.local.aurora",
+      version: "1.0.0",
+      name: { "zh-CN": "极光夜航" },
+      publisher: "publisher.local.user",
+      license: "LicenseRef-Proprietary",
+      theme: {
+        spec: "nimora.theme/1",
+        mode: "dark",
+        colors: {
+          surface: "#171922", surfaceElevated: "#222532", text: "#f5f6fb",
+          textMuted: "#b4b8c8", accent: "#9f91ff", accentSoft: "#312d50",
+          border: "#3d4152", success: "#87c98a", danger: "#ee8c85",
+        },
+        cornerStyle: "rounded",
+        motion: "reduced",
+      },
+    }} />);
+
+    expect(markup).toContain("极光夜航");
+    expect(markup).toContain("dark · reduced motion");
+    expect(markup).toContain("--preview-surface:#171922");
+    expect(markup).toContain("--preview-accent:#9f91ff");
+    expect(markup).toContain("安装不会自动改变当前主题");
+    expect(markup).not.toContain("<script");
   });
 });
 

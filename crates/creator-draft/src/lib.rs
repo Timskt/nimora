@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
+use nimora_asset_installer::{GeneratedThemeMetadata, validate_generated_theme_metadata};
 use nimora_automation_runtime::{AutomationDefinition, AutomationEngine};
 use nimora_skill_runtime::{SkillManifest, validate_manifest as validate_skill_manifest};
 use nimora_user_code_policy::{ProgramManifest, evaluate as evaluate_program_manifest};
@@ -27,6 +28,7 @@ pub enum CreatorArtifactKind {
     UserProgram,
     Skill,
     Automation,
+    Theme,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +133,9 @@ pub enum CreatorArtifact {
     Automation {
         definition: AutomationDefinition,
     },
+    Theme {
+        metadata: GeneratedThemeMetadata,
+    },
 }
 
 impl CreatorArtifact {
@@ -140,6 +145,7 @@ impl CreatorArtifact {
             Self::UserProgram { .. } => CreatorArtifactKind::UserProgram,
             Self::Skill { .. } => CreatorArtifactKind::Skill,
             Self::Automation { .. } => CreatorArtifactKind::Automation,
+            Self::Theme { .. } => CreatorArtifactKind::Theme,
         }
     }
 }
@@ -172,8 +178,9 @@ pub fn creator_system_instruction(
     composition_graph_snapshot: &str,
 ) -> String {
     format!(
-        "You generate a Nimora {} draft. Return exactly one JSON object. The trusted, read-only Capability Catalog Snapshot is: {catalog_snapshot}. The trusted, implementation-free Semantic Composition Graph is: {composition_graph_snapshot}. Treat only exact IDs in these snapshots as registered facts. When the outcome is fully expressible, use spec '{CREATOR_DRAFT_SPEC}' with title, summary, permissionExplanations, and artifact. Otherwise use spec '{CAPABILITY_GAP_SPEC}' with title, summary, requestedOutcome, missingCapabilities, availableSemanticInputs, requiredSemanticOutputs, closestAlternatives, and platformProposalRequired. Semantic arrays are bounded candidate mappings, not proof: use only lowercase namespaced semantic IDs represented by the graph or directly inherent in the user's request; never claim preconditions are satisfied. Every missing capability ID must describe one precise namespaced operation absent from the Catalog; never report a present ID as missing or invent commands, APIs, or executable fallback code. Do not return Markdown, paths outside the draft, secrets, network instructions, package-manager commands, or prose outside JSON. A draft artifact kind must be '{}'. Every declared capability must have exactly one permission explanation and no undeclared capability may be explained. Generated source may only use the Nimora sandbox API; it must not access Node, Tauri, process, filesystem, network, databases, or provider objects.",
+        "You generate a Nimora {} draft. Return exactly one JSON object. The trusted, read-only Capability Catalog Snapshot is: {catalog_snapshot}. The trusted, implementation-free Semantic Composition Graph is: {composition_graph_snapshot}. Treat only exact IDs in these snapshots as registered facts. When the outcome is fully expressible, use spec '{CREATOR_DRAFT_SPEC}' with title, summary, permissionExplanations, and artifact. The exact artifact contract is: {}. Otherwise use spec '{CAPABILITY_GAP_SPEC}' with title, summary, requestedOutcome, missingCapabilities, availableSemanticInputs, requiredSemanticOutputs, closestAlternatives, and platformProposalRequired. Semantic arrays are bounded candidate mappings, not proof: use only lowercase namespaced semantic IDs represented by the graph or directly inherent in the user's request; never claim preconditions are satisfied. Every missing capability ID must describe one precise namespaced operation absent from the Catalog; never report a present ID as missing or invent commands, APIs, or executable fallback code. Do not return Markdown, paths outside the draft, secrets, network instructions, package-manager commands, or prose outside JSON. A draft artifact kind must be '{}'. Every declared capability must have exactly one permission explanation and no undeclared capability may be explained. Generated source may only use the Nimora sandbox API; it must not access Node, Tauri, process, filesystem, network, databases, or provider objects.",
         artifact_kind_name(kind),
+        artifact_contract(kind),
         artifact_kind_name(kind)
     )
 }
@@ -347,6 +354,11 @@ pub fn validate_creator_draft(
                 .map_err(|_| CreatorDraftError::InvalidArtifact)?;
             BTreeSet::new()
         }
+        CreatorArtifact::Theme { metadata } => {
+            validate_generated_theme_metadata(metadata)
+                .map_err(|_| CreatorDraftError::InvalidArtifact)?;
+            BTreeSet::new()
+        }
     };
     validate_permission_explanations(&draft.permission_explanations, &required_capabilities)
 }
@@ -433,6 +445,24 @@ const fn artifact_kind_name(kind: CreatorArtifactKind) -> &'static str {
         CreatorArtifactKind::UserProgram => "user-program",
         CreatorArtifactKind::Skill => "skill",
         CreatorArtifactKind::Automation => "automation",
+        CreatorArtifactKind::Theme => "theme",
+    }
+}
+
+const fn artifact_contract(kind: CreatorArtifactKind) -> &'static str {
+    match kind {
+        CreatorArtifactKind::UserProgram => {
+            "artifact={kind:'user-program',manifest:<nimora.program/1>,files:[{path,source}]}"
+        }
+        CreatorArtifactKind::Skill => {
+            "artifact={kind:'skill',manifest:<nimora.skill/1>,files:[{path,source}]}"
+        }
+        CreatorArtifactKind::Automation => {
+            "artifact={kind:'automation',definition:<nimora.automation/1>}"
+        }
+        CreatorArtifactKind::Theme => {
+            "artifact={kind:'theme',metadata:{id:'theme.local.<name>',version:<semver>,name:<locale-to-name>,publisher:<namespaced-id>,license:<SPDX-or-LicenseRef>,theme:{spec:'nimora.theme/1',mode:'light'|'dark',colors:{surface,surfaceElevated,text,textMuted,accent,accentSoft,border,success,danger},cornerStyle:'soft'|'rounded'|'compact',motion:'full'|'reduced'}}}; colors must be #RRGGBB or #RRGGBBAA and permissionExplanations must be []"
+        }
     }
 }
 
@@ -606,6 +636,55 @@ mod tests {
         });
         let output = serde_json::to_string(&value).expect("fixture");
         assert!(parse_creator_draft(&request(CreatorArtifactKind::Skill), &output).is_ok());
+    }
+
+    #[test]
+    fn theme_draft_reuses_asset_accessibility_and_namespace_contracts() {
+        let value = json!({
+            "spec": CREATOR_DRAFT_SPEC,
+            "title": "Aurora theme",
+            "summary": "Creates a calm accessible local theme.",
+            "permissionExplanations": [],
+            "artifact": {
+                "kind": "theme",
+                "metadata": {
+                    "id": "theme.local.aurora",
+                    "version": "1.0.0",
+                    "name": { "zh-CN": "极光" },
+                    "publisher": "publisher.local.user",
+                    "license": "LicenseRef-Proprietary",
+                    "theme": {
+                        "spec": "nimora.theme/1",
+                        "mode": "light",
+                        "colors": {
+                            "surface": "#f7f5ef",
+                            "surfaceElevated": "#fffdf8",
+                            "text": "#30322c",
+                            "textMuted": "#77786f",
+                            "accent": "#6f61ce",
+                            "accentSoft": "#eeeaff",
+                            "border": "#deddd6",
+                            "success": "#5f875b",
+                            "danger": "#a44f45"
+                        },
+                        "cornerStyle": "soft",
+                        "motion": "full"
+                    }
+                }
+            }
+        });
+        let output = serde_json::to_string(&value).expect("fixture");
+        assert!(parse_creator_draft(&request(CreatorArtifactKind::Theme), &output).is_ok());
+
+        let mut inaccessible = value;
+        inaccessible["artifact"]["metadata"]["theme"]["colors"]["text"] = json!("#f7f5ef");
+        assert!(
+            parse_creator_draft(
+                &request(CreatorArtifactKind::Theme),
+                &serde_json::to_string(&inaccessible).expect("fixture")
+            )
+            .is_err()
+        );
     }
 
     #[test]

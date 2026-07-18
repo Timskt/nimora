@@ -73,7 +73,7 @@
 - 保存前必须获得五分钟、一次性、服务端持有的批准凭证；保存时重跑生产契约和隔离行为检查，再原子消费凭证。
 - 过期、摘要不匹配、重放、Safe Mode 与浏览器预览均失败关闭；保存仍只是草案操作，不代表安装或启用。
 - 新增外接 AI 能力目录，覆盖行为、资产、UI、声音、Automation、Program、Skill、Connector、Agent、CLI、知识、诊断、测试和迁移。
-- User Program 与 Skill 草案可在批准后由宿主构建受控临时包并复用生产原子安装器；Automation 定义新增严格版本并进入 SQLite 原子 Catalog。三类产物安装后都保持未授权、未启用，升级保留上一版本；Automation 工作区已提供目录、显式启停和回滚控制。
+- User Program 与 Skill 草案可在批准后由宿主构建受控临时包并复用生产原子安装器；Automation 定义新增严格版本并进入 SQLite 原子 Catalog；Theme 草案使用 `theme.local.*` 身份、固定 Token、WCAG 对比度门禁、生成完整性清单并复用 Asset 原子安装器。代码型三类产物安装后保持未授权、未启用，Theme 安装后保持未激活且不伪造权限；升级均保留上一版本。
 - Creator 升级审查会重新加载并复验当前安装版本，展示版本基线、Capability `added/removed` 及事件、命令、Contribution、运行预算 `scope-changed`；批准同时绑定草案与完整审查摘要，安装基线漂移即失败关闭并消费旧凭证；损坏安装包不能降级成首次安装，所有升级都明确要求重新授权。
 
 > 更新日期：2026-07-18
@@ -172,3 +172,12 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - Voice now has desktop activation, Safe Mode silent fallback, per-read package verification, Creator Studio preview/activation, archive round-trip coverage, and Quiet Mode enforcement before clip retrieval. Full workspace validation and real Tauri audio/UI verification remain required before release completion.
 - Implemented typed `AssetSelectionPolicy` lifecycle sharing for Character, Theme, and Voice without weakening subtype verification. Schema handling, Safe Mode, fallback classification, real I/O propagation, and atomic persistence now share one implementation; four cross-policy tests raise the Desktop Host suite from 91 to 95 tests.
 - Final local gate passed with 36 Asset Installer tests, 91 Desktop Host tests, 32 frontend tests, production TypeScript/Vite build and bundle budgets, workspace Clippy with warnings denied, and the complete Rust workspace test/doc-test suite. Real Tauri audio output and cross-platform visual inspection remain release-level evidence, not unit-test claims.
+
+## 2026-07-18 — AI-generated accessible theme vertical slice
+
+- Added `Theme` as a fourth Creator artifact with an exact model-output contract, strict parse, independent host review, one-time digest-bound approval, Workspace persistence and verified Asset Runtime installation.
+- Generated themes are restricted to `theme.local.*`, bounded localized names and license declarations, the fixed nine-token `nimora.theme/1` schema, valid hex colors and host-owned WCAG contrast checks.
+- Installation builds a standard manifest, theme payload and SHA-256 inventory, then reuses the atomic Asset Installer; it never grants capabilities and never activates the theme automatically.
+- Creator Studio renders a token-scoped, inert preview card instead of injecting generated CSS into the application theme. The review and install copy distinguishes permissionless theme upgrades from executable artifact reauthorization.
+- Focused evidence covers generated-package verification, low-contrast rejection, metadata control-character and length rejection, installed-version diff, two-file Workspace persistence, isolated preview rendering and TypeScript correctness.
+- Connector, Agent Profile, Persona Pack, Widget and other documented AI-native outputs remain proposals until each has a production Runtime, deterministic validator, install lifecycle and tests; Creator must return a capability gap rather than fabricate them.

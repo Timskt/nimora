@@ -4,6 +4,15 @@
 > 状态：持续维护  
 > 目的：在可演示纵切、每五个生产提交、公开契约变化或重大偏差时校准方向
 
+## M-2026-07-18 AI Theme Creator 完整纵切
+
+- 结果：Creator Studio 新增第四类真实产物 `theme`，外接 AI 可生成本地主题元数据与固定视觉 Token，并走生成、严格解析、独立审查、一次性批准、Workspace 保存和原子安装完整链路。
+- 复用：宿主把 Theme 转换为标准 `nimora.asset/1` 包，生成 Manifest、Descriptor 和 SHA-256 Inventory，再调用既有 Asset Installer；没有新增文件写入、安装或激活旁路。
+- 美学与可访问性：只接受九个语义 Token、`#RRGGBB/#RRGGBBAA`、深浅模式、三档圆角与动效策略；正文、弱文本、强调、成功和危险色必须满足既有 WCAG 门禁。
+- 安全：身份限定 `theme.local.*`，安装不会覆盖发布者命名空间、不会自动激活，也不继承 Creator Agent 权限；许可证是用户声明，不被模型文字冒充权属证明。
+- 证据：Asset Installer 覆盖生成包安装与命名空间拒绝，Creator Contract 覆盖合法主题和低对比度拒绝，Desktop 覆盖已安装版本基线与空权限 Diff，前端类型覆盖第四类产物。
+- 架构裁决：优先接入已有完整 Runtime 的 Theme，而不为尚无生产 Runtime 的 Connector/Agent Profile 制造假安装闭环；后两者必须先建立独立生命周期宿主，再注册到统一 Creator 产物面。
+
 ## M-2026-07-18 Capability Proposal 待评审队列纵切
 
 - 结果：用户可将宿主双重核验且明确需要平台扩展的 Gap 提交为版本化 Capability Proposal，原子进入所选 Workspace 的独立待评审队列。

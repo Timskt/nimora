@@ -33,6 +33,17 @@ pub struct GltfCharacterMetadata {
     pub animation_map: BTreeMap<String, ModelAnimationBinding>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GeneratedThemeMetadata {
+    pub id: String,
+    pub version: String,
+    pub name: BTreeMap<String, String>,
+    pub publisher: String,
+    pub license: String,
+    pub theme: ThemeDescriptor,
+}
+
 const MAX_FILES: usize = 10_000;
 const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
@@ -464,6 +475,108 @@ pub fn install_gltf_character(
 
     write_gltf_character_package_files(&package.root, &model_path, metadata)?;
     install_asset_package(&package.root, asset_store)
+}
+
+/// Builds and atomically installs a generated theme through the verified asset pipeline.
+///
+/// # Errors
+///
+/// Rejects non-local identities, invalid metadata, inaccessible color combinations, or
+/// any package generation or installation failure.
+pub fn install_generated_theme(
+    asset_store: &Path,
+    metadata: &GeneratedThemeMetadata,
+) -> Result<AssetPackageInstallResult, InstallError> {
+    validate_generated_theme_metadata(metadata)?;
+    let package = PreparedAssetSource {
+        root: unique_sibling(
+            &std::env::temp_dir().join("nimora-theme-package"),
+            "staging",
+        ),
+        temporary: true,
+    };
+    fs::create_dir_all(package.root.join("theme"))?;
+    write_generated_theme_package(&package.root, metadata)?;
+    install_asset_package(&package.root, asset_store)
+}
+
+/// Validates the complete host-owned metadata contract for an AI-generated theme.
+///
+/// # Errors
+///
+/// Rejects identities outside the local namespace and metadata that cannot form a valid
+/// `nimora.asset/1` theme package.
+pub fn validate_generated_theme_metadata(
+    metadata: &GeneratedThemeMetadata,
+) -> Result<(), InstallError> {
+    if !metadata.id.starts_with("theme.local.")
+        || !valid_asset_identifier(&metadata.id)
+        || !valid_semver(&metadata.version)
+        || !valid_asset_identifier(&metadata.publisher)
+        || metadata.name.is_empty()
+        || metadata.name.len() > 16
+        || metadata.name.iter().any(|(locale, name)| {
+            !valid_locale(locale)
+                || name.trim().is_empty()
+                || name.chars().count() > 128
+                || name.chars().any(char::is_control)
+        })
+        || metadata.license.trim().is_empty()
+        || metadata.license.len() > 128
+        || metadata.license.chars().any(char::is_control)
+    {
+        return Err(InstallError::InvalidMetadata(
+            "generated theme metadata is invalid".to_owned(),
+        ));
+    }
+    validate_theme_descriptor(&metadata.theme)
+}
+
+fn write_generated_theme_package(
+    package_root: &Path,
+    metadata: &GeneratedThemeMetadata,
+) -> Result<(), InstallError> {
+    let manifest = serde_json::to_vec_pretty(&serde_json::json!({
+        "spec": "nimora.asset/1",
+        "id": metadata.id,
+        "type": "theme",
+        "version": metadata.version,
+        "name": metadata.name,
+        "publisher": metadata.publisher,
+        "license": metadata.license,
+        "engines": { "nimora": ">=0.1.0" },
+        "entrypoints": { "theme": "theme/theme.json" },
+        "capabilities": [],
+        "fallbacks": {},
+        "locales": metadata.name.keys().collect::<Vec<_>>(),
+        "integrity": { "algorithm": "sha256", "files": "integrity.json" }
+    }))
+    .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    let theme = serde_json::to_vec_pretty(&metadata.theme)
+        .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    fs::write(package_root.join(MANIFEST_FILE), &manifest)?;
+    fs::write(package_root.join("theme/theme.json"), &theme)?;
+    let total_bytes = manifest.len() + theme.len();
+    let integrity = serde_json::to_vec_pretty(&serde_json::json!({
+        "files": [
+            {
+                "path": MANIFEST_FILE,
+                "sha256": format!("{:x}", Sha256::digest(&manifest)),
+                "bytes": manifest.len(),
+                "mediaType": "application/json"
+            },
+            {
+                "path": "theme/theme.json",
+                "sha256": format!("{:x}", Sha256::digest(&theme)),
+                "bytes": theme.len(),
+                "mediaType": "application/json"
+            }
+        ],
+        "totalBytes": total_bytes
+    }))
+    .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    fs::write(package_root.join("integrity.json"), integrity)?;
+    Ok(())
 }
 
 fn write_gltf_character_package_files(
@@ -3222,6 +3335,54 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
         write_vrm_package(&root, &minimal_glb());
         assert!(inspect_asset_renderer(&root).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generated_theme_uses_verified_asset_pipeline_and_local_namespace() {
+        let root = std::env::temp_dir().join("nimora-installer-generated-theme");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let metadata = GeneratedThemeMetadata {
+            id: "theme.local.aurora".to_owned(),
+            version: "1.0.0".to_owned(),
+            name: BTreeMap::from([("zh-CN".to_owned(), "极光".to_owned())]),
+            publisher: "publisher.local.user".to_owned(),
+            license: "LicenseRef-Proprietary".to_owned(),
+            theme: ThemeDescriptor {
+                spec: "nimora.theme/1".to_owned(),
+                mode: ThemeMode::Light,
+                colors: BTreeMap::from([
+                    ("surface".to_owned(), "#f7f5ef".to_owned()),
+                    ("surfaceElevated".to_owned(), "#fffdf8".to_owned()),
+                    ("text".to_owned(), "#30322c".to_owned()),
+                    ("textMuted".to_owned(), "#77786f".to_owned()),
+                    ("accent".to_owned(), "#6f61ce".to_owned()),
+                    ("accentSoft".to_owned(), "#eeeaff".to_owned()),
+                    ("border".to_owned(), "#deddd6".to_owned()),
+                    ("success".to_owned(), "#5f875b".to_owned()),
+                    ("danger".to_owned(), "#a44f45".to_owned()),
+                ]),
+                corner_style: ThemeCornerStyle::Soft,
+                motion: ThemeMotion::Full,
+            },
+        };
+        let installed = install_generated_theme(&root, &metadata).unwrap();
+        assert_eq!(installed.asset_id, metadata.id);
+        assert_eq!(
+            inspect_asset_theme(&installed.install.active_path).unwrap(),
+            metadata.theme
+        );
+
+        let mut invalid = metadata;
+        invalid.id = "theme.publisher.aurora".to_owned();
+        assert!(validate_generated_theme_metadata(&invalid).is_err());
+        invalid.id = "theme.local.aurora".to_owned();
+        invalid.name.insert("en".to_owned(), "x".repeat(129));
+        assert!(validate_generated_theme_metadata(&invalid).is_err());
+        invalid.name.insert("en".to_owned(), "Aurora".to_owned());
+        invalid.license = "LicenseRef-Proprietary\nInjected".to_owned();
+        assert!(validate_generated_theme_metadata(&invalid).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

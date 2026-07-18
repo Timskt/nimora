@@ -2354,6 +2354,7 @@ dependencies = [
 name = "nimora-creator-draft"
 version = "0.1.0"
 dependencies = [
+ "nimora-asset-installer",
  "nimora-automation-runtime",
  "nimora-skill-runtime",
  "nimora-user-code-policy",
