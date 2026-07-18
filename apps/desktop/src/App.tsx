@@ -5,7 +5,7 @@ import { DataProtection } from "./components/DataProtection";
 import { AgentWorkspace } from "./components/AgentWorkspace";
 import { AutomationWorkspace } from "./components/AutomationWorkspace";
 import { AiCreatorWorkspace } from "./components/AiCreatorWorkspace";
-import type { ActiveThemeSnapshot, AssetPreviewAudio, OutboxSnapshot, ThemeDescriptor } from "./platform/desktop";
+import type { ActiveThemeSnapshot, AssetPreviewAudio, DesktopSnapshot, OutboxSnapshot, ThemeDescriptor } from "./platform/desktop";
 import { desktopApi } from "./platform/desktop";
 
 export const navigation = ["概览", "角色", "Agent", "自动化", "扩展", "活动", "设置"] as const;
@@ -46,6 +46,7 @@ export function App() {
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [safetyBusy, setSafetyBusy] = useState(false);
   const [outbox, setOutbox] = useState<OutboxSnapshot | null>(null);
+  const [desktopSnapshot, setDesktopSnapshot] = useState<DesktopSnapshot | null>(null);
   const [activeTheme, setActiveTheme] = useState<ActiveThemeSnapshot | null>(null);
   const [notice, setNotice] = useState(desktopApi.native ? "原生运行时已连接" : "浏览器预览模式");
   const updateNotice = useCallback((message: string) => setNotice(message), []);
@@ -53,6 +54,7 @@ export function App() {
   useEffect(() => {
     void Promise.all([desktopApi.snapshot(), desktopApi.outboxSnapshot(), desktopApi.activeTheme()]).then(([snapshot, nextOutbox, nextTheme]) => {
       setSafeMode(snapshot.safety.mode === "safe");
+      setDesktopSnapshot(snapshot);
       const recovering = snapshot.startup.mode === "recovery";
       setRecoveryMode(recovering);
       if (recovering) {
@@ -64,6 +66,24 @@ export function App() {
     }).catch(() => {
       setNotice("运行时状态暂时不可用");
     });
+  }, []);
+
+  useEffect(() => {
+    if (!desktopApi.native) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void desktopApi.onPetVitalsChanged(() => {
+      void desktopApi.snapshot().then((snapshot) => {
+        if (!disposed) setDesktopSnapshot(snapshot);
+      });
+    }).then((value) => {
+      if (disposed) value();
+      else unlisten = value;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   async function runAction(action: "celebrate" | "work") {
@@ -190,15 +210,15 @@ export function App() {
 
           <section className="metric-card energy-card">
             <p className="card-label">今日状态</p>
-            <div className="metric-row"><strong>86</strong><span>/ 100</span></div>
-            <div className="progress-track"><span style={{ width: "86%" }} /></div>
-            <p className="supporting">精力充沛，适合轻量互动</p>
+            <div className="metric-row"><strong>{desktopSnapshot?.pet.energy ?? 100}</strong><span>/ 100</span></div>
+            <div className="progress-track"><span style={{ width: `${desktopSnapshot?.pet.energy ?? 100}%` }} /></div>
+            <p className="supporting">心情 {desktopSnapshot?.pet.mood ?? 70} · 完全离线持续演化</p>
           </section>
 
           <section className="metric-card affinity-card">
             <p className="card-label">陪伴关系</p>
-            <div className="metric-row"><strong>Lv. 3</strong><span>熟悉</span></div>
-            <p className="supporting">再相处 42 分钟解锁新动作</p>
+            <div className="metric-row"><strong>Lv. {Math.floor((desktopSnapshot?.pet.affinity ?? 0) / 20) + 1}</strong><span>羁绊 {desktopSnapshot?.pet.affinity ?? 0}</span></div>
+            <p className="supporting">每次真诚互动都会积累陪伴关系</p>
           </section>
 
           <section className="activity-card">

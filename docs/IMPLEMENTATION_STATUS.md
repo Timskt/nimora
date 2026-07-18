@@ -18,6 +18,13 @@
 - Focus 与 Presentation 会即时抑制仍由自主循环控制的动作并回到 Idle；若用户已拖拽或触发其它高优先级状态，只清理自主计划而不覆盖用户状态。
 - Offline Profile 不被静默禁用，桌宠自主生命继续完全本地运行；Rust 测试覆盖频率单调性、安静模式、离线语义和抑制状态收敛，前端测试覆盖 0% 文案。
 
+## 2026-07-19 — 持久离线生命值第一纵切
+
+- Pet Snapshot 新增向后兼容的生命更新时间，领域层按显式时间和十分钟粒度确定性演化 Energy/Mood；首次只建基线，离线追赶最多 24 小时，避免长时间关机后的惩罚性归零和启动风暴。
+- 点击互动现在真实提升 Mood 与 Affinity，并使用饱和运算封顶 100；生命状态仍不依赖 AI、Provider、网络或控制中心窗口。
+- `RuntimeService::tick_vitals` 将 Snapshot 与 `pet.vitals.changed` Outbox Event 原子保存，持久化失败不改变内存或事件总线；Desktop Host 仅在 Normal Mode 推进并向 Pet Overlay、控制中心发送可信刷新事件。
+- 控制中心已移除硬编码 Energy、等级和演示文案，改为展示生产 Snapshot；Rust、Schema 和前端契约测试覆盖旧字段兼容、有界衰减、互动封顶、事务失败与事件关联。
+
 ## 2026-07-19 — 运行级 Provider 推理策略纵切
 
 - Provider Descriptor 新增显式、版本化推理能力声明；`auto` 不能伪装为 Provider 具体能力，空集合和非法 Mapping Version 在注册前拒绝。

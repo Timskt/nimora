@@ -159,6 +159,8 @@ pub struct Pet {
     pub mood: u8,
     pub affinity: u8,
     #[serde(default)]
+    pub last_vitals_update_ms: u64,
+    #[serde(default)]
     pub autonomy: PetAutonomyState,
 }
 
@@ -183,6 +185,7 @@ impl Pet {
             energy: 100,
             mood: 70,
             affinity: 0,
+            last_vitals_update_ms: 0,
             autonomy: PetAutonomyState::default(),
         })
     }
@@ -210,6 +213,8 @@ impl Pet {
         }
         self.state = PetState::Interacting;
         self.emotion = Emotion::Happy;
+        self.mood = self.mood.saturating_add(2).min(100);
+        self.affinity = self.affinity.saturating_add(1).min(100);
         Ok(())
     }
 
@@ -287,6 +292,32 @@ impl Pet {
 
     pub fn set_energy(&mut self, energy: i16) {
         self.energy = u8::try_from(energy.clamp(0, 100)).unwrap_or_default();
+    }
+
+    #[must_use]
+    pub fn vitals_update_due(&self, now_ms: u64, interval_ms: u64) -> bool {
+        self.last_vitals_update_ms == 0
+            || now_ms.saturating_sub(self.last_vitals_update_ms) >= interval_ms
+    }
+
+    pub fn update_vitals(&mut self, now_ms: u64, interval_ms: u64, max_intervals: u64) {
+        if self.last_vitals_update_ms == 0 {
+            self.last_vitals_update_ms = now_ms;
+            return;
+        }
+        let intervals = now_ms
+            .saturating_sub(self.last_vitals_update_ms)
+            .checked_div(interval_ms.max(1))
+            .unwrap_or_default()
+            .min(max_intervals);
+        if intervals == 0 {
+            return;
+        }
+        let energy_loss = u8::try_from(intervals.min(u64::from(u8::MAX))).unwrap_or(u8::MAX);
+        let mood_loss = u8::try_from((intervals / 3).min(u64::from(u8::MAX))).unwrap_or(u8::MAX);
+        self.energy = self.energy.saturating_sub(energy_loss);
+        self.mood = self.mood.saturating_sub(mood_loss);
+        self.last_vitals_update_ms = now_ms;
     }
 
     pub fn recover_transient_state(&mut self) -> bool {
@@ -484,6 +515,27 @@ mod tests {
         assert_eq!(pet.energy, 0);
         pet.set_energy(500);
         assert_eq!(pet.energy, 100);
+    }
+
+    #[test]
+    fn vitals_initialize_then_apply_bounded_offline_decay() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.update_vitals(1_000, 100, 6);
+        assert_eq!(pet.energy, 100);
+        pet.update_vitals(11_000, 100, 6);
+        assert_eq!(pet.energy, 94);
+        assert_eq!(pet.mood, 68);
+        assert_eq!(pet.last_vitals_update_ms, 11_000);
+    }
+
+    #[test]
+    fn interaction_improves_mood_and_affinity_without_overflow() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.mood = 99;
+        pet.affinity = 100;
+        pet.interact().expect("interaction");
+        assert_eq!(pet.mood, 100);
+        assert_eq!(pet.affinity, 100);
     }
 
     #[test]

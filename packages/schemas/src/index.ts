@@ -71,6 +71,7 @@ export const petSchema = z.object({
   energy: z.number().int().min(0).max(100),
   mood: z.number().int().min(0).max(100),
   affinity: z.number().int().min(0).max(100),
+  lastVitalsUpdateMs: z.number().int().nonnegative().optional(),
   autonomy: z.object({
     sequence: z.number().int().nonnegative(),
     nextDueMs: z.number().int().nonnegative(),

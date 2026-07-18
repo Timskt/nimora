@@ -183,6 +183,9 @@ const CONTROL_CENTER_LABEL: &str = "control-center";
 const PET_WINDOW_LABEL: &str = "pet";
 const CHARACTER_RENDERER_CHANGED_EVENT: &str = "nimora://character-renderer-changed";
 const PET_AUTONOMY_CHANGED_EVENT: &str = "nimora://pet-autonomy-changed";
+const PET_VITALS_CHANGED_EVENT: &str = "nimora://pet-vitals-changed";
+const PET_VITALS_INTERVAL_MS: u64 = 10 * 60 * 1_000;
+const PET_VITALS_MAX_OFFLINE_INTERVALS: u64 = 24 * 60 / 10;
 const ASSET_PROTOCOL: &str = "nimora-asset";
 const DETERMINISTIC_PROVIDER_ID: &str = "provider:deterministic-local";
 const DEFAULT_AGENT_MODEL: &str = "model:echo-v1";
@@ -10726,6 +10729,20 @@ fn start_pet_autonomy(app: AppHandle) {
                 {
                     let _ = execute_pet_wander(&app);
                 }
+            }
+            if normal
+                && let Ok(now_ms) = current_time_ms()
+                && matches!(
+                    state.runtime.tick_vitals(
+                        now_ms,
+                        PET_VITALS_INTERVAL_MS,
+                        PET_VITALS_MAX_OFFLINE_INTERVALS,
+                    ),
+                    Ok(Some(_))
+                )
+            {
+                let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
+                let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
             }
             std::thread::sleep(Duration::from_secs(1));
         }

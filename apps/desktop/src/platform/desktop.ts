@@ -940,6 +940,7 @@ export interface DesktopApi {
   saveFile(options: { title: string; defaultPath: string; name: string; extensions: string[] }): Promise<string | null>;
   onCharacterRendererChanged(handler: () => void): Promise<() => void>;
   onPetAutonomyChanged(handler: () => void): Promise<() => void>;
+  onPetVitalsChanged(handler: () => void): Promise<() => void>;
   snapshot(): Promise<DesktopSnapshot>;
   drainEvents(): Promise<NimoraEvent[]>;
   outboxSnapshot(): Promise<OutboxSnapshot>;
@@ -1134,6 +1135,7 @@ export function createDesktopApi(
       async saveFile() { return null; },
       async onCharacterRendererChanged() { return () => undefined; },
       async onPetAutonomyChanged() { return () => undefined; },
+      async onPetVitalsChanged() { return () => undefined; },
       async snapshot() { return structuredClone(previewSnapshot); },
       async drainEvents() { return []; },
       async outboxSnapshot() { return { pending: 0, leased: 0, delivered: 0, deadLetter: 0 }; },
@@ -1460,6 +1462,9 @@ export function createDesktopApi(
     },
     async onPetAutonomyChanged(handler) {
       return await listen("nimora://pet-autonomy-changed", handler);
+    },
+    async onPetVitalsChanged(handler) {
+      return await listen("nimora://pet-vitals-changed", handler);
     },
     snapshot: async () => await invokeCommand("desktop_snapshot") as DesktopSnapshot,
     drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],

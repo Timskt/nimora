@@ -527,6 +527,44 @@ impl<R: PetRepository> RuntimeService<R> {
         .map(Some)
     }
 
+    /// Advances durable, provider-independent pet vitals when the interval is due.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when state access, command creation, or atomic persistence fails.
+    pub fn tick_vitals(
+        &self,
+        now_ms: u64,
+        interval_ms: u64,
+        max_intervals: u64,
+    ) -> Result<Option<Command>, RuntimeError> {
+        if !self.snapshot()?.vitals_update_due(now_ms, interval_ms) {
+            return Ok(None);
+        }
+        self.update(
+            |pet| {
+                pet.update_vitals(now_ms, interval_ms, max_intervals);
+                Ok(())
+            },
+            || {
+                Command::new(
+                    "pet.vitals.tick",
+                    serde_json::json!({ "nowMs": now_ms }),
+                    CommandRisk::Safe,
+                )
+            },
+            "pet.vitals.changed",
+            |before, after| {
+                serde_json::json!({
+                    "before": { "energy": before.energy, "mood": before.mood },
+                    "after": { "energy": after.energy, "mood": after.mood },
+                    "affinity": after.affinity,
+                })
+            },
+        )
+        .map(Some)
+    }
+
     /// Records a semantic pointer interaction with the pet.
     ///
     /// # Errors
@@ -1018,6 +1056,47 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, "pet.action.played");
         assert_eq!(events[0].trace_id, command.trace_id);
+    }
+
+    #[test]
+    fn vitals_tick_is_due_bounded_and_publishes_after_persistence() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let initialized = service
+            .tick_vitals(1_000, 100, 6)
+            .expect("baseline")
+            .expect("baseline command");
+        assert!(
+            service
+                .tick_vitals(1_050, 100, 6)
+                .expect("not due")
+                .is_none()
+        );
+        let updated = service
+            .tick_vitals(11_000, 100, 6)
+            .expect("offline catchup")
+            .expect("update command");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.energy, 94);
+        assert_eq!(snapshot.mood, 68);
+        let events = service.drain_events().expect("events");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].trace_id, initialized.trace_id);
+        assert_eq!(events[1].trace_id, updated.trace_id);
+        assert_eq!(events[1].event_type, "pet.vitals.changed");
+    }
+
+    #[test]
+    fn failed_vitals_persistence_does_not_publish_or_mutate_memory() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        service.repository.fail_save.store(true, Ordering::Relaxed);
+        assert!(service.tick_vitals(1_000, 100, 6).is_err());
+        assert_eq!(
+            service.snapshot().expect("snapshot").last_vitals_update_ms,
+            0
+        );
+        assert!(service.drain_events().expect("events").is_empty());
     }
 
     #[test]

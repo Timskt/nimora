@@ -58,6 +58,16 @@ export function PetOverlay() {
       }).catch(() => {
         if (!disposed) setMessage("自主行为更新监听不可用");
       });
+      void desktopApi.onPetVitalsChanged(() => {
+        void desktopApi.snapshot().then((value) => {
+          if (!disposed) setSnapshot(value);
+        });
+      }).then((disposeListener) => {
+        if (disposed) disposeListener();
+        else listeners.push(disposeListener);
+      }).catch(() => {
+        if (!disposed) setMessage("生命状态更新监听不可用");
+      });
     }
     return () => {
       disposed = true;
