@@ -113,11 +113,28 @@ describe("petSchema", () => {
     });
     expect(result.satiety).toBe(100);
     expect(result.cleanliness).toBe(100);
+    expect(result.homePosition).toBeUndefined();
     expect(result.inventory).toEqual([
       { itemId: "berry_bite", quantity: 3 },
       { itemId: "star_ball", quantity: 3 },
       { itemId: "bubble_soap", quantity: 3 },
     ]);
+  });
+
+  it("accepts a finite optional home anchor", () => {
+    const pet = {
+      id: "019bf2c6-4d40-7000-8000-000000000001",
+      name: "Aster",
+      state: "idle",
+      emotion: "happy",
+      position: { x: 0, y: 0 },
+      homePosition: { x: 120, y: 80 },
+      energy: 80,
+      mood: 70,
+      affinity: 0,
+    };
+    expect(petSchema.safeParse(pet).success).toBe(true);
+    expect(petSchema.safeParse({ ...pet, homePosition: { x: Number.NaN, y: 80 } }).success).toBe(false);
   });
 
   it("accepts only bounded, sorted, unique known inventory stacks", () => {

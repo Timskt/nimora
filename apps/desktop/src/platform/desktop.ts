@@ -1017,6 +1017,8 @@ export interface DesktopApi {
   enterSafeMode(): Promise<NimoraCommand | null>;
   exitSafeMode(): Promise<NimoraCommand | null>;
   movePet(x: number, y: number): Promise<NimoraCommand | null>;
+  setPetHome(): Promise<NimoraCommand | null>;
+  returnPetHome(): Promise<NimoraCommand | null>;
   playAction(action: PetAction): Promise<NimoraCommand | null>;
   carePet(action: PetCareAction): Promise<NimoraCommand | null>;
   usePetItem(itemId: PetItemId): Promise<NimoraCommand | null>;
@@ -1071,6 +1073,7 @@ const previewSnapshot: DesktopSnapshot = {
     state: "idle",
     emotion: "neutral",
     position: { x: 80, y: 80 },
+    homePosition: { x: 80, y: 80 },
     energy: 86,
     mood: 82,
     satiety: 72,
@@ -1399,7 +1402,19 @@ export function createDesktopApi(
       async switchProfile() { return null; },
       async enterSafeMode() { return null; },
       async exitSafeMode() { return null; },
-      async movePet() { return null; },
+      async movePet(x, y) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("invalid pet position");
+        previewSnapshot.pet.position = { x, y };
+        return null;
+      },
+      async setPetHome() {
+        previewSnapshot.pet.homePosition = { ...previewSnapshot.pet.position };
+        return null;
+      },
+      async returnPetHome() {
+        if (previewSnapshot.pet.homePosition) previewSnapshot.pet.position = { ...previewSnapshot.pet.homePosition };
+        return null;
+      },
       async playAction(action) {
         const presentation = action === "sleep"
           ? { state: "sleeping" as const, emotion: "sleepy" as const }
@@ -1637,6 +1652,8 @@ export function createDesktopApi(
     enterSafeMode: async () => await invokeCommand("enter_safe_mode") as NimoraCommand,
     exitSafeMode: async () => await invokeCommand("exit_safe_mode") as NimoraCommand,
     movePet: async (x, y) => await invokeCommand("move_pet", { request: { x, y } }) as NimoraCommand,
+    setPetHome: async () => await invokeCommand("set_pet_home") as NimoraCommand,
+    returnPetHome: async () => await invokeCommand("return_pet_home") as NimoraCommand,
     playAction: async (action) => await invokeCommand("play_pet_action", { action }) as NimoraCommand,
     carePet: async (action) => await invokeCommand("care_pet", { action }) as NimoraCommand,
     usePetItem: async (itemId) => await invokeCommand("use_pet_item", { itemId }) as NimoraCommand,

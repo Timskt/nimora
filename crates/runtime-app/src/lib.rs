@@ -405,7 +405,8 @@ impl<R: PetRepository> RuntimeService<R> {
         events: RuntimeEventBus,
     ) -> Result<Self, RuntimeError> {
         let pet = if let Some(mut pet) = repository.load()? {
-            if pet.recover_transient_state() {
+            let migrated_home = pet.ensure_home_position();
+            if pet.recover_transient_state() || migrated_home {
                 repository.save(&pet)?;
             }
             pet
@@ -455,6 +456,34 @@ impl<R: PetRepository> RuntimeService<R> {
             |before, after| {
                 serde_json::json!({ "before": before.position, "after": after.position })
             },
+        )
+    }
+
+    /// Saves the companion's current visible coordinate as its durable home anchor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation or atomic persistence fails.
+    pub fn set_pet_home(&self, position: Position) -> Result<Command, RuntimeError> {
+        self.update(
+            |pet| pet.set_home(position),
+            || Command::new("pet.home.set", serde_json::json!({ "position": position }), CommandRisk::Safe),
+            "pet.home.changed",
+            |before, after| serde_json::json!({ "before": before.home_position, "after": after.home_position }),
+        )
+    }
+
+    /// Returns the companion to a host-validated visible coordinate associated with its home.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the transition is forbidden or atomic persistence fails.
+    pub fn return_pet_home(&self, position: Position) -> Result<Command, RuntimeError> {
+        self.update(
+            |pet| pet.return_home_to(position),
+            || Command::new("pet.home.return", serde_json::json!({ "position": position }), CommandRisk::Safe),
+            "pet.home.returned",
+            |before, after| serde_json::json!({ "homePosition": after.home_position, "before": before.position, "after": after.position }),
         )
     }
 
@@ -1429,6 +1458,56 @@ mod tests {
         service.repository.fail_save.store(true, Ordering::Relaxed);
         assert!(service.rename_pet("Mochi").is_err());
         assert_eq!(service.snapshot().expect("snapshot").name, "Aster");
+        assert!(service.drain_events().expect("events").is_empty());
+    }
+
+    #[test]
+    fn legacy_position_migrates_to_home_and_home_commands_are_correlated() {
+        let mut legacy = Pet::new("Aster").expect("pet");
+        legacy.position = Position { x: 45.0, y: 90.0 };
+        legacy.home_position = None;
+        let repository = MemoryRepository::default();
+        *repository.pet.lock().expect("test lock") = Some(legacy);
+        let service = RuntimeService::initialize(repository, "Aster").expect("runtime");
+        assert_eq!(
+            service.snapshot().expect("snapshot").home_position,
+            Some(Position { x: 45.0, y: 90.0 })
+        );
+
+        let set = service
+            .set_pet_home(Position { x: 100.0, y: 120.0 })
+            .expect("set home");
+        service
+            .move_pet(Position { x: 500.0, y: 320.0 })
+            .expect("move away");
+        let returned = service
+            .return_pet_home(Position { x: 100.0, y: 120.0 })
+            .expect("return home");
+        let events = service.drain_events().expect("events");
+        assert_eq!(events[0].event_type, "pet.home.changed");
+        assert_eq!(events[0].trace_id, set.trace_id);
+        assert_eq!(events[2].event_type, "pet.home.returned");
+        assert_eq!(events[2].trace_id, returned.trace_id);
+        assert_eq!(
+            service.snapshot().expect("snapshot").position,
+            Position { x: 100.0, y: 120.0 }
+        );
+    }
+
+    #[test]
+    fn failed_home_persistence_preserves_anchor_position_and_events() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        service.repository.fail_save.store(true, Ordering::Relaxed);
+        assert!(service.set_pet_home(Position { x: 20.0, y: 30.0 }).is_err());
+        assert!(
+            service
+                .return_pet_home(Position { x: 20.0, y: 30.0 })
+                .is_err()
+        );
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.position, Position { x: 0.0, y: 0.0 });
+        assert_eq!(snapshot.home_position, Some(Position { x: 0.0, y: 0.0 }));
         assert!(service.drain_events().expect("events").is_empty());
     }
 

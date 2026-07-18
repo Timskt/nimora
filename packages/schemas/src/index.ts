@@ -88,6 +88,7 @@ export const petSchema = z.object({
   state: petStateSchema,
   emotion: emotionSchema,
   position: z.object({ x: z.number().finite(), y: z.number().finite() }),
+  homePosition: z.object({ x: z.number().finite(), y: z.number().finite() }).nullable().optional(),
   energy: z.number().int().min(0).max(100),
   mood: z.number().int().min(0).max(100),
   satiety: z.number().int().min(0).max(100).default(100),

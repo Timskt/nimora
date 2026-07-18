@@ -209,6 +209,26 @@ export function PetOverlay() {
     setMessage("安全落地");
   }
 
+  async function setHome() {
+    try {
+      await desktopApi.setPetHome();
+      setSnapshot(await desktopApi.snapshot());
+      setMessage("记住啦，这里就是家");
+    } catch {
+      setMessage("现在不能设置家位置");
+    }
+  }
+
+  async function returnHome() {
+    try {
+      await desktopApi.returnPetHome();
+      setSnapshot(await desktopApi.snapshot());
+      setMessage("回到家啦");
+    } catch {
+      setMessage("回家路线暂时不可用");
+    }
+  }
+
   async function toggleClickThrough() {
     const enabled = !snapshot?.windowPolicy.clickThrough;
     await desktopApi.setClickThrough(enabled);
@@ -371,6 +391,8 @@ export function PetOverlay() {
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("groom"); }}><span>♢</span>梳理</button>
               <button type="button" role="menuitem" onClick={() => setMenuPage("inventory")}><span>▣</span>背包<small>{petInventoryQuantity(snapshot?.pet.inventory ?? [])}</small></button>
               <button type="button" role="menuitem" onClick={() => { setNameDraft(snapshot?.pet.name ?? "Aster"); setMenuPage("rename"); }}><span>✎</span>改名字</button>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void returnHome(); }}><span>⌂</span>回家</button>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void setHome(); }}><span>⌖</span>这里设为家</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("sleep"); }}><span>☾</span>休息</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void toggleClickThrough(); }}><span>⌁</span>鼠标穿透</button>
             </>

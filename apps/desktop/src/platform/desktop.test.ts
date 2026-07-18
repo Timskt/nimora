@@ -19,6 +19,28 @@ describe("desktop platform adapter", () => {
     expect(invoke).toHaveBeenCalledWith("use_pet_item", { itemId: "berry_bite" });
   });
 
+  it("keeps preview home separate and maps native home commands", async () => {
+    const preview = createDesktopApi(false);
+    const original = await preview.snapshot();
+    try {
+      await preview.setPetHome();
+      await preview.movePet(640, 360);
+      expect((await preview.snapshot()).pet.position).toEqual({ x: 640, y: 360 });
+      await preview.returnPetHome();
+      expect((await preview.snapshot()).pet.position).toEqual(original.pet.position);
+      await expect(preview.movePet(Number.NaN, 0)).rejects.toThrow("invalid pet position");
+    } finally {
+      await preview.movePet(original.pet.position.x, original.pet.position.y);
+      await preview.setPetHome();
+    }
+
+    const invoke = vi.fn(async () => null);
+    const native = createDesktopApi(true, invoke);
+    await native.setPetHome();
+    await native.returnPetHome();
+    expect(invoke.mock.calls).toEqual([["set_pet_home"], ["return_pet_home"]]);
+  });
+
   it("normalizes preview names and maps native rename commands", async () => {
     const preview = createDesktopApi(false);
     const originalName = (await preview.snapshot()).pet.name;
@@ -352,6 +374,8 @@ describe("desktop platform adapter", () => {
     await api.enterSafeMode();
     await api.exitSafeMode();
     await api.movePet(24, 42);
+    await api.setPetHome();
+    await api.returnPetHome();
     await api.playAction("work");
     await api.clickPet(12, 24, "left");
     await api.strokePet(42, 240, 3);
@@ -492,6 +516,8 @@ describe("desktop platform adapter", () => {
       ["enter_safe_mode"],
       ["exit_safe_mode"],
       ["move_pet", { request: { x: 24, y: 42 } }],
+      ["set_pet_home"],
+      ["return_pet_home"],
       ["play_pet_action", { action: "work" }],
       ["click_pet", { request: { x: 12, y: 24, button: "left" } }],
       ["stroke_pet", { request: { distancePx: 42, durationMs: 240, reversals: 3 } }],

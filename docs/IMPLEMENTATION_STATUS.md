@@ -258,6 +258,8 @@ Agent Runtime 已新增 Provider 无关的推理策略领域契约，统一 `aut
 
 Pet Identity 已完成首个持久纵切：领域层统一 trim 与 1–64 Unicode scalar 校验，应用层以 `pet.identity.rename` / `pet.identity.renamed` 原子保存前后名称，Tauri Host 在 Normal Mode 下向 Overlay 和控制中心广播 Snapshot 变化。控制中心关系卡与桌宠长按/右键菜单均提供内联改名，动态文案和无障碍标签使用真实名称；Browser Preview 保持纯本地模拟。改名不更换 Pet ID 或角色资产，也不重置关系、生命值、背包和纪念。未来多宠、别名、语音命名和扩展调用必须继续经 Identity Capability 与同一事务边界演进。
 
+经典桌宠“家”已形成持久纵切：Pet Snapshot 区分当前 `position` 与用户家锚点 `homePosition`，旧数据以最后位置一次性迁移；设置家和返回家拥有独立 Command/Event，保存失败零副作用。Tauri Host 在返回前复用多屏安全区恢复算法，原生移动成功后才提交 Snapshot，持久化失败则补偿回滚窗口。Overlay 右键/长按菜单提供“回家”和“这里设为家”，Browser Preview 支持真实本地位置模拟；能力完全离线并在 Drag、Safe/Recovery Mode 下失败关闭。
+
 桌面 Tauri 宿主已接入 `agent-auto-host` 的持久单轮 Facade，并复用现有生产 Provider Registry、动态 Skill Tool Registry、Gateway Tool Backend 与 Capability Gateway。版本化 IPC 和 TypeScript 平台层支持显式 Session、Workspace、约束、输出预算与离线策略；Safe Mode、Recovery Mode 和非法预算均在 Provider 前 fail-closed。当前仍是用户触发的一次 Resume + 单轮执行，后台有界监督循环、桌面 Goal/Plan/Attempt UI、不确定 Attempt 对账和网络数据出境确认尚未闭环，因此 AI Agent 与 CLI 领域继续标记为“部分实现”。
 
 宿主无关的有界 Loop Facade 已实现连续 Continue、终态停止、业务暂停停止、Workspace Drift 停止和 `1..=256` 批次公平让出；真实 SQLite 测试证明两轮 Tool continuation 到完成、单轮让出后 Running/Checkpoint 保持，以及非法上限在 Provider 前拒绝。

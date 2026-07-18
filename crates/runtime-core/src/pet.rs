@@ -220,6 +220,8 @@ pub struct Pet {
     pub state: PetState,
     pub emotion: Emotion,
     pub position: Position,
+    #[serde(default)]
+    pub home_position: Option<Position>,
     pub energy: u8,
     pub mood: u8,
     #[serde(default = "default_need_level")]
@@ -288,6 +290,7 @@ impl Pet {
             state: PetState::Idle,
             emotion: Emotion::Neutral,
             position: Position { x: 0.0, y: 0.0 },
+            home_position: Some(Position { x: 0.0, y: 0.0 }),
             energy: 100,
             mood: 70,
             satiety: 100,
@@ -312,6 +315,41 @@ impl Pet {
     pub fn move_to(&mut self, position: Position) -> Result<(), PetError> {
         position.validate()?;
         self.position = position;
+        Ok(())
+    }
+
+    /// Migrates a legacy pet by treating its last durable position as home.
+    pub fn ensure_home_position(&mut self) -> bool {
+        if self.home_position.is_some() {
+            return false;
+        }
+        self.home_position = Some(self.position);
+        true
+    }
+
+    /// Saves a finite desktop coordinate as the companion's home.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PetError::InvalidPosition`] when either coordinate is NaN or infinite.
+    pub fn set_home(&mut self, position: Position) -> Result<(), PetError> {
+        position.validate()?;
+        self.home_position = Some(position);
+        Ok(())
+    }
+
+    /// Moves the companion to a host-validated visible position while preserving its home anchor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PetError::InvalidPosition`] for a non-finite position and
+    /// [`PetError::InvalidTransition`] while the companion is being dragged.
+    pub fn return_home_to(&mut self, position: Position) -> Result<(), PetError> {
+        if self.state == PetState::Dragged {
+            return Err(PetError::InvalidTransition);
+        }
+        self.move_to(position)?;
+        self.enter_idle();
         Ok(())
     }
 
@@ -452,6 +490,9 @@ impl Pet {
         }
         if !self.position.x.is_finite() || !self.position.y.is_finite() {
             return Err(PetError::InvalidPosition);
+        }
+        if let Some(home_position) = self.home_position {
+            home_position.validate()?;
         }
         if self.energy > 100
             || self.mood > 100
@@ -1301,6 +1342,25 @@ mod tests {
                 y: 1.0
             }),
             Err(PetError::InvalidPosition)
+        );
+    }
+
+    #[test]
+    fn home_anchor_is_independent_from_current_position_and_rejects_drag_return() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.set_home(Position { x: 120.0, y: 80.0 })
+            .expect("set home");
+        pet.move_to(Position { x: 480.0, y: 320.0 })
+            .expect("move away");
+        assert_eq!(pet.home_position, Some(Position { x: 120.0, y: 80.0 }));
+        pet.return_home_to(Position { x: 120.0, y: 80.0 })
+            .expect("return home");
+        assert_eq!(pet.position, Position { x: 120.0, y: 80.0 });
+
+        pet.begin_drag().expect("drag");
+        assert_eq!(
+            pet.return_home_to(Position { x: 120.0, y: 80.0 }),
+            Err(PetError::InvalidTransition)
         );
     }
 

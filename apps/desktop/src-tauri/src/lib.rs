@@ -6702,6 +6702,48 @@ fn move_pet(
     }
 }
 
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn set_pet_home(state: State<'_, DesktopState>) -> Result<Command, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let position = state.runtime.snapshot()?.position;
+    Ok(state.runtime.set_pet_home(position)?)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn return_pet_home(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<Command, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let snapshot = state.runtime.snapshot()?;
+    let home = snapshot.home_position.unwrap_or(snapshot.position);
+    let window = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
+    let previous = window.outer_position()?;
+    let requested =
+        tauri::PhysicalPosition::new(screen_coordinate(home.x)?, screen_coordinate(home.y)?);
+    let target = visible_position_for_window(&window, requested)?.unwrap_or(requested);
+    window.set_position(tauri::Position::Physical(target))?;
+    let position = Position {
+        x: f64::from(target.x),
+        y: f64::from(target.y),
+    };
+    match state.runtime.return_pet_home(position) {
+        Ok(command) => {
+            let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
+            let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
+            Ok(command)
+        }
+        Err(error) => {
+            let _ = window.set_position(tauri::Position::Physical(previous));
+            Err(error.into())
+        }
+    }
+}
+
 fn screen_coordinate(value: f64) -> Result<i32, DesktopError> {
     if !value.is_finite() || value < f64::from(i32::MIN) || value > f64::from(i32::MAX) {
         return Err(DesktopError::InvalidPosition);
@@ -10736,6 +10778,8 @@ pub fn run() {
             enter_safe_mode,
             exit_safe_mode,
             move_pet,
+            set_pet_home,
+            return_pet_home,
             play_pet_action,
             care_pet,
             use_pet_item,
@@ -10986,6 +11030,19 @@ fn ensure_pet_window_visible(app: &AppHandle) -> Result<(), DesktopError> {
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
     let current = window.outer_position()?;
+    let Some(target) = visible_position_for_window(&window, current)? else {
+        return Ok(());
+    };
+    if target != current {
+        window.set_position(tauri::Position::Physical(target))?;
+    }
+    Ok(())
+}
+
+fn visible_position_for_window(
+    window: &tauri::WebviewWindow,
+    position: tauri::PhysicalPosition<i32>,
+) -> Result<Option<tauri::PhysicalPosition<i32>>, DesktopError> {
     let window_size = window.outer_size()?;
     let mut monitors = Vec::new();
     if let Some(primary) = window.primary_monitor()? {
@@ -11007,13 +11064,7 @@ fn ensure_pet_window_visible(app: &AppHandle) -> Result<(), DesktopError> {
                 height: monitor.size().height,
             }),
     );
-    let Some(target) = recover_visible_position(current, window_size, &monitors) else {
-        return Ok(());
-    };
-    if target != current {
-        window.set_position(tauri::Position::Physical(target))?;
-    }
-    Ok(())
+    Ok(recover_visible_position(position, window_size, &monitors))
 }
 
 fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
