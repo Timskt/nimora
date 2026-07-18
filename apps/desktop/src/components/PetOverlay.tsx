@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction, PetCareAction } from "../platform/desktop";
+import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction, PetCareAction, PetItemId } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 import { RendererErrorBoundary } from "./RendererErrorBoundary";
 import { petStatusMessage } from "./petPresentation";
@@ -13,6 +13,7 @@ import {
   type PetGestureTrail,
 } from "./petGesture";
 import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
+import { petInventoryQuantity, petItemPresentation } from "./petItems";
 
 const GltfRenderer = lazy(async () => {
   const module = await import("./GltfRenderer");
@@ -25,6 +26,7 @@ export function PetOverlay() {
   const [rendererFailed, setRendererFailed] = useState(false);
   const [message, setMessage] = useState("正在醒来…");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPage, setMenuPage] = useState<"root" | "inventory">("root");
   const gestureTrail = useRef<PetGestureTrail | null>(null);
   const dragging = useRef(false);
   const suppressClick = useRef(false);
@@ -103,8 +105,12 @@ export function PetOverlay() {
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setMenuOpen(false);
-        petButton.current?.focus();
+        if (menuPage === "inventory") {
+          setMenuPage("root");
+        } else {
+          setMenuOpen(false);
+          petButton.current?.focus();
+        }
       }
     }
     window.addEventListener("keydown", closeOnEscape);
@@ -113,11 +119,11 @@ export function PetOverlay() {
       if (longPressTimer.current) clearTimeout(longPressTimer.current);
       if (singleClickTimer.current) clearTimeout(singleClickTimer.current);
     };
-  }, []);
+  }, [menuPage]);
 
   useEffect(() => {
     if (menuOpen) menu.current?.querySelector<HTMLButtonElement>("button")?.focus();
-  }, [menuOpen]);
+  }, [menuOpen, menuPage]);
 
   const handleRendererFailure = useCallback(() => {
     setRendererFailed(true);
@@ -163,6 +169,17 @@ export function PetOverlay() {
     }
   }
 
+  async function useItem(itemId: PetItemId) {
+    try {
+      await desktopApi.usePetItem(itemId);
+      const next = await desktopApi.snapshot();
+      setSnapshot(next);
+      setMessage(`已使用${petItemPresentation(itemId).label}`);
+    } catch {
+      setMessage("道具不可用或正在冷却");
+    }
+  }
+
   async function drag() {
     setMessage("抓稳啦…");
     await desktopApi.dragPet();
@@ -187,6 +204,7 @@ export function PetOverlay() {
   }
 
   function openPetMenu() {
+    setMenuPage("root");
     setMenuOpen(true);
     setMessage("想做什么呢？");
   }
@@ -323,12 +341,26 @@ export function PetOverlay() {
         <span className="overlay-shadow" aria-hidden="true" />
       </button>
       {menuOpen ? (
-        <div ref={menu} className="overlay-pet-menu" role="menu" aria-label="宠物菜单">
-          <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("feed"); }}><span>◒</span>喂食</button>
-          <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("play"); }}><span>✧</span>玩耍</button>
-          <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("groom"); }}><span>♢</span>梳理</button>
-          <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("sleep"); }}><span>☾</span>休息</button>
-          <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void toggleClickThrough(); }}><span>⌁</span>鼠标穿透</button>
+        <div ref={menu} className={`overlay-pet-menu${menuPage === "inventory" ? " inventory-page" : ""}`} role="menu" aria-label={menuPage === "inventory" ? "随身背包" : "宠物菜单"}>
+          {menuPage === "root" ? (
+            <>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("feed"); }}><span>◒</span>喂食</button>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("play"); }}><span>✧</span>玩耍</button>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("groom"); }}><span>♢</span>梳理</button>
+              <button type="button" role="menuitem" onClick={() => setMenuPage("inventory")}><span>▣</span>背包<small>{petInventoryQuantity(snapshot?.pet.inventory ?? [])}</small></button>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("sleep"); }}><span>☾</span>休息</button>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void toggleClickThrough(); }}><span>⌁</span>鼠标穿透</button>
+            </>
+          ) : (
+            <>
+              <button className="inventory-back" type="button" role="menuitem" onClick={() => setMenuPage("root")}><span>‹</span>返回宠物菜单</button>
+              {snapshot?.pet.inventory.map((stack) => {
+                const item = petItemPresentation(stack.itemId);
+                return <button className="inventory-item" type="button" role="menuitem" key={stack.itemId} onClick={() => void useItem(stack.itemId)}><span>{item.glyph}</span><b>{item.label}<small>{item.effect}</small></b><em>×{stack.quantity}</em></button>;
+              })}
+              {(snapshot?.pet.inventory.length ?? 0) === 0 ? <p className="overlay-inventory-empty">背包空空的<br />已有物品不会过期</p> : null}
+            </>
+          )}
         </div>
       ) : null}
       <div className="overlay-actions" aria-label="宠物快捷操作">

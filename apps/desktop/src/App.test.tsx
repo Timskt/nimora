@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { itemPresentation, keepsakePresentation, navigation, navItemClassName, runtimeActivities, voiceGain } from "./App";
+import { petInventoryQuantity, petItemPresentation } from "./components/petItems";
 
 describe("navItemClassName", () => {
   it("adds the active state only to the selected destination", () => {
@@ -34,6 +35,11 @@ describe("itemPresentation", () => {
   it("keeps domain identity separate from localized presentation", () => {
     expect(itemPresentation("berry_bite").label).toBe("莓果小食");
     expect(itemPresentation("bubble_soap").effect).toContain("清洁 +45");
+    expect(itemPresentation("star_ball")).toBe(petItemPresentation("star_ball"));
+    expect(petInventoryQuantity([
+      { itemId: "berry_bite", quantity: 3 },
+      { itemId: "star_ball", quantity: 2 },
+    ])).toBe(5);
   });
 });
 

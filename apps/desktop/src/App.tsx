@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { ProfileManager } from "./components/ProfileManager";
 import { LazyWorkspace } from "./components/LazyWorkspace";
+import { petItemPresentation } from "./components/petItems";
 import { petGrowth } from "./components/petGrowth";
 import type { ActiveThemeSnapshot, AssetPreviewAudio, DesktopSnapshot, OutboxSnapshot, PetCareAction, PetItemId, ThemeDescriptor } from "./platform/desktop";
 import { desktopApi } from "./platform/desktop";
@@ -32,14 +33,8 @@ export function keepsakePresentation(id: keyof typeof keepsakeMetadata) {
   return keepsakeMetadata[id];
 }
 
-const itemMetadata: Record<PetItemId, { glyph: string; label: string; effect: string }> = {
-  berry_bite: { glyph: "●", label: "莓果小食", effect: "饱腹 +35 · 精力 +30" },
-  star_ball: { glyph: "✦", label: "星星球", effect: "心情 +18 · 陪伴 +3" },
-  bubble_soap: { glyph: "○", label: "泡泡皂", effect: "清洁 +45 · 心情 +8" },
-};
-
 export function itemPresentation(id: PetItemId) {
-  return itemMetadata[id];
+  return petItemPresentation(id);
 }
 
 async function playVoiceCue(cue: "pet.celebrate" | "pet.work", quiet: boolean): Promise<void> {

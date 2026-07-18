@@ -55,6 +55,8 @@ Needs → Mood → Intent → Action Plan → Renderer Semantics → Adapter Ani
 
 背包资产完全本地拥有、离线可用、不过期、不因关系下降或 Provider 状态被回收。未来奖励系统、Creator 内容包、导入包和可选商店只能通过受审计的 Grant 契约授予物品，不能绕过库存校验、改变使用语义或回收既有资产。AI、Skill、Program 只能经 Capability Gateway 请求“使用已拥有道具”，不能直接改数量；控制中心关闭、AI 禁用或网络断开时桌宠、背包和生命循环仍完整运行。浏览器 Preview 只用于 UI 模拟，原生 Tauri Overlay 才是桌面生命体权威宿主。
 
+背包必须从桌宠本体直接可达，而不能要求用户先打开控制中心。长按或右键打开的轻量菜单显示当前道具总数，并进入同窗口二级背包页；每项呈现稳定图形、名称、核心效果和实时数量，点击后通过同一 `use_pet_item` 宿主命令扣减并留在背包页。Esc 在二级页先返回宠物菜单，再次 Esc 才关闭并把焦点交还桌宠；空背包仍保留无焦虑说明。该交互不扩大 260×300 原生窗口、不创建网页弹窗，也不把 Renderer 变成库存权威。
+
 生命值会影响行为而不制造惩罚性打扰：Energy ≤ 25 时下一次自主行为稳定优先 Rest；Energy 充足但 Mood ≤ 25 时优先温和的 Observe/互动反馈；其余状态继续按持久序列确定性轮换。Energy 优先级高于 Mood，防止疲惫角色仍被迫活跃。Idle 情绪同步派生为 Sleepy、Sad 或 Neutral，但不会覆盖 Drag、Work、Interact 等活动状态。Overlay 只在悬浮/键盘聚焦气泡中表达需求，不发送系统通知、不自动调用 AI、不访问网络；内置角色提供困倦和低落视觉细节，第三方 Renderer 继续消费统一 Sleep/Interact 行为语义。
 
 Sleep 是领域状态而非纯动画。用户主动休息时，每个生命周期恢复 2 Energy，最多 100；Mood、Satiety 与 Cleanliness 仍按低压力节奏自然演化。自主 Rest 的动作时长短于生命周期，因此在一次合法完成时直接恢复 8 Energy；被用户拖拽、Safe/Focus 策略或其它状态中断时不获得完成收益。两条路径均经过原子 Snapshot/Event 持久化，离线追赶受既有 24 小时上限约束。
