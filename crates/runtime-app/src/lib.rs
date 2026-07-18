@@ -1,9 +1,9 @@
 //! Application use cases and persistence ports for the `Nimora` runtime.
 
 use nimora_runtime_core::{
-    Command, CommandError, CommandRisk, Event, EventError, EventSource, Pet, PetAction, PetError,
-    PointerButton, Position, Profile, ProfileError, ProfileId, ProfilePolicy, RuntimeMode,
-    SafeModeReason, SafetySnapshot,
+    Command, CommandError, CommandRisk, Event, EventError, EventSource, Pet, PetAction,
+    PetAutonomyDecision, PetAutonomyPolicy, PetError, PointerButton, Position, Profile,
+    ProfileError, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -485,6 +485,46 @@ impl<R: PetRepository> RuntimeService<R> {
                 })
             },
         )
+    }
+
+    /// Advances the deterministic offline autonomy state machine once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the resulting transition cannot be persisted atomically.
+    pub fn tick_autonomy(
+        &self,
+        policy: PetAutonomyPolicy,
+        now_ms: u64,
+    ) -> Result<Option<Command>, RuntimeError> {
+        let decision = self.snapshot()?.autonomy_decision(policy, now_ms);
+        if decision == PetAutonomyDecision::Noop {
+            return Ok(None);
+        }
+        self.update(
+            |pet| {
+                pet.apply_autonomy_decision(decision, policy, now_ms);
+                Ok(())
+            },
+            || {
+                Command::new(
+                    "pet.autonomy.tick",
+                    serde_json::json!({ "nowMs": now_ms }),
+                    CommandRisk::Safe,
+                )
+            },
+            "pet.autonomy.transitioned",
+            |before, after| {
+                serde_json::json!({
+                    "decision": format!("{decision:?}"),
+                    "beforeState": before.state,
+                    "afterState": after.state,
+                    "intent": after.autonomy.active_intent,
+                    "nextDueMs": after.autonomy.next_due_ms,
+                })
+            },
+        )
+        .map(Some)
     }
 
     /// Records a semantic pointer interaction with the pet.

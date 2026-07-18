@@ -123,8 +123,9 @@ use nimora_runtime_app::{
     RuntimeEventBus, RuntimeEventSubscription, RuntimeService, SafetyService, SafetyServiceError,
 };
 use nimora_runtime_core::{
-    Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction, PointerButton,
-    Position, Profile, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
+    Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction, PetAutonomyPolicy,
+    PointerButton, Position, Profile, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason,
+    SafetySnapshot,
 };
 use nimora_secret_store::{
     MemorySecretStore, SecretPresence, SecretReference, SecretStore, SecretStoreError,
@@ -181,6 +182,7 @@ use zeroize::Zeroizing;
 const CONTROL_CENTER_LABEL: &str = "control-center";
 const PET_WINDOW_LABEL: &str = "pet";
 const CHARACTER_RENDERER_CHANGED_EVENT: &str = "nimora://character-renderer-changed";
+const PET_AUTONOMY_CHANGED_EVENT: &str = "nimora://pet-autonomy-changed";
 const ASSET_PROTOCOL: &str = "nimora-asset";
 const DETERMINISTIC_PROVIDER_ID: &str = "provider:deterministic-local";
 const DEFAULT_AGENT_MODEL: &str = "model:echo-v1";
@@ -218,6 +220,7 @@ struct DesktopState {
     policy_before_safe_mode: Mutex<Option<WindowPolicy>>,
     position_revision: AtomicU64,
     dragging: AtomicBool,
+    autonomy_stop: AtomicBool,
     asset_store: PathBuf,
     active_asset_selection_write: Mutex<()>,
     program_store: PathBuf,
@@ -668,6 +671,7 @@ impl DesktopState {
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
+            autonomy_stop: AtomicBool::new(false),
             asset_store,
             active_asset_selection_write: Mutex::new(()),
             program_store,
@@ -748,6 +752,7 @@ impl DesktopState {
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
+            autonomy_stop: AtomicBool::new(false),
             asset_store,
             active_asset_selection_write: Mutex::new(()),
             program_store,
@@ -10495,6 +10500,7 @@ pub fn run() {
     application.run(|app, event| {
         if matches!(event, RunEvent::ExitRequested { .. }) {
             let state = app.state::<DesktopState>();
+            state.autonomy_stop.store(true, Ordering::Release);
             let _ = quiesce_auto_mode_jobs(&state, AUTO_MODE_SHUTDOWN_TIMEOUT, "shutdown-timeout");
             let _ = stop_automation_event_sessions(&state);
         }
@@ -10582,8 +10588,37 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
         });
     }
     create_pet_window(app.handle())?;
+    if schedule_backups {
+        start_pet_autonomy(app.handle().clone());
+    }
     create_tray(app.handle())?;
     Ok(())
+}
+
+fn start_pet_autonomy(app: AppHandle) {
+    std::thread::spawn(move || {
+        while let Some(state) = app.try_state::<DesktopState>() {
+            if state.autonomy_stop.load(Ordering::Acquire) {
+                break;
+            }
+            let normal = state
+                .safety
+                .snapshot()
+                .is_ok_and(|snapshot| snapshot.mode == RuntimeMode::Normal);
+            if normal
+                && let Ok(now_ms) = current_time_ms()
+                && matches!(
+                    state
+                        .runtime
+                        .tick_autonomy(PetAutonomyPolicy::default(), now_ms),
+                    Ok(Some(_))
+                )
+            {
+                let _ = app.emit_to(PET_WINDOW_LABEL, PET_AUTONOMY_CHANGED_EVENT, ());
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    });
 }
 
 fn discover_agent_provider_worker(app: &AppHandle) -> Option<PathBuf> {

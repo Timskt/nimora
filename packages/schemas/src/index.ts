@@ -71,6 +71,12 @@ export const petSchema = z.object({
   energy: z.number().int().min(0).max(100),
   mood: z.number().int().min(0).max(100),
   affinity: z.number().int().min(0).max(100),
+  autonomy: z.object({
+    sequence: z.number().int().nonnegative(),
+    nextDueMs: z.number().int().nonnegative(),
+    activeUntilMs: z.number().int().nonnegative().nullable(),
+    activeIntent: z.enum(["observe", "explore", "rest"]).nullable(),
+  }).optional(),
 });
 
 export const profileModeSchema = z.enum([

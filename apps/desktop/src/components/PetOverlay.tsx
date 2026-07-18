@@ -23,7 +23,7 @@ export function PetOverlay() {
 
   useEffect(() => {
     let disposed = false;
-    let unlisten: (() => void) | undefined;
+    const listeners: Array<() => void> = [];
     void Promise.all([desktopApi.snapshot(), desktopApi.activeCharacterRenderer()]).then(([value, descriptor]) => {
       if (disposed) return;
       setSnapshot(value);
@@ -44,14 +44,24 @@ export function PetOverlay() {
         });
       }).then((disposeListener) => {
         if (disposed) disposeListener();
-        else unlisten = disposeListener;
+        else listeners.push(disposeListener);
       }).catch(() => {
         if (!disposed) setMessage("角色更新监听不可用");
+      });
+      void desktopApi.onPetAutonomyChanged(() => {
+        void desktopApi.snapshot().then((value) => {
+          if (!disposed) setSnapshot(value);
+        });
+      }).then((disposeListener) => {
+        if (disposed) disposeListener();
+        else listeners.push(disposeListener);
+      }).catch(() => {
+        if (!disposed) setMessage("自主行为更新监听不可用");
       });
     }
     return () => {
       disposed = true;
-      unlisten?.();
+      listeners.forEach((unlisten) => unlisten());
     };
   }, [refreshRenderer]);
 

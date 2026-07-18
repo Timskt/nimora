@@ -53,6 +53,61 @@ pub enum PetAction {
     Celebrate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PetIntent {
+    Observe,
+    Explore,
+    Rest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PetAutonomyPolicy {
+    pub enabled: bool,
+    pub quiet: bool,
+    pub focus: bool,
+    pub idle_delay_ms: u64,
+    pub action_duration_ms: u64,
+    pub cooldown_ms: u64,
+}
+
+impl Default for PetAutonomyPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quiet: false,
+            focus: false,
+            idle_delay_ms: 20_000,
+            action_duration_ms: 8_000,
+            cooldown_ms: 45_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PetAutonomyState {
+    pub sequence: u64,
+    pub next_due_ms: u64,
+    pub active_until_ms: Option<u64>,
+    pub active_intent: Option<PetIntent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PetAutonomyDecision {
+    Noop,
+    Schedule {
+        next_due_ms: u64,
+    },
+    Start {
+        intent: PetIntent,
+        action: PetAction,
+    },
+    Finish,
+    Interrupt,
+}
+
 impl PetAction {
     pub const ALL: [Self; 5] = [
         Self::Idle,
@@ -102,6 +157,8 @@ pub struct Pet {
     pub energy: u8,
     pub mood: u8,
     pub affinity: u8,
+    #[serde(default)]
+    pub autonomy: PetAutonomyState,
 }
 
 impl Pet {
@@ -125,6 +182,7 @@ impl Pet {
             energy: 100,
             mood: 70,
             affinity: 0,
+            autonomy: PetAutonomyState::default(),
         })
     }
 
@@ -241,6 +299,78 @@ impl Pet {
         }
         false
     }
+
+    #[must_use]
+    pub fn autonomy_decision(&self, policy: PetAutonomyPolicy, now_ms: u64) -> PetAutonomyDecision {
+        if let Some(active_until_ms) = self.autonomy.active_until_ms {
+            let expected_state = match self.autonomy.active_intent {
+                Some(PetIntent::Observe) => PetState::Interacting,
+                Some(PetIntent::Explore) => PetState::Walking,
+                Some(PetIntent::Rest) => PetState::Sleeping,
+                None => return PetAutonomyDecision::Interrupt,
+            };
+            if self.state != expected_state {
+                return PetAutonomyDecision::Interrupt;
+            }
+            return if now_ms >= active_until_ms {
+                PetAutonomyDecision::Finish
+            } else {
+                PetAutonomyDecision::Noop
+            };
+        }
+        if !policy.enabled || policy.quiet || policy.focus {
+            return PetAutonomyDecision::Noop;
+        }
+        if self.state != PetState::Idle {
+            return PetAutonomyDecision::Noop;
+        }
+        if self.autonomy.next_due_ms == 0 {
+            return PetAutonomyDecision::Schedule {
+                next_due_ms: now_ms.saturating_add(policy.idle_delay_ms),
+            };
+        }
+        if now_ms < self.autonomy.next_due_ms {
+            return PetAutonomyDecision::Noop;
+        }
+        let (intent, action) = match self.autonomy.sequence % 3 {
+            0 => (PetIntent::Observe, PetAction::Celebrate),
+            1 => (PetIntent::Explore, PetAction::Walk),
+            _ => (PetIntent::Rest, PetAction::Sleep),
+        };
+        PetAutonomyDecision::Start { intent, action }
+    }
+
+    pub fn apply_autonomy_decision(
+        &mut self,
+        decision: PetAutonomyDecision,
+        policy: PetAutonomyPolicy,
+        now_ms: u64,
+    ) {
+        match decision {
+            PetAutonomyDecision::Noop => {}
+            PetAutonomyDecision::Schedule { next_due_ms } => {
+                self.autonomy.next_due_ms = next_due_ms;
+            }
+            PetAutonomyDecision::Start { intent, action } => {
+                self.apply_action(action);
+                self.autonomy.active_intent = Some(intent);
+                self.autonomy.active_until_ms =
+                    Some(now_ms.saturating_add(policy.action_duration_ms));
+                self.autonomy.sequence = self.autonomy.sequence.saturating_add(1);
+            }
+            PetAutonomyDecision::Finish => {
+                self.apply_action(PetAction::Idle);
+                self.autonomy.active_intent = None;
+                self.autonomy.active_until_ms = None;
+                self.autonomy.next_due_ms = now_ms.saturating_add(policy.cooldown_ms);
+            }
+            PetAutonomyDecision::Interrupt => {
+                self.autonomy.active_intent = None;
+                self.autonomy.active_until_ms = None;
+                self.autonomy.next_due_ms = now_ms.saturating_add(policy.cooldown_ms);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -258,6 +388,58 @@ pub enum PetError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autonomy_is_deterministic_and_respects_cooldown() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        let policy = PetAutonomyPolicy {
+            idle_delay_ms: 10,
+            action_duration_ms: 5,
+            cooldown_ms: 20,
+            ..PetAutonomyPolicy::default()
+        };
+        let scheduled = pet.autonomy_decision(policy, 100);
+        assert_eq!(
+            scheduled,
+            PetAutonomyDecision::Schedule { next_due_ms: 110 }
+        );
+        pet.apply_autonomy_decision(scheduled, policy, 100);
+        let started = pet.autonomy_decision(policy, 110);
+        assert_eq!(
+            started,
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Observe,
+                action: PetAction::Celebrate,
+            }
+        );
+        pet.apply_autonomy_decision(started, policy, 110);
+        assert_eq!(pet.state, PetState::Interacting);
+        let finished = pet.autonomy_decision(policy, 115);
+        assert_eq!(finished, PetAutonomyDecision::Finish);
+        pet.apply_autonomy_decision(finished, policy, 115);
+        assert_eq!(pet.state, PetState::Idle);
+        assert_eq!(pet.autonomy.next_due_ms, 135);
+    }
+
+    #[test]
+    fn user_state_interrupts_autonomy_without_being_overwritten() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        let policy = PetAutonomyPolicy::default();
+        pet.apply_autonomy_decision(
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Explore,
+                action: PetAction::Walk,
+            },
+            policy,
+            100,
+        );
+        pet.begin_drag().expect("user drag preempts autonomy");
+        let decision = pet.autonomy_decision(policy, 101);
+        assert_eq!(decision, PetAutonomyDecision::Interrupt);
+        pet.apply_autonomy_decision(decision, policy, 101);
+        assert_eq!(pet.state, PetState::Dragged);
+        assert_eq!(pet.autonomy.active_intent, None);
+    }
 
     #[test]
     fn clamps_vitals_to_domain_range() {
