@@ -2328,6 +2328,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nimora-creator-composition"
+version = "0.1.0"
+dependencies = [
+ "nimora-agent-runtime",
+ "nimora-runtime-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "nimora-creator-draft"
 version = "0.1.0"
 dependencies = [
@@ -2352,6 +2364,7 @@ dependencies = [
  "nimora-automation-agent-bridge",
  "nimora-automation-capability-bridge",
  "nimora-automation-runtime",
+ "nimora-creator-composition",
  "nimora-creator-draft",
  "nimora-diagnostics-bundle",
  "nimora-model-importer",

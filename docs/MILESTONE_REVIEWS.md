@@ -277,6 +277,16 @@ Actions 分钟：
 - 证据：Creator Contract 8 项、Desktop Host 126 项、Frontend 42 项测试覆盖严格解析、重复/非法能力、原子保存、符号链接、IPC 映射和无批准安装入口。
 - 下一缺口：当前 Gap 仍由无 Tool Creator 模型根据受信指令提出，尚未用最小 Catalog Slice 做确定性存在性核验；下一纵切必须引入 Catalog Snapshot 与 Composition Planner，不能把模型判断升级为宿主事实。
 
+## M-2026-07-18 Creator Catalog Snapshot 与精确组合核验
+
+- 问题：严格 Gap Schema 只能约束模型输出形状，不能证明模型声称缺失的能力确实不在当前生产 Registry；保存的报告也缺少可复验目录基线。
+- 裁决：不建立第二套可执行 Registry。新增纯投影层，从桌面生产 Tool Registry（含当前激活 Skill Contribution）只提取已复验 ID 与 effect，第三方标题/描述和实现对象均不进入受信提示；快照稳定摘要后由纯函数 Planner 做 Exact-ID 集合判定。
+- 信任边界：Snapshot 进入受信 System Message；Provider 无目录查询 Tool。宿主解析 Gap 后重新匹配，任何已注册 ID 被声称缺失都失败关闭；前端只接收摘要与计划，不参与判定。
+- 持久化：保存时再次读取实时 Registry 并重算计划，原子文件升级为 `nimora.persisted-capability-gap/1`，同时保留 Gap、目录摘要和 missing/resolved 证据。
+- UI：新增“宿主目录已核验”证据卡和摘要，但同时明确“未证明自然语言目标不存在其他组合路径”，避免将精确集合判断包装成语义完备性。
+- 证据：`creator-composition` 3 项覆盖稳定快照、精确分离和篡改/重复拒绝；Desktop 新增 3 项覆盖 Skill 动态目录、矛盾 Gap 拒绝与真实缺失证明；Frontend 保持 42 项并增加核验语义断言。
+- 下一缺口：Exact-ID Planner 不理解能力输入输出、前置条件、数据分类、授权范围和成本，不能发现多步转换路径；下一阶段应建立只读 Composition Graph 与有界搜索，而不是让模型自行宣称可组合。
+
 ## M-2026-07-18 AI 辅助扩展草案
 
 - 目标：让外接 AI 帮用户创建 User Program、Skill 与 Automation，同时不继承普通 Agent 的生产 Tool 权限。

@@ -69,6 +69,9 @@ use nimora_automation_runtime::{
     ActionFailure, AutomationBackend, AutomationDefinition, AutomationEngine, AutomationError,
     AutomationExecutionContext, AutomationRun, RunControl, RunMode, Uncancelled,
 };
+use nimora_creator_composition::{
+    CapabilityCatalogSnapshot, CapabilityCompositionPlan, CompositionError, plan_exact_capabilities,
+};
 use nimora_creator_draft::{
     CapabilityGap, CreatorArtifactKind, CreatorDraft, CreatorDraftError, CreatorDraftRequest,
     CreatorProposal, creator_system_instruction, parse_creator_proposal, validate_creator_draft,
@@ -1210,6 +1213,8 @@ enum DesktopError {
     #[error(transparent)]
     CreatorDraft(#[from] CreatorDraftError),
     #[error(transparent)]
+    CreatorComposition(#[from] CompositionError),
+    #[error(transparent)]
     CreatorWorkspace(#[from] CreatorWorkspaceError),
     #[error("operation is unavailable from this window")]
     WindowForbidden,
@@ -1336,6 +1341,8 @@ struct DesktopCreatorDraftResult {
     task: AgentTask,
     draft: Option<CreatorDraft>,
     capability_gap: Option<CapabilityGap>,
+    catalog_digest: String,
+    composition_plan: Option<CapabilityCompositionPlan>,
     usage: nimora_agent_runtime::ProviderUsage,
     finish_reason: nimora_agent_runtime::ProviderFinishReason,
 }
@@ -3049,6 +3056,7 @@ fn generate_creator_draft_inner(
         return Err(DesktopError::SafeModeActive);
     }
     let draft_request = CreatorDraftRequest::new(request.kind, request.requirement)?;
+    let creator_catalog = creator_capability_catalog(state)?;
     let providers = desktop_provider_registry(state)?;
     let now_ms = current_time_ms()?;
     let tool_ids = BTreeSet::new();
@@ -3090,7 +3098,7 @@ fn generate_creator_draft_inner(
         vec![
             ProviderMessage::text(
                 ProviderMessageRole::System,
-                creator_system_instruction(request.kind),
+                creator_system_instruction(request.kind, &creator_catalog.compact_prompt_slice()?),
                 DataClassification::Public,
                 true,
             ),
@@ -3112,9 +3120,12 @@ fn generate_creator_draft_inner(
         ));
     };
     let proposal = parse_creator_proposal(&draft_request, &response.content)?;
-    let (outcome, draft, capability_gap) = match proposal {
-        CreatorProposal::Draft(draft) => ("draft", Some(*draft), None),
-        CreatorProposal::CapabilityGap(gap) => ("capability-gap", None, Some(gap)),
+    let (outcome, draft, capability_gap, composition_plan) = match proposal {
+        CreatorProposal::Draft(draft) => ("draft", Some(*draft), None, None),
+        CreatorProposal::CapabilityGap(gap) => {
+            let plan = verify_capability_gap_against_catalog(&creator_catalog, &gap)?;
+            ("capability-gap", None, Some(gap), Some(plan))
+        }
     };
     Ok(DesktopCreatorDraftResult {
         spec: "nimora.desktop-creator-draft/1",
@@ -3122,9 +3133,40 @@ fn generate_creator_draft_inner(
         task,
         draft,
         capability_gap,
+        catalog_digest: creator_catalog.digest,
+        composition_plan,
         usage: response.usage,
         finish_reason: response.finish_reason,
     })
+}
+
+fn verify_capability_gap_against_catalog(
+    catalog: &CapabilityCatalogSnapshot,
+    gap: &CapabilityGap,
+) -> Result<CapabilityCompositionPlan, DesktopError> {
+    let plan = plan_exact_capabilities(
+        catalog,
+        gap.missing_capabilities
+            .iter()
+            .map(|item| item.capability.clone()),
+    )?;
+    if !plan.resolved_capabilities.is_empty() {
+        return Err(DesktopError::Agent(
+            "creator capability gap contradicts the live Catalog Snapshot".to_owned(),
+        ));
+    }
+    Ok(plan)
+}
+
+fn creator_capability_catalog(
+    state: &DesktopState,
+) -> Result<CapabilityCatalogSnapshot, DesktopError> {
+    let descriptors = desktop_tool_registry(state)?
+        .descriptors()
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    CapabilityCatalogSnapshot::from_tool_descriptors(descriptors).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -3159,10 +3201,14 @@ fn save_creator_draft_command(
 #[allow(clippy::needless_pass_by_value)]
 fn save_capability_gap_command(
     request: SaveCapabilityGapRequest,
+    state: State<'_, DesktopState>,
 ) -> Result<CapabilityGapSaveReceipt, DesktopError> {
+    let catalog = creator_capability_catalog(&state)?;
+    let plan = verify_capability_gap_against_catalog(&catalog, &request.capability_gap)?;
     save_capability_gap(
         &request.workspace_root,
         &request.capability_gap,
+        &plan,
         &Uuid::now_v7().to_string(),
     )
     .map_err(Into::into)
@@ -9735,9 +9781,10 @@ mod tests {
         automation_governance_catalog_inner, cancel_agent_task_inner,
         cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
         cancel_skill_execution_inner, capability_set_diff, confirm_agent_tool_inner,
-        confirm_agent_tool_with_registry, consume_creator_approval_from, creator_capability_risk,
-        current_time_ms, default_agent_model, default_agent_provider_id, desktop_tool_registry,
-        diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
+        confirm_agent_tool_with_registry, consume_creator_approval_from,
+        creator_capability_catalog, creator_capability_risk, current_time_ms, default_agent_model,
+        default_agent_provider_id, desktop_tool_registry, diagnostic_report,
+        dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
         parse_user_program_plan, pause_auto_mode_job_inner, permission_grant,
@@ -9750,6 +9797,7 @@ mod tests {
         skill_capability_names, skill_event_types, stage_creator_package,
         stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
         validate_model_source, validate_package_source, validate_requested_animation_map,
+        verify_capability_gap_against_catalog,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -9764,6 +9812,7 @@ mod tests {
     use nimora_automation_agent_bridge::{
         AgentTaskSubmissionOutcome, AgentTaskSubmitter, AutomationAgentTask,
     };
+    use nimora_creator_draft::CapabilityGap;
     use nimora_diagnostics_bundle::{
         DiagnosticComponent, DiagnosticEventCode, DiagnosticSeverity, PersistentDiagnosticJournal,
     };
@@ -12745,6 +12794,86 @@ mod tests {
             state.runtime.snapshot().expect("pet snapshot"),
             snapshot_before_revocation
         );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn creator_catalog_tracks_live_skill_contributions() {
+        let (root, state) = normal_desktop_state();
+        let skill_id = activate_test_skill_agent_tool(&state);
+        let snapshot = creator_capability_catalog(&state).expect("Creator catalog");
+        assert!(
+            snapshot
+                .capabilities
+                .iter()
+                .any(|capability| capability.id == format!("{skill_id}.wave"))
+        );
+        state
+            .skill_host
+            .lock()
+            .expect("Skill Host")
+            .suspend(skill_id)
+            .expect("suspend Skill");
+        let revoked = creator_capability_catalog(&state).expect("revoked Creator catalog");
+        assert_ne!(snapshot.digest, revoked.digest);
+        assert!(
+            revoked
+                .capabilities
+                .iter()
+                .all(|capability| capability.id != format!("{skill_id}.wave"))
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn creator_gap_verification_rejects_registered_capabilities() {
+        let (root, state) = normal_desktop_state();
+        let catalog = creator_capability_catalog(&state).expect("Creator catalog");
+        let gap: CapabilityGap = serde_json::from_value(json!({
+            "spec": "nimora.capability-gap/1",
+            "title": "Incorrect missing capability",
+            "summary": "The model incorrectly claims an existing capability is absent.",
+            "requestedOutcome": "Read current pet state.",
+            "missingCapabilities": [{
+                "capability": "pet.state.read",
+                "reason": "Claimed absent by the model.",
+                "requiredOperations": ["Read the current bounded pet state."]
+            }],
+            "closestAlternatives": [],
+            "platformProposalRequired": true
+        }))
+        .expect("gap");
+        assert!(matches!(
+            verify_capability_gap_against_catalog(&catalog, &gap),
+            Err(DesktopError::Agent(message))
+                if message == "creator capability gap contradicts the live Catalog Snapshot"
+        ));
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn creator_gap_verification_proves_exact_missing_ids() {
+        let (root, state) = normal_desktop_state();
+        let catalog = creator_capability_catalog(&state).expect("Creator catalog");
+        let gap: CapabilityGap = serde_json::from_value(json!({
+            "spec": "nimora.capability-gap/1",
+            "title": "Missing camera capability",
+            "summary": "No registered camera observation capability exists.",
+            "requestedOutcome": "Observe one user-approved gesture.",
+            "missingCapabilities": [{
+                "capability": "perception.camera.observe",
+                "reason": "The exact capability is absent from the live snapshot.",
+                "requiredOperations": ["Produce a bounded gesture event without retaining frames."]
+            }],
+            "closestAlternatives": [],
+            "platformProposalRequired": true
+        }))
+        .expect("gap");
+        let plan = verify_capability_gap_against_catalog(&catalog, &gap).expect("verified gap");
+        assert_eq!(plan.catalog_digest, catalog.digest);
+        assert_eq!(plan.missing_capabilities, ["perception.camera.observe"]);
+        assert!(plan.resolved_capabilities.is_empty());
+        assert!(!plan.fully_resolved);
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 

@@ -618,6 +618,11 @@ ID / 标题 / 优先级 / 前置条件
 - Verify Capability Gap 只包含结构化目标、缺失能力、所需操作、替代方案和平台提案标志；不能进入 Draft 检查、批准、安装或执行路径。
 - Verify Gap UI 明确标记 `NON-EXECUTABLE`，显示机器尚未验证的缺口事实，不出现批准和安装入口；报告保存仅写入用户选择 Workspace。
 - Verify Gap 报告使用不可覆盖原子文件、拒绝符号链接和非法 Workspace，响应只返回相对文件名且不泄露绝对路径。
+- Verify Creator Catalog Snapshot 从同一生产 Tool Registry 投影，按 ID 稳定排序且摘要稳定，不暴露第三方标题/描述、输入输出 Schema、Backend、文件、网络、数据库、Provider 或 Tauri 对象，Skill 元数据不能进入受信 System Message。
+- Verify 已激活 Skill Agent Tool 进入 Creator Snapshot，Skill 暂停后立即撤销且摘要变化；生成时目录与保存时目录分别由宿主读取，不能信任前端缓存。
+- Verify Capability Gap 声称已注册精确 ID 缺失时失败关闭；真实缺失 ID 生成带 Catalog Digest 的确定性 Composition Plan，resolved/missing 集合不可混淆。
+- Verify 持久 Gap 报告包含宿主重新计算的 Composition Plan；伪造、过期或与 Gap ID 不一致的证明不能写入 Workspace。
+- Verify UI 将精确 ID 缺失证明与自然语言目标不可实现证明明确区分，不能用绿色核验状态暗示所有组合路径已穷尽。
 - Verify AI 对同一目标按设置、组合、Automation、Program、Skill、Connector 和 L4 Proposal 比较，选择最低充分层级并给出不自动化理由。
 - Verify 多模态 Perception Pipeline 对每个来源单独授权，原始音视频默认不持久化，低置信推断不能触发高风险动作。
 - Verify Personal API 只能映射 Registry 中的 Command/Query，声明鉴权、幂等、速率、离线和撤销语义，不能生成任意本地 Handler。

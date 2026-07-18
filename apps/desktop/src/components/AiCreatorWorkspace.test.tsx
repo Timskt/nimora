@@ -23,6 +23,15 @@ describe("CapabilityGapPreview", () => {
         closestAlternatives: [{ kind: "automation", title: "手动触发动作", tradeoff: "需要用户主动操作。" }],
         platformProposalRequired: true,
       },
+      catalogDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      compositionPlan: {
+        spec: "nimora.capability-composition-plan/1",
+        catalogDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        requestedCapabilities: ["perception.camera.observe"],
+        resolvedCapabilities: [],
+        missingCapabilities: ["perception.camera.observe"],
+        fullyResolved: false,
+      },
       usage: { inputTokens: 12, outputTokens: 18, costMicrounits: 0 },
       finishReason: "stop",
     };
@@ -31,6 +40,8 @@ describe("CapabilityGapPreview", () => {
     expect(markup).toContain("CAPABILITY GAP · NON-EXECUTABLE");
     expect(markup).toContain("perception.camera.observe");
     expect(markup).toContain("需要平台提案");
+    expect(markup).toContain("宿主目录已核验");
+    expect(markup).toContain("未证明自然语言目标不存在其他组合路径");
     expect(markup).not.toContain("批准此权限与行为审查");
     expect(markup).not.toContain("原子安装");
     expect(markup).toContain("保存缺口报告");

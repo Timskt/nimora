@@ -17,6 +17,7 @@ members = [
   "crates/automation-capability-bridge",
   "crates/diagnostics-bundle",
   "crates/creator-draft",
+  "crates/creator-composition",
   "crates/asset-installer",
   "crates/model-importer",
   "crates/user-code-policy",

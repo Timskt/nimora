@@ -1,0 +1,17 @@
+[package]
+name = "nimora-creator-composition"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nimora-agent-runtime = { path = "../agent-runtime" }
+nimora-runtime-core = { path = "../runtime-core" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

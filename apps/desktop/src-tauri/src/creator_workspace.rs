@@ -2,6 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path};
 
+use nimora_creator_composition::{COMPOSITION_PLAN_SPEC, CapabilityCompositionPlan};
 use nimora_creator_draft::{
     CapabilityGap, CreatorArtifact, CreatorDraft, CreatorDraftError, CreatorDraftFile,
     validate_capability_gap,
@@ -28,6 +29,14 @@ pub struct CapabilityGapSaveReceipt {
     pub relative_file: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedCapabilityGapReport<'a> {
+    spec: &'static str,
+    gap: &'a CapabilityGap,
+    composition_plan: &'a CapabilityCompositionPlan,
+}
+
 #[derive(Debug, Error)]
 pub enum CreatorWorkspaceError {
     #[error("creator workspace root is invalid")]
@@ -40,6 +49,8 @@ pub enum CreatorWorkspaceError {
     SymbolicLink,
     #[error("creator draft persistence failed")]
     Io,
+    #[error("creator capability gap proof is invalid")]
+    InvalidGapProof,
     #[error(transparent)]
     Draft(#[from] CreatorDraftError),
 }
@@ -88,9 +99,34 @@ pub fn save_creator_draft(
 pub fn save_capability_gap(
     workspace_root: &Path,
     gap: &CapabilityGap,
+    composition_plan: &CapabilityCompositionPlan,
     operation_id: &str,
 ) -> Result<CapabilityGapSaveReceipt, CreatorWorkspaceError> {
     validate_capability_gap(gap)?;
+    let requested = gap
+        .missing_capabilities
+        .iter()
+        .map(|item| item.capability.as_str())
+        .collect::<Vec<_>>();
+    if composition_plan.spec != COMPOSITION_PLAN_SPEC
+        || !valid_sha256_digest(&composition_plan.catalog_digest)
+        || !composition_plan.resolved_capabilities.is_empty()
+        || composition_plan.fully_resolved
+        || composition_plan
+            .requested_capabilities
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            != requested
+        || composition_plan
+            .missing_capabilities
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            != requested
+    {
+        return Err(CreatorWorkspaceError::InvalidGapProof);
+    }
     validate_segment(operation_id)?;
     let root = fs::canonicalize(workspace_root).map_err(|_| CreatorWorkspaceError::InvalidRoot)?;
     if !root.is_dir()
@@ -106,13 +142,24 @@ pub fn save_capability_gap(
     let report_id = format!("capability-gap-{operation_id}");
     let file_name = format!("{report_id}.json");
     let destination = drafts_root.join(&file_name);
-    let bytes = serde_json::to_vec_pretty(gap).map_err(|_| CreatorWorkspaceError::Io)?;
+    let bytes = serde_json::to_vec_pretty(&PersistedCapabilityGapReport {
+        spec: "nimora.persisted-capability-gap/1",
+        gap,
+        composition_plan,
+    })
+    .map_err(|_| CreatorWorkspaceError::Io)?;
     write_new(&destination, &bytes)?;
     Ok(CapabilityGapSaveReceipt {
         spec: "nimora.capability-gap-save/1",
         report_id,
         relative_file: format!("{DRAFTS_DIRECTORY}/{file_name}"),
     })
+}
+
+fn valid_sha256_digest(value: &str) -> bool {
+    value.len() == 71
+        && value.starts_with("sha256:")
+        && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn artifact_id(draft: &CreatorDraft) -> String {
@@ -204,6 +251,9 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    use nimora_agent_runtime::{ToolDescriptor, ToolEffect};
+    use nimora_creator_composition::{CapabilityCatalogSnapshot, plan_exact_capabilities};
+    use nimora_runtime_core::CommandRisk;
     use serde_json::json;
 
     use super::*;
@@ -283,12 +333,31 @@ mod tests {
             "platformProposalRequired": true
         }))
         .expect("gap");
+        let descriptor = ToolDescriptor::new(
+            "pet.state.read",
+            "Read pet state",
+            "Reads bounded pet state.",
+            json!({"type": "object"}),
+            json!({"type": "object"}),
+            CommandRisk::Safe,
+            ToolEffect::ReadOnly,
+        )
+        .expect("descriptor");
+        let catalog =
+            CapabilityCatalogSnapshot::from_tool_descriptors([descriptor]).expect("catalog");
+        let plan = plan_exact_capabilities(&catalog, ["perception.camera.observe".to_owned()])
+            .expect("plan");
         let receipt =
-            save_capability_gap(&root, &gap, "018f0000-0000-7000-8000-000000000032").expect("save");
+            save_capability_gap(&root, &gap, &plan, "018f0000-0000-7000-8000-000000000032")
+                .expect("save");
         assert_eq!(receipt.spec, "nimora.capability-gap-save/1");
-        assert!(root.join(&receipt.relative_file).is_file());
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join(&receipt.relative_file)).expect("report"))
+                .expect("JSON report");
+        assert_eq!(report["spec"], "nimora.persisted-capability-gap/1");
+        assert_eq!(report["compositionPlan"]["catalogDigest"], catalog.digest);
         assert_eq!(
-            save_capability_gap(&root, &gap, "018f0000-0000-7000-8000-000000000032")
+            save_capability_gap(&root, &gap, &plan, "018f0000-0000-7000-8000-000000000032",)
                 .unwrap_err()
                 .to_string(),
             CreatorWorkspaceError::Io.to_string()

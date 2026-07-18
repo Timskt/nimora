@@ -97,6 +97,15 @@ export interface CreatorDraftResult {
     closestAlternatives: Array<{ kind: CreatorArtifactKind; title: string; tradeoff: string }>;
     platformProposalRequired: boolean;
   } | null;
+  catalogDigest: string;
+  compositionPlan: {
+    spec: "nimora.capability-composition-plan/1";
+    catalogDigest: string;
+    requestedCapabilities: string[];
+    resolvedCapabilities: string[];
+    missingCapabilities: string[];
+    fullyResolved: boolean;
+  } | null;
   usage: { inputTokens: number; outputTokens: number; costMicrounits: number };
   finishReason: string;
 }

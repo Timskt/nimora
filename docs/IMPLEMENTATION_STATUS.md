@@ -1,12 +1,20 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-18 — Creator Catalog Snapshot 与精确组合核验纵切
+
+- 新增独立纯 Rust `creator-composition`：从生产 `ToolRegistry` 投影只有宿主复验 ID 与 effect、无第三方标题/描述、无 Schema、无 Backend、无原生对象的有界 `nimora.capability-catalog-snapshot/1`，按能力 ID 稳定排序并生成 SHA-256 摘要；内建工具与当前已激活 Skill Agent Tool Contribution 使用同一动态目录事实。
+- Creator Provider 的受信 System Message 现在携带本次只读 Catalog Snapshot，并被要求只把快照中的精确 ID 视为已注册事实；模型仍无 Tool、文件、安装或执行权限。
+- Gap 接受前由宿主运行确定性 Exact-ID Composition Planner；模型把当前已注册能力报告为缺失时失败关闭，真实缺失项返回 `nimora.capability-composition-plan/1`、目录摘要和分离的 resolved/missing 集合。
+- Gap 保存时不信任前端或生成时旧证明：宿主重新读取当前动态 Registry、重新规划，再将 Gap 与 Composition Plan 原子保存为 `nimora.persisted-capability-gap/1`。
+- UI 明确区分“精确能力 ID 已由宿主核验缺失”和“尚未穷尽自然语言目标的其他组合路径”。本纵切不是语义规划器、图搜索器或目标不可实现证明；后续仍需引入带前置/后置条件的数据流 Composition Graph。
+
 ## 2026-07-18 — Creator Capability Gap 真实纵切
 
 - Creator 模型输出新增并列的严格 `nimora.capability-gap/1` 契约；目标无法由当前 Registry 表达时，模型只能返回缺失能力、所需操作、最低替代和平台提案需求，不能发明 Command、API 或可执行回退代码。
 - `creator-draft` 在同一有界 JSON 信任边界解析 Draft 或 Gap，验证字段白名单、文本预算、能力命名、数量、重复项和替代方案；Gap 永远不能进入 Draft 的检查、批准或安装函数。
 - Desktop Host 使用 `outcome`、互斥 `draft/capabilityGap` 投影；Creator Studio 为 Gap 提供独立警示界面，不渲染权限批准、原子安装或 Draft Workspace 保存入口。
 - 用户可将经过复验的 Gap 原子保存为 `.nimora-drafts/capability-gap-<uuid>.json` 项目事实；报告只有结构化数据，无源码、运行 Grant、Secret 或宿主路径回传，Safe/Recovery 下仍可导出恢复资料。
-- Creator Contract 8 项、Desktop Host 126 项、Frontend 42 项测试通过；当前尚未实现基于真实 Capability Catalog 的确定性 Composition Planner，也未实现 Gap 到 L4 Proposal 的评审工作流。
+- Creator Contract 8 项、Desktop Host 129 项、Frontend 42 项测试通过；当前已实现真实动态 Catalog 的精确 ID 确定性核验，但尚未实现语义级 Composition Graph，也未实现 Gap 到 L4 Proposal 的评审工作流。
 
 ## 2026-07-18 — 外接 AI 原生扩展能力面基线
 
