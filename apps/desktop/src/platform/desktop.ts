@@ -1073,6 +1073,7 @@ const previewSnapshot: DesktopSnapshot = {
     cleanliness: 91,
     affinity: 34,
     bondPoints: 84,
+    keepsakes: ["first_hello", "caring_hands", "trusted_companion"],
   },
   windowPolicy: { alwaysOnTop: true, clickThrough: false },
   safety: { mode: "normal", reason: null },

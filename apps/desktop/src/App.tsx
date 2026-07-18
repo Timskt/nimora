@@ -21,6 +21,17 @@ export function voiceGain(gainDb: number): number {
   return Math.min(1, Math.max(0, 10 ** (gainDb / 20)));
 }
 
+const keepsakeMetadata = {
+  first_hello: { glyph: "✦", label: "第一次回应" },
+  caring_hands: { glyph: "♡", label: "温柔照料" },
+  trusted_companion: { glyph: "◇", label: "可信伙伴" },
+  hundred_moments: { glyph: "✺", label: "百刻相伴" },
+} as const;
+
+export function keepsakePresentation(id: keyof typeof keepsakeMetadata) {
+  return keepsakeMetadata[id];
+}
+
 async function playVoiceCue(cue: "pet.celebrate" | "pet.work", quiet: boolean): Promise<void> {
   if (quiet) return;
   const clip = await desktopApi.activeVoiceClip(cue);
@@ -256,6 +267,13 @@ export function App() {
               <span>升级进度 {relationship.levelProgress} / {relationship.pointsPerLevel}</span>
               <span>关系温度 {desktopSnapshot?.pet.affinity ?? 0} / 100</span>
             </p>
+            <div className="keepsake-collection" aria-label={`已收藏 ${desktopSnapshot?.pet.keepsakes.length ?? 0} 件陪伴纪念`}>
+              {(desktopSnapshot?.pet.keepsakes ?? []).map((id) => {
+                const keepsake = keepsakePresentation(id);
+                return <span className="keepsake-chip" key={id} title={keepsake.label}><i aria-hidden="true">{keepsake.glyph}</i>{keepsake.label}</span>;
+              })}
+              {(desktopSnapshot?.pet.keepsakes.length ?? 0) === 0 && <span className="keepsake-empty">第一次互动后会留下纪念</span>}
+            </div>
           </section>
 
           <section className="activity-card">

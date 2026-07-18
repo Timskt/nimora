@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { navigation, navItemClassName, runtimeActivities, voiceGain } from "./App";
+import { keepsakePresentation, navigation, navItemClassName, runtimeActivities, voiceGain } from "./App";
 
 describe("navItemClassName", () => {
   it("adds the active state only to the selected destination", () => {
@@ -20,6 +20,13 @@ describe("voiceGain", () => {
     expect(voiceGain(0)).toBe(1);
     expect(voiceGain(-6)).toBeCloseTo(0.501, 3);
     expect(voiceGain(6)).toBe(1);
+  });
+});
+
+describe("keepsakePresentation", () => {
+  it("maps stable domain identifiers to local presentation", () => {
+    expect(keepsakePresentation("first_hello")).toEqual({ glyph: "✦", label: "第一次回应" });
+    expect(keepsakePresentation("hundred_moments").label).toBe("百刻相伴");
   });
 });
 

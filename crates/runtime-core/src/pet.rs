@@ -61,6 +61,24 @@ pub enum PetCareAction {
     Groom,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PetKeepsake {
+    FirstHello,
+    CaringHands,
+    TrustedCompanion,
+    HundredMoments,
+}
+
+impl PetKeepsake {
+    pub const ALL: [(Self, u64); 4] = [
+        (Self::FirstHello, 1),
+        (Self::CaringHands, 25),
+        (Self::TrustedCompanion, 50),
+        (Self::HundredMoments, 100),
+    ];
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PetVitalsPolicy {
     Full,
@@ -180,6 +198,8 @@ pub struct Pet {
     #[serde(default)]
     pub bond_points: u64,
     #[serde(default)]
+    pub keepsakes: Vec<PetKeepsake>,
+    #[serde(default)]
     pub last_vitals_update_ms: u64,
     #[serde(default)]
     pub last_care_ms: u64,
@@ -238,6 +258,7 @@ impl Pet {
             cleanliness: 100,
             affinity: 0,
             bond_points: 0,
+            keepsakes: Vec::new(),
             last_vitals_update_ms: 0,
             last_care_ms: 0,
             autonomy: PetAutonomyState::default(),
@@ -312,6 +333,17 @@ impl Pet {
             .effective_bond_points()
             .saturating_add(points)
             .min(Self::MAX_BOND_POINTS);
+        self.unlock_keepsakes();
+    }
+
+    fn unlock_keepsakes(&mut self) {
+        let bond_points = self.effective_bond_points();
+        for (keepsake, threshold) in PetKeepsake::ALL {
+            if bond_points >= threshold && !self.keepsakes.contains(&keepsake) {
+                self.keepsakes.push(keepsake);
+            }
+        }
+        self.keepsakes.sort_unstable();
     }
 
     /// Returns an active interaction to the neutral idle state.
@@ -376,6 +408,9 @@ impl Pet {
             || self.bond_points > Self::MAX_BOND_POINTS
         {
             return Err(PetError::InvalidVitals);
+        }
+        if self.keepsakes.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(PetError::InvalidCollection);
         }
         Ok(())
     }
@@ -624,6 +659,8 @@ pub enum PetError {
     CareCooldown,
     #[error("pet state transition is not allowed")]
     InvalidTransition,
+    #[error("pet keepsake collection must be sorted and unique")]
+    InvalidCollection,
 }
 
 #[cfg(test)]
@@ -922,6 +959,43 @@ mod tests {
             assert_eq!(pet.relationship_level(), level);
             assert_eq!(pet.relationship_level_progress(), progress);
         }
+    }
+
+    #[test]
+    fn companionship_unlocks_ordered_keepsakes_across_thresholds() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.interact().expect("first hello");
+        assert_eq!(pet.keepsakes, [PetKeepsake::FirstHello]);
+
+        pet.bond_points = 24;
+        pet.interact().expect("care milestone");
+        assert_eq!(
+            pet.keepsakes,
+            [PetKeepsake::FirstHello, PetKeepsake::CaringHands]
+        );
+
+        pet.bond_points = 99;
+        pet.interact().expect("hundred moments");
+        assert_eq!(
+            pet.keepsakes,
+            PetKeepsake::ALL.map(|(keepsake, _)| keepsake)
+        );
+    }
+
+    #[test]
+    fn legacy_collection_defaults_empty_and_rejects_duplicate_ownership() {
+        let pet = Pet::new("Aster").expect("valid pet");
+        let mut value = serde_json::to_value(&pet).expect("serialize pet");
+        value
+            .as_object_mut()
+            .expect("pet object")
+            .remove("keepsakes");
+        let restored: Pet = serde_json::from_value(value).expect("legacy pet remains readable");
+        assert!(restored.keepsakes.is_empty());
+
+        let mut corrupt = pet;
+        corrupt.keepsakes = vec![PetKeepsake::FirstHello, PetKeepsake::FirstHello];
+        assert_eq!(corrupt.validate(), Err(PetError::InvalidCollection));
     }
 
     #[test]

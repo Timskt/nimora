@@ -329,3 +329,11 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - 已完成：原生宿主每次 Tick 动态映射活动 Profile，不依赖 AI、网络或控制中心。
 - 已完成：Profile UI 提供可访问的三档选择、说明与卡片摘要；Browser Preview 使用完整照料默认值。
 - 已验证：Runtime Core 36、Runtime App 23、Schemas 19、Frontend 62 项测试通过。
+
+## 2026-07-19 陪伴纪念收藏
+
+- 已完成：Pet 快照新增向后兼容、排序去重的 `keepsakes` 集合，四个首批纪念由真实陪伴点阈值确定性解锁。
+- 已完成：互动、关系成长、纪念和标准事件继续经过同一 Repository 原子边界；SQLite 无需新表即可持久恢复版本化快照。
+- 已完成：控制中心关系卡展示本地化纪念标签和可访问空态，Browser Preview 提供三项代表性收藏。
+- 已验证：Runtime Core 38、Runtime App 23、SQLite 82、Schemas 19、Frontend 63 项聚焦测试与生产构建通过。
+- 待验收：Chrome 扩展返回跨会话旧 Tab，本次未取得可信截图；`UI-024` 保留为真机视觉门禁，不将源码结构替代视觉证据。
