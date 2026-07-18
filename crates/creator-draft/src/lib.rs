@@ -153,11 +153,16 @@ pub fn parse_creator_draft(
     }
     let draft = serde_json::from_str::<CreatorDraft>(model_output)
         .map_err(|_| CreatorDraftError::InvalidJson)?;
-    validate_draft(request, &draft)?;
+    validate_creator_draft(request, &draft)?;
     Ok(draft)
 }
 
-fn validate_draft(
+/// Revalidates a structured draft received across a trust boundary.
+///
+/// # Errors
+///
+/// Rejects metadata, artifact, file, or permission-contract drift.
+pub fn validate_creator_draft(
     request: &CreatorDraftRequest,
     draft: &CreatorDraft,
 ) -> Result<(), CreatorDraftError> {

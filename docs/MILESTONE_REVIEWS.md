@@ -266,3 +266,9 @@ Actions 分钟：
 - 实现：新增 `nimora.creator-draft/1` 严格契约、专用无工具 Draft Agent 和独立桌面创作工作区；可信规则、用户需求和模型输出分级处理。
 - 防线：路径与文件预算、权限解释精确匹配、生产 Manifest/Policy/Engine 复用、Safe/Recovery 门禁，以及“尚未安装”显式状态。
 - 未闭环：本里程碑不写盘、不安装、不启用；Workspace、静态检查、沙箱测试、Diff 批准、监控修复和回滚必须作为后续真实纵切完成。
+
+## M-2026-07-18 Creator Workspace 原子草案保存
+
+- 修正：已验证草案可由用户显式选择 Workspace 保存，不再依赖复制模型文本或绕过契约。
+- 鲁棒性：保存 IPC 重新执行完整生产校验；Writer 只创建 `.nimora-drafts/<artifact-id>`，拒绝覆盖、符号链接和非目录根，失败清理 staging。
+- 边界：保存结果明确保持“尚未安装”，不授予 Capability、不启用、不发布；静态检查、沙箱、Diff 批准和安装仍是后续强制阶段。

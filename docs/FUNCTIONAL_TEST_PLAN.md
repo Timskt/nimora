@@ -551,4 +551,5 @@ ID / 标题 / 优先级 / 前置条件
 - Verify可信 System instruction 与 Personal/Untrusted 用户需求使用独立消息，模型输出永远按不可信输入处理。
 - Verify Markdown 包裹、未知字段、类型不匹配、非法 Manifest、权限说明缺失/额外/重复均拒绝，错误不回显模型原文。
 - Verify 绝对路径、`..`、反斜杠、重复路径、缺失入口、文件数/单文件/总大小超限均在任何写盘前拒绝。
-- Verify User Program、Skill、Automation 分别复用生产校验；Safe/Recovery/浏览器预览禁止生成，有效结果只显示“尚未安装”。
+- Verify User Program、Skill、Automation 分别复用生产校验；Safe/Recovery/浏览器预览禁止生成和保存，已保存结果仍显示“尚未安装”。
+- Verify 保存 IPC 重新校验完整需求与草案，选择的 Workspace 必须是可规范化真实目录；`.nimora-drafts` 符号链接、目标已存在和中途写入失败均不得覆盖或留下已发布的半成品。

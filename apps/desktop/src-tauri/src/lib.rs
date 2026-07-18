@@ -3,6 +3,7 @@ mod asset_selection;
 pub mod auto_mode_jobs;
 mod auto_mode_runner;
 mod backup_service;
+mod creator_workspace;
 mod diagnostic_report;
 mod fail_closed_convergence;
 mod reversible_transition;
@@ -18,6 +19,7 @@ use asset_selection::{
     persist_asset_selection, resolve_asset_selection,
 };
 use backup_service::BackupService;
+use creator_workspace::{CreatorDraftSaveReceipt, CreatorWorkspaceError, save_creator_draft};
 use diagnostic_report::{
     DiagnosticReportFacts, DiagnosticSafetyMode, DiagnosticStartupMode, build_diagnostic_report,
 };
@@ -65,7 +67,7 @@ use nimora_automation_runtime::{
 };
 use nimora_creator_draft::{
     CreatorArtifactKind, CreatorDraft, CreatorDraftError, CreatorDraftRequest,
-    creator_system_instruction, parse_creator_draft,
+    creator_system_instruction, parse_creator_draft, validate_creator_draft,
 };
 use nimora_diagnostics_bundle::{
     DiagnosticBundleError, DiagnosticBundleReceipt, DiagnosticBundleSelection, DiagnosticComponent,
@@ -1091,6 +1093,8 @@ enum DesktopError {
     Agent(String),
     #[error(transparent)]
     CreatorDraft(#[from] CreatorDraftError),
+    #[error(transparent)]
+    CreatorWorkspace(#[from] CreatorWorkspaceError),
     #[error("operation is unavailable from this window")]
     WindowForbidden,
     #[error("pet position must be a finite 32-bit screen coordinate")]
@@ -1206,6 +1210,15 @@ struct DesktopCreatorDraftResult {
     draft: CreatorDraft,
     usage: nimora_agent_runtime::ProviderUsage,
     finish_reason: nimora_agent_runtime::ProviderFinishReason,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SaveCreatorDraftRequest {
+    workspace_root: PathBuf,
+    kind: CreatorArtifactKind,
+    requirement: String,
+    draft: CreatorDraft,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2208,6 +2221,26 @@ fn generate_creator_draft_inner(
         usage: response.usage,
         finish_reason: response.finish_reason,
     })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn save_creator_draft_command(
+    request: SaveCreatorDraftRequest,
+    state: State<'_, DesktopState>,
+) -> Result<CreatorDraftSaveReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    let draft_request = CreatorDraftRequest::new(request.kind, request.requirement)?;
+    validate_creator_draft(&draft_request, &request.draft)?;
+    save_creator_draft(
+        &request.workspace_root,
+        &request.draft,
+        &current_time_ms()?.to_string(),
+    )
+    .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -7626,6 +7659,7 @@ pub fn run() {
             delete_agent_history,
             run_local_agent,
             generate_creator_draft,
+            save_creator_draft_command,
             resume_auto_mode_turn,
             start_auto_mode_job,
             auto_mode_job_status,
