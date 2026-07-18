@@ -142,4 +142,4 @@ pnpm deskpet extension pack ./scripts/build-companion
 
 ## AI 辅助创作边界
 
-桌面“扩展”工作区可让外接 AI 生成 User Program、Skill 与 Automation 的结构化草案。该入口使用空 Tool allowlist、`AgentAutonomy::Draft`、固定调用深度和受限输出预算；可信 System instruction 与 Personal/Untrusted 用户需求分离。模型输出必须是单个严格 JSON 对象，并经过路径预算、权限精确解释及对应生产契约校验。用户可显式选择 Workspace，将宿主重新复验后的草案原子保存到 `.nimora-drafts/<artifact-id>`；目标存在、符号链接或写入故障均失败关闭且不覆盖。保存不等于安装或启用；下一阶段仍须增加独立 Worker 静态检查、沙箱测试、Diff、风险批准、原子安装、监控与回滚。
+桌面“扩展”工作区可让外接 AI 生成 User Program、Skill 与 Automation 的结构化草案。该入口使用空 Tool allowlist、`AgentAutonomy::Draft`、固定调用深度和受限输出预算；可信 System instruction 与 Personal/Untrusted 用户需求分离。模型输出必须是单个严格 JSON 对象，并经过路径预算、权限精确解释及对应生产契约校验。User Program 与 Skill 的 JavaScript 还会在独立 Worker 中执行 parse-only 检查：不运行顶层代码、不注入 Nimora SDK，也不签发任何生产 Capability。用户可显式选择 Workspace，将宿主重新复验并重新执行 Worker 检查后的草案原子保存到 `.nimora-drafts/<artifact-id>`；目标存在、符号链接、检查失败或写入故障均失败关闭且不覆盖。保存不等于安装或启用；仍须增加沙箱行为测试、Diff、风险批准、原子安装、监控与回滚。完整外接 AI 能力范围见 [`AI_EXTENSION_FACTORY.md`](AI_EXTENSION_FACTORY.md)。

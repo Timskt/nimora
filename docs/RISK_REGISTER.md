@@ -51,4 +51,6 @@
 | R-042 | Safe Mode 已提交后首个隔离故障提前返回，使后续 Auto Mode、用户程序、Skill 或 Agent 继续运行 | 低（已缓解） | 严重 | Tauri-free 收敛协调器固定顺序全尝试全部隔离、策略缓存与 Renderer 通知；只返回固定步骤码并尽力持久记录 Security 诊断，底层错误和路径不进入公开错误 |
 | R-043 | 退出 Safe Mode 已提交 Normal 后恢复策略、Skill 会话或 Renderer 失败，形成普通模式与宿主能力不一致 | 中 | 严重 | 设计显式 `RecoveryPending/Degraded` 恢复状态和可重试补偿；在该状态闭环前不得把退出入口描述为原子恢复，也不得自动恢复高危授权 |
 | R-044 | AI 创作复用普通 Agent Tool allowlist，使生成阶段获得无关生产能力 | 低（已缓解） | 严重 | Creator 使用独立 requester、空 Tool 集合、Draft autonomy 与深度 1；Tool Call 和确认等待失败关闭，架构与功能测试防回退 |
+| R-045 | Creator 复用正常执行协议做安装前检查，导致草案顶层代码在授权前运行 | 低（已缓解） | 严重 | User Program 与 Skill 使用显式 `Validate/Validated` parse-only 协议；不注入 SDK 或 Capability；保存 IPC 强制重新检查，测试用顶层 `throw` 防回退 |
+| R-046 | AI 能力工厂把模型判断当作安全结论，自动安装或扩大产物权限 | 中 | 严重 | 模型只负责生成与解释；Schema、Worker、沙箱、权限 Diff、风险批准和原子安装由确定性宿主执行；运行 Grant 按最终 Manifest 重新签发 |
 | R-045 | 模型输出以 Markdown 或任意文件直接落盘，造成路径逃逸、权限欺骗或未验证代码安装 | 低（保存阶段已缓解） | 严重 | 保存前重新执行严格契约和生产校验；Tauri-free Writer 使用隐藏 staging、create-new、拒绝符号链接/覆盖并同目录原子 rename；保存仍不安装，后续必须经过 Worker、Diff、批准和原子安装 |

@@ -272,3 +272,11 @@ Actions 分钟：
 - 修正：已验证草案可由用户显式选择 Workspace 保存，不再依赖复制模型文本或绕过契约。
 - 鲁棒性：保存 IPC 重新执行完整生产校验；Writer 只创建 `.nimora-drafts/<artifact-id>`，拒绝覆盖、符号链接和非目录根，失败清理 staging。
 - 边界：保存结果明确保持“尚未安装”，不授予 Capability、不启用、不发布；静态检查、沙箱、Diff 批准和安装仍是后续强制阶段。
+
+## M-2026-07-18 Creator 独立草案检查
+
+- 修正：User Program 与 Skill 不再借正常执行路径验证源码；新增显式 `Validate/Validated` Worker 协议，只解析 JavaScript，不运行顶层代码、不注入 SDK 或生产能力。
+- 纵深防御：桌面返回 `nimora.creator-draft-check/1` 逐文件报告；UI 仅在通过后开放保存，保存 IPC 仍重新执行生产契约与独立 Worker 检查。
+- 契约边界：Skill Validate 校验协议、Execution ID 与 Manifest，但安装前不要求 Active Lease；Skill Run 的 Lease 与 Activation Event 约束保持不变。Automation 继续复用生产 Engine 校验。
+- 范围校准：外接 AI 的完整产品范围扩展为 User Program、Skill、Automation、Connector、Agent、角色资产、声明式 UI、测试、迁移与运维能力工厂；当前仅前三类草案生成和前两类 parse-only 检查已实现，不能误报完整流水线完成。
+- 后续硬门禁：沙箱行为测试、权限与行为 Diff、风险批准、原子安装启用、运行监控、AI 最小修复和回滚。

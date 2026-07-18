@@ -47,6 +47,12 @@ pub struct SkillExecutionOutput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SkillWorkerMessage {
+    Validate {
+        protocol_version: u16,
+        execution_id: String,
+        manifest: Box<SkillManifest>,
+        source: String,
+    },
     Run {
         protocol_version: u16,
         execution_id: String,
@@ -59,6 +65,9 @@ pub enum SkillWorkerMessage {
     Completed {
         execution_id: String,
         output: SkillExecutionOutput,
+    },
+    Validated {
+        execution_id: String,
     },
     Error {
         execution_id: Option<String>,
@@ -289,35 +298,52 @@ fn validate_run_request(
     request: &SkillWorkerMessage,
     lifecycle: &SkillHost,
 ) -> Result<(), SkillHostError> {
-    let SkillWorkerMessage::Run {
-        protocol_version,
-        execution_id,
-        manifest,
-        activation_event,
-        ..
-    } = request
-    else {
-        return Err(SkillHostError::Admission("expected run request".to_owned()));
+    let (protocol_version, execution_id, manifest, activation_event) = match request {
+        SkillWorkerMessage::Run {
+            protocol_version,
+            execution_id,
+            manifest,
+            activation_event,
+            ..
+        } => (
+            *protocol_version,
+            execution_id,
+            manifest,
+            Some(activation_event),
+        ),
+        SkillWorkerMessage::Validate {
+            protocol_version,
+            execution_id,
+            manifest,
+            ..
+        } => (*protocol_version, execution_id, manifest, None),
+        _ => {
+            return Err(SkillHostError::Admission(
+                "expected run or validate request".to_owned(),
+            ));
+        }
     };
-    if *protocol_version != SKILL_WORKER_PROTOCOL_VERSION || execution_id != &config.execution_id {
+    if protocol_version != SKILL_WORKER_PROTOCOL_VERSION || execution_id != &config.execution_id {
         return Err(SkillHostError::Admission(
             "protocol version or execution identity mismatch".to_owned(),
         ));
     }
     validate_manifest((**manifest).clone())
         .map_err(|error| SkillHostError::Admission(error.to_string()))?;
-    let active_manifest = lifecycle
-        .active_manifest(&manifest.id)
-        .map_err(|error| SkillHostError::Admission(error.to_string()))?;
-    if active_manifest != manifest.as_ref() {
-        return Err(SkillHostError::Admission(
-            "request manifest does not match the active Skill lease".to_owned(),
-        ));
-    }
-    if !manifest.activation_events.contains(activation_event) {
-        return Err(SkillHostError::Admission(
-            "activation event is not declared by the Skill".to_owned(),
-        ));
+    if let Some(activation_event) = activation_event {
+        let active_manifest = lifecycle
+            .active_manifest(&manifest.id)
+            .map_err(|error| SkillHostError::Admission(error.to_string()))?;
+        if active_manifest != manifest.as_ref() {
+            return Err(SkillHostError::Admission(
+                "request manifest does not match the active Skill lease".to_owned(),
+            ));
+        }
+        if !manifest.activation_events.contains(activation_event) {
+            return Err(SkillHostError::Admission(
+                "activation event is not declared by the Skill".to_owned(),
+            ));
+        }
     }
     Ok(())
 }
@@ -329,6 +355,9 @@ fn validate_response(
     let (SkillWorkerMessage::Completed {
         execution_id: response_id,
         ..
+    }
+    | SkillWorkerMessage::Validated {
+        execution_id: response_id,
     }
     | SkillWorkerMessage::Error {
         execution_id: Some(response_id),
@@ -350,9 +379,70 @@ fn validate_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nimora_skill_runtime::{SkillCapability, SkillContributions};
+    use std::collections::BTreeSet;
+
+    fn manifest() -> SkillManifest {
+        SkillManifest {
+            spec: "nimora.skill/1".to_owned(),
+            id: "studio.example.validator".to_owned(),
+            version: "1.0.0".to_owned(),
+            publisher: "studio.example".to_owned(),
+            entrypoint: "dist/main.js".to_owned(),
+            capabilities: BTreeSet::from([SkillCapability::InvokeCommands]),
+            activation_events: BTreeSet::from(["onStartup".to_owned()]),
+            command_allowlist: BTreeSet::from(["safe.pet.animate".to_owned()]),
+            contributions: SkillContributions::default(),
+        }
+    }
 
     #[test]
     fn protocol_version_is_explicit() {
         assert_eq!(SKILL_WORKER_PROTOCOL_VERSION, 1);
+    }
+
+    #[test]
+    fn validation_is_admitted_without_an_active_skill_lease() {
+        let request = SkillWorkerMessage::Validate {
+            protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
+            execution_id: "validation-1".to_owned(),
+            manifest: Box::new(manifest()),
+            source: "export default {};".to_owned(),
+        };
+        let config = SkillWorkerConfig {
+            executable: "unused".to_owned(),
+            args: Vec::new(),
+            execution_id: "validation-1".to_owned(),
+            timeout: Duration::from_secs(1),
+            output_bytes: 1024,
+            cancellation: None,
+        };
+
+        assert_eq!(
+            validate_run_request(&config, &request, &SkillHost::default()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn validated_response_must_match_execution_identity() {
+        assert_eq!(
+            validate_response(
+                "validation-1",
+                &SkillWorkerMessage::Validated {
+                    execution_id: "validation-1".to_owned(),
+                },
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_response(
+                "validation-1",
+                &SkillWorkerMessage::Validated {
+                    execution_id: "validation-2".to_owned(),
+                },
+            ),
+            Err(SkillHostError::Protocol(_))
+        ));
     }
 }

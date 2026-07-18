@@ -97,6 +97,12 @@ export interface CreatorDraftSaveReceipt {
   filesWritten: number;
 }
 
+export interface CreatorDraftCheckReport {
+  spec: "nimora.creator-draft-check/1";
+  status: "passed" | "failed";
+  checks: Array<{ id: string; status: "passed" | "failed"; file: string | null; message: string }>;
+}
+
 export interface ResumeAutoModeTurnRequest {
   sessionId: string;
   workspaceRoot: string;
@@ -680,6 +686,7 @@ export interface DesktopApi {
   runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
   generateCreatorDraft(kind: CreatorArtifactKind, requirement: string, providerId: string, model: string): Promise<CreatorDraftResult>;
   saveCreatorDraft(workspaceRoot: string, kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"]): Promise<CreatorDraftSaveReceipt>;
+  checkCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"]): Promise<CreatorDraftCheckReport>;
   resumeAutoModeTurn(request: ResumeAutoModeTurnRequest): Promise<DesktopAutoModeTurnResult>;
   startAutoModeJob(request: StartAutoModeJobRequest): Promise<DesktopAutoModeJobSnapshot>;
   autoModeJobStatus(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
@@ -940,6 +947,9 @@ export function createDesktopApi(
       async saveCreatorDraft() {
         throw new Error("desktop-host-required");
       },
+      async checkCreatorDraft() {
+        throw new Error("desktop-host-required");
+      },
       async resumeAutoModeTurn(request) {
         return {
           spec: "nimora.desktop-auto-mode-turn/1",
@@ -1131,6 +1141,7 @@ export function createDesktopApi(
     runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") => await invokeCommand("run_local_agent", { request: { prompt, providerId, model } }) as LocalAgentResult,
     generateCreatorDraft: async (kind, requirement, providerId, model) => await invokeCommand("generate_creator_draft", { request: { kind, requirement, providerId, model } }) as CreatorDraftResult,
     saveCreatorDraft: async (workspaceRoot, kind, requirement, draft) => await invokeCommand("save_creator_draft_command", { request: { workspaceRoot, kind, requirement, draft } }) as CreatorDraftSaveReceipt,
+    checkCreatorDraft: async (kind, requirement, draft) => await invokeCommand("check_creator_draft", { request: { kind, requirement, draft } }) as CreatorDraftCheckReport,
     resumeAutoModeTurn: async (request) => await invokeCommand("resume_auto_mode_turn", {
       request: {
         sessionId: request.sessionId,

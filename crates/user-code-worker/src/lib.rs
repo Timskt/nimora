@@ -1,4 +1,4 @@
-use boa_engine::{Context, Source};
+use boa_engine::{Context, Script, Source};
 use nimora_user_code_host::WorkerMessage;
 
 const MAX_SOURCE_BYTES: usize = 256 * 1024;
@@ -36,6 +36,21 @@ pub fn evaluate(source: &str) -> Result<serde_json::Value, EngineError> {
     evaluate_with_input(source, &serde_json::Value::Null)
 }
 
+/// Parses one source unit without executing top-level code.
+///
+/// # Errors
+///
+/// Returns an error when the source exceeds its budget or is not valid JavaScript.
+pub fn validate(source: &str) -> Result<(), EngineError> {
+    if source.len() > MAX_SOURCE_BYTES {
+        return Err(EngineError::SourceTooLarge);
+    }
+    let mut context = Context::default();
+    Script::parse(Source::from_bytes(source.as_bytes()), None, &mut context)
+        .map(|_| ())
+        .map_err(|error| EngineError::JavaScript(error.to_string()))
+}
+
 /// Evaluates one source unit with an immutable JSON input snapshot.
 ///
 /// # Errors
@@ -67,6 +82,13 @@ pub fn evaluate_with_input(
 #[must_use]
 pub fn execute(message: WorkerMessage) -> WorkerMessage {
     match message {
+        WorkerMessage::Validate { source } => match validate(&source) {
+            Ok(()) => WorkerMessage::Validated,
+            Err(error) => WorkerMessage::Error {
+                code: "validation-error".to_owned(),
+                message: error.to_string(),
+            },
+        },
         WorkerMessage::Run { source, input, .. } => match evaluate_with_input(&source, &input) {
             Ok(value) => WorkerMessage::Result { value },
             Err(error) => WorkerMessage::Error {
@@ -92,6 +114,20 @@ mod tests {
             evaluate("({ answer: 6 * 7 })").unwrap(),
             json!({"answer": 42})
         );
+    }
+
+    #[test]
+    fn validates_without_executing_top_level_code() {
+        assert_eq!(
+            execute(WorkerMessage::Validate {
+                source: "throw new Error('must not run')".to_owned()
+            }),
+            WorkerMessage::Validated
+        );
+        assert!(matches!(
+            execute(WorkerMessage::Validate { source: "const =".to_owned() }),
+            WorkerMessage::Error { code, .. } if code == "validation-error"
+        ));
     }
 
     #[test]

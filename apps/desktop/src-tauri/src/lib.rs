@@ -1221,6 +1221,31 @@ struct SaveCreatorDraftRequest {
     draft: CreatorDraft,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CheckCreatorDraftRequest {
+    kind: CreatorArtifactKind,
+    requirement: String,
+    draft: CreatorDraft,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatorDraftCheckReport {
+    spec: &'static str,
+    status: &'static str,
+    checks: Vec<CreatorDraftCheck>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatorDraftCheck {
+    id: &'static str,
+    status: &'static str,
+    file: Option<String>,
+    message: &'static str,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ResumeAutoModeTurnRequest {
@@ -2226,6 +2251,7 @@ fn generate_creator_draft_inner(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn save_creator_draft_command(
+    app: AppHandle,
     request: SaveCreatorDraftRequest,
     state: State<'_, DesktopState>,
 ) -> Result<CreatorDraftSaveReceipt, DesktopError> {
@@ -2235,12 +2261,132 @@ fn save_creator_draft_command(
     }
     let draft_request = CreatorDraftRequest::new(request.kind, request.requirement)?;
     validate_creator_draft(&draft_request, &request.draft)?;
+    let report = check_creator_draft_inner(&app, &request.draft)?;
+    if report.status != "passed" {
+        return Err(DesktopError::Agent(
+            "creator draft failed isolated validation".to_owned(),
+        ));
+    }
     save_creator_draft(
         &request.workspace_root,
         &request.draft,
         &current_time_ms()?.to_string(),
     )
     .map_err(Into::into)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn check_creator_draft(
+    app: AppHandle,
+    request: CheckCreatorDraftRequest,
+    state: State<'_, DesktopState>,
+) -> Result<CreatorDraftCheckReport, DesktopError> {
+    ensure_normal_mode(&state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    let draft_request = CreatorDraftRequest::new(request.kind, request.requirement)?;
+    validate_creator_draft(&draft_request, &request.draft)?;
+    check_creator_draft_inner(&app, &request.draft)
+}
+
+fn check_creator_draft_inner(
+    app: &AppHandle,
+    draft: &CreatorDraft,
+) -> Result<CreatorDraftCheckReport, DesktopError> {
+    let mut checks = vec![CreatorDraftCheck {
+        id: "production-contract",
+        status: "passed",
+        file: None,
+        message: "生产契约校验通过",
+    }];
+    match &draft.artifact {
+        nimora_creator_draft::CreatorArtifact::Automation { .. } => {}
+        nimora_creator_draft::CreatorArtifact::UserProgram { files, .. } => {
+            for file in files.iter().filter(|file| {
+                Path::new(&file.path)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("js"))
+            }) {
+                let execution_id = Uuid::now_v7().to_string();
+                let config = WorkerConfig {
+                    executable: user_code_worker_executable(app)
+                        .to_string_lossy()
+                        .into_owned(),
+                    args: Vec::new(),
+                    execution_id,
+                    timeout: Duration::from_secs(5),
+                    output_bytes: 64 * 1024,
+                    cancellation: None,
+                };
+                let response = WorkerProcess::spawn(
+                    config,
+                    &WorkerMessage::Validate {
+                        source: file.source.clone(),
+                    },
+                )
+                .map_err(|error| DesktopError::UserCodeHost(error.to_string()))?
+                .wait()
+                .map_err(|error| DesktopError::UserCodeHost(error.to_string()))?;
+                let passed = matches!(response, WorkerMessage::Validated);
+                checks.push(CreatorDraftCheck {
+                    id: "javascript-syntax",
+                    status: if passed { "passed" } else { "failed" },
+                    file: Some(file.path.clone()),
+                    message: if passed {
+                        "独立 Worker 语法检查通过"
+                    } else {
+                        "独立 Worker 语法检查失败"
+                    },
+                });
+            }
+        }
+        nimora_creator_draft::CreatorArtifact::Skill { manifest, files } => {
+            for file in files.iter().filter(|file| {
+                Path::new(&file.path)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("js"))
+            }) {
+                let execution_id = Uuid::now_v7();
+                let cancellation = ExecutionCancellation::default();
+                let message = SkillWorkerMessage::Validate {
+                    protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
+                    execution_id: execution_id.to_string(),
+                    manifest: Box::new(manifest.clone()),
+                    source: file.source.clone(),
+                };
+                let lifecycle = nimora_skill_runtime::SkillHost::default();
+                let response = SkillWorkerProcess::spawn(
+                    skill_worker_config(app, execution_id, cancellation),
+                    &message,
+                    &lifecycle,
+                )?
+                .wait()?;
+                let passed = matches!(response, SkillWorkerMessage::Validated { .. });
+                checks.push(CreatorDraftCheck {
+                    id: "javascript-syntax",
+                    status: if passed { "passed" } else { "failed" },
+                    file: Some(file.path.clone()),
+                    message: if passed {
+                        "独立 Skill Worker 语法检查通过"
+                    } else {
+                        "独立 Skill Worker 语法检查失败"
+                    },
+                });
+            }
+        }
+    }
+    let status = if checks.iter().all(|check| check.status == "passed") {
+        "passed"
+    } else {
+        "failed"
+    };
+    Ok(CreatorDraftCheckReport {
+        spec: "nimora.creator-draft-check/1",
+        status,
+        checks,
+    })
 }
 
 #[tauri::command]
@@ -5542,9 +5688,11 @@ fn terminal_skill_worker_output(
         SkillWorkerMessage::Error { code, message, .. } => Err(DesktopError::SkillHost(
             SkillHostError::Protocol(format!("{code}: {message}")),
         )),
-        SkillWorkerMessage::Run { .. } => Err(DesktopError::SkillHost(SkillHostError::Protocol(
-            "worker returned a non-terminal response".to_owned(),
-        ))),
+        SkillWorkerMessage::Run { .. }
+        | SkillWorkerMessage::Validate { .. }
+        | SkillWorkerMessage::Validated { .. } => Err(DesktopError::SkillHost(
+            SkillHostError::Protocol("worker returned an unexpected response".to_owned()),
+        )),
     }
 }
 
@@ -6848,7 +6996,19 @@ fn authorized_user_program_input(
 }
 
 fn worker_config(app: &AppHandle, execution: &ExecutionHandle) -> WorkerConfig {
-    let executable = option_env!("NIMORA_USER_CODE_WORKER_PATH")
+    let executable = user_code_worker_executable(app);
+    WorkerConfig {
+        executable: executable.to_string_lossy().into_owned(),
+        args: Vec::new(),
+        execution_id: execution.execution_id().to_string(),
+        timeout: execution.limits.timeout,
+        output_bytes: execution.limits.output_bytes,
+        cancellation: Some(execution.cancellation()),
+    }
+}
+
+fn user_code_worker_executable(app: &AppHandle) -> PathBuf {
+    option_env!("NIMORA_USER_CODE_WORKER_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             let executable_candidates = app
@@ -6879,15 +7039,7 @@ fn worker_config(app: &AppHandle, execution: &ExecutionHandle) -> WorkerConfig {
                         .map(|directory| directory.join("nimora-user-code-worker"))
                 })
                 .unwrap_or_else(|| PathBuf::from("nimora-user-code-worker"))
-        });
-    WorkerConfig {
-        executable: executable.to_string_lossy().into_owned(),
-        args: Vec::new(),
-        execution_id: execution.execution_id().to_string(),
-        timeout: execution.limits.timeout,
-        output_bytes: execution.limits.output_bytes,
-        cancellation: Some(execution.cancellation()),
-    }
+        })
 }
 
 fn skill_worker_config(
@@ -7660,6 +7812,7 @@ pub fn run() {
             run_local_agent,
             generate_creator_draft,
             save_creator_draft_command,
+            check_creator_draft,
             resume_auto_mode_turn,
             start_auto_mode_job,
             auto_mode_job_status,

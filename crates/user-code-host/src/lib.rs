@@ -22,10 +22,14 @@ pub enum WorkerMessage {
         #[serde(default)]
         input: serde_json::Value,
     },
+    Validate {
+        source: String,
+    },
     Cancel,
     Result {
         value: serde_json::Value,
     },
+    Validated,
     Error {
         code: String,
         message: String,
@@ -191,7 +195,9 @@ impl WorkerProcess {
                         .map_err(|error| HostError::Protocol(error.to_string()))?;
                     if matches!(
                         message,
-                        WorkerMessage::Result { .. } | WorkerMessage::Error { .. }
+                        WorkerMessage::Result { .. }
+                            | WorkerMessage::Validated
+                            | WorkerMessage::Error { .. }
                     ) {
                         let _ = self.child.wait();
                         return Ok(message);
@@ -226,15 +232,22 @@ mod tests {
 
     #[test]
     fn protocol_messages_round_trip_as_jsonl() {
-        let message = WorkerMessage::Hello {
-            protocol_version: PROTOCOL_VERSION,
-            execution_id: "run-1".to_owned(),
-        };
-        let encoded = serde_json::to_string(&message).unwrap();
-        assert_eq!(
-            serde_json::from_str::<WorkerMessage>(&encoded).unwrap(),
-            message
-        );
+        for message in [
+            WorkerMessage::Hello {
+                protocol_version: PROTOCOL_VERSION,
+                execution_id: "run-1".to_owned(),
+            },
+            WorkerMessage::Validate {
+                source: "throw new Error('must not run')".to_owned(),
+            },
+            WorkerMessage::Validated,
+        ] {
+            let encoded = serde_json::to_string(&message).unwrap();
+            assert_eq!(
+                serde_json::from_str::<WorkerMessage>(&encoded).unwrap(),
+                message
+            );
+        }
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use boa_engine::{Context, Source};
+use boa_engine::{Context, Script, Source};
 use nimora_skill_host::{SKILL_WORKER_PROTOCOL_VERSION, SkillExecutionOutput, SkillWorkerMessage};
 use nimora_skill_runtime::{SkillCapability, SkillManifest, validate_manifest};
 
@@ -127,6 +127,32 @@ const nimora = Object.freeze({{
 
 #[must_use]
 pub fn execute(message: SkillWorkerMessage) -> SkillWorkerMessage {
+    if let SkillWorkerMessage::Validate {
+        protocol_version,
+        execution_id,
+        manifest,
+        source,
+    } = message
+    {
+        if protocol_version != SKILL_WORKER_PROTOCOL_VERSION {
+            return protocol_error(Some(execution_id), "unsupported protocol version");
+        }
+        if let Err(error) = validate_manifest(*manifest) {
+            return protocol_error(Some(execution_id), &error.to_string());
+        }
+        if source.len() > MAX_SOURCE_BYTES {
+            return protocol_error(Some(execution_id), "source exceeds budget");
+        }
+        let mut context = Context::default();
+        return match Script::parse(Source::from_bytes(source.as_bytes()), None, &mut context) {
+            Ok(_) => SkillWorkerMessage::Validated { execution_id },
+            Err(error) => SkillWorkerMessage::Error {
+                execution_id: Some(execution_id),
+                code: "validation-error".to_owned(),
+                message: error.to_string(),
+            },
+        };
+    }
     let SkillWorkerMessage::Run {
         protocol_version,
         execution_id,
@@ -187,6 +213,32 @@ mod tests {
                 agent_tasks: true,
             },
         }
+    }
+
+    #[test]
+    fn validates_without_executing_top_level_code() {
+        let response = execute(SkillWorkerMessage::Validate {
+            protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
+            execution_id: "validation-1".to_owned(),
+            manifest: Box::new(manifest()),
+            source: "throw new Error('must not run')".to_owned(),
+        });
+        assert!(matches!(
+            response,
+            SkillWorkerMessage::Validated { execution_id }
+                if execution_id == "validation-1"
+        ));
+
+        let response = execute(SkillWorkerMessage::Validate {
+            protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
+            execution_id: "validation-2".to_owned(),
+            manifest: Box::new(manifest()),
+            source: "const =".to_owned(),
+        });
+        assert!(matches!(
+            response,
+            SkillWorkerMessage::Error { code, .. } if code == "validation-error"
+        ));
     }
 
     #[test]

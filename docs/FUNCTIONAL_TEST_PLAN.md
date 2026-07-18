@@ -553,3 +553,7 @@ ID / 标题 / 优先级 / 前置条件
 - Verify 绝对路径、`..`、反斜杠、重复路径、缺失入口、文件数/单文件/总大小超限均在任何写盘前拒绝。
 - Verify User Program、Skill、Automation 分别复用生产校验；Safe/Recovery/浏览器预览禁止生成和保存，已保存结果仍显示“尚未安装”。
 - Verify 保存 IPC 重新校验完整需求与草案，选择的 Workspace 必须是可规范化真实目录；`.nimora-drafts` 符号链接、目标已存在和中途写入失败均不得覆盖或留下已发布的半成品。
+- Verify User Program 与 Skill 的每个 JavaScript 文件都由对应独立 Worker 的显式 `Validate/Validated` 协议检查；包含顶层 `throw` 的合法语法通过且不执行，非法语法返回逐文件失败。
+- Verify Skill 草案检查校验协议版本、Execution ID 和 Manifest，但安装前不要求 Active Skill Lease；正式 `Run` 仍必须精确匹配 Active Lease 与 Activation Event。
+- Verify UI 检查报告使用 `nimora.creator-draft-check/1`，逐文件区分 passed/failed；未通过检查时保存按钮不可用，绕过 UI 直接调用保存 IPC 仍失败关闭。
+- Verify Automation 草案复用生产 Engine 的确定性校验且不会伪装成 JavaScript Worker 检查；检查、保存、安装和启用状态在 UI 中不可混淆。
