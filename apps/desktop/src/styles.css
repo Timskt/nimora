@@ -79,6 +79,9 @@ body.pet-window { min-width: 0; overflow: hidden; background: transparent; user-
 .pet-overlay { width: 100vw; height: 100vh; display: grid; place-items: center; position: relative; overflow: hidden; }
 .overlay-drag-region { width: 100%; height: 100%; display: grid; place-items: center; border: 0; padding: 0; color: inherit; background: transparent; cursor: grab; }
 .overlay-drag-region:active { cursor: grabbing; }
+.overlay-drag-region.is-stroking { cursor: ew-resize; filter: drop-shadow(0 8px 14px rgba(130,101,190,.22)); }
+.overlay-drag-region.is-stroking::after { content: "♥"; position: absolute; top: 54px; right: 47px; color: #a984c7; font-size: 15px; text-shadow: 0 3px 9px rgba(91,60,133,.25); animation: stroke-heart 700ms ease-out infinite; }
+@keyframes stroke-heart { from { opacity: 0; transform: translateY(6px) scale(.75); } 45% { opacity: 1; } to { opacity: 0; transform: translateY(-12px) scale(1.08); } }
 .overlay-status { position: absolute; top: 19px; padding: 7px 11px; border: 1px solid rgba(255,255,255,.72); border-radius: 99px; color: #625d75; background: rgba(252,250,255,.78); box-shadow: 0 8px 24px rgba(51,41,103,.12); backdrop-filter: blur(16px); font-size: 10px; font-weight: 700; opacity: 0; transform: translateY(5px); transition: 180ms ease-out; }
 .pet-overlay:hover .overlay-status, .overlay-drag-region:focus-visible .overlay-status { opacity: 1; transform: translateY(0); }
 .overlay-pet { width: 138px; height: 158px; position: relative; display: block; border-radius: 46% 46% 43% 43%; background: linear-gradient(145deg,#fffaf0 8%,#d8d0f0 100%); box-shadow: inset -14px -20px 28px rgba(67,54,131,.12),0 22px 34px rgba(45,36,91,.22); animation: overlay-breathe 3.6s ease-in-out infinite; }

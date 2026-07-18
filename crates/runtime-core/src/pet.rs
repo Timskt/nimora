@@ -251,6 +251,23 @@ impl Pet {
         Ok(())
     }
 
+    /// Applies one deliberate, host-recognized petting gesture.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PetError::InvalidTransition`] while a drag is active.
+    pub fn stroke(&mut self) -> Result<(), PetError> {
+        if self.state == PetState::Dragged {
+            return Err(PetError::InvalidTransition);
+        }
+        self.state = PetState::Interacting;
+        self.emotion = Emotion::Happy;
+        self.mood = self.mood.saturating_add(4).min(100);
+        self.add_bond_points(2);
+        self.affinity = self.affinity.saturating_add(2).min(100);
+        Ok(())
+    }
+
     #[must_use]
     pub fn effective_bond_points(&self) -> u64 {
         self.bond_points.max(u64::from(self.affinity))
@@ -701,6 +718,18 @@ mod tests {
         assert_eq!(pet.mood, 100);
         assert_eq!(pet.affinity, 100);
         assert_eq!(pet.bond_points, 101);
+    }
+
+    #[test]
+    fn stroke_is_a_distinct_bounded_companionship_interaction() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.mood = 98;
+        pet.stroke().expect("stroke");
+        assert_eq!((pet.mood, pet.affinity, pet.bond_points), (100, 2, 2));
+
+        pet.begin_drag().expect("drag");
+        assert_eq!(pet.stroke(), Err(PetError::InvalidTransition));
+        assert_eq!(pet.bond_points, 2);
     }
 
     #[test]

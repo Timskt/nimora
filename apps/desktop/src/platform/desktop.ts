@@ -1018,6 +1018,7 @@ export interface DesktopApi {
   playAction(action: PetAction): Promise<NimoraCommand | null>;
   carePet(action: PetCareAction): Promise<NimoraCommand | null>;
   clickPet(x: number, y: number, button: PointerButton): Promise<NimoraCommand | null>;
+  strokePet(distancePx: number, durationMs: number, reversals: number): Promise<NimoraCommand | null>;
   dragPet(): Promise<NimoraCommand | null>;
   setClickThrough(enabled: boolean): Promise<void>;
   assetCatalog(): Promise<AssetCatalogSnapshot>;
@@ -1405,6 +1406,12 @@ export function createDesktopApi(
         previewSnapshot.pet.bondPoints += 1;
         return null;
       },
+      async strokePet() {
+        previewSnapshot.pet.mood = Math.min(100, previewSnapshot.pet.mood + 4);
+        previewSnapshot.pet.affinity = Math.min(100, previewSnapshot.pet.affinity + 2);
+        previewSnapshot.pet.bondPoints += 2;
+        return null;
+      },
       async dragPet() { return null; },
       async setClickThrough() {},
       async assetCatalog() { return { assets: [], rejected: [] }; },
@@ -1581,6 +1588,9 @@ export function createDesktopApi(
     carePet: async (action) => await invokeCommand("care_pet", { action }) as NimoraCommand,
     clickPet: async (x, y, button) => await invokeCommand("click_pet", {
       request: { x, y, button },
+    }) as NimoraCommand,
+    strokePet: async (distancePx, durationMs, reversals) => await invokeCommand("stroke_pet", {
+      request: { distancePx, durationMs, reversals },
     }) as NimoraCommand,
     dragPet: async () => {
       await invokeCommand("begin_pet_drag");

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { exceedsPetDragThreshold, PET_DRAG_THRESHOLD_PX } from "./petGesture";
+import {
+  appendPetGesturePoint,
+  createPetGestureTrail,
+  exceedsPetDragThreshold,
+  isPetStroke,
+  PET_DRAG_THRESHOLD_PX,
+} from "./petGesture";
 
 describe("pet gesture arbitration", () => {
   it("keeps small pointer jitter as a click", () => {
@@ -8,6 +14,32 @@ describe("pet gesture arbitration", () => {
 
   it("starts dragging at the inclusive movement threshold", () => {
     expect(exceedsPetDragThreshold({ clientX: 100, clientY: 100 }, 100 + PET_DRAG_THRESHOLD_PX, 100)).toBe(true);
-    expect(exceedsPetDragThreshold({ clientX: 100, clientY: 100 }, 106, 108)).toBe(true);
+    expect(exceedsPetDragThreshold({ clientX: 100, clientY: 100 }, 112, 116)).toBe(true);
+  });
+
+  it("recognizes a bounded deliberate back-and-forth stroke", () => {
+    let trail = createPetGestureTrail({ clientX: 100, clientY: 100 }, 1_000);
+    for (const clientX of [108, 100, 108, 100, 108, 102]) {
+      trail = appendPetGesturePoint(trail, { clientX, clientY: 100 });
+    }
+    expect(isPetStroke(trail, 1_220)).toBe(true);
+  });
+
+  it("rejects fast, one-way, and outward paths as strokes", () => {
+    let trail = createPetGestureTrail({ clientX: 100, clientY: 100 }, 1_000);
+    for (const clientX of [108, 100, 108, 100, 108, 102]) {
+      trail = appendPetGesturePoint(trail, { clientX, clientY: 100 });
+    }
+    expect(isPetStroke(trail, 1_100)).toBe(false);
+
+    let oneWay = createPetGestureTrail({ clientX: 100, clientY: 100 }, 1_000);
+    oneWay = appendPetGesturePoint(oneWay, { clientX: 111, clientY: 100 });
+    expect(isPetStroke(oneWay, 1_300)).toBe(false);
+
+    let outward = createPetGestureTrail({ clientX: 100, clientY: 100 }, 1_000);
+    outward = appendPetGesturePoint(outward, { clientX: 112, clientY: 100 });
+    outward = appendPetGesturePoint(outward, { clientX: 100, clientY: 100 });
+    outward = appendPetGesturePoint(outward, { clientX: 112, clientY: 100 });
+    expect(isPetStroke(outward, 1_300)).toBe(false);
   });
 });

@@ -657,6 +657,55 @@ impl<R: PetRepository> RuntimeService<R> {
         )
     }
 
+    /// Records a deliberate host-recognized petting gesture.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for forbidden transitions or a failed durable update.
+    pub fn stroke_pet(
+        &self,
+        distance_px: f64,
+        duration_ms: u64,
+        reversals: u8,
+    ) -> Result<Command, RuntimeError> {
+        self.update(
+            Pet::stroke,
+            || {
+                Command::new(
+                    "pet.interaction.stroke",
+                    serde_json::json!({
+                        "distancePx": distance_px,
+                        "durationMs": duration_ms,
+                        "reversals": reversals,
+                    }),
+                    CommandRisk::Safe,
+                )
+            },
+            "pet.interaction.stroked",
+            |before, after| {
+                serde_json::json!({
+                    "gesture": {
+                        "distancePx": distance_px,
+                        "durationMs": duration_ms,
+                        "reversals": reversals,
+                    },
+                    "before": {
+                        "mood": before.mood,
+                        "affinity": before.affinity,
+                        "bondPoints": before.effective_bond_points(),
+                        "relationshipLevel": before.relationship_level(),
+                    },
+                    "after": {
+                        "mood": after.mood,
+                        "affinity": after.affinity,
+                        "bondPoints": after.effective_bond_points(),
+                        "relationshipLevel": after.relationship_level(),
+                    },
+                })
+            },
+        )
+    }
+
     /// Returns an interaction animation to idle without overriding newer states.
     ///
     /// # Errors
@@ -1228,6 +1277,41 @@ mod tests {
         assert_eq!(event.data["before"]["bondPoints"], 0);
         assert_eq!(event.data["after"]["bondPoints"], 1);
         assert_eq!(event.data["after"]["relationshipLevel"], 1);
+    }
+
+    #[test]
+    fn stroke_publishes_growth_and_gesture_evidence_atomically() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let command = service.stroke_pet(42.0, 240, 3).expect("stroke");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(
+            (snapshot.mood, snapshot.affinity, snapshot.bond_points),
+            (74, 2, 2)
+        );
+        let event = service
+            .drain_events()
+            .expect("events")
+            .pop()
+            .expect("event");
+        assert_eq!(event.event_type, "pet.interaction.stroked");
+        assert_eq!(event.trace_id, command.trace_id);
+        assert_eq!(event.data["gesture"]["reversals"], 3);
+        assert_eq!(event.data["after"]["bondPoints"], 2);
+    }
+
+    #[test]
+    fn failed_stroke_persistence_does_not_publish_or_apply_growth() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        service.repository.fail_save.store(true, Ordering::Relaxed);
+        assert!(service.stroke_pet(42.0, 240, 3).is_err());
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(
+            (snapshot.mood, snapshot.affinity, snapshot.bond_points),
+            (70, 0, 0)
+        );
+        assert!(service.drain_events().expect("events").is_empty());
     }
 
     #[test]

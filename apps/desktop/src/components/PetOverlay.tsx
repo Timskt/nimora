@@ -3,7 +3,15 @@ import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction, PetCareActi
 import { desktopApi } from "../platform/desktop";
 import { RendererErrorBoundary } from "./RendererErrorBoundary";
 import { petStatusMessage } from "./petPresentation";
-import { exceedsPetDragThreshold, PET_LONG_PRESS_MS, PET_SINGLE_CLICK_DELAY_MS, type PointerOrigin } from "./petGesture";
+import {
+  appendPetGesturePoint,
+  createPetGestureTrail,
+  exceedsPetDragThreshold,
+  isPetStroke,
+  PET_LONG_PRESS_MS,
+  PET_SINGLE_CLICK_DELAY_MS,
+  type PetGestureTrail,
+} from "./petGesture";
 import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
 
 const GltfRenderer = lazy(async () => {
@@ -17,13 +25,14 @@ export function PetOverlay() {
   const [rendererFailed, setRendererFailed] = useState(false);
   const [message, setMessage] = useState("正在醒来…");
   const [menuOpen, setMenuOpen] = useState(false);
-  const pointerOrigin = useRef<PointerOrigin | null>(null);
+  const gestureTrail = useRef<PetGestureTrail | null>(null);
   const dragging = useRef(false);
   const suppressClick = useRef(false);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const singleClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const petButton = useRef<HTMLButtonElement | null>(null);
   const menu = useRef<HTMLDivElement | null>(null);
+  const [stroking, setStroking] = useState(false);
 
   const refreshRenderer = useCallback(async () => {
     const descriptor = await desktopApi.activeCharacterRenderer();
@@ -128,6 +137,17 @@ export function PetOverlay() {
     setSnapshot(await desktopApi.snapshot());
   }
 
+  async function stroke(distancePx: number, durationMs: number, reversals: number) {
+    setMessage("好舒服，再摸摸我吧");
+    await desktopApi.strokePet(
+      Math.min(240, distancePx),
+      Math.min(2_000, durationMs),
+      Math.min(12, reversals),
+    );
+    setSnapshot(await desktopApi.snapshot());
+    window.setTimeout(() => setStroking(false), 420);
+  }
+
   async function care(action: PetCareAction) {
     const labels: Record<PetCareAction, string> = {
       feed: "吃饱啦，谢谢你！",
@@ -174,32 +194,68 @@ export function PetOverlay() {
   function handlePointerDown(event: React.PointerEvent<HTMLButtonElement>) {
     if (event.button !== 0) return;
     setMenuOpen(false);
-    pointerOrigin.current = { clientX: event.clientX, clientY: event.clientY };
+    gestureTrail.current = createPetGestureTrail(
+      { clientX: event.clientX, clientY: event.clientY },
+      performance.now(),
+    );
     dragging.current = false;
     suppressClick.current = false;
+    setStroking(false);
     event.currentTarget.setPointerCapture(event.pointerId);
     clearLongPress();
     longPressTimer.current = setTimeout(() => {
-      pointerOrigin.current = null;
+      gestureTrail.current = null;
       suppressClick.current = true;
       openPetMenu();
     }, PET_LONG_PRESS_MS);
   }
 
   function handlePointerMove(event: React.PointerEvent<HTMLButtonElement>) {
-    if (!pointerOrigin.current || dragging.current) return;
-    if (!exceedsPetDragThreshold(pointerOrigin.current, event.clientX, event.clientY)) return;
+    if (!gestureTrail.current || dragging.current) return;
+    const nextTrail = appendPetGesturePoint(gestureTrail.current, {
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+    gestureTrail.current = nextTrail;
+    if (nextTrail.distancePx >= 6) {
+      clearLongPress();
+      setStroking(true);
+    }
+    if (!exceedsPetDragThreshold(nextTrail.origin, event.clientX, event.clientY)) return;
     clearLongPress();
     dragging.current = true;
     suppressClick.current = true;
-    pointerOrigin.current = null;
+    gestureTrail.current = null;
+    setStroking(false);
     void drag();
   }
 
   function finishPointerGesture() {
     clearLongPress();
-    pointerOrigin.current = null;
+    const trail = gestureTrail.current;
+    gestureTrail.current = null;
+    if (!dragging.current && trail && isPetStroke(trail, performance.now())) {
+      suppressClick.current = true;
+      void stroke(
+        trail.distancePx,
+        Math.round(performance.now() - trail.startedAtMs),
+        trail.reversals,
+      ).catch(() => {
+        setStroking(false);
+        setMessage("现在不方便抚摸，请稍后再试");
+      });
+    } else if (!dragging.current) {
+      setStroking(false);
+    }
     dragging.current = false;
+  }
+
+  function cancelPointerGesture() {
+    clearLongPress();
+    gestureTrail.current = null;
+    dragging.current = false;
+    suppressClick.current = true;
+    setStroking(false);
   }
 
   function handlePetClick(event: React.MouseEvent<HTMLButtonElement>) {
@@ -224,12 +280,12 @@ export function PetOverlay() {
     <main className="pet-overlay" aria-label="Nimora 桌面宠物">
       <button
         ref={petButton}
-        className="overlay-drag-region"
+        className={`overlay-drag-region${stroking ? " is-stroking" : ""}`}
         type="button"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={finishPointerGesture}
-        onPointerCancel={finishPointerGesture}
+        onPointerCancel={cancelPointerGesture}
         onClick={handlePetClick}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -237,7 +293,7 @@ export function PetOverlay() {
           suppressClick.current = true;
           openPetMenu();
         }}
-        aria-label="与 Aster 互动或拖动"
+        aria-label="与 Aster 互动、抚摸或拖动"
         aria-haspopup="menu"
         aria-expanded={menuOpen}
       >

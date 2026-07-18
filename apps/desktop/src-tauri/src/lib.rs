@@ -1014,6 +1014,14 @@ struct ClickPetRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StrokePetRequest {
+    distance_px: f64,
+    duration_ms: u64,
+    reversals: u8,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct InstallAssetRequest {
     source_path: PathBuf,
 }
@@ -1474,6 +1482,8 @@ enum DesktopError {
     WindowForbidden,
     #[error("pet position must be a finite 32-bit screen coordinate")]
     InvalidPosition,
+    #[error("pet stroke evidence is outside the trusted gesture bounds")]
+    InvalidStrokeGesture,
     #[error(transparent)]
     Runtime(#[from] RuntimeError),
     #[error(transparent)]
@@ -6753,6 +6763,36 @@ fn click_pet(
         },
         request.button,
     )?;
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(CLICK_FEEDBACK_DURATION);
+        let _ = app.state::<DesktopState>().runtime.finish_interaction();
+    });
+    Ok(command)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn stroke_pet(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    request: StrokePetRequest,
+) -> Result<Command, DesktopError> {
+    ensure_normal_mode(&state)?;
+    if !request.distance_px.is_finite()
+        || !(32.0..=240.0).contains(&request.distance_px)
+        || !(160..=2_000).contains(&request.duration_ms)
+        || !(1..=12).contains(&request.reversals)
+    {
+        return Err(DesktopError::InvalidStrokeGesture);
+    }
+    let command =
+        state
+            .runtime
+            .stroke_pet(request.distance_px, request.duration_ms, request.reversals)?;
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
     tauri::async_runtime::spawn_blocking(move || {
         std::thread::sleep(CLICK_FEEDBACK_DURATION);
         let _ = app.state::<DesktopState>().runtime.finish_interaction();
@@ -10663,6 +10703,7 @@ pub fn run() {
             play_pet_action,
             care_pet,
             click_pet,
+            stroke_pet,
             begin_pet_drag,
             finish_pet_drag,
             set_click_through,
