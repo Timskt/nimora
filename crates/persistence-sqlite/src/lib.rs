@@ -13,6 +13,7 @@ mod automation_governance;
 mod automation_journal;
 mod backup;
 mod context_cache_store;
+mod provider_config_store;
 mod skill_approval_journal;
 mod skill_execution_history;
 mod workspace_snapshot_store;
@@ -51,6 +52,7 @@ pub use backup::{
 pub use context_cache_store::{
     ContextCachePolicy, SqliteContextCacheRepository, StoredContextCacheEntry,
 };
+pub use provider_config_store::{ProviderConfig, SqliteProviderConfigRepository};
 pub use skill_approval_journal::{
     SkillApprovalJournalEntry, SkillApprovalJournalStatus, SqliteSkillApprovalJournal,
 };
@@ -1585,6 +1587,10 @@ pub enum SqlitePersistenceError {
     InvalidContextCache,
     #[error("Context cache schema version {0} is unsupported")]
     UnsupportedContextCacheVersion(u32),
+    #[error("Provider configuration is invalid")]
+    InvalidProviderConfig,
+    #[error("Provider configuration changed by another writer")]
+    ProviderConfigConflict,
     #[error("Automation journal record or state transition is invalid")]
     InvalidAutomationJournal,
     #[error("Automation Agent journal record or state transition is invalid")]

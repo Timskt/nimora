@@ -1,7 +1,7 @@
 # Nimora 文档控制中心
 
 > 版本：0.1.0-draft  
-> 更新日期：2026-07-18
+> 更新日期：2026-07-19
 > 所有者：产品与架构负责人
 
 ## 1. 文档优先级
@@ -30,7 +30,7 @@ Provider、Connector、缓存与授权材料的系统密钥存储、非敏感引
 
 外接 AI 如何检索与组合现有能力、提交能力缺口、使用受控 Builder API、跨模型接力并完成验证、运营和退役，以 [`AI_CAPABILITY_DEVELOPMENT_PLATFORM.md`](AI_CAPABILITY_DEVELOPMENT_PLATFORM.md) 为工程基线。
 
-外接 AI 可进一步创建的多模态感知、个人 API、数据应用、语义映射、Agent Team、策略编译、数字孪生、角色人格、声明式组件、浏览器协作、XR、数字身份、受控交易、时序规划、群体评测、模型蒸馏、跨设备连续体验、知识策展、注意力编排、硬件实验、隐私治理、桌面空间自动化、创作者商业化、数字健康和可验证决策能力，以 [`AI_NATIVE_EXTENSION_SURFACES.md`](AI_NATIVE_EXTENSION_SURFACES.md) 为能力面与安全测试基线。
+外接 AI 可进一步创建的多模态感知、个人 API、数据应用、语义映射、Agent Team、策略编译、数字孪生、角色人格、声明式组件、浏览器协作、XR、数字身份、受控交易、时序规划、群体评测、模型蒸馏、跨设备连续体验、知识策展、注意力编排、硬件实验、隐私治理、桌面空间自动化、创作者商业化、数字健康、可验证决策、需求契约、用户评测数据集、多 Agent 委托、兼容迁移、能源感知、内容可信链、应急连续性和可撤销偏好学习能力，以 [`AI_NATIVE_EXTENSION_SURFACES.md`](AI_NATIVE_EXTENSION_SURFACES.md) 为能力面与安全测试基线。
 
 面向广大用户的持续需求发现、新技术准入、Adapter 替换、稳定版前后兼容和退出演练统一遵循 [`FUTURE_EVOLUTION_GOVERNANCE.md`](FUTURE_EVOLUTION_GOVERNANCE.md)。
 
