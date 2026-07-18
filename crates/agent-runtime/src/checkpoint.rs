@@ -80,6 +80,7 @@ impl AutoModeCheckpoint {
                     | AgentTaskStatus::Running
                     | AgentTaskStatus::Paused
                     | AgentTaskStatus::Succeeded
+                    | AgentTaskStatus::Cancelled
             )
             || self.model.trim().is_empty()
             || self.model.len() > MAX_MODEL_BYTES
@@ -179,10 +180,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_terminal_tasks_and_unbounded_bindings() {
+    fn accepts_cancelled_task_but_rejects_unbounded_bindings() {
         let mut checkpoint = checkpoint();
         checkpoint.task.cancel(1_002);
-        assert!(checkpoint.validate().is_err());
+        assert!(checkpoint.validate().is_ok());
         checkpoint.task.status = AgentTaskStatus::Running;
         checkpoint.workspace_revision = "x".repeat(MAX_BINDING_BYTES + 1);
         assert!(checkpoint.validate().is_err());

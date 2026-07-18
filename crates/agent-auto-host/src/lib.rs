@@ -473,6 +473,106 @@ pub enum CommittedAutoModeTurn {
     Completed(Box<RecoveredAutoModeTurn>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoModeHostControl {
+    Pause,
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HostControlledAutoModeTurn {
+    Paused(Box<RecoveredAutoModeTurn>),
+    Cancelled(Box<RecoveredAutoModeTurn>),
+}
+
+#[derive(Debug, Clone)]
+pub struct AutoModeHostControlService {
+    database_path: PathBuf,
+}
+
+impl AutoModeHostControlService {
+    #[must_use]
+    pub fn new(database_path: impl Into<PathBuf>) -> Self {
+        Self {
+            database_path: database_path.into(),
+        }
+    }
+
+    /// Atomically applies a user control request at a clean yielded boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the continuation is not running, time moves backwards, a state
+    /// transition is illegal, or another writer wins either persisted version.
+    pub fn commit(
+        &self,
+        mut turn: RecoveredAutoModeTurn,
+        control: AutoModeHostControl,
+        now_ms: u64,
+    ) -> Result<HostControlledAutoModeTurn, AutoModeHostControlError> {
+        if turn.session.status != AutoModeStatus::Running
+            || turn.task.status != AgentTaskStatus::Running
+            || now_ms < turn.session.updated_at_ms
+        {
+            return Err(AutoModeHostControlError::InvalidState);
+        }
+        let previous_session_updated_at_ms = turn.session.updated_at_ms;
+        let previous_checkpoint_sequence = turn.checkpoint_sequence;
+        match control {
+            AutoModeHostControl::Pause => {
+                turn.session
+                    .pause(AutoModePauseReason::UserRequested, now_ms)
+                    .map_err(|_| AutoModeHostControlError::InvalidState)?;
+                turn.task
+                    .transition(AgentTaskStatus::Paused, now_ms)
+                    .map_err(|_| AutoModeHostControlError::InvalidState)?;
+            }
+            AutoModeHostControl::Cancel => {
+                turn.session
+                    .cancel(now_ms)
+                    .map_err(|_| AutoModeHostControlError::InvalidState)?;
+                turn.task.cancel(now_ms);
+            }
+        }
+        turn.checkpoint_sequence = turn
+            .checkpoint_sequence
+            .checked_add(1)
+            .ok_or(AutoModeHostControlError::InvalidState)?;
+        let checkpoint = AutoModeCheckpoint::new(
+            turn.session.id,
+            turn.goal.id,
+            turn.plan.revision,
+            turn.checkpoint_sequence,
+            turn.task.clone(),
+            turn.model.clone(),
+            turn.messages.clone(),
+            turn.workspace.fingerprint.clone(),
+            turn.session.policy_fingerprint.clone(),
+            turn.checkpoint_created_at_ms,
+            now_ms,
+        )
+        .map_err(|_| AutoModeHostControlError::InvalidState)?;
+        SqliteAutoModeCommitRepository::open(&self.database_path)?.commit_host_control(
+            &turn.session,
+            previous_session_updated_at_ms,
+            &checkpoint,
+            previous_checkpoint_sequence,
+        )?;
+        Ok(match control {
+            AutoModeHostControl::Pause => HostControlledAutoModeTurn::Paused(Box::new(turn)),
+            AutoModeHostControl::Cancel => HostControlledAutoModeTurn::Cancelled(Box::new(turn)),
+        })
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum AutoModeHostControlError {
+    #[error("Auto Mode host control requires a running yielded continuation")]
+    InvalidState,
+    #[error(transparent)]
+    Persistence(#[from] SqlitePersistenceError),
+}
+
 #[derive(Debug, Clone)]
 pub struct AutoModeTurnCommitService {
     database_path: PathBuf,
@@ -1878,6 +1978,100 @@ mod tests {
             recovery.recover(session_id, &workspace, 1_105),
             Err(AutoModeRecoveryError::IndeterminateTurnAttempt)
         ));
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn yielded_turn_can_be_atomically_paused_by_host() {
+        let (database, workspace, session_id) = fixture();
+        let running = running_turn(&database, &workspace, session_id);
+        let previous_sequence = running.checkpoint_sequence;
+
+        let controlled = AutoModeHostControlService::new(&database)
+            .commit(running, AutoModeHostControl::Pause, 1_102)
+            .expect("pause");
+        let HostControlledAutoModeTurn::Paused(paused) = controlled else {
+            panic!("host control must pause");
+        };
+        assert_eq!(paused.session.status, AutoModeStatus::Paused);
+        assert_eq!(
+            paused.session.pause_reason,
+            Some(AutoModePauseReason::UserRequested)
+        );
+        assert_eq!(paused.task.status, AgentTaskStatus::Paused);
+        assert_eq!(paused.checkpoint_sequence, previous_sequence + 1);
+
+        let stored_session = SqliteAutoModeRepository::open(&database)
+            .expect("sessions")
+            .get(session_id)
+            .expect("session")
+            .expect("stored session");
+        let stored_checkpoint = SqliteAutoModeCheckpointRepository::open(&database)
+            .expect("checkpoints")
+            .get(session_id)
+            .expect("checkpoint")
+            .expect("stored checkpoint");
+        assert_eq!(stored_session, paused.session);
+        assert_eq!(stored_checkpoint.sequence, paused.checkpoint_sequence);
+        assert_eq!(stored_checkpoint.task.status, AgentTaskStatus::Paused);
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn yielded_turn_can_be_atomically_cancelled_by_host() {
+        let (database, workspace, session_id) = fixture();
+        let running = running_turn(&database, &workspace, session_id);
+
+        let controlled = AutoModeHostControlService::new(&database)
+            .commit(running, AutoModeHostControl::Cancel, 1_102)
+            .expect("cancel");
+        let HostControlledAutoModeTurn::Cancelled(cancelled) = controlled else {
+            panic!("host control must cancel");
+        };
+        assert_eq!(cancelled.session.status, AutoModeStatus::Cancelled);
+        assert_eq!(cancelled.session.pause_reason, None);
+        assert_eq!(cancelled.task.status, AgentTaskStatus::Cancelled);
+
+        let stored_session = SqliteAutoModeRepository::open(&database)
+            .expect("sessions")
+            .get(session_id)
+            .expect("session")
+            .expect("stored session");
+        let stored_checkpoint = SqliteAutoModeCheckpointRepository::open(&database)
+            .expect("checkpoints")
+            .get(session_id)
+            .expect("checkpoint")
+            .expect("stored checkpoint");
+        assert_eq!(stored_session, cancelled.session);
+        assert_eq!(stored_checkpoint.task.status, AgentTaskStatus::Cancelled);
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn stale_host_control_cannot_overwrite_first_terminal_choice() {
+        let (database, workspace, session_id) = fixture();
+        let running = running_turn(&database, &workspace, session_id);
+        let stale = running.clone();
+        let service = AutoModeHostControlService::new(&database);
+        service
+            .commit(running, AutoModeHostControl::Pause, 1_102)
+            .expect("first control wins");
+
+        assert!(matches!(
+            service.commit(stale, AutoModeHostControl::Cancel, 1_103),
+            Err(AutoModeHostControlError::Persistence(
+                SqlitePersistenceError::AutoModeCommitConflict
+            ))
+        ));
+        let stored = SqliteAutoModeRepository::open(&database)
+            .expect("sessions")
+            .get(session_id)
+            .expect("session")
+            .expect("stored session");
+        assert_eq!(stored.status, AutoModeStatus::Paused);
         fs::remove_file(database).expect("database cleanup");
         fs::remove_dir_all(workspace).expect("workspace cleanup");
     }

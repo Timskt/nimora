@@ -240,6 +240,8 @@ nimora ai history delete --database <path> (--task-id <uuid>|--all)
 
 后台 Supervisor 禁止通过线程重复调用 `resume_auto_mode_turn` 实现：该接口每次都要求从 Paused Session 恢复，而 Continue 提交后的 Session 为 Running。宿主必须直接装配 `AutoModeLoopService`，在批次内持有领域续体；仅在 `yielded` 后安排下一批，并在每个调度边界重新检查 Execution Grant、Safe/Recovery Mode、预算、暂停、取消与应用退出。详细纠偏和硬验收见 [`MILESTONE_REVIEWS.md`](MILESTONE_REVIEWS.md)。
 
+Yield 边界的宿主 Pause/Cancel 现已具备独立原子提交：此时没有活跃 Turn Attempt，因此使用 Session timestamp 与 Checkpoint sequence 双 CAS 同步转换 Session、Task 和 Checkpoint，而不是制造虚假 Attempt。Pause 固定记录 `user_requested`；Cancel 保留 `Cancelled` Task 的终态 Checkpoint；竞争控制只能有一个胜者。桌面 Job Supervisor 接线后必须复用该服务，禁止只修改内存 Job 状态。
+
 桌面 Control Center 已提供 Agent 一级入口。工作台从宿主读取与 CLI、Provider 请求相同的十项生产 Tool Catalog，明确区分只读能力与必须确认的可逆写能力，并显示本地、无凭据、零费用边界。当前对话路径为 `provider:deterministic-local` 的确定性离线诊断单步，返回真实 Task、Finish Reason 与 Usage；它不伪装成通用对话模型，也不会自行产生 Tool Call。
 
 工作台提供生产 Tool Catalog 的真实执行验证入口：只读工具经 Tool Registry 和共享 Capability Gateway 立即执行；写工具由 Rust 宿主生成参数绑定的 Invocation 与 Approval，并仅在 UI 展示实际 Tool ID、参数、风险和期限。Approval 不交给前端，宿主最多持有 32 个待确认项，5 分钟过期，确认或拒绝时一次性移除后再处理，因此不能换参、重放或在执行失败后隐式重试。进入 Safe Mode 会撤销全部待确认项；Recovery Mode 不允许创建或确认工具调用。
