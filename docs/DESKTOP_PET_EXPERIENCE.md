@@ -47,9 +47,9 @@ Needs → Mood → Intent → Action Plan → Renderer Semantics → Adapter Ani
 
 拖拽释放由 Desktop Host 根据原生物理坐标完成桌边吸附：仅当窗口距离当前显示器安全边界 32px 内时吸附最近边，远离边缘保持用户位置；负坐标副屏、窗口尺寸和上下左右安全边距均参与计算。`edgeSnap` 是向后兼容的 Profile 策略，默认开启，用户可选择自由摆放。Renderer、Program、Skill 与 AI 不能提交伪造的显示器几何或绕过宿主边界。当前 Tauri Monitor API 暴露的是显示器物理区域，针对 macOS Dock、Windows 任务栏与 Linux Panel 的平台工作区精确适配仍需真机门禁验证。
 
-生命状态同样必须完全本地运行。当前基线每十分钟确定性推进 Energy 与 Mood，首次运行只建立时间基线，休眠或退出后的追赶最多计算 24 小时，避免长时间未启动造成瞬时归零；每次点击互动增加 Mood 与 Affinity 并在 100 封顶。时间戳、生命值和标准 `pet.vitals.changed` Event 由同一 Repository 事务原子保存，失败时内存状态和事件总线均不发布。Pet Overlay 与控制中心通过可信宿主事件刷新同一 Snapshot，控制中心不得再展示与真实领域状态无关的演示数字。
+生命状态同样必须完全本地运行。当前基线每十分钟确定性推进 Energy、Mood、Satiety 与 Cleanliness：Energy 每周期下降 1，Mood 每 3 周期下降 1，Satiety 每 2 周期下降 1，Cleanliness 每 4 周期下降 1。首次运行只建立时间基线，休眠或退出后的追赶最多计算 24 小时，避免长时间未启动造成瞬时归零；所有值仅表达照料倾向，不死亡、不生病、不倒扣关系，也不发送惩罚性通知。每次点击互动增加 Mood 与 Affinity 并在 100 封顶。时间戳、生命值和标准 `pet.vitals.changed` Event 由同一 Repository 事务原子保存，失败时内存状态和事件总线均不发布。Pet Overlay 与控制中心通过可信宿主事件刷新同一 Snapshot，控制中心不得再展示与真实领域状态无关的演示数字。旧快照缺少 Satiety/Cleanliness 时迁移为 100，避免升级后制造虚假欠照料。
 
-照料采用独立的 `PetCareAction` 语义，而不是把喂食伪装成动画。Feed 恢复 Energy 并小幅增加 Mood/Affinity，Play 消耗少量 Energy 换取较高 Mood/Affinity，Groom 提升 Mood 与关系；所有结果在 0–100 饱和。照料拥有 30 秒宿主时间冷却、防止误触和脚本刷值，Drag 具有绝对优先级；合法照料可以安全中止自主动作并进入短暂互动反馈。Overlay 与控制中心提供同一三种操作，Safe/Recovery Mode 失败关闭，浏览器预览只模拟 UI，不冒充原生持久化完成。
+照料采用独立的 `PetCareAction` 语义，而不是把喂食伪装成动画。Feed 恢复 20 Energy、25 Satiety，并小幅增加 Mood/Affinity；Play 消耗 5 Energy、3 Satiety 与 2 Cleanliness，换取较高 Mood/Affinity；Groom 恢复 30 Cleanliness并提升 Mood 与关系；所有结果在 0–100 饱和。照料拥有 30 秒宿主时间冷却、防止误触和脚本刷值，Drag 具有绝对优先级；合法照料可以安全中止自主动作并进入短暂互动反馈。Overlay 与控制中心提供同一三种操作，Safe/Recovery Mode 失败关闭，浏览器预览只模拟 UI，不冒充原生持久化完成。
 
 生命值会影响行为而不制造惩罚性打扰：Energy ≤ 25 时下一次自主行为稳定优先 Rest；Energy 充足但 Mood ≤ 25 时优先温和的 Observe/互动反馈；其余状态继续按持久序列确定性轮换。Energy 优先级高于 Mood，防止疲惫角色仍被迫活跃。Idle 情绪同步派生为 Sleepy、Sad 或 Neutral，但不会覆盖 Drag、Work、Interact 等活动状态。Overlay 只在悬浮/键盘聚焦气泡中表达需求，不发送系统通知、不自动调用 AI、不访问网络；内置角色提供困倦和低落视觉细节，第三方 Renderer 继续消费统一 Sleep/Interact 行为语义。
 

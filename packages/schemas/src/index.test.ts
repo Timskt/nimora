@@ -99,6 +99,21 @@ describe("petSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("defaults legacy care needs to a healthy low-pressure baseline", () => {
+    const result = petSchema.parse({
+      id: "019bf2c6-4d40-7000-8000-000000000001",
+      name: "Aster",
+      state: "idle",
+      emotion: "happy",
+      position: { x: 0, y: 0 },
+      energy: 80,
+      mood: 70,
+      affinity: 0,
+    });
+    expect(result.satiety).toBe(100);
+    expect(result.cleanliness).toBe(100);
+  });
 });
 
 describe("profileSnapshotSchema", () => {

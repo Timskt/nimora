@@ -1736,6 +1736,14 @@ mod tests {
             .as_object_mut()
             .expect("pet object")
             .remove("bondPoints");
+        payload["pet"]
+            .as_object_mut()
+            .expect("pet object")
+            .remove("satiety");
+        payload["pet"]
+            .as_object_mut()
+            .expect("pet object")
+            .remove("cleanliness");
         payload["pet"]["affinity"] = serde_json::json!(34);
         repository
             .connection
@@ -1750,6 +1758,7 @@ mod tests {
         let restored = repository.load_snapshot().expect("load").expect("snapshot");
         assert_eq!(restored.bond_points, 0);
         assert_eq!(restored.effective_bond_points(), 34);
+        assert_eq!((restored.satiety, restored.cleanliness), (100, 100));
     }
 
     #[test]

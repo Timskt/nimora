@@ -556,8 +556,8 @@ impl<R: PetRepository> RuntimeService<R> {
             "pet.vitals.changed",
             |before, after| {
                 serde_json::json!({
-                    "before": { "energy": before.energy, "mood": before.mood },
-                    "after": { "energy": after.energy, "mood": after.mood },
+                    "before": { "energy": before.energy, "mood": before.mood, "satiety": before.satiety, "cleanliness": before.cleanliness },
+                    "after": { "energy": after.energy, "mood": after.mood, "satiety": after.satiety, "cleanliness": after.cleanliness },
                     "affinity": after.affinity,
                 })
             },
@@ -592,6 +592,8 @@ impl<R: PetRepository> RuntimeService<R> {
                     "before": {
                         "energy": before.energy,
                         "mood": before.mood,
+                        "satiety": before.satiety,
+                        "cleanliness": before.cleanliness,
                         "affinity": before.affinity,
                         "bondPoints": before.effective_bond_points(),
                         "relationshipLevel": before.relationship_level(),
@@ -599,6 +601,8 @@ impl<R: PetRepository> RuntimeService<R> {
                     "after": {
                         "energy": after.energy,
                         "mood": after.mood,
+                        "satiety": after.satiety,
+                        "cleanliness": after.cleanliness,
                         "affinity": after.affinity,
                         "bondPoints": after.effective_bond_points(),
                         "relationshipLevel": after.relationship_level(),
@@ -1185,11 +1189,14 @@ mod tests {
         let snapshot = service.snapshot().expect("snapshot");
         assert_eq!(snapshot.energy, 94);
         assert_eq!(snapshot.mood, 68);
+        assert_eq!((snapshot.satiety, snapshot.cleanliness), (97, 99));
         let events = service.drain_events().expect("events");
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].trace_id, initialized.trace_id);
         assert_eq!(events[1].trace_id, updated.trace_id);
         assert_eq!(events[1].event_type, "pet.vitals.changed");
+        assert_eq!(events[1].data["after"]["satiety"], 97);
+        assert_eq!(events[1].data["after"]["cleanliness"], 99);
     }
 
     #[test]
@@ -1214,8 +1221,14 @@ mod tests {
             .expect("care");
         let snapshot = service.snapshot().expect("snapshot");
         assert_eq!(
-            (snapshot.energy, snapshot.mood, snapshot.affinity),
-            (95, 82, 2)
+            (
+                snapshot.energy,
+                snapshot.mood,
+                snapshot.satiety,
+                snapshot.cleanliness,
+                snapshot.affinity
+            ),
+            (95, 82, 97, 98, 2)
         );
         assert!(matches!(
             service.care_pet(PetCareAction::Feed, 2_000, 30_000),
@@ -1231,6 +1244,8 @@ mod tests {
         assert_eq!(event.data["action"], "play");
         assert_eq!(event.data["before"]["bondPoints"], 0);
         assert_eq!(event.data["after"]["bondPoints"], 2);
+        assert_eq!(event.data["after"]["satiety"], 97);
+        assert_eq!(event.data["after"]["cleanliness"], 98);
         assert_eq!(event.data["after"]["relationshipLevel"], 1);
     }
 

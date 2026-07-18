@@ -70,6 +70,8 @@ export const petSchema = z.object({
   position: z.object({ x: z.number().finite(), y: z.number().finite() }),
   energy: z.number().int().min(0).max(100),
   mood: z.number().int().min(0).max(100),
+  satiety: z.number().int().min(0).max(100).default(100),
+  cleanliness: z.number().int().min(0).max(100).default(100),
   affinity: z.number().int().min(0).max(100),
   bondPoints: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).default(0),
   lastVitalsUpdateMs: z.number().int().nonnegative().optional(),

@@ -238,7 +238,12 @@ export function App() {
             <p className="card-label">今日状态</p>
             <div className="metric-row"><strong>{desktopSnapshot?.pet.energy ?? 100}</strong><span>/ 100</span></div>
             <div className="progress-track"><span style={{ width: `${desktopSnapshot?.pet.energy ?? 100}%` }} /></div>
-            <p className="supporting">心情 {desktopSnapshot?.pet.mood ?? 70} · 完全离线持续演化</p>
+            <p className="supporting vital-summary">
+              <span>心情 {desktopSnapshot?.pet.mood ?? 70}</span>
+              <span>饱腹 {desktopSnapshot?.pet.satiety ?? 100}</span>
+              <span>清洁 {desktopSnapshot?.pet.cleanliness ?? 100}</span>
+              <span>完全离线持续演化</span>
+            </p>
           </section>
 
           <section className="metric-card affinity-card">

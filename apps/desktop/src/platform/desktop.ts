@@ -1069,6 +1069,8 @@ const previewSnapshot: DesktopSnapshot = {
     position: { x: 80, y: 80 },
     energy: 86,
     mood: 82,
+    satiety: 72,
+    cleanliness: 91,
     affinity: 34,
     bondPoints: 84,
   },
@@ -1390,12 +1392,14 @@ export function createDesktopApi(
       async playAction() { return null; },
       async carePet(action) {
         const gains = action === "feed"
-          ? { energy: 20, mood: 2, affinity: 1 }
+          ? { energy: 20, mood: 2, satiety: 25, cleanliness: 0, affinity: 1 }
           : action === "play"
-            ? { energy: -5, mood: 12, affinity: 2 }
-            : { energy: 0, mood: 6, affinity: 3 };
+            ? { energy: -5, mood: 12, satiety: -3, cleanliness: -2, affinity: 2 }
+            : { energy: 0, mood: 6, satiety: 0, cleanliness: 30, affinity: 3 };
         previewSnapshot.pet.energy = Math.max(0, Math.min(100, previewSnapshot.pet.energy + gains.energy));
         previewSnapshot.pet.mood = Math.min(100, previewSnapshot.pet.mood + gains.mood);
+        previewSnapshot.pet.satiety = Math.max(0, Math.min(100, previewSnapshot.pet.satiety + gains.satiety));
+        previewSnapshot.pet.cleanliness = Math.max(0, Math.min(100, previewSnapshot.pet.cleanliness + gains.cleanliness));
         previewSnapshot.pet.affinity = Math.min(100, previewSnapshot.pet.affinity + gains.affinity);
         previewSnapshot.pet.bondPoints += gains.affinity;
         return null;

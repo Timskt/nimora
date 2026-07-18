@@ -165,6 +165,10 @@ pub struct Pet {
     pub position: Position,
     pub energy: u8,
     pub mood: u8,
+    #[serde(default = "default_need_level")]
+    pub satiety: u8,
+    #[serde(default = "default_need_level")]
+    pub cleanliness: u8,
     pub affinity: u8,
     #[serde(default)]
     pub bond_points: u64,
@@ -176,6 +180,10 @@ pub struct Pet {
     pub autonomy: PetAutonomyState,
 }
 
+const fn default_need_level() -> u8 {
+    100
+}
+
 impl Pet {
     const LOW_VITAL_THRESHOLD: u8 = 25;
     pub const MAX_BOND_POINTS: u64 = 9_007_199_254_740_991;
@@ -183,7 +191,10 @@ impl Pet {
     fn idle_emotion(&self) -> Emotion {
         if self.energy <= Self::LOW_VITAL_THRESHOLD {
             Emotion::Sleepy
-        } else if self.mood <= Self::LOW_VITAL_THRESHOLD {
+        } else if self.mood <= Self::LOW_VITAL_THRESHOLD
+            || self.satiety <= Self::LOW_VITAL_THRESHOLD
+            || self.cleanliness <= Self::LOW_VITAL_THRESHOLD
+        {
             Emotion::Sad
         } else {
             Emotion::Neutral
@@ -214,6 +225,8 @@ impl Pet {
             position: Position { x: 0.0, y: 0.0 },
             energy: 100,
             mood: 70,
+            satiety: 100,
+            cleanliness: 100,
             affinity: 0,
             bond_points: 0,
             last_vitals_update_ms: 0,
@@ -348,6 +361,8 @@ impl Pet {
         }
         if self.energy > 100
             || self.mood > 100
+            || self.satiety > 100
+            || self.cleanliness > 100
             || self.affinity > 100
             || self.bond_points > Self::MAX_BOND_POINTS
         {
@@ -398,8 +413,13 @@ impl Pet {
         }
         let energy_loss = u8::try_from(intervals.min(u64::from(u8::MAX))).unwrap_or(u8::MAX);
         let mood_loss = u8::try_from((intervals / 3).min(u64::from(u8::MAX))).unwrap_or(u8::MAX);
+        let satiety_loss = u8::try_from((intervals / 2).min(u64::from(u8::MAX))).unwrap_or(u8::MAX);
+        let cleanliness_loss =
+            u8::try_from((intervals / 4).min(u64::from(u8::MAX))).unwrap_or(u8::MAX);
         self.energy = self.energy.saturating_sub(energy_loss);
         self.mood = self.mood.saturating_sub(mood_loss);
+        self.satiety = self.satiety.saturating_sub(satiety_loss);
+        self.cleanliness = self.cleanliness.saturating_sub(cleanliness_loss);
         self.last_vitals_update_ms = now_ms;
         if self.state == PetState::Idle {
             self.emotion = self.idle_emotion();
@@ -426,17 +446,21 @@ impl Pet {
         match action {
             PetCareAction::Feed => {
                 self.energy = self.energy.saturating_add(20).min(100);
+                self.satiety = self.satiety.saturating_add(25).min(100);
                 self.mood = self.mood.saturating_add(2).min(100);
                 self.add_bond_points(1);
                 self.affinity = self.affinity.saturating_add(1).min(100);
             }
             PetCareAction::Play => {
                 self.energy = self.energy.saturating_sub(5);
+                self.satiety = self.satiety.saturating_sub(3);
+                self.cleanliness = self.cleanliness.saturating_sub(2);
                 self.mood = self.mood.saturating_add(12).min(100);
                 self.add_bond_points(2);
                 self.affinity = self.affinity.saturating_add(2).min(100);
             }
             PetCareAction::Groom => {
+                self.cleanliness = self.cleanliness.saturating_add(30).min(100);
                 self.mood = self.mood.saturating_add(6).min(100);
                 self.add_bond_points(3);
                 self.affinity = self.affinity.saturating_add(3).min(100);
@@ -498,7 +522,10 @@ impl Pet {
         }
         let (intent, action) = if self.energy <= Self::LOW_VITAL_THRESHOLD {
             (PetIntent::Rest, PetAction::Sleep)
-        } else if self.mood <= Self::LOW_VITAL_THRESHOLD {
+        } else if self.mood <= Self::LOW_VITAL_THRESHOLD
+            || self.satiety <= Self::LOW_VITAL_THRESHOLD
+            || self.cleanliness <= Self::LOW_VITAL_THRESHOLD
+        {
             (PetIntent::Observe, PetAction::Celebrate)
         } else {
             match self.autonomy.sequence % 3 {
@@ -706,7 +733,34 @@ mod tests {
         pet.update_vitals(11_000, 100, 6);
         assert_eq!(pet.energy, 94);
         assert_eq!(pet.mood, 68);
+        assert_eq!(pet.satiety, 97);
+        assert_eq!(pet.cleanliness, 99);
         assert_eq!(pet.last_vitals_update_ms, 11_000);
+    }
+
+    #[test]
+    fn care_actions_restore_real_needs_without_punitive_overflow() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.energy = 70;
+        pet.satiety = 20;
+        pet.cleanliness = 20;
+        pet.care(PetCareAction::Feed, 1_000, 0).expect("feed");
+        assert_eq!((pet.energy, pet.satiety), (90, 45));
+        pet.care(PetCareAction::Groom, 2_000, 0).expect("groom");
+        assert_eq!(pet.cleanliness, 50);
+        pet.care(PetCareAction::Play, 3_000, 0).expect("play");
+        assert_eq!((pet.energy, pet.satiety, pet.cleanliness), (85, 42, 48));
+    }
+
+    #[test]
+    fn legacy_snapshot_defaults_new_care_needs_to_full() {
+        let pet = Pet::new("Aster").expect("valid pet");
+        let mut value = serde_json::to_value(pet).expect("serialize pet");
+        let object = value.as_object_mut().expect("pet object");
+        object.remove("satiety");
+        object.remove("cleanliness");
+        let restored: Pet = serde_json::from_value(value).expect("legacy pet");
+        assert_eq!((restored.satiety, restored.cleanliness), (100, 100));
     }
 
     #[test]
