@@ -114,6 +114,16 @@ export interface CreatorDraftApprovalReceipt {
   expiresAtMs: number;
 }
 
+export interface CreatorDraftInstallReceipt {
+  spec: "nimora.creator-draft-install/1";
+  artifactKind: CreatorArtifactKind;
+  artifactId: string;
+  version: string;
+  replacedPrevious: boolean;
+  authorized: false;
+  enabled: false;
+}
+
 export interface ResumeAutoModeTurnRequest {
   sessionId: string;
   workspaceRoot: string;
@@ -697,6 +707,7 @@ export interface DesktopApi {
   runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
   generateCreatorDraft(kind: CreatorArtifactKind, requirement: string, providerId: string, model: string): Promise<CreatorDraftResult>;
   approveCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"], draftDigest: string): Promise<CreatorDraftApprovalReceipt>;
+  installCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"], approvalId: string): Promise<CreatorDraftInstallReceipt>;
   saveCreatorDraft(workspaceRoot: string, kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"], approvalId: string): Promise<CreatorDraftSaveReceipt>;
   checkCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"]): Promise<CreatorDraftCheckReport>;
   resumeAutoModeTurn(request: ResumeAutoModeTurnRequest): Promise<DesktopAutoModeTurnResult>;
@@ -962,6 +973,9 @@ export function createDesktopApi(
       async approveCreatorDraft() {
         throw new Error("desktop-host-required");
       },
+      async installCreatorDraft() {
+        throw new Error("desktop-host-required");
+      },
       async checkCreatorDraft() {
         throw new Error("desktop-host-required");
       },
@@ -1156,6 +1170,7 @@ export function createDesktopApi(
     runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") => await invokeCommand("run_local_agent", { request: { prompt, providerId, model } }) as LocalAgentResult,
     generateCreatorDraft: async (kind, requirement, providerId, model) => await invokeCommand("generate_creator_draft", { request: { kind, requirement, providerId, model } }) as CreatorDraftResult,
     approveCreatorDraft: async (kind, requirement, draft, draftDigest) => await invokeCommand("approve_creator_draft", { request: { kind, requirement, draft, draftDigest } }) as CreatorDraftApprovalReceipt,
+    installCreatorDraft: async (kind, requirement, draft, approvalId) => await invokeCommand("install_creator_draft", { request: { kind, requirement, draft, approvalId } }) as CreatorDraftInstallReceipt,
     saveCreatorDraft: async (workspaceRoot, kind, requirement, draft, approvalId) => await invokeCommand("save_creator_draft_command", { request: { workspaceRoot, kind, requirement, draft, approvalId } }) as CreatorDraftSaveReceipt,
     checkCreatorDraft: async (kind, requirement, draft) => await invokeCommand("check_creator_draft", { request: { kind, requirement, draft } }) as CreatorDraftCheckReport,
     resumeAutoModeTurn: async (request) => await invokeCommand("resume_auto_mode_turn", {

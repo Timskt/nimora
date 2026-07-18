@@ -1279,6 +1279,38 @@ struct CreatorDraftApprovalReceipt {
     expires_at_ms: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InstallCreatorDraftRequest {
+    kind: CreatorArtifactKind,
+    requirement: String,
+    draft: CreatorDraft,
+    approval_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatorDraftInstallReceipt {
+    spec: &'static str,
+    artifact_kind: CreatorArtifactKind,
+    artifact_id: String,
+    version: String,
+    replaced_previous: bool,
+    authorized: bool,
+    enabled: bool,
+}
+
+struct CreatorPackageStaging {
+    root: PathBuf,
+    files: Vec<InstallFile>,
+}
+
+impl Drop for CreatorPackageStaging {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CreatorDraftCheck {
@@ -2363,6 +2395,130 @@ fn approve_creator_draft(
         draft_digest: report.draft_digest,
         expires_at_ms,
     })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn install_creator_draft(
+    app: AppHandle,
+    request: InstallCreatorDraftRequest,
+    state: State<'_, DesktopState>,
+) -> Result<CreatorDraftInstallReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    let draft_request = CreatorDraftRequest::new(request.kind, request.requirement)?;
+    validate_creator_draft(&draft_request, &request.draft)?;
+    let report = check_creator_draft_inner(&app, &request.draft)?;
+    if report.status != "passed" {
+        return Err(DesktopError::Agent(
+            "creator draft failed isolated validation".to_owned(),
+        ));
+    }
+    consume_creator_approval(&state, request.approval_id, &report.draft_digest)?;
+
+    match request.draft.artifact {
+        nimora_creator_draft::CreatorArtifact::UserProgram { manifest, files } => {
+            let staging = stage_creator_package(&manifest, &files)?;
+            let result = install_program_atomically(
+                &staging.root,
+                &state.program_store,
+                manifest,
+                &staging.files,
+            )?;
+            cancel_user_program_workers(&state, &result.program_id)?;
+            cancel_user_program_event_sessions(&state, &result.program_id)?;
+            Ok(CreatorDraftInstallReceipt {
+                spec: "nimora.creator-draft-install/1",
+                artifact_kind: CreatorArtifactKind::UserProgram,
+                artifact_id: result.program_id,
+                version: result.version,
+                replaced_previous: result.backup_path.is_some(),
+                authorized: false,
+                enabled: false,
+            })
+        }
+        nimora_creator_draft::CreatorArtifact::Skill { manifest, files } => {
+            let staging = stage_creator_package(&manifest, &files)?;
+            let result = install_skill_atomically(
+                &staging.root,
+                &state.skill_store,
+                manifest,
+                &staging.files,
+            )?;
+            let installed = load_installed_skill(&state.skill_store, &result.skill_id)?;
+            let capabilities = installed.manifest.manifest().capabilities.clone();
+            state.skill_states.save(&SkillStateRecord {
+                skill_id: result.skill_id.clone(),
+                version: result.version.clone(),
+                capabilities: skill_capability_names(&capabilities)?,
+                authorized: false,
+                enabled: false,
+            })?;
+            rebuild_skill_host(&state)?;
+            Ok(CreatorDraftInstallReceipt {
+                spec: "nimora.creator-draft-install/1",
+                artifact_kind: CreatorArtifactKind::Skill,
+                artifact_id: result.skill_id,
+                version: result.version,
+                replaced_previous: result.backup_path.is_some(),
+                authorized: false,
+                enabled: false,
+            })
+        }
+        nimora_creator_draft::CreatorArtifact::Automation { .. } => Err(DesktopError::Agent(
+            "automation draft installation requires the automation catalog".to_owned(),
+        )),
+    }
+}
+
+fn stage_creator_package<T: Serialize>(
+    manifest: &T,
+    draft_files: &[nimora_creator_draft::CreatorDraftFile],
+) -> Result<CreatorPackageStaging, DesktopError> {
+    use sha2::{Digest, Sha256};
+
+    let root = std::env::temp_dir().join(format!("nimora-creator-{}", Uuid::now_v7()));
+    fs::create_dir(&root)?;
+    let mut package_files = Vec::with_capacity(draft_files.len().saturating_add(1));
+    let manifest_bytes = serde_json::to_vec_pretty(manifest)?;
+    write_creator_package_file(&root, Path::new("manifest.json"), &manifest_bytes)?;
+    package_files.push(InstallFile {
+        relative_path: PathBuf::from("manifest.json"),
+        bytes: manifest_bytes.len() as u64,
+        sha256: format!("{:x}", Sha256::digest(&manifest_bytes)),
+    });
+    for file in draft_files {
+        if file.path == "manifest.json" {
+            continue;
+        }
+        let relative_path = PathBuf::from(&file.path);
+        let bytes = file.source.as_bytes();
+        write_creator_package_file(&root, &relative_path, bytes)?;
+        package_files.push(InstallFile {
+            relative_path,
+            bytes: bytes.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+        });
+    }
+    Ok(CreatorPackageStaging {
+        root,
+        files: package_files,
+    })
+}
+
+fn write_creator_package_file(
+    root: &Path,
+    relative_path: &Path,
+    bytes: &[u8],
+) -> Result<(), DesktopError> {
+    let destination = root.join(relative_path);
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(destination, bytes)?;
+    Ok(())
 }
 
 fn consume_creator_approval(
@@ -8121,6 +8277,7 @@ pub fn run() {
             save_creator_draft_command,
             check_creator_draft,
             approve_creator_draft,
+            install_creator_draft,
             resume_auto_mode_turn,
             start_auto_mode_job,
             auto_mode_job_status,
@@ -8345,8 +8502,9 @@ mod tests {
         resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
         run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
         screen_coordinate, serve_asset_protocol, skill_capability_names, skill_event_types,
-        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
-        validate_model_source, validate_package_source, validate_requested_animation_map,
+        stage_creator_package, stop_skill_event_sessions, test_automation, user_program_input,
+        valid_asset_identifier, validate_model_source, validate_package_source,
+        validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -8380,7 +8538,8 @@ mod tests {
         SkillAgentToolContribution, SkillAgentToolEffect, SkillCapability, SkillContributions,
         SkillGrant, SkillManifest, SkillStatus, validate_manifest,
     };
-    use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
+    use nimora_user_code_package::install_program_atomically;
+    use nimora_user_code_policy::{Capability, EventConcurrencyPolicy, ProgramManifest, evaluate};
     use serde_json::json;
     use sha2::{Digest, Sha256};
     use std::collections::HashMap;
@@ -11590,5 +11749,39 @@ mod tests {
         )]));
         assert!(consume_creator_approval_from(&pending, approval_id, "sha256:draft", 100).is_err());
         assert!(pending.lock().expect("pending lock").is_empty());
+    }
+
+    #[test]
+    fn creator_package_staging_generates_verified_manifest_inventory() {
+        let manifest = ProgramManifest {
+            id: "studio.example.creator-install".to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities: vec![],
+            subscriptions: vec![],
+            event_concurrency: EventConcurrencyPolicy::Serial,
+            event_queue_capacity: 8,
+            commands: vec![],
+            timeout_ms: 5_000,
+            memory_bytes: 8 * 1024 * 1024,
+        };
+        let staging = stage_creator_package(
+            &manifest,
+            &[nimora_creator_draft::CreatorDraftFile {
+                path: "main.js".to_owned(),
+                source: "({ agentTasks: [] })".to_owned(),
+            }],
+        )
+        .expect("staged Creator package");
+        assert_eq!(staging.files.len(), 2);
+        assert!(staging.root.join("manifest.json").is_file());
+        assert!(staging.root.join("main.js").is_file());
+        let installed = install_program_atomically(
+            &staging.root,
+            &staging.root.join("store"),
+            manifest,
+            &staging.files,
+        )
+        .expect("install staged package");
+        assert_eq!(installed.program_id, "studio.example.creator-install");
     }
 }
