@@ -18,6 +18,7 @@ const MAX_JSON_POINTER_BYTES: usize = 256;
 pub struct AutomationDefinition {
     pub spec: String,
     pub id: String,
+    pub version: String,
     pub name: String,
     pub enabled: bool,
     pub trigger: EventTrigger,
@@ -177,6 +178,7 @@ impl AutomationEngine {
     pub fn validate(definition: &AutomationDefinition) -> Result<(), AutomationError> {
         if definition.spec != "nimora.automation/1"
             || !valid_automation_id(&definition.id)
+            || !valid_automation_version(&definition.version)
             || definition.name.trim().is_empty()
             || definition.name.len() > 128
             || definition.actions.is_empty()
@@ -327,6 +329,16 @@ impl AutomationEngine {
         run.status = AutomationRunStatus::Succeeded;
         Ok(run)
     }
+}
+
+fn valid_automation_version(version: &str) -> bool {
+    let segments = version.split('.').collect::<Vec<_>>();
+    segments.len() == 3
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && (*segment == "0" || !segment.starts_with('0'))
+                && segment.chars().all(|character| character.is_ascii_digit())
+        })
 }
 
 fn execute_action(
@@ -536,6 +548,7 @@ mod tests {
         AutomationDefinition {
             spec: "nimora.automation/1".to_owned(),
             id: "local.focus.on-build".to_owned(),
+            version: "1.0.0".to_owned(),
             name: "Build companion".to_owned(),
             enabled: true,
             trigger: EventTrigger {
@@ -588,6 +601,22 @@ mod tests {
         assert_eq!(run.status, AutomationRunStatus::Planned);
         assert_eq!(run.steps[0].attempts, 0);
         assert!(backend.commands.lock().expect("commands").is_empty());
+    }
+
+    #[test]
+    fn version_requires_three_canonical_numeric_segments() {
+        let mut candidate = definition();
+        candidate.version = "1.0.0".to_owned();
+        assert_eq!(AutomationEngine::validate(&candidate), Ok(()));
+
+        for version in ["1.0", "01.0.0", "1.0.0-beta", "1.0.0.0"] {
+            candidate.version = version.to_owned();
+            assert_eq!(
+                AutomationEngine::validate(&candidate),
+                Err(AutomationError::InvalidDefinition),
+                "version {version} must be rejected"
+            );
+        }
     }
 
     #[test]

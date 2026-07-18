@@ -72,6 +72,7 @@ describe("desktop platform adapter", () => {
     const definition = {
       spec: "nimora.automation/1" as const,
       id: "local.focus.on-build",
+      version: "1.0.0",
       name: "Build companion",
       enabled: true,
       trigger: { eventType: "dev.build.finished" },

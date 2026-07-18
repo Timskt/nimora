@@ -62,3 +62,4 @@
 | R-047 | Creator 行为检查调用真实 Gateway，或把临时 Skill Lease 误持久化为安装授权 | 低（已缓解） | 严重 | User Program 无原生能力；Skill Worker 仅返回调用计划且不接 Gateway；Automation 使用拒绝命令的 DryRun Backend；临时 Lease 只存在于检查函数栈，保存后仍显示未安装 |
 | R-045 | 模型输出以 Markdown 或任意文件直接落盘，造成路径逃逸、权限欺骗或未验证代码安装 | 低（保存阶段已缓解） | 严重 | 保存前重新执行严格契约和生产校验；Tauri-free Writer 使用隐藏 staging、create-new、拒绝符号链接/覆盖并同目录原子 rename；保存仍不安装，后续必须经过 Worker、Diff、批准和原子安装 |
 | R-048 | Creator 批准后、安装前当前版本被升级、回滚或篡改，使用户批准的权限 Diff 与实际基线不同 | 低（已缓解） | 严重 | 审查和安装均重新加载并完整性复验安装包；一次性凭证同时绑定 draft digest 与完整 review digest，基线或 Diff 漂移时失败关闭并原子消费凭证，必须重新审查批准；所有升级撤销旧授权 |
+| R-049 | Automation 以可变 JSON 直接覆盖，导致运行身份漂移、隐式降级、旧启用状态继承或无法可靠回滚 | 低（Catalog 阶段已缓解） | 严重 | 定义要求稳定版本；SQLite Immediate 事务同时更新当前/上一版本；普通安装只接受严格递增版本，同版本与隐式降级拒绝；首装、升级和回滚强制停用；控制面只接受已安装 ID；真实事件订阅与运行授权闭环前不得自动执行 Catalog 项 |

@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
-import type { AutomationDefinition, AutomationRun } from "../platform/desktop";
+import { useEffect, useMemo, useState } from "react";
+import type { AutomationCatalogEntry, AutomationDefinition, AutomationRun } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const sampleDefinition: AutomationDefinition = {
   spec: "nimora.automation/1",
   id: "local.focus.on-build",
+  version: "1.0.0",
   name: "构建完成后庆祝",
   enabled: true,
   trigger: { eventType: "dev.build.finished" },
@@ -29,7 +30,44 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
   const [succeeded, setSucceeded] = useState(true);
   const [busy, setBusy] = useState(false);
   const [run, setRun] = useState<AutomationRun | null>(null);
+  const [catalog, setCatalog] = useState<AutomationCatalogEntry[]>([]);
   const definition = useMemo(() => sampleDefinition, []);
+
+  async function refreshCatalog() {
+    try {
+      setCatalog(await desktopApi.automationCatalog());
+    } catch {
+      setCatalog([]);
+    }
+  }
+
+  useEffect(() => { void refreshCatalog(); }, []);
+
+  async function toggleAutomation(entry: AutomationCatalogEntry) {
+    setBusy(true);
+    try {
+      await desktopApi.setAutomationEnabled(entry.definition.id, !entry.enabled);
+      await refreshCatalog();
+      onNotice(!entry.enabled ? "自动化已显式启用" : "自动化已停用");
+    } catch {
+      onNotice("自动化状态更新失败，未改变目录状态");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rollbackAutomation(entry: AutomationCatalogEntry) {
+    setBusy(true);
+    try {
+      const receipt = await desktopApi.rollbackAutomation(entry.definition.id);
+      await refreshCatalog();
+      onNotice(`已回滚到 ${receipt.version}，出于安全考虑保持停用`);
+    } catch {
+      onNotice("没有可用的上一版本，未执行回滚");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function testRun() {
     setBusy(true);
@@ -54,6 +92,15 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
       <span>离线可用</span>
     </div>
     <div className="automation-grid">
+      <section className="automation-catalog" aria-label="已安装自动化目录">
+        <div className="section-heading"><div><p className="card-label">INSTALLED CATALOG</p><h3>已安装自动化</h3></div><span>{catalog.length} 项</span></div>
+        {catalog.length === 0 ? <p>尚未安装自动化。可在“扩展”工作区让外接 AI 生成、审查并原子安装。</p> : catalog.map((entry) => <article className="automation-catalog-entry" key={entry.definition.id}>
+          <div><strong>{entry.definition.name}</strong><code>{entry.definition.id} · {entry.definition.version}</code><small>{entry.previousVersion ? `可回滚：${entry.previousVersion}` : "首次安装"}</small></div>
+          <span className={entry.enabled ? "automation-enabled" : "automation-disabled"}>{entry.enabled ? "已启用" : "已停用"}</span>
+          <button disabled={disabled || busy} onClick={() => void toggleAutomation(entry)} type="button">{entry.enabled ? "停用" : "启用"}</button>
+          <button disabled={disabled || busy || !entry.previousVersion} onClick={() => void rollbackAutomation(entry)} type="button">回滚</button>
+        </article>)}
+      </section>
       <article className="automation-rule-card">
         <div className="section-heading">
           <div><p className="card-label">示例规则</p><h3>{definition.name}</h3></div>

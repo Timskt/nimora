@@ -399,6 +399,7 @@ mod tests {
                 "definition": {
                     "spec": "nimora.automation/1",
                     "id": "automation.local.greeting",
+                    "version": "1.0.0",
                     "name": "Greeting",
                     "enabled": false,
                     "trigger": { "eventType": "pet.pointer.clicked" },

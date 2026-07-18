@@ -91,10 +91,10 @@ use nimora_persistence_sqlite::{
     SkillStateRecord, SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
     SqliteAutoModeAttemptResolutionRepository, SqliteAutoModeCheckpointRepository,
     SqliteAutoModeRepository, SqliteAutoModeTurnAttemptRepository, SqliteAutomationAgentJournal,
-    SqliteAutomationJournal, SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository,
-    SqliteProfileRepository, SqliteProgramPermissionRepository, SqliteSkillApprovalJournal,
-    SqliteSkillExecutionHistory, SqliteSkillStateRepository, apply_pending_restore,
-    verify_database_file,
+    SqliteAutomationCatalog, SqliteAutomationJournal, SqliteOutboxRepository,
+    SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
+    SqliteProgramPermissionRepository, SqliteSkillApprovalJournal, SqliteSkillExecutionHistory,
+    SqliteSkillStateRepository, apply_pending_restore, verify_database_file,
 };
 use nimora_runtime_app::{
     ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBatch,
@@ -196,6 +196,7 @@ struct DesktopState {
     skill_host: Mutex<SkillHost>,
     outbox: SqliteOutboxRepository,
     agent_history: SqliteAgentHistoryRepository,
+    automation_catalog: SqliteAutomationCatalog,
     automation_journal: SqliteAutomationJournal,
     automation_agent_journal: SqliteAutomationAgentJournal,
     agent_history_last_error: Mutex<bool>,
@@ -474,6 +475,7 @@ impl DesktopState {
             skill_host: Mutex::new(skill_host),
             outbox: SqliteOutboxRepository::open(database_path)?,
             agent_history: SqliteAgentHistoryRepository::open(database_path)?,
+            automation_catalog: SqliteAutomationCatalog::open(database_path)?,
             automation_journal,
             automation_agent_journal,
             agent_history_last_error: Mutex::new(false),
@@ -548,6 +550,7 @@ impl DesktopState {
             skill_host: Mutex::new(SkillHost::default()),
             outbox: SqliteOutboxRepository::in_memory()?,
             agent_history: SqliteAgentHistoryRepository::in_memory()?,
+            automation_catalog: SqliteAutomationCatalog::in_memory()?,
             automation_journal: SqliteAutomationJournal::in_memory()?,
             automation_agent_journal: SqliteAutomationAgentJournal::in_memory()?,
             agent_history_last_error: Mutex::new(false),
@@ -1441,6 +1444,55 @@ impl AutomationBackend for DryRunAutomationBackend {
 #[tauri::command]
 fn test_automation(request: AutomationTestRequest) -> Result<AutomationRun, DesktopError> {
     dry_run_automation(&request.definition, request.event_type, request.event_data)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri managed state command arguments are owned extractors"
+)]
+fn automation_catalog(
+    state: State<'_, DesktopState>,
+) -> Result<Vec<nimora_persistence_sqlite::AutomationCatalogEntry>, DesktopError> {
+    Ok(state.automation_catalog.list()?)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri command arguments are owned deserialization and state extractors"
+)]
+fn set_automation_enabled(
+    automation_id: String,
+    enabled: bool,
+    state: State<'_, DesktopState>,
+) -> Result<(), DesktopError> {
+    ensure_normal_mode(&state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    state
+        .automation_catalog
+        .set_enabled(&automation_id, enabled, current_time_ms()?)?;
+    Ok(())
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri command arguments are owned deserialization and state extractors"
+)]
+fn rollback_automation(
+    automation_id: String,
+    state: State<'_, DesktopState>,
+) -> Result<nimora_persistence_sqlite::AutomationInstallReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    Ok(state
+        .automation_catalog
+        .rollback(&automation_id, current_time_ms()?)?)
 }
 
 #[tauri::command]
@@ -2478,9 +2530,20 @@ fn install_creator_draft(
                 enabled: false,
             })
         }
-        nimora_creator_draft::CreatorArtifact::Automation { .. } => Err(DesktopError::Agent(
-            "automation draft installation requires the automation catalog".to_owned(),
-        )),
+        nimora_creator_draft::CreatorArtifact::Automation { definition } => {
+            let result = state
+                .automation_catalog
+                .install(&definition, current_time_ms()?)?;
+            Ok(CreatorDraftInstallReceipt {
+                spec: "nimora.creator-draft-install/1",
+                artifact_kind: CreatorArtifactKind::Automation,
+                artifact_id: result.automation_id,
+                version: result.version,
+                replaced_previous: result.replaced_version.is_some(),
+                authorized: false,
+                enabled: false,
+            })
+        }
     }
 }
 
@@ -2655,20 +2718,7 @@ fn creator_permission_diff(
 ) -> Result<CreatorPermissionReview, DesktopError> {
     match &draft.artifact {
         nimora_creator_draft::CreatorArtifact::Automation { definition } => {
-            Ok(CreatorPermissionReview {
-                diff: definition
-                    .actions
-                    .iter()
-                    .map(|action| CreatorPermissionDiff {
-                        capability: action.command.clone(),
-                        change: "added",
-                        risk: action.risk,
-                        reason: format!("自动化动作 {} 将请求该命令", action.id),
-                    })
-                    .collect(),
-                installed_version: None,
-                proposed_version: None,
-            })
+            automation_permission_diff(state, definition)
         }
         nimora_creator_draft::CreatorArtifact::UserProgram { manifest, .. } => {
             let installed = match load_installed_program(&state.program_store, &manifest.id) {
@@ -2711,6 +2761,89 @@ fn creator_permission_diff(
             })
         }
     }
+}
+
+fn automation_permission_diff(
+    state: &DesktopState,
+    definition: &AutomationDefinition,
+) -> Result<CreatorPermissionReview, DesktopError> {
+    let installed = state.automation_catalog.get(&definition.id)?;
+    let previous_commands = installed.as_ref().map_or_else(BTreeSet::new, |entry| {
+        entry
+            .definition
+            .actions
+            .iter()
+            .map(|action| action.command.clone())
+            .collect()
+    });
+    let proposed_commands = definition
+        .actions
+        .iter()
+        .map(|action| action.command.clone())
+        .collect::<BTreeSet<_>>();
+    let previous_risks = installed.as_ref().map_or_else(HashMap::new, |entry| {
+        entry
+            .definition
+            .actions
+            .iter()
+            .map(|action| (action.command.clone(), action.risk))
+            .collect()
+    });
+    let proposed_risks = definition
+        .actions
+        .iter()
+        .map(|action| (action.command.clone(), action.risk))
+        .collect::<HashMap<_, _>>();
+    let mut diff = previous_commands
+        .difference(&proposed_commands)
+        .map(|command| CreatorPermissionDiff {
+            capability: command.clone(),
+            change: "removed",
+            risk: previous_risks
+                .get(command)
+                .copied()
+                .unwrap_or(CommandRisk::Medium),
+            reason: "升级后不再请求该自动化命令".to_owned(),
+        })
+        .chain(
+            proposed_commands
+                .difference(&previous_commands)
+                .map(|command| CreatorPermissionDiff {
+                    capability: command.clone(),
+                    change: "added",
+                    risk: proposed_risks
+                        .get(command)
+                        .copied()
+                        .unwrap_or(CommandRisk::Medium),
+                    reason: "新版本将请求该自动化命令".to_owned(),
+                }),
+        )
+        .collect::<Vec<_>>();
+    if let Some(previous) = &installed
+        && (previous.definition.trigger != definition.trigger
+            || previous.definition.conditions != definition.conditions
+            || previous.definition.actions != definition.actions
+            || previous.definition.policy != definition.policy)
+    {
+        diff.push(CreatorPermissionDiff {
+            capability: "automation-behavior".to_owned(),
+            change: "scope-changed",
+            risk: definition
+                .actions
+                .iter()
+                .map(|action| action.risk)
+                .max_by_key(|risk| command_risk_rank(*risk))
+                .unwrap_or(CommandRisk::Safe),
+            reason: "触发器、条件、动作参数、补偿或失败策略发生变化".to_owned(),
+        });
+    }
+    Ok(CreatorPermissionReview {
+        diff,
+        installed_version: installed
+            .as_ref()
+            .map(|entry| entry.definition.version.clone()),
+        proposed_version: Some(definition.version.clone()),
+    })
 }
 
 fn serialized_capability_set<T: Serialize>(
@@ -8428,6 +8561,9 @@ pub fn run() {
             desktop_snapshot,
             agent_catalog,
             test_automation,
+            automation_catalog,
+            set_automation_enabled,
+            rollback_automation,
             run_automation,
             automation_run_status,
             automation_agent_task_status,
@@ -9191,6 +9327,7 @@ mod tests {
             "definition": {
                 "spec": "nimora.automation/1",
                 "id": "local.focus.on-build",
+                "version": "1.0.0",
                 "name": "Build companion",
                 "enabled": true,
                 "trigger": { "eventType": "dev.build.finished" },
@@ -9225,6 +9362,7 @@ mod tests {
             "definition": {
                 "spec": "nimora.automation/1",
                 "id": "local.pet.move-on-build",
+                "version": "1.0.0",
                 "name": "Move on build",
                 "enabled": true,
                 "trigger": { "eventType": "dev.build.finished" },
@@ -9256,6 +9394,7 @@ mod tests {
             "definition": {
                 "spec": "nimora.automation/1",
                 "id": automation_id,
+                "version": "1.0.0",
                 "name": "Agent automation",
                 "enabled": true,
                 "trigger": { "eventType": event_type },
@@ -9352,6 +9491,7 @@ mod tests {
             "definition": {
                 "spec": "nimora.automation/1",
                 "id": "local.focus.ai-summary",
+                "version": "1.0.0",
                 "name": "AI focus summary",
                 "enabled": true,
                 "trigger": { "eventType": "focus.session.finished" },
@@ -9634,6 +9774,7 @@ mod tests {
                     "definition": {
                         "spec": "nimora.automation/1",
                         "id": "local.focus.on-build",
+                        "version": "1.0.0",
                         "name": "Build companion",
                         "enabled": true,
                         "trigger": { "eventType": "dev.build.finished" },
@@ -12059,5 +12200,82 @@ mod tests {
                 item.capability == "runtime-budget" && item.change == "scope-changed"
             })
         );
+    }
+
+    #[test]
+    fn creator_automation_review_uses_installed_catalog_baseline() {
+        let (_root, state) = normal_desktop_state();
+        let previous =
+            serde_json::from_value::<nimora_automation_runtime::AutomationDefinition>(json!({
+                "spec": "nimora.automation/1",
+                "id": "automation.local.creator-catalog",
+                "version": "1.0.0",
+                "name": "Creator catalog",
+                "enabled": true,
+                "trigger": { "eventType": "focus.session.finished" },
+                "conditions": [],
+                "actions": [{
+                    "id": "celebrate",
+                    "command": "pet.animation.play",
+                    "arguments": { "action": "celebrate" },
+                    "risk": "low",
+                    "retrySafe": false,
+                    "idempotencyKey": null,
+                    "compensation": null
+                }],
+                "policy": { "timeoutMs": 5000, "failure": "stop" }
+            }))
+            .expect("previous definition");
+        state
+            .automation_catalog
+            .install(&previous, 10)
+            .expect("install previous");
+        let proposed = serde_json::from_value::<nimora_creator_draft::CreatorDraft>(json!({
+            "spec": "nimora.creator-draft/1",
+            "title": "Creator catalog upgrade",
+            "summary": "Changes the action and failure policy.",
+            "permissionExplanations": [],
+            "artifact": {
+                "kind": "automation",
+                "definition": {
+                    "spec": "nimora.automation/1",
+                    "id": "automation.local.creator-catalog",
+                    "version": "2.0.0",
+                    "name": "Creator catalog",
+                    "enabled": false,
+                    "trigger": { "eventType": "focus.session.finished" },
+                    "conditions": [],
+                    "actions": [{
+                        "id": "idle",
+                        "command": "pet.action.play",
+                        "arguments": { "action": "idle" },
+                        "risk": "safe",
+                        "retrySafe": false,
+                        "idempotencyKey": null,
+                        "compensation": null
+                    }],
+                    "policy": { "timeoutMs": 7000, "failure": "stop" }
+                }
+            }
+        }))
+        .expect("proposed draft");
+
+        let review = super::creator_permission_diff(&state, &proposed).expect("review");
+        assert_eq!(review.installed_version.as_deref(), Some("1.0.0"));
+        assert_eq!(review.proposed_version.as_deref(), Some("2.0.0"));
+        assert!(
+            review.diff.iter().any(|item| {
+                item.capability == "pet.animation.play" && item.change == "removed"
+            })
+        );
+        assert!(
+            review
+                .diff
+                .iter()
+                .any(|item| { item.capability == "pet.action.play" && item.change == "added" })
+        );
+        assert!(review.diff.iter().any(|item| {
+            item.capability == "automation-behavior" && item.change == "scope-changed"
+        }));
     }
 }

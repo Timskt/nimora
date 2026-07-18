@@ -7,6 +7,7 @@ mod auto_mode_commit_store;
 mod auto_mode_store;
 mod auto_mode_turn_attempt_store;
 mod automation_agent_journal;
+mod automation_catalog;
 mod automation_journal;
 mod backup;
 mod context_cache_store;
@@ -27,6 +28,9 @@ pub use auto_mode_turn_attempt_store::{
 };
 pub use automation_agent_journal::{
     AutomationAgentJournalEntry, AutomationAgentJournalStatus, SqliteAutomationAgentJournal,
+};
+pub use automation_catalog::{
+    AutomationCatalogEntry, AutomationInstallReceipt, SqliteAutomationCatalog,
 };
 pub use automation_journal::{
     AutomationJournalEntry, AutomationJournalStatus, AutomationRunStart, SqliteAutomationJournal,
@@ -1109,6 +1113,7 @@ fn prepare_connection(connection: &mut Connection) -> Result<(), SqlitePersisten
         transaction.commit()?;
     }
     ensure_current_schema_extensions(connection)?;
+    automation_catalog::ensure_automation_catalog_schema(connection)?;
     Ok(())
 }
 
@@ -1525,6 +1530,16 @@ pub enum SqlitePersistenceError {
     InvalidOutboxRequest,
     #[error("Agent history record or request is invalid")]
     InvalidAgentHistory,
+    #[error("Automation catalog record or request is invalid")]
+    InvalidAutomationCatalog,
+    #[error("Automation is not installed")]
+    AutomationNotInstalled,
+    #[error("Automation version is already installed")]
+    AutomationVersionAlreadyInstalled,
+    #[error("Automation install version must be newer than the installed version")]
+    AutomationVersionNotNewer,
+    #[error("Automation has no previous version")]
+    AutomationPreviousVersionUnavailable,
     #[error("Agent Goal record or request is invalid")]
     InvalidAgentGoal,
     #[error("Agent Goal was not found")]

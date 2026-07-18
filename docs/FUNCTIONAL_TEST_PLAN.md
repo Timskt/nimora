@@ -566,6 +566,9 @@ ID / 标题 / 优先级 / 前置条件
 - Verify Markdown 包裹、未知字段、类型不匹配、非法 Manifest、权限说明缺失/额外/重复均拒绝，错误不回显模型原文。
 - Verify 绝对路径、`..`、反斜杠、重复路径、缺失入口、文件数/单文件/总大小超限均在任何写盘前拒绝。
 - Verify User Program、Skill、Automation 分别复用生产校验；Safe/Recovery/浏览器预览禁止生成和保存，已保存结果仍显示“尚未安装”。
+- Verify Automation 必须携带严格三段数字版本；Creator 首装进入 SQLite Catalog 且保持停用，升级保存上一版本并展示命令 `added/removed` 与行为 `scope-changed`。
+- Verify 同版本覆盖、损坏 Catalog、Safe/Recovery 启停、无上一版回滚均失败关闭；升级和回滚不能继承启用状态，目录跨重启恢复一致。
+- Verify Automation 目录启停和回滚只接受已安装 ID；浏览器预览不得伪造 Catalog 写入成功，回滚后再次回滚可恢复刚才替换的版本。
 - Verify 保存 IPC 重新校验完整需求与草案，选择的 Workspace 必须是可规范化真实目录；`.nimora-drafts` 符号链接、目标已存在和中途写入失败均不得覆盖或留下已发布的半成品。
 - Verify User Program 与 Skill 的每个 JavaScript 文件都由对应独立 Worker 的显式 `Validate/Validated` 协议检查；包含顶层 `throw` 的合法语法通过且不执行，非法语法返回逐文件失败。
 - Verify Skill 草案检查校验协议版本、Execution ID 和 Manifest，但安装前不要求 Active Skill Lease；正式 `Run` 仍必须精确匹配 Active Lease 与 Activation Event。

@@ -444,6 +444,7 @@ mod tests {
         AutomationDefinition {
             spec: "nimora.automation/1".to_owned(),
             id: "local.focus.ai-summary".to_owned(),
+            version: "1.0.0".to_owned(),
             name: "AI summary".to_owned(),
             enabled: true,
             trigger: EventTrigger {

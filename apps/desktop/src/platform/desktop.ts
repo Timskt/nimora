@@ -620,6 +620,7 @@ export type UserProgramCapabilityResponse =
 export interface AutomationDefinition {
   spec: "nimora.automation/1";
   id: string;
+  version: string;
   name: string;
   enabled: boolean;
   trigger: { eventType: string };
@@ -638,6 +639,23 @@ export interface AutomationDefinition {
     };
   }>;
   policy: { timeoutMs: number; failure: "stop" | "compensate" };
+}
+
+export interface AutomationCatalogEntry {
+  spec: "nimora.automation-catalog-entry/1";
+  definition: AutomationDefinition;
+  enabled: boolean;
+  installedAtMs: number;
+  updatedAtMs: number;
+  previousVersion: string | null;
+}
+
+export interface AutomationInstallReceipt {
+  spec: "nimora.automation-install-receipt/1";
+  automationId: string;
+  version: string;
+  replacedVersion: string | null;
+  enabled: false;
 }
 
 export interface AutomationRun {
@@ -694,6 +712,9 @@ export interface DesktopApi {
   drainEvents(): Promise<NimoraEvent[]>;
   outboxSnapshot(): Promise<OutboxSnapshot>;
   testAutomation(definition: AutomationDefinition, eventType: string, eventData: unknown): Promise<AutomationRun>;
+  automationCatalog(): Promise<AutomationCatalogEntry[]>;
+  setAutomationEnabled(automationId: string, enabled: boolean): Promise<void>;
+  rollbackAutomation(automationId: string): Promise<AutomationInstallReceipt>;
   runAutomation(definition: AutomationDefinition, eventType: string, eventData: unknown): Promise<AutomationRun>;
   automationRunStatus(runId: string): Promise<AutomationJournalEntry | null>;
   automationAgentTaskStatus(taskId: string): Promise<AutomationAgentJournalEntry | null>;
@@ -887,6 +908,9 @@ export function createDesktopApi(
           reason: status === "planned" ? null : "测试事件未通过触发器或条件",
         };
       },
+      async automationCatalog() { return []; },
+      async setAutomationEnabled() { throw new Error("Automation catalog requires the Nimora desktop runtime."); },
+      async rollbackAutomation() { throw new Error("Automation catalog requires the Nimora desktop runtime."); },
       async runAutomation() { throw new Error("Live automation requires the Nimora desktop runtime."); },
       async automationRunStatus() { return null; },
       async automationAgentTaskStatus() { return null; },
@@ -1157,6 +1181,9 @@ export function createDesktopApi(
     drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],
     outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,
     testAutomation: async (definition, eventType, eventData) => await invokeCommand("test_automation", { request: { definition, eventType, eventData } }) as AutomationRun,
+    automationCatalog: async () => await invokeCommand("automation_catalog") as AutomationCatalogEntry[],
+    setAutomationEnabled: async (automationId, enabled) => { await invokeCommand("set_automation_enabled", { automationId, enabled }); },
+    rollbackAutomation: async (automationId) => await invokeCommand("rollback_automation", { automationId }) as AutomationInstallReceipt,
     runAutomation: async (definition, eventType, eventData) => await invokeCommand("run_automation", { request: { definition, eventType, eventData } }) as AutomationRun,
     automationRunStatus: async (runId) => await invokeCommand("automation_run_status", { runId }) as AutomationJournalEntry | null,
     automationAgentTaskStatus: async (taskId) => await invokeCommand("automation_agent_task_status", { taskId }) as AutomationAgentJournalEntry | null,
