@@ -1069,6 +1069,7 @@ const previewSnapshot: DesktopSnapshot = {
     energy: 86,
     mood: 82,
     affinity: 34,
+    bondPoints: 84,
   },
   windowPolicy: { alwaysOnTop: true, clickThrough: false },
   safety: { mode: "normal", reason: null },
@@ -1395,9 +1396,15 @@ export function createDesktopApi(
         previewSnapshot.pet.energy = Math.max(0, Math.min(100, previewSnapshot.pet.energy + gains.energy));
         previewSnapshot.pet.mood = Math.min(100, previewSnapshot.pet.mood + gains.mood);
         previewSnapshot.pet.affinity = Math.min(100, previewSnapshot.pet.affinity + gains.affinity);
+        previewSnapshot.pet.bondPoints += gains.affinity;
         return null;
       },
-      async clickPet() { return null; },
+      async clickPet() {
+        previewSnapshot.pet.mood = Math.min(100, previewSnapshot.pet.mood + 2);
+        previewSnapshot.pet.affinity = Math.min(100, previewSnapshot.pet.affinity + 1);
+        previewSnapshot.pet.bondPoints += 1;
+        return null;
+      },
       async dragPet() { return null; },
       async setClickThrough() {},
       async assetCatalog() { return { assets: [], rejected: [] }; },

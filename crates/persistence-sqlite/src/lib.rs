@@ -1715,10 +1715,41 @@ mod tests {
         let repository = SqlitePetRepository::in_memory().expect("database");
         let mut pet = Pet::new("Aster").expect("pet");
         pet.apply_action(PetAction::Sleep);
+        pet.interact().expect("interaction");
         repository.save_snapshot(&pet).expect("save");
         let restored = repository.load_snapshot().expect("load").expect("snapshot");
         assert_eq!(restored.id, pet.id);
-        assert_eq!(restored.state, PetState::Sleeping);
+        assert_eq!(restored.state, PetState::Interacting);
+        assert_eq!(restored.bond_points, 1);
+    }
+
+    #[test]
+    fn loads_legacy_pet_snapshot_without_bond_points() {
+        let repository = SqlitePetRepository::in_memory().expect("database");
+        let pet = Pet::new("Aster").expect("pet");
+        let mut payload = serde_json::to_value(StoredPetSnapshot {
+            schema_version: PET_SNAPSHOT_VERSION,
+            pet,
+        })
+        .expect("serialize fixture");
+        payload["pet"]
+            .as_object_mut()
+            .expect("pet object")
+            .remove("bondPoints");
+        payload["pet"]["affinity"] = serde_json::json!(34);
+        repository
+            .connection
+            .lock()
+            .expect("lock")
+            .execute(
+                "INSERT INTO pet_snapshot (singleton, schema_version, payload) VALUES (1, ?1, ?2)",
+                rusqlite::params![PET_SNAPSHOT_VERSION, payload.to_string()],
+            )
+            .expect("fixture");
+
+        let restored = repository.load_snapshot().expect("load").expect("snapshot");
+        assert_eq!(restored.bond_points, 0);
+        assert_eq!(restored.effective_bond_points(), 34);
     }
 
     #[test]

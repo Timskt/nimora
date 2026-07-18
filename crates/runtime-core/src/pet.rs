@@ -167,6 +167,8 @@ pub struct Pet {
     pub mood: u8,
     pub affinity: u8,
     #[serde(default)]
+    pub bond_points: u64,
+    #[serde(default)]
     pub last_vitals_update_ms: u64,
     #[serde(default)]
     pub last_care_ms: u64,
@@ -176,6 +178,7 @@ pub struct Pet {
 
 impl Pet {
     const LOW_VITAL_THRESHOLD: u8 = 25;
+    pub const MAX_BOND_POINTS: u64 = 9_007_199_254_740_991;
 
     fn idle_emotion(&self) -> Emotion {
         if self.energy <= Self::LOW_VITAL_THRESHOLD {
@@ -212,6 +215,7 @@ impl Pet {
             energy: 100,
             mood: 70,
             affinity: 0,
+            bond_points: 0,
             last_vitals_update_ms: 0,
             last_care_ms: 0,
             autonomy: PetAutonomyState::default(),
@@ -242,8 +246,33 @@ impl Pet {
         self.state = PetState::Interacting;
         self.emotion = Emotion::Happy;
         self.mood = self.mood.saturating_add(2).min(100);
+        self.add_bond_points(1);
         self.affinity = self.affinity.saturating_add(1).min(100);
         Ok(())
+    }
+
+    #[must_use]
+    pub fn effective_bond_points(&self) -> u64 {
+        self.bond_points.max(u64::from(self.affinity))
+    }
+
+    #[must_use]
+    pub fn relationship_level(&self) -> u64 {
+        self.effective_bond_points()
+            .saturating_div(50)
+            .saturating_add(1)
+    }
+
+    #[must_use]
+    pub fn relationship_level_progress(&self) -> u64 {
+        self.effective_bond_points() % 50
+    }
+
+    fn add_bond_points(&mut self, points: u64) {
+        self.bond_points = self
+            .effective_bond_points()
+            .saturating_add(points)
+            .min(Self::MAX_BOND_POINTS);
     }
 
     /// Returns an active interaction to the neutral idle state.
@@ -300,7 +329,11 @@ impl Pet {
         if !self.position.x.is_finite() || !self.position.y.is_finite() {
             return Err(PetError::InvalidPosition);
         }
-        if self.energy > 100 || self.mood > 100 || self.affinity > 100 {
+        if self.energy > 100
+            || self.mood > 100
+            || self.affinity > 100
+            || self.bond_points > Self::MAX_BOND_POINTS
+        {
             return Err(PetError::InvalidVitals);
         }
         Ok(())
@@ -377,15 +410,18 @@ impl Pet {
             PetCareAction::Feed => {
                 self.energy = self.energy.saturating_add(20).min(100);
                 self.mood = self.mood.saturating_add(2).min(100);
+                self.add_bond_points(1);
                 self.affinity = self.affinity.saturating_add(1).min(100);
             }
             PetCareAction::Play => {
                 self.energy = self.energy.saturating_sub(5);
                 self.mood = self.mood.saturating_add(12).min(100);
+                self.add_bond_points(2);
                 self.affinity = self.affinity.saturating_add(2).min(100);
             }
             PetCareAction::Groom => {
                 self.mood = self.mood.saturating_add(6).min(100);
+                self.add_bond_points(3);
                 self.affinity = self.affinity.saturating_add(3).min(100);
             }
         }
@@ -664,6 +700,55 @@ mod tests {
         pet.interact().expect("interaction");
         assert_eq!(pet.mood, 100);
         assert_eq!(pet.affinity, 100);
+        assert_eq!(pet.bond_points, 101);
+    }
+
+    #[test]
+    fn companionship_growth_is_durable_unbounded_and_migration_safe() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        assert_eq!((pet.bond_points, pet.relationship_level()), (0, 1));
+
+        pet.affinity = 34;
+        pet.interact().expect("interaction");
+        assert_eq!(pet.bond_points, 35);
+
+        pet.affinity = 100;
+        pet.bond_points = 149;
+        pet.interact().expect("interaction");
+        assert_eq!(pet.bond_points, 150);
+        assert_eq!(pet.relationship_level(), 4);
+        assert_eq!(pet.relationship_level_progress(), 0);
+
+        pet.bond_points = Pet::MAX_BOND_POINTS;
+        pet.interact().expect("saturating interaction");
+        assert_eq!(pet.bond_points, Pet::MAX_BOND_POINTS);
+        assert_eq!(pet.relationship_level(), Pet::MAX_BOND_POINTS / 50 + 1);
+    }
+
+    #[test]
+    fn relationship_level_uses_fifty_point_boundaries() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        for (points, level, progress) in [(0, 1, 0), (49, 1, 49), (50, 2, 0)] {
+            pet.bond_points = points;
+            assert_eq!(pet.relationship_level(), level);
+            assert_eq!(pet.relationship_level_progress(), progress);
+        }
+    }
+
+    #[test]
+    fn legacy_snapshot_defaults_bond_points_to_affinity_baseline() {
+        let pet = Pet::new("Aster").expect("valid pet");
+        let mut value = serde_json::to_value(pet).expect("serialize pet");
+        value
+            .as_object_mut()
+            .expect("pet object")
+            .remove("bondPoints");
+        value["affinity"] = serde_json::json!(34);
+
+        let restored: Pet = serde_json::from_value(value).expect("legacy snapshot");
+        assert_eq!(restored.bond_points, 0);
+        assert_eq!(restored.effective_bond_points(), 34);
+        assert_eq!(restored.relationship_level(), 1);
     }
 
     #[test]
@@ -673,6 +758,7 @@ mod tests {
         pet.mood = 50;
         pet.care(PetCareAction::Feed, 1_000, 30_000).expect("feed");
         assert_eq!((pet.energy, pet.mood, pet.affinity), (70, 52, 1));
+        assert_eq!(pet.bond_points, 1);
         assert_eq!(pet.state, PetState::Interacting);
         assert_eq!(
             pet.care(PetCareAction::Play, 2_000, 30_000),
@@ -680,6 +766,7 @@ mod tests {
         );
         pet.care(PetCareAction::Play, 31_000, 30_000).expect("play");
         assert_eq!((pet.energy, pet.mood, pet.affinity), (65, 64, 3));
+        assert_eq!(pet.bond_points, 3);
     }
 
     #[test]

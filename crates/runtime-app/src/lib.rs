@@ -589,8 +589,20 @@ impl<R: PetRepository> RuntimeService<R> {
             |before, after| {
                 serde_json::json!({
                     "action": action,
-                    "before": { "energy": before.energy, "mood": before.mood, "affinity": before.affinity },
-                    "after": { "energy": after.energy, "mood": after.mood, "affinity": after.affinity },
+                    "before": {
+                        "energy": before.energy,
+                        "mood": before.mood,
+                        "affinity": before.affinity,
+                        "bondPoints": before.effective_bond_points(),
+                        "relationshipLevel": before.relationship_level(),
+                    },
+                    "after": {
+                        "energy": after.energy,
+                        "mood": after.mood,
+                        "affinity": after.affinity,
+                        "bondPoints": after.effective_bond_points(),
+                        "relationshipLevel": after.relationship_level(),
+                    },
                 })
             },
         )
@@ -624,8 +636,22 @@ impl<R: PetRepository> RuntimeService<R> {
                 serde_json::json!({
                     "position": position,
                     "button": button,
-                    "before": { "state": before.state, "emotion": before.emotion },
-                    "after": { "state": after.state, "emotion": after.emotion },
+                    "before": {
+                        "state": before.state,
+                        "emotion": before.emotion,
+                        "mood": before.mood,
+                        "affinity": before.affinity,
+                        "bondPoints": before.effective_bond_points(),
+                        "relationshipLevel": before.relationship_level(),
+                    },
+                    "after": {
+                        "state": after.state,
+                        "emotion": after.emotion,
+                        "mood": after.mood,
+                        "affinity": after.affinity,
+                        "bondPoints": after.effective_bond_points(),
+                        "relationshipLevel": after.relationship_level(),
+                    },
                 })
             },
         )
@@ -1154,6 +1180,9 @@ mod tests {
         assert_eq!(event.event_type, "pet.care.performed");
         assert_eq!(event.trace_id, command.trace_id);
         assert_eq!(event.data["action"], "play");
+        assert_eq!(event.data["before"]["bondPoints"], 0);
+        assert_eq!(event.data["after"]["bondPoints"], 2);
+        assert_eq!(event.data["after"]["relationshipLevel"], 1);
     }
 
     #[test]
@@ -1171,6 +1200,7 @@ mod tests {
             (snapshot.energy, snapshot.mood, snapshot.affinity),
             (100, 70, 0)
         );
+        assert_eq!(snapshot.bond_points, 0);
         assert_eq!(snapshot.last_care_ms, 0);
         assert!(service.drain_events().expect("events").is_empty());
     }
@@ -1195,6 +1225,9 @@ mod tests {
         assert_eq!(event.trace_id, command.trace_id);
         assert_eq!(event.data["position"]["x"], 12.0);
         assert_eq!(event.data["button"], "left");
+        assert_eq!(event.data["before"]["bondPoints"], 0);
+        assert_eq!(event.data["after"]["bondPoints"], 1);
+        assert_eq!(event.data["after"]["relationshipLevel"], 1);
     }
 
     #[test]

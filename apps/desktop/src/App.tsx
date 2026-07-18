@@ -5,6 +5,7 @@ import { DataProtection } from "./components/DataProtection";
 import { AgentWorkspace } from "./components/AgentWorkspace";
 import { AutomationWorkspace } from "./components/AutomationWorkspace";
 import { AiCreatorWorkspace } from "./components/AiCreatorWorkspace";
+import { petGrowth } from "./components/petGrowth";
 import type { ActiveThemeSnapshot, AssetPreviewAudio, DesktopSnapshot, OutboxSnapshot, PetCareAction, ThemeDescriptor } from "./platform/desktop";
 import { desktopApi } from "./platform/desktop";
 
@@ -50,6 +51,7 @@ export function App() {
   const [activeTheme, setActiveTheme] = useState<ActiveThemeSnapshot | null>(null);
   const [notice, setNotice] = useState(desktopApi.native ? "原生运行时已连接" : "浏览器预览模式");
   const updateNotice = useCallback((message: string) => setNotice(message), []);
+  const relationship = petGrowth(desktopSnapshot?.pet.bondPoints, desktopSnapshot?.pet.affinity ?? 0);
 
   useEffect(() => {
     void Promise.all([desktopApi.snapshot(), desktopApi.outboxSnapshot(), desktopApi.activeTheme()]).then(([snapshot, nextOutbox, nextTheme]) => {
@@ -239,8 +241,14 @@ export function App() {
 
           <section className="metric-card affinity-card">
             <p className="card-label">陪伴关系</p>
-            <div className="metric-row"><strong>Lv. {Math.floor((desktopSnapshot?.pet.affinity ?? 0) / 20) + 1}</strong><span>羁绊 {desktopSnapshot?.pet.affinity ?? 0}</span></div>
-            <p className="supporting">每次真诚互动都会积累陪伴关系</p>
+            <div className="metric-row"><strong>Lv. {relationship.level}</strong><span>累计陪伴 {relationship.bondPoints}</span></div>
+            <div className="progress-track relationship-progress" aria-label={`当前等级进度 ${relationship.levelProgress}/${relationship.pointsPerLevel}`}>
+              <span style={{ width: `${relationship.progressPercent}%` }} />
+            </div>
+            <p className="supporting relationship-detail">
+              <span>升级进度 {relationship.levelProgress} / {relationship.pointsPerLevel}</span>
+              <span>关系温度 {desktopSnapshot?.pet.affinity ?? 0} / 100</span>
+            </p>
           </section>
 
           <section className="activity-card">
