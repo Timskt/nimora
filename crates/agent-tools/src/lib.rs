@@ -28,8 +28,10 @@ const PROGRAM_EXECUTE: &str = "program.installed.execute";
 const RUNTIME_HEALTH_READ: &str = "runtime.health.read";
 const AUTOMATION_DEFINITION_VALIDATE: &str = "automation.definition.validate";
 const PET_ANIMATION_PLAY: &str = "pet.animation.play";
+const PET_CARE_PERFORM: &str = "pet.care.perform";
 const PET_POSITION_MOVE: &str = "pet.position.move";
 const SAFE_PET_ANIMATE: &str = "safe.pet.animate";
+const SAFE_PET_CARE: &str = "safe.pet.care";
 const SAFE_PET_MOVE: &str = "safe.pet.move";
 const SAFE_PROFILE_SWITCH: &str = "safe.profile.switch";
 const SAFE_CHARACTER_SWITCH: &str = "safe.character.switch";
@@ -135,6 +137,7 @@ pub fn production_tool_descriptors() -> Result<Vec<ToolDescriptor>, AgentRuntime
             CommandRisk::Low,
             ToolEffect::ReversibleWrite,
         )?,
+        pet_care_descriptor()?,
         descriptor(
             PET_POSITION_MOVE,
             "Move pet",
@@ -251,6 +254,7 @@ pub fn production_capability_semantic_contracts()
             CapabilityEffect::ReversibleWrite,
             10,
         ),
+        pet_care_semantic(),
         semantic(
             PET_POSITION_MOVE,
             &["pet.position-coordinates"],
@@ -366,6 +370,34 @@ fn program_execute_descriptor() -> Result<ToolDescriptor, AgentRuntimeError> {
     )
 }
 
+fn pet_care_descriptor() -> Result<ToolDescriptor, AgentRuntimeError> {
+    descriptor(
+        PET_CARE_PERFORM,
+        "Care for pet",
+        "Performs one validated pet care action through the Capability Gateway.",
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["action"],
+            "properties": {
+                "action": {"type": "string", "enum": ["feed", "play", "groom"]}
+            }
+        }),
+        CommandRisk::Low,
+        ToolEffect::IrreversibleWrite,
+    )
+}
+
+fn pet_care_semantic() -> Result<CapabilitySemanticContract, CapabilityContractError> {
+    semantic(
+        PET_CARE_PERFORM,
+        &["pet.care-action-id"],
+        &["pet.vitals-state"],
+        CapabilityEffect::IrreversibleWrite,
+        10,
+    )
+}
+
 #[derive(Debug)]
 pub struct GatewayToolBackend<B> {
     gateway: CapabilityGateway<B>,
@@ -412,6 +444,7 @@ impl<B: CapabilityBackend> GatewayToolBackend<B> {
             ]),
             commands: BTreeSet::from([
                 SAFE_PET_ANIMATE.to_owned(),
+                SAFE_PET_CARE.to_owned(),
                 SAFE_PET_MOVE.to_owned(),
                 SAFE_PROFILE_SWITCH.to_owned(),
                 SAFE_CHARACTER_SWITCH.to_owned(),
@@ -482,6 +515,13 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
                 command: SAFE_PET_ANIMATE.to_owned(),
                 arguments: invocation.arguments.clone(),
             },
+            PET_CARE_PERFORM => {
+                validate_pet_care_arguments(&invocation.arguments)?;
+                CapabilityRequest::InvokeCommand {
+                    command: SAFE_PET_CARE.to_owned(),
+                    arguments: invocation.arguments.clone(),
+                }
+            }
             PET_POSITION_MOVE => CapabilityRequest::InvokeCommand {
                 command: SAFE_PET_MOVE.to_owned(),
                 arguments: invocation.arguments.clone(),
@@ -559,6 +599,19 @@ fn required_argument<'a>(arguments: &'a Value, key: &str) -> Result<&'a Value, S
         .as_object()
         .and_then(|object| object.get(key))
         .ok_or_else(|| format!("missing required argument: {key}"))
+}
+
+fn validate_pet_care_arguments(arguments: &Value) -> Result<(), String> {
+    let object = arguments
+        .as_object()
+        .ok_or_else(|| "pet care arguments must be an object".to_owned())?;
+    if object.len() != 1 {
+        return Err("pet care accepts only the action argument".to_owned());
+    }
+    match object.get("action").and_then(Value::as_str) {
+        Some("feed" | "play" | "groom") => Ok(()),
+        _ => Err("pet care action must be feed, play, or groom".to_owned()),
+    }
 }
 
 #[cfg(test)]

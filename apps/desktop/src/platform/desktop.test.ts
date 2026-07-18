@@ -17,7 +17,7 @@ describe("desktop platform adapter", () => {
     });
     expect((await api.previewDiagnosticReport()).sources).toEqual({ eventCount: 2, eventRetentionDays: 14 });
     expect((await api.profiles()).profiles[0]?.name).toBe("Default");
-    expect((await api.agentCatalog()).tools).toHaveLength(13);
+    expect((await api.agentCatalog()).tools).toHaveLength(14);
     expect((await api.agentCatalog()).providers).toHaveLength(2);
     await expect(api.automationPendingApprovalCount()).resolves.toBe(0);
     await expect(api.pendingAutomationApprovals()).resolves.toEqual({ spec: "nimora.automation-approval-catalog/1", approvals: [] });

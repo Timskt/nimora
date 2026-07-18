@@ -57,6 +57,13 @@ impl AutomationCapabilityPolicy {
                     },
                 ),
                 (
+                    "pet.care.perform".to_owned(),
+                    AutomationCommandBinding {
+                        gateway_command: "safe.pet.care".to_owned(),
+                        minimum_risk: CommandRisk::Low,
+                    },
+                ),
+                (
                     "pet.position.move".to_owned(),
                     AutomationCommandBinding {
                         gateway_command: "safe.pet.move".to_owned(),
@@ -282,5 +289,24 @@ mod tests {
         let calls = calls.lock().expect("calls");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "safe.pet.move");
+    }
+
+    #[test]
+    fn care_uses_the_shared_command_and_raises_understated_risk() {
+        let backend = Backend::default();
+        let calls = Arc::clone(&backend.calls);
+        let bridge =
+            AutomationCapabilityBridge::new(backend, AutomationCapabilityPolicy::pet_actions());
+        let command = Command::new(
+            "pet.care.perform",
+            json!({"action": "groom"}),
+            CommandRisk::Safe,
+        )
+        .expect("care command");
+        let admission = bridge.policy.admit(&command).expect("admission");
+        assert_eq!(admission.gateway_command, "safe.pet.care");
+        assert_eq!(admission.effective_risk, CommandRisk::Low);
+        bridge.execute(&context(), command).expect("execute care");
+        assert_eq!(calls.lock().expect("calls")[0].0, "safe.pet.care");
     }
 }

@@ -202,7 +202,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
 
   async function prepareTool(toolId: string) {
     if (toolBusy || safeMode || recoveryMode) return;
-    const argumentsValue = toolId === "pet.animation.play" ? { action: "celebrate" } : toolId === "pet.position.move" ? { x: 120, y: 120 } : {};
+    const argumentsValue = toolId === "pet.animation.play" ? { action: "celebrate" } : toolId === "pet.care.perform" ? { action: "feed" } : toolId === "pet.position.move" ? { x: 120, y: 120 } : {};
     setToolBusy(true);
     try {
       const next = await desktopApi.prepareAgentTool(toolId, argumentsValue);

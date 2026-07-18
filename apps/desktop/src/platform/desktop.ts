@@ -1199,6 +1199,7 @@ export function createDesktopApi(
             { id: "character.state.read", title: "Read character state", description: "Reads the active character and path-free renderer capabilities.", baseRisk: "safe", effect: "read_only" },
             { id: "pet.action.catalog.read", title: "Read pet action catalog", description: "Reads the exact actions accepted by the pet runtime.", baseRisk: "safe", effect: "read_only" },
             { id: "pet.animation.play", title: "Play pet animation", description: "Plays one validated pet action through the Capability Gateway.", baseRisk: "low", effect: "reversible_write" },
+            { id: "pet.care.perform", title: "Care for pet", description: "Simulates one care action in browser preview without native persistence.", baseRisk: "low", effect: "irreversible_write" },
             { id: "pet.position.move", title: "Move pet", description: "Moves the pet through the Capability Gateway.", baseRisk: "low", effect: "reversible_write" },
             { id: "pet.state.read", title: "Read pet state", description: "Reads current pet state.", baseRisk: "safe", effect: "read_only" },
             { id: "profile.active.switch", title: "Switch active profile", description: "Switches Profile and applies its native window policy.", baseRisk: "low", effect: "reversible_write" },
@@ -1339,7 +1340,7 @@ export function createDesktopApi(
       },
       async prepareAgentTool(toolId, argumentsValue) {
         const invocationId = crypto.randomUUID();
-        const requiresConfirmation = toolId === "pet.animation.play" || toolId === "pet.position.move";
+        const requiresConfirmation = toolId === "pet.animation.play" || toolId === "pet.care.perform" || toolId === "pet.position.move";
         return { spec: "nimora.desktop-agent-tool-result/1", task: { id: crypto.randomUUID(), status: requiresConfirmation ? "waiting_for_confirmation" : "succeeded", providerId: "provider:deterministic-local" }, invocation: { invocationId, taskId: crypto.randomUUID(), traceId: crypto.randomUUID(), toolId, arguments: argumentsValue }, effectiveRisk: requiresConfirmation ? "low" : "safe", requiresConfirmation, expiresAtMs: requiresConfirmation ? Date.now() + 300_000 : null, output: requiresConfirmation ? null : { preview: true } };
       },
       async confirmAgentTool(invocationId) {

@@ -6716,12 +6716,21 @@ fn care_pet(
     state: State<'_, DesktopState>,
     action: PetCareAction,
 ) -> Result<Command, DesktopError> {
-    ensure_normal_mode(&state)?;
+    care_pet_inner(&app, &state, action)
+}
+
+fn care_pet_inner(
+    app: &AppHandle,
+    state: &DesktopState,
+    action: PetCareAction,
+) -> Result<Command, DesktopError> {
+    ensure_normal_mode(state)?;
     let command = state
         .runtime
         .care_pet(action, current_time_ms()?, PET_CARE_COOLDOWN_MS)?;
     let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
     let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         std::thread::sleep(CLICK_FEEDBACK_DURATION);
         let _ = app.state::<DesktopState>().runtime.finish_interaction();
@@ -8277,7 +8286,7 @@ fn ensure_skill_execution_active(cancellation: &ExecutionCancellation) -> Result
 fn skill_command_risk(command: &str) -> Option<CommandRisk> {
     match command {
         "safe.pet.animate" => Some(CommandRisk::Safe),
-        "safe.pet.move" => Some(CommandRisk::Low),
+        "safe.pet.care" | "safe.pet.move" => Some(CommandRisk::Low),
         "safe.profile.switch" | "safe.character.switch" => Some(CommandRisk::Medium),
         "safe.program.execute" => Some(CommandRisk::High),
         _ => None,
@@ -10172,6 +10181,7 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
                     .play_action(action)
                     .map_err(|error| error.to_string())
             }
+            "safe.pet.care" => invoke_pet_care_command(self.state, &arguments),
             "safe.pet.move" => {
                 let position = serde_json::from_value::<Position>(arguments)
                     .map_err(|error| error.to_string())?;
@@ -10254,6 +10264,24 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
         result.idempotency_key = idempotency_key.map(ToOwned::to_owned);
         serde_json::to_value(result).map_err(|error| error.to_string())
     }
+}
+
+fn invoke_pet_care_command(
+    state: &DesktopState,
+    arguments: &serde_json::Value,
+) -> Result<Command, String> {
+    let action = serde_json::from_value::<PetCareAction>(
+        arguments
+            .get("action")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+    .map_err(|error| error.to_string())?;
+    let app = state
+        .native_app
+        .as_ref()
+        .ok_or_else(|| "native desktop context is unavailable".to_owned())?;
+    care_pet_inner(app, state, action).map_err(|error| error.to_string())
 }
 
 fn valid_asset_identifier(value: &str) -> bool {

@@ -260,6 +260,56 @@ fn write_tool_requires_bound_approval_before_fixed_gateway_command() {
 }
 
 #[test]
+fn care_tool_is_strict_and_dispatches_only_the_fixed_gateway_command() {
+    let tools = production_tool_registry().expect("registry");
+    let mut task = task();
+    let capability_backend = Backend::default();
+    let command_log = Arc::clone(&capability_backend.commands);
+    let backend = GatewayToolBackend::new(
+        capability_backend,
+        GatewayToolBackend::<Backend>::standard_policy(task.id, task.trace_id),
+    );
+    for arguments in [
+        json!({"action": "sleep"}),
+        json!({"action": "feed", "nowMs": 1}),
+    ] {
+        let invalid = ToolInvocation::new(task.id, task.trace_id, "pet.care.perform", arguments)
+            .expect("invocation shape");
+        let ToolAdmission::ConfirmationRequired { effective_risk, .. } =
+            tools.admit(&invalid).expect("descriptor admission")
+        else {
+            panic!("care remains a confirmed write");
+        };
+        let approval = ToolApproval::bind(&invalid, effective_risk);
+        assert!(tools.dispatch(&backend, &invalid, Some(&approval)).is_err());
+    }
+
+    let invocation = ToolInvocation::new(
+        task.id,
+        task.trace_id,
+        "pet.care.perform",
+        json!({"action": "feed"}),
+    )
+    .expect("invocation");
+    let ToolAdmission::ConfirmationRequired { effective_risk, .. } =
+        tools.admit(&invocation).expect("admit")
+    else {
+        panic!("care must require confirmation");
+    };
+    assert_eq!(effective_risk, CommandRisk::Low);
+    let approval = ToolApproval::bind(&invocation, effective_risk);
+    let providers = ProviderRegistry::default();
+    let coordinator = AgentCoordinator::new(&providers, &tools);
+    coordinator
+        .tool_step(&mut task, &backend, invocation, Some(&approval), 1_002)
+        .expect("approved care");
+    let commands = command_log.lock().expect("command log");
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].command, "safe.pet.care");
+    assert_eq!(commands[0].arguments, json!({"action": "feed"}));
+}
+
+#[test]
 fn profile_switch_requires_bound_approval_and_fixed_gateway_command() {
     let tools = production_tool_registry().expect("registry");
     let providers = ProviderRegistry::default();
