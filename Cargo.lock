@@ -2328,6 +2328,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nimora-creator-draft"
+version = "0.1.0"
+dependencies = [
+ "nimora-automation-runtime",
+ "nimora-skill-runtime",
+ "nimora-user-code-policy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "nimora-desktop"
 version = "0.1.0"
 dependencies = [
@@ -2340,6 +2352,7 @@ dependencies = [
  "nimora-automation-agent-bridge",
  "nimora-automation-capability-bridge",
  "nimora-automation-runtime",
+ "nimora-creator-draft",
  "nimora-diagnostics-bundle",
  "nimora-model-importer",
  "nimora-module-agent-adapter",

@@ -70,6 +70,26 @@ export interface LocalAgentResult {
   pendingTools: AgentToolResult[];
 }
 
+export type CreatorArtifactKind = "user-program" | "skill" | "automation";
+
+export interface CreatorDraftResult {
+  spec: "nimora.desktop-creator-draft/1";
+  task: { id: string; status: string; providerId: string };
+  draft: {
+    spec: "nimora.creator-draft/1";
+    title: string;
+    summary: string;
+    permissionExplanations: Array<{ capability: string; reason: string }>;
+    artifact: ({ kind: "automation"; definition: AutomationDefinition } | {
+      kind: "user-program" | "skill";
+      manifest: Record<string, unknown>;
+      files: Array<{ path: string; source: string }>;
+    });
+  };
+  usage: { inputTokens: number; outputTokens: number; costMicrounits: number };
+  finishReason: string;
+}
+
 export interface ResumeAutoModeTurnRequest {
   sessionId: string;
   workspaceRoot: string;
@@ -651,6 +671,7 @@ export interface DesktopApi {
   deleteSkillExecutionHistory(executionId?: string): Promise<number>;
   cancelSkillExecution(executionId: string): Promise<boolean>;
   runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
+  generateCreatorDraft(kind: CreatorArtifactKind, requirement: string, providerId: string, model: string): Promise<CreatorDraftResult>;
   resumeAutoModeTurn(request: ResumeAutoModeTurnRequest): Promise<DesktopAutoModeTurnResult>;
   startAutoModeJob(request: StartAutoModeJobRequest): Promise<DesktopAutoModeJobSnapshot>;
   autoModeJobStatus(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
@@ -905,6 +926,9 @@ export function createDesktopApi(
         const historyRecord = recordPreviewAgentHistory(task, prompt, model, content, "stop", usage);
         return { spec: "nimora.desktop-agent-result/1", status: "completed", task: historyRecord.task, content, finishReason: "stop", usage, pendingTools: [] };
       },
+      async generateCreatorDraft() {
+        throw new Error("desktop-host-required");
+      },
       async resumeAutoModeTurn(request) {
         return {
           spec: "nimora.desktop-auto-mode-turn/1",
@@ -1094,6 +1118,7 @@ export function createDesktopApi(
     deleteSkillExecutionHistory: async (executionId) => (await invokeCommand("delete_skill_execution_history", { request: { executionId: executionId ?? null } }) as { deleted: number }).deleted,
     cancelSkillExecution: async (executionId) => await invokeCommand("cancel_skill_execution", { executionId }) as boolean,
     runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") => await invokeCommand("run_local_agent", { request: { prompt, providerId, model } }) as LocalAgentResult,
+    generateCreatorDraft: async (kind, requirement, providerId, model) => await invokeCommand("generate_creator_draft", { request: { kind, requirement, providerId, model } }) as CreatorDraftResult,
     resumeAutoModeTurn: async (request) => await invokeCommand("resume_auto_mode_turn", {
       request: {
         sessionId: request.sessionId,

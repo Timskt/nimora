@@ -23,6 +23,7 @@ nimora-agent-tools = { path = "../../../crates/agent-tools" }
 nimora-automation-agent-bridge = { path = "../../../crates/automation-agent-bridge" }
 nimora-automation-capability-bridge = { path = "../../../crates/automation-capability-bridge" }
 nimora-automation-runtime = { path = "../../../crates/automation-runtime" }
+nimora-creator-draft = { path = "../../../crates/creator-draft" }
 nimora-asset-installer = { path = "../../../crates/asset-installer" }
 nimora-model-importer = { path = "../../../crates/model-importer" }
 nimora-diagnostics-bundle = { path = "../../../crates/diagnostics-bundle" }

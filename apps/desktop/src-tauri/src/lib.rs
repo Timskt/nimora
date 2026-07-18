@@ -63,6 +63,10 @@ use nimora_automation_runtime::{
     ActionFailure, AutomationBackend, AutomationDefinition, AutomationEngine, AutomationError,
     AutomationExecutionContext, AutomationRun, RunControl, RunMode, Uncancelled,
 };
+use nimora_creator_draft::{
+    CreatorArtifactKind, CreatorDraft, CreatorDraftError, CreatorDraftRequest,
+    creator_system_instruction, parse_creator_draft,
+};
 use nimora_diagnostics_bundle::{
     DiagnosticBundleError, DiagnosticBundleReceipt, DiagnosticBundleSelection, DiagnosticComponent,
     DiagnosticContextAdmissionAudit, DiagnosticEvent, DiagnosticEventCode, DiagnosticJournalPolicy,
@@ -1085,6 +1089,8 @@ enum DesktopError {
     WindowUnavailable(String),
     #[error("Agent runtime failed: {0}")]
     Agent(String),
+    #[error(transparent)]
+    CreatorDraft(#[from] CreatorDraftError),
     #[error("operation is unavailable from this window")]
     WindowForbidden,
     #[error("pet position must be a finite 32-bit screen coordinate")]
@@ -1181,6 +1187,25 @@ struct LocalAgentRequest {
     provider_id: String,
     #[serde(default = "default_agent_model")]
     model: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GenerateCreatorDraftRequest {
+    kind: CreatorArtifactKind,
+    requirement: String,
+    provider_id: String,
+    model: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopCreatorDraftResult {
+    spec: &'static str,
+    task: AgentTask,
+    draft: CreatorDraft,
+    usage: nimora_agent_runtime::ProviderUsage,
+    finish_reason: nimora_agent_runtime::ProviderFinishReason,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2088,6 +2113,101 @@ fn run_local_agent_inner(
         cancellation,
     )?;
     Ok(desktop_agent_run_result(outcome))
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn generate_creator_draft(
+    request: GenerateCreatorDraftRequest,
+    state: State<'_, DesktopState>,
+) -> Result<DesktopCreatorDraftResult, DesktopError> {
+    generate_creator_draft_inner(request, &state)
+}
+
+fn generate_creator_draft_inner(
+    request: GenerateCreatorDraftRequest,
+    state: &DesktopState,
+) -> Result<DesktopCreatorDraftResult, DesktopError> {
+    if request.model.trim().is_empty() || request.model.len() > 128 {
+        return Err(DesktopError::Agent(
+            "model must contain 1 to 128 bytes".to_owned(),
+        ));
+    }
+    ensure_normal_mode(state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    let draft_request = CreatorDraftRequest::new(request.kind, request.requirement)?;
+    let providers = desktop_provider_registry(state)?;
+    let now_ms = current_time_ms()?;
+    let tool_ids = BTreeSet::new();
+    let policy = AgentTaskGatewayPolicy::new(
+        "desktop:creator-user",
+        [AgentTaskOrigin::Desktop],
+        [
+            DETERMINISTIC_PROVIDER_ID.to_owned(),
+            "provider:ollama-loopback".to_owned(),
+        ],
+        tool_ids.clone(),
+        DataClassification::Personal,
+        AgentAutonomy::Draft,
+        AgentBudget::default(),
+        1,
+    )
+    .map_err(agent_error)?;
+    let task = AgentTaskGateway::new(policy)
+        .admit(
+            AgentTaskRequest::new(
+                AgentTaskOrigin::Desktop,
+                "desktop:creator-user",
+                request.provider_id,
+                tool_ids.clone(),
+                DataClassification::Personal,
+                AgentAutonomy::Draft,
+                AgentBudget::default(),
+            ),
+            now_ms,
+        )
+        .map_err(agent_error)?
+        .task;
+    let cancellation = provider_agent_cancellation(state, task.id)?;
+    let outcome = advance_provider_agent(
+        &providers,
+        state,
+        task,
+        request.model,
+        vec![
+            ProviderMessage::text(
+                ProviderMessageRole::System,
+                creator_system_instruction(request.kind),
+                DataClassification::Public,
+                true,
+            ),
+            ProviderMessage::text(
+                ProviderMessageRole::User,
+                draft_request.requirement.clone(),
+                DataClassification::Personal,
+                false,
+            ),
+        ],
+        4096,
+        true,
+        tool_ids,
+        cancellation,
+    )?;
+    let ProviderAgentOutcome::Completed { task, response } = outcome else {
+        return Err(DesktopError::Agent(
+            "creator draft cannot wait for tool confirmation".to_owned(),
+        ));
+    };
+    let draft = parse_creator_draft(&draft_request, &response.content)?;
+    Ok(DesktopCreatorDraftResult {
+        spec: "nimora.desktop-creator-draft/1",
+        task,
+        draft,
+        usage: response.usage,
+        finish_reason: response.finish_reason,
+    })
 }
 
 #[tauri::command]
@@ -7505,6 +7625,7 @@ pub fn run() {
             agent_history_list,
             delete_agent_history,
             run_local_agent,
+            generate_creator_draft,
             resume_auto_mode_turn,
             start_auto_mode_job,
             auto_mode_job_status,

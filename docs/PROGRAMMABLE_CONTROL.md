@@ -139,3 +139,7 @@ pnpm deskpet extension pack ./scripts/build-companion
 - 离线、休眠恢复、时区变化和时钟回拨不造成任务风暴。
 - 事件回放可复现结果，密钥和敏感字段不进入日志、快照或导出包。
 - 同一脚本可通过语义 Command 控制序列帧、Live2D 和 VRM 角色。
+
+## AI 辅助创作边界
+
+桌面“扩展”工作区可让外接 AI 生成 User Program、Skill 与 Automation 的结构化草案。该入口使用空 Tool allowlist、`AgentAutonomy::Draft`、固定调用深度和受限输出预算；可信 System instruction 与 Personal/Untrusted 用户需求分离。模型输出必须是单个严格 JSON 对象，并经过路径预算、权限精确解释及对应生产契约校验。当前结果只供检查，不写 Workspace、不安装、不启用。后续写盘必须增加独立 Worker 静态检查、沙箱测试、Diff、风险批准、原子安装、监控与回滚。

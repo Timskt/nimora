@@ -259,3 +259,10 @@ Actions 分钟：
 - 隐私与稳定性：失败结果只保留九个固定步骤码，不保存底层错误、路径或 Secret；诊断写入自身失败也作为固定步骤记录，Safe Mode 领域状态不回滚。
 - 证据：纯故障注入覆盖全成功、首项失败后继续、多项失败稳定顺序和底层错误不泄漏；架构门禁拒绝协调器依赖 Tauri，Desktop Host 与 Diagnostics Bundle 测试共同验证接线和稳定事件码。
 - 剩余边界：退出 Safe Mode 在领域状态切回 Normal 后仍存在多步恢复失败窗口；必须引入显式 `RecoveryPending/Degraded` 和可重试补偿，不能复用“保持 Safe”的进入语义草率处理。
+
+## M-2026-07-18 AI 辅助扩展草案
+
+- 目标：让外接 AI 帮用户创建 User Program、Skill 与 Automation，同时不继承普通 Agent 的生产 Tool 权限。
+- 实现：新增 `nimora.creator-draft/1` 严格契约、专用无工具 Draft Agent 和独立桌面创作工作区；可信规则、用户需求和模型输出分级处理。
+- 防线：路径与文件预算、权限解释精确匹配、生产 Manifest/Policy/Engine 复用、Safe/Recovery 门禁，以及“尚未安装”显式状态。
+- 未闭环：本里程碑不写盘、不安装、不启用；Workspace、静态检查、沙箱测试、Diff 批准、监控修复和回滚必须作为后续真实纵切完成。

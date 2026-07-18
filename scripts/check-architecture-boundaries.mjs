@@ -69,6 +69,7 @@ async function checkRustLayers() {
     ["runtime-core", ["rusqlite", "tauri", "reqwest", "nimora-agent-provider-worker"]],
     ["agent-runtime", ["rusqlite", "tauri", "reqwest", "nimora-agent-provider-worker"]],
     ["automation-runtime", ["rusqlite", "tauri", "reqwest", "nimora-agent-provider-worker"]],
+    ["creator-draft", ["rusqlite", "tauri", "reqwest", "nimora-agent-provider-worker"]],
     ["user-code-policy", ["rusqlite", "tauri", "reqwest", "nimora-agent-provider-worker"]],
     ["skill-runtime", ["rusqlite", "tauri", "reqwest", "nimora-agent-provider-worker"]],
     ["skill-worker", ["rusqlite", "tauri", "reqwest", "nimora-agent-provider-worker"]],

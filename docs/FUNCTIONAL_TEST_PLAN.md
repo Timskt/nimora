@@ -544,3 +544,11 @@ ID / 标题 / 优先级 / 前置条件
 - Architecture gate: `pnpm check:architecture` 必须先通过检测器自检，再证明 UI 不能直接导入 Tauri，纯领域/Policy/Worker/Module Adapter 不能引入 SQLite、Tauri、HTTP Client 或 Provider Worker；任何新增例外必须通过 ADR 改规则，禁止内联忽略。
 - Verify Quiet Mode 在 Clip IPC 前阻断；动作成功后音频读取或播放失败不改变动作结果与用户通知。
 - Verify 平台权限、危险、错误和恢复提示 Cue 永远不查询第三方 Voice 包。
+
+## AI 辅助扩展创作
+
+- Verify Creator Agent 固定使用 `Draft` autonomy、空 Tool allowlist、调用深度 1，且只允许已登记的本地 Provider；模型 Tool Call 必须 fail closed。
+- Verify可信 System instruction 与 Personal/Untrusted 用户需求使用独立消息，模型输出永远按不可信输入处理。
+- Verify Markdown 包裹、未知字段、类型不匹配、非法 Manifest、权限说明缺失/额外/重复均拒绝，错误不回显模型原文。
+- Verify 绝对路径、`..`、反斜杠、重复路径、缺失入口、文件数/单文件/总大小超限均在任何写盘前拒绝。
+- Verify User Program、Skill、Automation 分别复用生产校验；Safe/Recovery/浏览器预览禁止生成，有效结果只显示“尚未安装”。

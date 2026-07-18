@@ -4,6 +4,7 @@ import { CreatorStudio } from "./components/CreatorStudio";
 import { DataProtection } from "./components/DataProtection";
 import { AgentWorkspace } from "./components/AgentWorkspace";
 import { AutomationWorkspace } from "./components/AutomationWorkspace";
+import { AiCreatorWorkspace } from "./components/AiCreatorWorkspace";
 import type { ActiveThemeSnapshot, AssetPreviewAudio, OutboxSnapshot, ThemeDescriptor } from "./platform/desktop";
 import { desktopApi } from "./platform/desktop";
 
@@ -160,7 +161,7 @@ export function App() {
           </div>
         </section>}
 
-        {active === "角色" || active === "扩展" ? <CreatorStudio onThemeChange={setActiveTheme} /> : active === "Agent" ? <AgentWorkspace safeMode={safeMode} recoveryMode={recoveryMode} onNotice={updateNotice} /> : active === "自动化" ? <AutomationWorkspace disabled={safeMode || recoveryMode} onNotice={updateNotice} /> : active === "设置" ? <DataProtection recoveryMode={recoveryMode} onNotice={updateNotice} /> : <div className="dashboard-grid">
+        {active === "角色" ? <CreatorStudio onThemeChange={setActiveTheme} /> : active === "扩展" ? <AiCreatorWorkspace disabled={safeMode || recoveryMode} /> : active === "Agent" ? <AgentWorkspace safeMode={safeMode} recoveryMode={recoveryMode} onNotice={updateNotice} /> : active === "自动化" ? <AutomationWorkspace disabled={safeMode || recoveryMode} onNotice={updateNotice} /> : active === "设置" ? <DataProtection recoveryMode={recoveryMode} onNotice={updateNotice} /> : <div className="dashboard-grid">
           <section className="pet-stage" aria-labelledby="pet-heading">
             <div className="stage-copy">
               <span className="pill">{notice}</span>
