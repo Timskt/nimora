@@ -120,7 +120,7 @@ use nimora_runtime_app::{
 };
 use nimora_runtime_core::{
     Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction, PointerButton,
-    Position, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
+    Position, Profile, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
 };
 use nimora_skill_host::{
     SKILL_WORKER_PROTOCOL_VERSION, SkillAgentTaskRequest, SkillExecutionOutput, SkillHostError,
@@ -3511,7 +3511,38 @@ fn install_creator_draft(
                 enabled: false,
             })
         }
+        nimora_creator_draft::CreatorArtifact::Profile { profile } => {
+            install_creator_profile(&state, profile)
+        }
     }
+}
+
+fn install_creator_profile(
+    state: &DesktopState,
+    profile: nimora_creator_draft::GeneratedProfile,
+) -> Result<CreatorDraftInstallReceipt, DesktopError> {
+    let command = state
+        .profiles
+        .create_profile(profile.name, profile.policy)?;
+    let created: Profile =
+        serde_json::from_value(
+            command.arguments.get("profile").cloned().ok_or_else(|| {
+                DesktopError::Agent("profile creation receipt missing".to_owned())
+            })?,
+        )?;
+    let artifact_id = serde_json::to_value(created.id)?
+        .as_str()
+        .ok_or_else(|| DesktopError::Agent("profile identity is invalid".to_owned()))?
+        .to_owned();
+    Ok(CreatorDraftInstallReceipt {
+        spec: "nimora.creator-draft-install/1",
+        artifact_kind: CreatorArtifactKind::Profile,
+        artifact_id,
+        version: "1".to_owned(),
+        replaced_previous: false,
+        authorized: true,
+        enabled: false,
+    })
 }
 
 fn stage_creator_package<T: Serialize>(
@@ -3652,6 +3683,16 @@ fn check_creator_draft_inner(
                 message: "主题令牌、颜色格式与最低对比度校验通过".to_owned(),
             });
         }
+        nimora_creator_draft::CreatorArtifact::Profile { profile } => {
+            Profile::new(profile.name.clone(), profile.policy.clone())
+                .map_err(|error| DesktopError::Agent(error.to_string()))?;
+            checks.push(CreatorDraftCheck {
+                id: "profile-policy",
+                status: "passed",
+                file: Some("profile.json".to_owned()),
+                message: "Profile 名称、模式与行为策略边界校验通过；创建后不会自动切换".to_owned(),
+            });
+        }
     }
     let status = if checks.iter().all(|check| check.status == "passed") {
         "passed"
@@ -3676,6 +3717,7 @@ fn check_creator_draft_inner(
             && !matches!(
                 draft.artifact,
                 nimora_creator_draft::CreatorArtifact::Theme { .. }
+                    | nimora_creator_draft::CreatorArtifact::Profile { .. }
             ),
         installed_version,
         proposed_version,
@@ -3755,6 +3797,11 @@ fn creator_permission_diff(
                 proposed_version: Some(metadata.version.clone()),
             })
         }
+        nimora_creator_draft::CreatorArtifact::Profile { .. } => Ok(CreatorPermissionReview {
+            diff: Vec::new(),
+            installed_version: None,
+            proposed_version: Some("1".to_owned()),
+        }),
     }
 }
 
@@ -13989,5 +14036,36 @@ mod tests {
         assert_eq!(review.installed_version.as_deref(), Some("1.0.0"));
         assert_eq!(review.proposed_version.as_deref(), Some("2.0.0"));
         assert!(review.diff.is_empty());
+    }
+
+    #[test]
+    fn creator_profile_is_durably_created_without_switching_active_policy() {
+        let (_root, state) = normal_desktop_state();
+        let before = state.profiles.snapshot().expect("before profiles");
+        let generated = serde_json::from_value::<nimora_creator_draft::GeneratedProfile>(json!({
+            "name": "深度专注",
+            "policy": {
+                "mode": "focus", "alwaysOnTop": true, "clickThrough": false,
+                "soundEnabled": false, "proactiveFrequency": 5
+            }
+        }))
+        .expect("generated profile");
+
+        let receipt = super::install_creator_profile(&state, generated).expect("create profile");
+        let created_id =
+            serde_json::from_value::<nimora_runtime_core::ProfileId>(json!(receipt.artifact_id))
+                .expect("receipt profile id");
+        let after = state.profiles.snapshot().expect("after profiles");
+        assert_eq!(after.active_profile_id, before.active_profile_id);
+        assert_eq!(after.profiles.len(), before.profiles.len() + 1);
+        let created = after
+            .profiles
+            .iter()
+            .find(|profile| profile.id == created_id)
+            .expect("created profile");
+        assert_eq!(created.name, "深度专注");
+        assert_eq!(created.policy.mode, nimora_runtime_core::ProfileMode::Focus);
+        assert!(!receipt.enabled);
+        assert!(receipt.authorized);
     }
 }

@@ -607,6 +607,11 @@ fn artifact_id(draft: &CreatorDraft) -> String {
         CreatorArtifact::Skill { manifest, .. } => manifest.id.clone(),
         CreatorArtifact::Automation { definition } => definition.id.clone(),
         CreatorArtifact::Theme { metadata } => metadata.id.clone(),
+        CreatorArtifact::Profile { profile } => {
+            let bytes = serde_json::to_vec(profile).expect("serializable generated profile");
+            let digest = Sha256::digest(bytes);
+            format!("profile-draft-{}", &format!("{digest:x}")[..16])
+        }
     }
 }
 
@@ -631,6 +636,12 @@ fn write_draft(root: &Path, draft: &CreatorDraft) -> Result<usize, CreatorWorksp
             let bytes =
                 serde_json::to_vec_pretty(metadata).map_err(|_| CreatorWorkspaceError::Io)?;
             write_new(&root.join("theme.json"), &bytes)?;
+            count += 1;
+        }
+        CreatorArtifact::Profile { profile } => {
+            let bytes =
+                serde_json::to_vec_pretty(profile).map_err(|_| CreatorWorkspaceError::Io)?;
+            write_new(&root.join("profile.json"), &bytes)?;
             count += 1;
         }
     }
@@ -794,6 +805,27 @@ mod tests {
         .expect("theme draft")
     }
 
+    fn profile_draft() -> CreatorDraft {
+        serde_json::from_value(json!({
+            "spec": "nimora.creator-draft/1",
+            "title": "Deep focus",
+            "summary": "A validated profile draft.",
+            "permissionExplanations": [],
+            "artifact": {
+                "kind": "profile",
+                "profile": {
+                    "name": "深度专注",
+                    "policy": {
+                        "mode": "focus", "alwaysOnTop": true,
+                        "clickThrough": false, "soundEnabled": false,
+                        "proactiveFrequency": 5
+                    }
+                }
+            }
+        }))
+        .expect("profile draft")
+    }
+
     fn gap_proof_fixture() -> (
         CapabilityGap,
         CapabilityCatalogSnapshot,
@@ -874,6 +906,23 @@ mod tests {
         .expect("theme metadata JSON");
         assert_eq!(metadata["id"], "theme.local.aurora");
         assert_eq!(metadata["theme"]["spec"], "nimora.theme/1");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn atomically_saves_profile_policy_with_a_content_bound_directory() {
+        let root = fixture_root();
+        let receipt = save_creator_draft(&root, &profile_draft(), "profile-save").expect("save");
+        assert_eq!(receipt.files_written, 2);
+        assert!(receipt.artifact_id.starts_with("profile-draft-"));
+        let destination = root.join(&receipt.relative_directory);
+        assert!(destination.join("nimora-draft.json").is_file());
+        let profile: serde_json::Value = serde_json::from_slice(
+            &fs::read(destination.join("profile.json")).expect("profile policy"),
+        )
+        .expect("profile policy JSON");
+        assert_eq!(profile["name"], "深度专注");
+        assert_eq!(profile["policy"]["mode"], "focus");
         fs::remove_dir_all(root).expect("cleanup");
     }
 

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CapabilityGapPreview, ThemeDraftPreview } from "./AiCreatorWorkspace";
+import { CapabilityGapPreview, ProfileDraftPreview, ThemeDraftPreview } from "./AiCreatorWorkspace";
 import { CapabilityProposalGovernance } from "./CapabilityProposalGovernance";
 import type { CreatorDraftResult } from "../platform/desktop";
 
@@ -89,6 +89,21 @@ describe("ThemeDraftPreview", () => {
     expect(markup).toContain("--preview-accent:#9f91ff");
     expect(markup).toContain("安装不会自动改变当前主题");
     expect(markup).not.toContain("<script");
+  });
+});
+
+describe("ProfileDraftPreview", () => {
+  it("renders bounded policy values and the non-activation boundary", () => {
+    const markup = renderToStaticMarkup(<ProfileDraftPreview profile={{
+      name: "深度专注",
+      policy: { mode: "focus", alwaysOnTop: true, clickThrough: false, soundEnabled: false, proactiveFrequency: 5 },
+    }} />);
+
+    expect(markup).toContain("深度专注");
+    expect(markup).toContain("focus");
+    expect(markup).toContain("主动互动频率");
+    expect(markup).toContain("5%");
+    expect(markup).toContain("创建后不会自动切换");
   });
 });
 

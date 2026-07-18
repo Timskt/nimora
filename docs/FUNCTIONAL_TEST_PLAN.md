@@ -549,6 +549,15 @@ ID / 标题 / 优先级 / 前置条件
 - Verify Theme 缺少入口、错误媒体类型、缺失/额外 Token、非法 Hex、未知字段、CSS/URL/脚本注入均在安装前拒绝且不改变活动主题。
 - Verify 安装前预览只作用于 Creator Studio 卡片；取消或安装失败后 App Shell Token 保持不变。
 - Verify Theme 激活后全局 Token 一致，选择记录原子持久化，重启后重新复验；包缺失或损坏时回退内置主题并显示原因。
+
+## AI 场景 Profile 创建
+
+- Verify Creator 只接受七种既有 Profile Mode、可空布尔覆盖与 `0..100` 主动频率；未知字段、控制字符、空名称、超长名称和越界频率在模型输出边界拒绝。
+- Verify Profile 草案权限说明必须为空，独立审查复用领域校验并明确“创建后不切换”；一次性批准仍与完整草案摘要绑定。
+- Verify Workspace 原子写入 `nimora-draft.json` 与 `profile.json`，目录身份来自规范化产物摘要，不允许 AI 控制文件路径或运行时 UUID。
+- Verify 创建调用生产 `ProfileService` 和 SQLite 事务，宿主生成真实 UUID、发布标准创建事件，活动 Profile、窗口策略与声音状态保持不变。
+- Verify Creator Studio 展示模式、置顶、点击穿透、声音和主动频率预览；空覆盖显示“继承默认”，窄屏和键盘访问保持可用。
+- Verify Safe/Recovery Mode 禁止创建；重复创建形成独立宿主 Profile 而不是静默覆盖，用户必须在 Profile 控制中心显式切换。
 - Verify Safe Mode 始终使用内置主题且拒绝激活写入；Recovery Mode 拒绝主题切换且选择文件不变化。
 - Verify 浅色、深色、高对比度和减少动画在 720px、宽屏、200% 缩放和键盘路径下可辨识，危险态不被主题弱化。
 - Verify RGBA 先按主题模式与 Surface 正确合成再计算 WCAG 相对亮度；正文低于 `4.5:1` 或强调/成功/危险低于 `3:1` 时包整体拒绝。

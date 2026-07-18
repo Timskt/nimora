@@ -71,7 +71,7 @@ export interface LocalAgentResult {
   pendingTools: AgentToolResult[];
 }
 
-export type CreatorArtifactKind = "user-program" | "skill" | "automation" | "theme";
+export type CreatorArtifactKind = "user-program" | "skill" | "automation" | "theme" | "profile";
 
 export interface CreatorDraftResult {
   spec: "nimora.desktop-creator-draft/1";
@@ -95,6 +95,12 @@ export interface CreatorDraftResult {
         publisher: string;
         license: string;
         theme: ThemeDescriptor;
+      };
+    } | {
+      kind: "profile";
+      profile: {
+        name: string;
+        policy: ProfilePolicy;
       };
     });
   } | null;
@@ -205,8 +211,8 @@ export interface CreatorDraftInstallReceipt {
   artifactId: string;
   version: string;
   replacedPrevious: boolean;
-  authorized: false;
-  enabled: false;
+  authorized: boolean;
+  enabled: boolean;
 }
 
 export interface ResumeAutoModeTurnRequest {

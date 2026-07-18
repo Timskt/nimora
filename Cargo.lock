@@ -2356,6 +2356,7 @@ version = "0.1.0"
 dependencies = [
  "nimora-asset-installer",
  "nimora-automation-runtime",
+ "nimora-runtime-core",
  "nimora-skill-runtime",
  "nimora-user-code-policy",
  "serde",

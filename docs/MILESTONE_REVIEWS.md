@@ -1,5 +1,16 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-18 AI 核心场景 Profile Creator 完整纵切
+
+- 结果：Creator Studio 新增第五类真实产物 `profile`，外接 AI 可生成既有场景模式及窗口、穿透、声音和主动频率覆盖，并走严格解析、独立审查、一次性批准、Workspace 保存和事务化创建完整链路。
+- 身份边界：AI 不提供运行时 ID；草案目录使用内容摘要，生产 Profile UUID 只由 `ProfileService` 生成。创建不调用 `switch_active`，因此不会静默改变当前窗口和声音策略。
+- 证据：Creator Contract 覆盖合法 Profile 与越界频率拒绝；Workspace 覆盖摘要目录和双文件原子保存；Desktop 真实 SQLite 测试覆盖创建持久化、UUID 收据和活动 Profile 不变；前端覆盖策略预览与不切换提示。
+- 架构裁决：这是已有 Core Profile Runtime 的配置产物，不是拥有 Provider、Tool、Memory 或委派能力的 Agent Profile；后者继续保持未实现，不能因名称相近而误报。
+- UI：普通用户看到直观开关与频率，开发者仍可查看结构化 JSON；创建按钮、完成状态和收据统一使用“创建/未切换”，不复用可执行扩展的“授权/启用”语义。
+- 离线与稳定性：生成步骤可使用本地 Provider；审查、保存、创建和后续切换全部离线可用。SQLite 保存失败时领域状态与事件均不发布。
+- Actions：本纵切继续使用本地全量门禁，未增加高频 GitHub Actions 触发。
+- 下一缺口：Agent Profile 需要独立身份、Provider/Model、Tool Scope、Memory、预算、委派和停用生命周期；Connector 与声明式 Widget 仍缺生产 Runtime，不能直接注册 Creator Handler。
+
 > 更新日期：2026-07-18  
 > 状态：持续维护  
 > 目的：在可演示纵切、每五个生产提交、公开契约变化或重大偏差时校准方向

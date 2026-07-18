@@ -181,3 +181,12 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - Creator Studio renders a token-scoped, inert preview card instead of injecting generated CSS into the application theme. The review and install copy distinguishes permissionless theme upgrades from executable artifact reauthorization.
 - Focused evidence covers generated-package verification, low-contrast rejection, metadata control-character and length rejection, installed-version diff, two-file Workspace persistence, isolated preview rendering and TypeScript correctness.
 - Connector, Agent Profile, Persona Pack, Widget and other documented AI-native outputs remain proposals until each has a production Runtime, deterministic validator, install lifecycle and tests; Creator must return a capability gap rather than fabricate them.
+
+## 2026-07-18 — AI-generated core Profile vertical slice
+
+- Added core scene `Profile` as a fifth Creator artifact with an exact `name + ProfilePolicy` contract; it accepts only existing domain modes, nullable bounded overrides and no capability declarations.
+- The model cannot choose a runtime identity. Workspace persistence derives a stable draft directory from the canonical profile payload, while creation delegates to `ProfileService`, which generates the real UUID and commits the SQLite snapshot plus event transactionally.
+- Independent review reruns both Creator and domain validation. A digest-bound one-time approval is consumed before creation; Safe and Recovery Mode remain fail-closed through the shared Creator entry.
+- Creation never calls `switch_active`, so the active Profile and native window/sound policy do not change. Creator Studio exposes an inert policy preview and labels the action `原子创建（不切换）`.
+- Focused tests prove strict frequency rejection, two-file atomic Workspace persistence, a real durable Profile creation with an unchanged active identity, and accessible frontend policy rendering.
+- This artifact is the existing core scene Profile, not an Agent Profile. Agent tool identity, model routing, memory and delegation profiles still require a separate production contract and lifecycle.

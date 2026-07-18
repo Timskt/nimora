@@ -3,6 +3,7 @@ use std::path::{Component, Path};
 
 use nimora_asset_installer::{GeneratedThemeMetadata, validate_generated_theme_metadata};
 use nimora_automation_runtime::{AutomationDefinition, AutomationEngine};
+use nimora_runtime_core::ProfilePolicy;
 use nimora_skill_runtime::{SkillManifest, validate_manifest as validate_skill_manifest};
 use nimora_user_code_policy::{ProgramManifest, evaluate as evaluate_program_manifest};
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,7 @@ pub enum CreatorArtifactKind {
     Skill,
     Automation,
     Theme,
+    Profile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +73,13 @@ pub struct PermissionExplanation {
 pub struct CreatorDraftFile {
     pub path: String,
     pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GeneratedProfile {
+    pub name: String,
+    pub policy: ProfilePolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,6 +145,9 @@ pub enum CreatorArtifact {
     Theme {
         metadata: GeneratedThemeMetadata,
     },
+    Profile {
+        profile: GeneratedProfile,
+    },
 }
 
 impl CreatorArtifact {
@@ -146,6 +158,7 @@ impl CreatorArtifact {
             Self::Skill { .. } => CreatorArtifactKind::Skill,
             Self::Automation { .. } => CreatorArtifactKind::Automation,
             Self::Theme { .. } => CreatorArtifactKind::Theme,
+            Self::Profile { .. } => CreatorArtifactKind::Profile,
         }
     }
 }
@@ -359,8 +372,26 @@ pub fn validate_creator_draft(
                 .map_err(|_| CreatorDraftError::InvalidArtifact)?;
             BTreeSet::new()
         }
+        CreatorArtifact::Profile { profile } => {
+            validate_generated_profile(profile)?;
+            BTreeSet::new()
+        }
     };
     validate_permission_explanations(&draft.permission_explanations, &required_capabilities)
+}
+
+fn validate_generated_profile(profile: &GeneratedProfile) -> Result<(), CreatorDraftError> {
+    if profile.name.trim().is_empty()
+        || profile.name.chars().count() > 64
+        || profile.name.chars().any(char::is_control)
+        || profile
+            .policy
+            .proactive_frequency
+            .is_some_and(|value| value > 100)
+    {
+        return Err(CreatorDraftError::InvalidArtifact);
+    }
+    Ok(())
 }
 
 fn serialized_names<'a, T: Serialize + 'a>(
@@ -446,6 +477,7 @@ const fn artifact_kind_name(kind: CreatorArtifactKind) -> &'static str {
         CreatorArtifactKind::Skill => "skill",
         CreatorArtifactKind::Automation => "automation",
         CreatorArtifactKind::Theme => "theme",
+        CreatorArtifactKind::Profile => "profile",
     }
 }
 
@@ -462,6 +494,9 @@ const fn artifact_contract(kind: CreatorArtifactKind) -> &'static str {
         }
         CreatorArtifactKind::Theme => {
             "artifact={kind:'theme',metadata:{id:'theme.local.<name>',version:<semver>,name:<locale-to-name>,publisher:<namespaced-id>,license:<SPDX-or-LicenseRef>,theme:{spec:'nimora.theme/1',mode:'light'|'dark',colors:{surface,surfaceElevated,text,textMuted,accent,accentSoft,border,success,danger},cornerStyle:'soft'|'rounded'|'compact',motion:'full'|'reduced'}}}; colors must be #RRGGBB or #RRGGBBAA and permissionExplanations must be []"
+        }
+        CreatorArtifactKind::Profile => {
+            "artifact={kind:'profile',profile:{name:'1-64 character display name',policy:{mode:'companion'|'work'|'focus'|'creator'|'developer'|'presentation'|'offline',alwaysOnTop:boolean|null,clickThrough:boolean|null,soundEnabled:boolean|null,proactiveFrequency:integer 0..100|null}}}; permissionExplanations must be []; host creates the UUID and does not activate the profile"
         }
     }
 }
@@ -685,6 +720,36 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn profile_draft_accepts_only_bounded_host_owned_policy() {
+        let value = json!({
+            "spec": CREATOR_DRAFT_SPEC,
+            "title": "Deep focus",
+            "summary": "Creates a quiet focus profile without activating it.",
+            "permissionExplanations": [],
+            "artifact": {
+                "kind": "profile",
+                "profile": {
+                    "name": "深度专注",
+                    "policy": {
+                        "mode": "focus",
+                        "alwaysOnTop": true,
+                        "clickThrough": false,
+                        "soundEnabled": false,
+                        "proactiveFrequency": 5
+                    }
+                }
+            }
+        });
+        let output = serde_json::to_string(&value).expect("fixture");
+        assert!(parse_creator_draft(&request(CreatorArtifactKind::Profile), &output).is_ok());
+
+        let mut invalid = value;
+        invalid["artifact"]["profile"]["policy"]["proactiveFrequency"] = json!(101);
+        let output = serde_json::to_string(&invalid).expect("fixture");
+        assert!(parse_creator_draft(&request(CreatorArtifactKind::Profile), &output).is_err());
     }
 
     #[test]
