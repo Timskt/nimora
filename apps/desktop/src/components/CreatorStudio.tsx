@@ -343,7 +343,7 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
       <section className="asset-catalog" aria-labelledby="asset-catalog-heading">
         <div className="section-heading">
           <div><p className="card-label">INSTALLED ASSETS</p><h3 id="asset-catalog-heading">本机资源目录</h3></div>
-          <strong>{catalog?.assets.length ?? 0} 个可用</strong>
+          <div className="asset-catalog-actions"><strong>{catalog?.assets.length ?? 0} 个可用</strong>{activeTheme?.source === "installed" ? <button className="text-button" type="button" disabled={activating !== null} onClick={() => void activateTheme("builtin.nimora")}>恢复内置主题</button> : null}</div>
         </div>
         {catalogError ? <p className="catalog-empty error">资源目录暂时不可读取，当前角色不受影响。</p> : null}
         {!catalogError && catalog === null ? <p className="catalog-empty">正在验证已安装资源…</p> : null}

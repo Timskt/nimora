@@ -24,7 +24,7 @@
 | Sprite 角色与皮肤 | 部分实现 | 严格包契约、安全导入导出、序列/图集真实渲染、动作 fallback | 独立预览实例、命中区编辑、连续切换泄漏与性能门禁 |
 | glTF/GLB 角色 | 部分实现 | 独立 Worker 探测、命名动画报告、可编辑标准动作映射、原子安装、受控协议、Three.js 真渲染、cross-fade、framing、释放与失败回退 | 独立预览、持续切换与 GPU 压测、真实截图和跨平台验证 |
 | VRM 与 Live2D | 未实现 | Manifest 可识别并显式安全回退 | 独立 Adapter、格式验证、动作/表情映射、许可证策略、隔离与资源释放测试 |
-| 主题包 | 部分实现 | `nimora.theme/1` 严格 Token、安装前局部预览、原子安装/激活、Safe Mode 回退 | 完成高对比度审查、主题编辑器、签名和跨平台视觉验收 |
+| 主题包 | 部分实现 | `nimora.theme/1` 严格 Token、透明色合成后的 WCAG 最低对比度门禁、安装前局部预览、原子安装/激活、显式恢复内置主题、Safe Mode 宿主与 UI 同步回退 | 完成高对比度人工审查、主题编辑器、签名和跨平台视觉验收 |
 | 声音与行为包 | 未实现 | 规格和统一 Asset Manifest 基础 | 严格子契约、编辑预览、权限、隔离执行和回退实现 |
 | 用户代码执行 | 部分实现 | 独立 JS Worker、预算、强制取消、安装完整性、版本精确授权、Capability Gateway | 授权型文件/网络/自动化后端、调试器、录制回放、跨平台 sidecar 发布验证、OS 资源硬限制 |
 | 事件驱动程序 | 部分实现 | 可信 Rust 订阅、`serial`/`drop`/`cancel-previous` Supervisor、迟到完成隔离 | 桌面纯 Supervisor 集成测试、执行历史与 Creator Studio 可视诊断 |

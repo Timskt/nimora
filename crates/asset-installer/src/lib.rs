@@ -1291,7 +1291,73 @@ fn validate_theme_descriptor(theme: &ThemeDescriptor) -> Result<(), InstallError
             "theme descriptor violates nimora.theme/1".to_owned(),
         ));
     }
+    validate_theme_contrast(theme)?;
     Ok(())
+}
+
+fn validate_theme_contrast(theme: &ThemeDescriptor) -> Result<(), InstallError> {
+    let backdrop = match theme.mode {
+        ThemeMode::Light => [1.0, 1.0, 1.0],
+        ThemeMode::Dark => [0.0, 0.0, 0.0],
+    };
+    let color = |token: &str| {
+        let rgba = parse_theme_color(&theme.colors[token]);
+        composite_rgb(rgba, backdrop)
+    };
+    let surface = color("surface");
+    let elevated = composite_rgb(parse_theme_color(&theme.colors["surfaceElevated"]), surface);
+    let checks = [
+        ("text/surface", color("text"), surface, 4.5),
+        ("text/elevated", color("text"), elevated, 4.5),
+        ("textMuted/surface", color("textMuted"), surface, 3.0),
+        ("accent/elevated", color("accent"), elevated, 3.0),
+        ("success/elevated", color("success"), elevated, 3.0),
+        ("danger/elevated", color("danger"), elevated, 3.0),
+    ];
+    if let Some((pair, _, _, minimum)) =
+        checks
+            .into_iter()
+            .find(|(_, foreground, background, minimum)| {
+                contrast_ratio(*foreground, *background) < *minimum
+            })
+    {
+        return Err(InstallError::InvalidMetadata(format!(
+            "theme contrast for {pair} is below {minimum}:1"
+        )));
+    }
+    Ok(())
+}
+
+fn parse_theme_color(value: &str) -> [f64; 4] {
+    let channel =
+        |start| f64::from(u8::from_str_radix(&value[start..start + 2], 16).unwrap_or(0)) / 255.0;
+    [
+        channel(1),
+        channel(3),
+        channel(5),
+        if value.len() == 9 { channel(7) } else { 1.0 },
+    ]
+}
+
+fn composite_rgb(foreground: [f64; 4], background: [f64; 3]) -> [f64; 3] {
+    [0, 1, 2]
+        .map(|index| foreground[index] * foreground[3] + background[index] * (1.0 - foreground[3]))
+}
+
+fn contrast_ratio(left: [f64; 3], right: [f64; 3]) -> f64 {
+    let luminance = |color: [f64; 3]| {
+        let linear = color.map(|channel| {
+            if channel <= 0.04045 {
+                channel / 12.92
+            } else {
+                ((channel + 0.055) / 1.055).powf(2.4)
+            }
+        });
+        0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    };
+    let left = luminance(left);
+    let right = luminance(right);
+    (left.max(right) + 0.05) / (left.min(right) + 0.05)
 }
 
 fn valid_action_id(value: &str) -> bool {
@@ -2054,6 +2120,33 @@ mod tests {
         colors.insert("customCss".to_owned(), "#000000".to_owned());
         let unknown = ThemeDescriptor { colors, ..theme };
         assert!(validate_theme_descriptor(&unknown).is_err());
+    }
+
+    #[test]
+    fn rejects_theme_text_and_semantic_colors_without_minimum_contrast() {
+        let mut colors = BTreeMap::from([
+            ("surface".to_owned(), "#ffffff".to_owned()),
+            ("surfaceElevated".to_owned(), "#ffffff".to_owned()),
+            ("text".to_owned(), "#fefefe".to_owned()),
+            ("textMuted".to_owned(), "#777777".to_owned()),
+            ("accent".to_owned(), "#666666".to_owned()),
+            ("accentSoft".to_owned(), "#eeeeee".to_owned()),
+            ("border".to_owned(), "#dddddd".to_owned()),
+            ("success".to_owned(), "#557755".to_owned()),
+            ("danger".to_owned(), "#995555".to_owned()),
+        ]);
+        let theme = ThemeDescriptor {
+            spec: "nimora.theme/1".to_owned(),
+            mode: ThemeMode::Light,
+            colors: colors.clone(),
+            corner_style: ThemeCornerStyle::Soft,
+            motion: ThemeMotion::Full,
+        };
+        assert!(validate_theme_descriptor(&theme).is_err());
+        colors.insert("text".to_owned(), "#111111".to_owned());
+        colors.insert("danger".to_owned(), "#fdfdfd".to_owned());
+        let semantic_failure = ThemeDescriptor { colors, ..theme };
+        assert!(validate_theme_descriptor(&semantic_failure).is_err());
     }
 
     #[test]

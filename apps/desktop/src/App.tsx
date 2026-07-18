@@ -55,10 +55,12 @@ export function App() {
       if (safeMode) {
         await desktopApi.exitSafeMode();
         setSafeMode(false);
+        setActiveTheme(await desktopApi.activeTheme());
         setNotice("已退出安全模式");
       } else {
         await desktopApi.enterSafeMode();
         setSafeMode(true);
+        setActiveTheme(await desktopApi.activeTheme());
         setNotice("安全模式已启用，受限操作已被阻止");
       }
     } catch {
