@@ -40,6 +40,7 @@ nimora-user-code-package = { path = "../../../crates/user-code-package" }
 nimora-user-code-storage = { path = "../../../crates/user-code-storage" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tauri = { version = "2.11", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-dialog = "2.6"
 thiserror.workspace = true
@@ -49,4 +50,3 @@ uuid.workspace = true
 workspace = true
 
 [dev-dependencies]
-sha2.workspace = true

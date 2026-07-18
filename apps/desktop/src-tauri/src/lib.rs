@@ -167,6 +167,8 @@ const MAX_PENDING_AGENT_TOOLS: usize = 32;
 const AGENT_TOOL_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
 const MAX_PENDING_SKILL_EXECUTIONS: usize = 32;
 const SKILL_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
+const CREATOR_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
+const MAX_PENDING_CREATOR_APPROVALS: usize = 32;
 const SKILL_EVENT_QUEUE_CAPACITY: usize = 32;
 const SKILL_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const AUTO_MODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -204,6 +206,7 @@ struct DesktopState {
     active_user_program_workers: Mutex<HashMap<Uuid, ActiveUserProgramWorker>>,
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
     pending_agent_tools: Mutex<HashMap<Uuid, PendingAgentTool>>,
+    pending_creator_approvals: Mutex<HashMap<Uuid, PendingCreatorApproval>>,
     skill_approval_journal: SqliteSkillApprovalJournal,
     skill_execution_history: SqliteSkillExecutionHistory,
     active_skill_executions: Mutex<HashMap<Uuid, ActiveSkillExecution>>,
@@ -223,6 +226,12 @@ struct PendingAgentTool {
     effective_risk: CommandRisk,
     expires_at_ms: u64,
     context: PendingAgentToolContext,
+}
+
+#[derive(Debug)]
+struct PendingCreatorApproval {
+    draft_digest: String,
+    expires_at_ms: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -474,6 +483,7 @@ impl DesktopState {
             active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
             pending_agent_tools: Mutex::new(HashMap::new()),
+            pending_creator_approvals: Mutex::new(HashMap::new()),
             skill_approval_journal,
             skill_execution_history,
             active_skill_executions: Mutex::new(HashMap::new()),
@@ -547,6 +557,7 @@ impl DesktopState {
             active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
             pending_agent_tools: Mutex::new(HashMap::new()),
+            pending_creator_approvals: Mutex::new(HashMap::new()),
             skill_approval_journal: SqliteSkillApprovalJournal::in_memory()?,
             skill_execution_history: SqliteSkillExecutionHistory::in_memory()?,
             active_skill_executions: Mutex::new(HashMap::new()),
@@ -1219,6 +1230,7 @@ struct SaveCreatorDraftRequest {
     kind: CreatorArtifactKind,
     requirement: String,
     draft: CreatorDraft,
+    approval_id: Uuid,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1234,7 +1246,37 @@ struct CheckCreatorDraftRequest {
 struct CreatorDraftCheckReport {
     spec: &'static str,
     status: &'static str,
+    draft_digest: String,
+    highest_risk: CommandRisk,
+    permission_diff: Vec<CreatorPermissionDiff>,
     checks: Vec<CreatorDraftCheck>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatorPermissionDiff {
+    capability: String,
+    change: &'static str,
+    risk: CommandRisk,
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ApproveCreatorDraftRequest {
+    kind: CreatorArtifactKind,
+    requirement: String,
+    draft: CreatorDraft,
+    draft_digest: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatorDraftApprovalReceipt {
+    spec: &'static str,
+    approval_id: Uuid,
+    draft_digest: String,
+    expires_at_ms: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -2267,12 +2309,92 @@ fn save_creator_draft_command(
             "creator draft failed isolated validation".to_owned(),
         ));
     }
+    consume_creator_approval(&state, request.approval_id, &report.draft_digest)?;
     save_creator_draft(
         &request.workspace_root,
         &request.draft,
         &current_time_ms()?.to_string(),
     )
     .map_err(Into::into)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn approve_creator_draft(
+    app: AppHandle,
+    request: ApproveCreatorDraftRequest,
+    state: State<'_, DesktopState>,
+) -> Result<CreatorDraftApprovalReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    let draft_request = CreatorDraftRequest::new(request.kind, request.requirement)?;
+    validate_creator_draft(&draft_request, &request.draft)?;
+    let report = check_creator_draft_inner(&app, &request.draft)?;
+    if report.status != "passed" || report.draft_digest != request.draft_digest {
+        return Err(DesktopError::Agent(
+            "creator review changed before approval".to_owned(),
+        ));
+    }
+    let now_ms = current_time_ms()?;
+    let approval_id = Uuid::now_v7();
+    let expires_at_ms = now_ms.saturating_add(CREATOR_APPROVAL_TTL_MS);
+    let mut pending = state
+        .pending_creator_approvals
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    pending.retain(|_, approval| approval.expires_at_ms > now_ms);
+    if pending.len() >= MAX_PENDING_CREATOR_APPROVALS {
+        return Err(DesktopError::Agent(
+            "maximum pending Creator approvals reached".to_owned(),
+        ));
+    }
+    pending.insert(
+        approval_id,
+        PendingCreatorApproval {
+            draft_digest: report.draft_digest.clone(),
+            expires_at_ms,
+        },
+    );
+    Ok(CreatorDraftApprovalReceipt {
+        spec: "nimora.creator-draft-approval/1",
+        approval_id,
+        draft_digest: report.draft_digest,
+        expires_at_ms,
+    })
+}
+
+fn consume_creator_approval(
+    state: &DesktopState,
+    approval_id: Uuid,
+    draft_digest: &str,
+) -> Result<(), DesktopError> {
+    consume_creator_approval_from(
+        &state.pending_creator_approvals,
+        approval_id,
+        draft_digest,
+        current_time_ms()?,
+    )
+}
+
+fn consume_creator_approval_from(
+    pending: &Mutex<HashMap<Uuid, PendingCreatorApproval>>,
+    approval_id: Uuid,
+    draft_digest: &str,
+    now_ms: u64,
+) -> Result<(), DesktopError> {
+    let approval = pending
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .remove(&approval_id)
+        .ok_or_else(|| DesktopError::Agent("creator approval is unavailable".to_owned()))?;
+    if approval.expires_at_ms <= now_ms || approval.draft_digest != draft_digest {
+        return Err(DesktopError::Agent(
+            "creator approval is expired or does not match the draft".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -2317,11 +2439,63 @@ fn check_creator_draft_inner(
     } else {
         "failed"
     };
+    let permission_diff = creator_permission_diff(draft);
+    let highest_risk = permission_diff
+        .iter()
+        .map(|item| item.risk)
+        .max_by_key(|risk| command_risk_rank(*risk))
+        .unwrap_or(CommandRisk::Safe);
     Ok(CreatorDraftCheckReport {
         spec: "nimora.creator-draft-check/1",
         status,
+        draft_digest: creator_draft_digest(draft)?,
+        highest_risk,
+        permission_diff,
         checks,
     })
+}
+
+fn creator_draft_digest(draft: &CreatorDraft) -> Result<String, DesktopError> {
+    use sha2::{Digest, Sha256};
+
+    let bytes =
+        serde_json::to_vec(draft).map_err(|error| DesktopError::Agent(error.to_string()))?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+}
+
+fn creator_permission_diff(draft: &CreatorDraft) -> Vec<CreatorPermissionDiff> {
+    match &draft.artifact {
+        nimora_creator_draft::CreatorArtifact::Automation { definition } => definition
+            .actions
+            .iter()
+            .map(|action| CreatorPermissionDiff {
+                capability: action.command.clone(),
+                change: "added",
+                risk: action.risk,
+                reason: format!("自动化动作 {} 将请求该命令", action.id),
+            })
+            .collect(),
+        _ => draft
+            .permission_explanations
+            .iter()
+            .map(|item| CreatorPermissionDiff {
+                capability: item.capability.clone(),
+                change: "added",
+                risk: creator_capability_risk(&item.capability),
+                reason: item.reason.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn creator_capability_risk(capability: &str) -> CommandRisk {
+    match capability {
+        "invoke-agent-tasks" => CommandRisk::High,
+        "invoke-commands" | "invoke-safe-commands" => CommandRisk::Medium,
+        "store-local-data" | "subscribe-events" => CommandRisk::Low,
+        _ if capability.starts_with("read-") => CommandRisk::Low,
+        _ => CommandRisk::Medium,
+    }
 }
 
 fn check_creator_automation_behavior(
@@ -4149,6 +4323,11 @@ impl SafeModeConvergenceOperations for DesktopSafeModeConvergence<'_> {
 }
 
 fn cancel_all_pending_agent_tools(state: &DesktopState) -> Result<(), DesktopError> {
+    state
+        .pending_creator_approvals
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .clear();
     let mut task_ids = {
         let mut pending = state
             .pending_agent_tools
@@ -7941,6 +8120,7 @@ pub fn run() {
             generate_creator_draft,
             save_creator_draft_command,
             check_creator_draft,
+            approve_creator_draft,
             resume_auto_mode_turn,
             start_auto_mode_job,
             auto_mode_job_status,
@@ -8145,14 +8325,15 @@ mod tests {
         BUILTIN_THEME_ID, BUILTIN_VOICE_ID, CHARACTER_SELECTION, CapabilityBackend,
         DETERMINISTIC_PROVIDER_ID, DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
         DesktopResolveAutoModeAttemptRequest, DesktopState, ExecutionCancellation,
-        LocalAgentRequest, PendingSkillExecution, PetAction, PrepareAgentToolRequest,
-        ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest,
-        ResumeAutoModeTurnRequest, SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
-        UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
-        VOICE_SELECTION, WindowPolicy, agent_catalog_inner, approve_skill_execution_inner,
-        auto_mode_control_center_inner, automation_agent_messages, cancel_agent_task_inner,
-        cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
-        cancel_skill_execution_inner, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
+        LocalAgentRequest, PendingCreatorApproval, PendingSkillExecution, PetAction,
+        PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
+        ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SkillEventSession, StartupMode,
+        THEME_SELECTION, TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
+        UserProgramRollbackReceipt, VOICE_SELECTION, WindowPolicy, agent_catalog_inner,
+        approve_skill_execution_inner, auto_mode_control_center_inner, automation_agent_messages,
+        cancel_agent_task_inner, cancel_all_pending_agent_tools, cancel_auto_mode_job_inner,
+        cancel_automation_run_inner, cancel_skill_execution_inner, confirm_agent_tool_inner,
+        confirm_agent_tool_with_registry, consume_creator_approval_from, creator_capability_risk,
         current_time_ms, default_agent_model, default_agent_provider_id, desktop_tool_registry,
         diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
@@ -8202,6 +8383,8 @@ mod tests {
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
     use sha2::{Digest, Sha256};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
     use std::{
         collections::BTreeSet,
         path::Path,
@@ -11345,5 +11528,67 @@ mod tests {
         assert!(!valid_asset_identifier("character.example"));
         assert!(!valid_asset_identifier("character.example../escape"));
         assert!(!valid_asset_identifier("Character.example.mochi"));
+    }
+
+    #[test]
+    fn creator_capabilities_map_to_conservative_risk() {
+        assert_eq!(creator_capability_risk("read-pet-state"), CommandRisk::Low);
+        assert_eq!(
+            creator_capability_risk("invoke-agent-tasks"),
+            CommandRisk::High
+        );
+        assert_eq!(
+            creator_capability_risk("unknown-future-capability"),
+            CommandRisk::Medium
+        );
+    }
+
+    #[test]
+    fn creator_approval_is_single_use_and_digest_bound() {
+        let approval_id = Uuid::now_v7();
+        let pending = Mutex::new(HashMap::from([(
+            approval_id,
+            PendingCreatorApproval {
+                draft_digest: "sha256:expected".to_owned(),
+                expires_at_ms: 200,
+            },
+        )]));
+        consume_creator_approval_from(&pending, approval_id, "sha256:expected", 100)
+            .expect("matching approval");
+        assert!(
+            consume_creator_approval_from(&pending, approval_id, "sha256:expected", 100).is_err()
+        );
+
+        let mismatched_id = Uuid::now_v7();
+        pending.lock().expect("pending lock").insert(
+            mismatched_id,
+            PendingCreatorApproval {
+                draft_digest: "sha256:expected".to_owned(),
+                expires_at_ms: 200,
+            },
+        );
+        assert!(
+            consume_creator_approval_from(&pending, mismatched_id, "sha256:changed", 100).is_err()
+        );
+        assert!(
+            !pending
+                .lock()
+                .expect("pending lock")
+                .contains_key(&mismatched_id)
+        );
+    }
+
+    #[test]
+    fn creator_approval_expires_fail_closed() {
+        let approval_id = Uuid::now_v7();
+        let pending = Mutex::new(HashMap::from([(
+            approval_id,
+            PendingCreatorApproval {
+                draft_digest: "sha256:draft".to_owned(),
+                expires_at_ms: 100,
+            },
+        )]));
+        assert!(consume_creator_approval_from(&pending, approval_id, "sha256:draft", 100).is_err());
+        assert!(pending.lock().expect("pending lock").is_empty());
     }
 }

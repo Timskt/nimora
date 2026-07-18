@@ -1,5 +1,7 @@
 # Nimora 外接 AI 能力工厂
 
+完整能力与场景矩阵见 [`AI_AUGMENTED_CAPABILITY_CATALOG.md`](AI_AUGMENTED_CAPABILITY_CATALOG.md)。
+
 > 状态：产品与架构规范  
 > 更新日期：2026-07-18  
 > 目标：让用户借助自选 AI 安全地创造、验证、安装、维护和演进 Nimora 可扩展能力，而不是只生成一段不可治理的代码。

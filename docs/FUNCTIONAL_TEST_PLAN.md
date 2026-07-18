@@ -1,5 +1,14 @@
 # Nimora 功能测试计划
 
+## Creator 权限 Diff 与一次性批准
+
+- 同一结构化草案重复审查产生相同 `sha256:` 摘要；任意源码、Manifest、权限或自动化动作变化均改变摘要。
+- 审查报告展示新增 Capability、文字风险级别、原因与最高风险，不能只靠颜色表达。
+- 未审查、审查失败、未批准、批准过期、摘要不匹配、凭证重放和进入 Safe Mode 后保存全部失败关闭。
+- 批准命令与保存命令均由宿主重跑生产契约、独立语法检查和无副作用行为沙箱。
+- 成功保存只写入 `.nimora-drafts`，不得安装、激活、发布或签发运行 Grant。
+- Browser Preview 的生成、批准和保存接口统一返回 `desktop-host-required`，不得伪造安全凭证。
+
 ## VRM 1.0 纵切增量
 
 - Verify VRM 安装必须使用 `.vrm`、`model/gltf-binary`、GLB 2.0、声明的 `VRMC_vrm`、1.0 `specVersion`、meta 与 humanoid；普通 GLB 伪装 VRM、VRM 0.x 和未声明扩展全部拒绝。

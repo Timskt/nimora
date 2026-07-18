@@ -15,6 +15,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 
 export const petActions = ["idle", "walk", "sleep", "work", "celebrate"] as const;
 export type PetAction = (typeof petActions)[number];
+export type CommandRisk = "safe" | "low" | "medium" | "high" | "critical";
 
 export interface DesktopSnapshot {
   pet: Pet;
@@ -40,7 +41,7 @@ export interface AgentToolDescriptor {
   id: string;
   title: string;
   description: string;
-  baseRisk: "safe" | "low" | "medium" | "high" | "critical";
+  baseRisk: CommandRisk;
   effect: "read_only" | "reversible_write" | "irreversible_write" | "external_side_effect";
 }
 
@@ -100,7 +101,17 @@ export interface CreatorDraftSaveReceipt {
 export interface CreatorDraftCheckReport {
   spec: "nimora.creator-draft-check/1";
   status: "passed" | "failed";
+  draftDigest: string;
+  highestRisk: CommandRisk;
+  permissionDiff: Array<{ capability: string; change: "added"; risk: CommandRisk; reason: string }>;
   checks: Array<{ id: string; status: "passed" | "failed"; file: string | null; message: string }>;
+}
+
+export interface CreatorDraftApprovalReceipt {
+  spec: "nimora.creator-draft-approval/1";
+  approvalId: string;
+  draftDigest: string;
+  expiresAtMs: number;
 }
 
 export interface ResumeAutoModeTurnRequest {
@@ -685,7 +696,8 @@ export interface DesktopApi {
   cancelSkillExecution(executionId: string): Promise<boolean>;
   runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
   generateCreatorDraft(kind: CreatorArtifactKind, requirement: string, providerId: string, model: string): Promise<CreatorDraftResult>;
-  saveCreatorDraft(workspaceRoot: string, kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"]): Promise<CreatorDraftSaveReceipt>;
+  approveCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"], draftDigest: string): Promise<CreatorDraftApprovalReceipt>;
+  saveCreatorDraft(workspaceRoot: string, kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"], approvalId: string): Promise<CreatorDraftSaveReceipt>;
   checkCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: CreatorDraftResult["draft"]): Promise<CreatorDraftCheckReport>;
   resumeAutoModeTurn(request: ResumeAutoModeTurnRequest): Promise<DesktopAutoModeTurnResult>;
   startAutoModeJob(request: StartAutoModeJobRequest): Promise<DesktopAutoModeJobSnapshot>;
@@ -947,6 +959,9 @@ export function createDesktopApi(
       async saveCreatorDraft() {
         throw new Error("desktop-host-required");
       },
+      async approveCreatorDraft() {
+        throw new Error("desktop-host-required");
+      },
       async checkCreatorDraft() {
         throw new Error("desktop-host-required");
       },
@@ -1140,7 +1155,8 @@ export function createDesktopApi(
     cancelSkillExecution: async (executionId) => await invokeCommand("cancel_skill_execution", { executionId }) as boolean,
     runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") => await invokeCommand("run_local_agent", { request: { prompt, providerId, model } }) as LocalAgentResult,
     generateCreatorDraft: async (kind, requirement, providerId, model) => await invokeCommand("generate_creator_draft", { request: { kind, requirement, providerId, model } }) as CreatorDraftResult,
-    saveCreatorDraft: async (workspaceRoot, kind, requirement, draft) => await invokeCommand("save_creator_draft_command", { request: { workspaceRoot, kind, requirement, draft } }) as CreatorDraftSaveReceipt,
+    approveCreatorDraft: async (kind, requirement, draft, draftDigest) => await invokeCommand("approve_creator_draft", { request: { kind, requirement, draft, draftDigest } }) as CreatorDraftApprovalReceipt,
+    saveCreatorDraft: async (workspaceRoot, kind, requirement, draft, approvalId) => await invokeCommand("save_creator_draft_command", { request: { workspaceRoot, kind, requirement, draft, approvalId } }) as CreatorDraftSaveReceipt,
     checkCreatorDraft: async (kind, requirement, draft) => await invokeCommand("check_creator_draft", { request: { kind, requirement, draft } }) as CreatorDraftCheckReport,
     resumeAutoModeTurn: async (request) => await invokeCommand("resume_auto_mode_turn", {
       request: {

@@ -24,6 +24,8 @@ AI 与其它模块的双向调用以 [`AI_MODULE_INTERACTIONS.md`](AI_MODULE_INT
 
 用户借助外接 AI 创建、测试、安装、维护 User Program、Skill、Automation、Connector、Agent、角色资产和声明式 UI 的完整能力边界，以 [`AI_EXTENSION_FACTORY.md`](AI_EXTENSION_FACTORY.md) 为产品与工程基线。
 
+外接 AI 可创建、组合与演进的跨领域能力矩阵见 [`AI_AUGMENTED_CAPABILITY_CATALOG.md`](AI_AUGMENTED_CAPABILITY_CATALOG.md)。
+
 面向广大用户的持续需求发现、新技术准入、Adapter 替换、稳定版前后兼容和退出演练统一遵循 [`FUTURE_EVOLUTION_GOVERNANCE.md`](FUTURE_EVOLUTION_GOVERNANCE.md)。
 
 Coding Agent 竞品能力吸收、持久 Goal、无人值守预授权和模型推理策略分别以 [`AGENT_COMPETITIVE_DESIGN.md`](AGENT_COMPETITIVE_DESIGN.md)、[`AUTO_AUTHORIZATION.md`](AUTO_AUTHORIZATION.md) 与 [`MODEL_REASONING_POLICY.md`](MODEL_REASONING_POLICY.md) 为实现基线。
