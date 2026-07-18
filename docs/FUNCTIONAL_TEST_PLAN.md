@@ -175,6 +175,9 @@ ID / 标题 / 优先级 / 前置条件
 | EXT-035 | Skill 事件订阅授权 | Manifest 声明任一 `onEvent:*` 必须同时声明 `subscribe-events`；缺失 Capability 在安装验证阶段拒绝，授权精确绑定包含该 Capability 的版本 | P0 |
 | EXT-036 | Skill Runtime Event 自动调度 | Activated Skill 仅订阅 Manifest 中 `onEvent:*` 的精确事件类型；独立 32 项队列、串行 Worker 调度，事件以版本化 JSON 输入传入且不暴露 Event Bus | P0 |
 | EXT-037 | Skill 事件会话生命周期 | 停用、升级、回滚、Host 重建、Safe Mode 或 Worker 故障撤销订阅并取消在途 Worker/Provider；旧线程迟到退出不得删除替代会话 | P0 |
+| EXT-038 | Skill Agent Tool Manifest 门禁 | Tool ID 必须属于 Skill 命名空间，Schema 与元数据有界，映射命令必须在精确 `commandAllowlist`，并要求独立 `contribute-agent-tools` Capability | P0 |
+| EXT-039 | Skill Agent Tool 风险复核 | Desktop 构建 Registry 时比较 Tool 声明风险与宿主命令真实风险；任何低报、未知命令或 ID 冲突在 Provider/Gateway 前拒绝 | P0 |
+| EXT-040 | Skill Agent Tool 动态执行与撤销 | Activated Tool 出现在 Catalog、Provider allowlist 和独立 Tool 入口，参数绑定批准后只经共享 Capability Gateway 执行；停用、升级、回滚或重建后立即消失 | P0 |
 | EXT-029 | Desktop Skill Agent 回执 | Agent 计划固定使用 `Module + skill:<id> + draft + no-tools`，上下文注入检测、Provider allowlist、Agent History 与用户程序共用生产链路 | P0 |
 | EXT-030 | Skill Command 整批准入 | Worker 计划必须逐项命中精确 `commandAllowlist` 与宿主风险注册；Safe/Low 直接经 Module Gateway 执行，Medium/High 返回完整参数与风险并进入五分钟一次性整批批准；未知、未声明、拒绝、过期或重复批准在任何副作用与 Agent Task 前失败 | P0 |
 | EXT-031 | Skill Command Manifest 授权 | `commandAllowlist` 只接受有界 `safe.*` 标识并要求 `invoke-commands`；升级变更 allowlist 后安装状态回到未授权、停用 | P0 |
@@ -286,6 +289,11 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-057 | Agent 角色切换 | `character.active.switch` 必须绑定实际 Asset ID 批准，只映射到 `safe.character.switch`；仅激活内置或复验通过的 Character，刷新失败回滚原选择，无原生上下文时零状态写入 | P0 |
 | AGT-058 | Agent 程序目录 | `program.catalog.read` 只返回完整性复验通过的已安装程序身份、声明、预算和精确版本授权摘要；损坏项只计数，不暴露源码、安装路径、Worker 路径或系统句柄；普通用户程序不继承该 Agent Capability | P0 |
 | AGT-059 | Agent 已安装程序执行 | `program.installed.execute` 必须绑定 `programId + version` 批准，只映射到 `safe.program.execute`；执行前重验 active 安装、完整性、精确版本和持久授权，仅经隔离 Worker 与 Capability Gateway 执行，无原生上下文时零副作用 | P0 |
+| AGT-060 | 持久 Goal 与 Plan 分离 | Goal 可跨会话恢复，Plan 可演进但不能单独证明 Goal 完成；完成必须关联逐项证据 | P0 |
+| AGT-061 | Auto Mode 权限不扩张 | 自动循环只能在 Capability、Tool、数据、费用、时间、步骤和并发预算交集内推进，不能借 `--yes` 绕过写入或数据出境确认 | P0 |
+| AGT-062 | Checkpoint 安全恢复 | 恢复保留任务因果、预算和结果摘要，但旧批准证明、原生句柄与版本已变化的工具租约必须失效 | P0 |
+| AGT-063 | 上下文压缩可追溯 | 压缩前后保留 Goal、约束、未完成项、关键证据和来源引用；不可信正文不能被提升为系统约束 | P0 |
+| AGT-064 | 多 Agent 权限与预算继承 | 子 Agent 继承 Trace、最小 Tool allowlist 和父级剩余预算，不能重置深度、费用或主动性，也不能读取兄弟任务私有上下文 | P0 |
 | AGT-060 | Agent 自动化定义验证 | `automation.definition.validate` 仅接受对象定义、事件类型和对象事件数据；经专用 Agent Gateway Query 调用自动化 Dry-run，返回计划或不匹配状态且尝试次数为零，不创建确认项、不调用 Command Backend；普通用户程序不继承该能力 | P0 |
 | AGT-061 | 用户程序创建模块 Agent 任务 | 未声明 `invoke-agent-tasks` 时在 Provider 前拒绝；精确版本授权后固定使用 `Module` Origin、`program:<id>` requester、`draft`、空 Tool Allowlist 与宿主预算，结果进入回执和 Agent History | P0 |
 | AGT-062 | 用户程序不可信 Context Admission | `context[]` 计入统一 32 操作预算并通过共享来源、段数、字节和注入检测；Prompt Injection 不进入 Provider/History，诊断只含来源类别及 Trace/Module/Execution 关联 ID | P0 |

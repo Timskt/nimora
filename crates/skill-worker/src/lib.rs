@@ -183,6 +183,7 @@ mod tests {
             command_allowlist: BTreeSet::from(["safe.pet.animate".to_owned()]),
             contributions: SkillContributions {
                 commands: Vec::new(),
+                agent_tools: Vec::new(),
                 agent_tasks: true,
             },
         }

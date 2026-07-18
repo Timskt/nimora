@@ -7,7 +7,7 @@ use nimora_agent_runtime::{
     CancellationFlag, DataClassification, DeterministicLocalProvider, PlannedToolCall,
     ProviderExecutionContext, ProviderMessage, ProviderMessageRole, ProviderRegistry,
     ProviderResponse, ProviderStepInput, ProviderStepOutcome, ProviderToolTurn, ToolAdmission,
-    ToolApproval, ToolInvocation, ToolStepOutcome,
+    ToolApproval, ToolDescriptor, ToolEffect, ToolInvocation, ToolRegistry, ToolStepOutcome,
 };
 use nimora_agent_tools::{GatewayToolBackend, production_tool_registry};
 use nimora_asset_installer::{
@@ -68,7 +68,8 @@ use nimora_skill_package::{
     rollback_skill,
 };
 use nimora_skill_runtime::{
-    SkillCapability, SkillError, SkillGrant, SkillHost, SkillManifest, SkillStatus,
+    SkillAgentToolEffect, SkillCapability, SkillError, SkillGrant, SkillHost, SkillManifest,
+    SkillStatus,
 };
 use nimora_user_code_gateway::{
     CapabilityBackend, CapabilityGateway, CapabilityRequest, CapabilityResponse, GatewayEnvelope,
@@ -1125,7 +1126,7 @@ fn run_live_automation(
         request.event_data,
     )
     .map_err(RuntimeError::from)?;
-    let agent_policy = desktop_automation_agent_policy()?;
+    let agent_policy = desktop_automation_agent_policy(state)?;
     let run_id = Uuid::now_v7();
     state.automation_journal.start(&AutomationRunStart {
         run_id,
@@ -1410,7 +1411,9 @@ impl AutomationAgentContext for DesktopAutomationAgentContext<'_> {
     }
 }
 
-fn desktop_automation_agent_policy() -> Result<AgentTaskGatewayPolicy, DesktopError> {
+fn desktop_automation_agent_policy(
+    state: &DesktopState,
+) -> Result<AgentTaskGatewayPolicy, DesktopError> {
     AgentTaskGatewayPolicy::new(
         AUTOMATION_AGENT_REQUESTER,
         [AgentTaskOrigin::Automation],
@@ -1418,7 +1421,7 @@ fn desktop_automation_agent_policy() -> Result<AgentTaskGatewayPolicy, DesktopEr
             DETERMINISTIC_PROVIDER_ID.to_owned(),
             "provider:ollama-loopback".to_owned(),
         ],
-        production_agent_tool_allowlist()?,
+        production_agent_tool_allowlist(state)?,
         DataClassification::Personal,
         AgentAutonomy::ConfirmEach,
         AgentBudget::default(),
@@ -1707,8 +1710,7 @@ fn agent_catalog(state: State<'_, DesktopState>) -> Result<AgentCatalog, Desktop
 
 fn agent_catalog_inner(state: &DesktopState) -> Result<AgentCatalog, DesktopError> {
     let providers = desktop_provider_registry(state)?;
-    let tools =
-        production_tool_registry().map_err(|error| DesktopError::Agent(error.to_string()))?;
+    let tools = desktop_tool_registry(state)?;
     Ok(AgentCatalog {
         spec: "nimora.desktop-agent-catalog/1",
         providers: providers.descriptors().into_iter().cloned().collect(),
@@ -1860,9 +1862,9 @@ fn run_local_agent_inner(
     }
     let providers = desktop_provider_registry(state)?;
     let now_ms = current_time_ms()?;
-    let task = admit_desktop_agent_task(request.provider_id, now_ms)?;
+    let task = admit_desktop_agent_task(state, request.provider_id, now_ms)?;
     let cancellation = provider_agent_cancellation(state, task.id)?;
-    let tool_allowlist = production_agent_tool_allowlist()?;
+    let tool_allowlist = production_agent_tool_allowlist(state)?;
     let outcome = advance_provider_agent(
         &providers,
         state,
@@ -1905,8 +1907,12 @@ fn desktop_agent_run_result(outcome: ProviderAgentOutcome) -> DesktopAgentRunRes
     }
 }
 
-fn admit_desktop_agent_task(provider_id: String, now_ms: u64) -> Result<AgentTask, DesktopError> {
-    let tool_ids = production_agent_tool_allowlist()?;
+fn admit_desktop_agent_task(
+    state: &DesktopState,
+    provider_id: String,
+    now_ms: u64,
+) -> Result<AgentTask, DesktopError> {
+    let tool_ids = production_agent_tool_allowlist(state)?;
     let policy = AgentTaskGatewayPolicy::new(
         "desktop:local-user",
         [AgentTaskOrigin::Desktop],
@@ -1938,13 +1944,85 @@ fn admit_desktop_agent_task(provider_id: String, now_ms: u64) -> Result<AgentTas
         .map_err(agent_error)
 }
 
-fn production_agent_tool_allowlist() -> Result<BTreeSet<String>, DesktopError> {
-    Ok(production_tool_registry()
-        .map_err(agent_error)?
+fn production_agent_tool_allowlist(state: &DesktopState) -> Result<BTreeSet<String>, DesktopError> {
+    Ok(desktop_tool_registry(state)?
         .descriptors()
         .into_iter()
         .map(|descriptor| descriptor.id.to_string())
         .collect())
+}
+
+fn desktop_tool_registry(state: &DesktopState) -> Result<ToolRegistry, DesktopError> {
+    let mut registry = production_tool_registry().map_err(agent_error)?;
+    for (descriptor, _) in active_skill_agent_tools(state)? {
+        registry.register(descriptor).map_err(agent_error)?;
+    }
+    Ok(registry)
+}
+
+fn active_skill_agent_tools(
+    state: &DesktopState,
+) -> Result<Vec<(ToolDescriptor, String)>, DesktopError> {
+    let host = state
+        .skill_host
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    host.active_contributions()
+        .into_iter()
+        .flat_map(|skill| skill.agent_tools)
+        .map(|tool| {
+            let registered_risk = skill_command_risk(&tool.command)
+                .ok_or_else(|| DesktopError::SkillCommandNotRegistered(tool.command.clone()))?;
+            if command_risk_rank(tool.base_risk) < command_risk_rank(registered_risk) {
+                return Err(DesktopError::Agent(format!(
+                    "Skill tool {} understates its command risk",
+                    tool.id
+                )));
+            }
+            let effect = match tool.effect {
+                SkillAgentToolEffect::ReversibleWrite => ToolEffect::ReversibleWrite,
+                SkillAgentToolEffect::IrreversibleWrite => ToolEffect::IrreversibleWrite,
+                SkillAgentToolEffect::ExternalSideEffect => ToolEffect::ExternalSideEffect,
+            };
+            let descriptor = ToolDescriptor::new(
+                &tool.id,
+                tool.title,
+                tool.description,
+                tool.input_schema,
+                tool.output_schema,
+                tool.base_risk,
+                effect,
+            )
+            .map_err(agent_error)?;
+            Ok((descriptor, tool.command))
+        })
+        .collect()
+}
+
+fn command_risk_rank(risk: CommandRisk) -> u8 {
+    match risk {
+        CommandRisk::Safe => 0,
+        CommandRisk::Low => 1,
+        CommandRisk::Medium => 2,
+        CommandRisk::High => 3,
+        CommandRisk::Critical => 4,
+    }
+}
+
+fn desktop_tool_backend(
+    state: &DesktopState,
+    task_id: Uuid,
+    trace_id: Uuid,
+) -> Result<GatewayToolBackend<DesktopCapabilityBackend<'_>>, DesktopError> {
+    let contributed_commands = active_skill_agent_tools(state)?
+        .into_iter()
+        .map(|(descriptor, command)| (descriptor.id.to_string(), command))
+        .collect();
+    Ok(GatewayToolBackend::new(
+        DesktopCapabilityBackend { state },
+        GatewayToolBackend::<DesktopCapabilityBackend<'_>>::standard_policy(task_id, trace_id),
+    )
+    .with_contributed_commands(contributed_commands))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1965,7 +2043,7 @@ fn advance_provider_agent(
         task_id,
         retain: false,
     };
-    let tools = production_tool_registry().map_err(agent_error)?;
+    let tools = desktop_tool_registry(state)?;
     let coordinator = AgentCoordinator::new(providers, &tools);
     let now_ms = current_time_ms()?;
     let outcome = coordinator
@@ -2085,12 +2163,9 @@ fn execute_ready_provider_tools(
     now_ms: u64,
     tool_allowlist: &BTreeSet<String>,
 ) -> Result<Vec<(PlannedToolCall, CommandRisk)>, DesktopError> {
-    let tools = production_tool_registry().map_err(agent_error)?;
+    let tools = desktop_tool_registry(state)?;
     let coordinator = AgentCoordinator::new(providers, &tools);
-    let backend = GatewayToolBackend::new(
-        DesktopCapabilityBackend { state },
-        GatewayToolBackend::<DesktopCapabilityBackend<'_>>::standard_policy(task.id, task.trace_id),
-    );
+    let backend = desktop_tool_backend(state, task.id, task.trace_id)?;
     let mut confirmations = Vec::new();
     for call in calls {
         if !tool_allowlist.contains(call.invocation.tool_id.as_str()) {
@@ -2215,11 +2290,11 @@ fn prepare_agent_tool_inner(
     if state.safety.snapshot()?.mode == RuntimeMode::Safe {
         return Err(DesktopError::SafeModeActive);
     }
-    let tools = production_tool_registry().map_err(agent_error)?;
+    let tools = desktop_tool_registry(state)?;
     let providers = ProviderRegistry::default();
     let coordinator = AgentCoordinator::new(&providers, &tools);
     let now_ms = current_time_ms()?;
-    let mut task = admit_desktop_agent_task(DETERMINISTIC_PROVIDER_ID.to_owned(), now_ms)?;
+    let mut task = admit_desktop_agent_task(state, DETERMINISTIC_PROVIDER_ID.to_owned(), now_ms)?;
     task.transition(AgentTaskStatus::Planning, now_ms)
         .map_err(agent_error)?;
     let invocation =
@@ -2231,13 +2306,7 @@ fn prepare_agent_tool_inner(
         | ToolAdmission::ConfirmationRequired { effective_risk, .. } => effective_risk,
     };
     if matches!(admission, ToolAdmission::Ready { .. }) {
-        let backend = GatewayToolBackend::new(
-            DesktopCapabilityBackend { state },
-            GatewayToolBackend::<DesktopCapabilityBackend<'_>>::standard_policy(
-                task.id,
-                task.trace_id,
-            ),
-        );
+        let backend = desktop_tool_backend(state, task.id, task.trace_id)?;
         let ToolStepOutcome::Completed { output, .. } = coordinator
             .tool_step(&mut task, &backend, invocation.clone(), None, now_ms)
             .map_err(agent_error)?
@@ -2407,7 +2476,7 @@ fn confirm_agent_tool_with_registry(
             "pending Agent tool confirmation expired".to_owned(),
         ));
     }
-    let tools = production_tool_registry().map_err(agent_error)?;
+    let tools = desktop_tool_registry(state)?;
     let coordinator = AgentCoordinator::new(providers, &tools);
     let automation_task_id = automation_agent_task_id(&pending.context)?;
     let result = match pending.context.clone() {
@@ -2442,10 +2511,7 @@ fn confirm_standalone_agent_tool(
     mut task: AgentTask,
     now_ms: u64,
 ) -> Result<(AgentToolResult, Option<ProviderAgentOutcome>), DesktopError> {
-    let backend = GatewayToolBackend::new(
-        DesktopCapabilityBackend { state },
-        GatewayToolBackend::<DesktopCapabilityBackend<'_>>::standard_policy(task.id, task.trace_id),
-    );
+    let backend = desktop_tool_backend(state, task.id, task.trace_id)?;
     let ToolStepOutcome::Completed { output, .. } = coordinator
         .tool_step(
             &mut task,
@@ -2506,13 +2572,7 @@ fn confirm_provider_agent_tool(
             None,
         ));
     }
-    let backend = GatewayToolBackend::new(
-        DesktopCapabilityBackend { state },
-        GatewayToolBackend::<DesktopCapabilityBackend<'_>>::standard_policy(
-            session_guard.task.id,
-            session_guard.task.trace_id,
-        ),
-    );
+    let backend = desktop_tool_backend(state, session_guard.task.id, session_guard.task.trace_id)?;
     let approvals = std::mem::take(&mut session_guard.approvals);
     let mut confirmed_output = None;
     for approved in approvals.into_iter().flatten() {
@@ -6959,14 +7019,14 @@ mod tests {
         approve_skill_execution_inner, automation_agent_messages, cancel_agent_task_inner,
         cancel_all_pending_agent_tools, cancel_automation_run_inner, cancel_skill_execution_inner,
         confirm_agent_tool_inner, confirm_agent_tool_with_registry, current_time_ms,
-        default_agent_model, default_agent_provider_id, diagnostic_report, dispatch_skill_commands,
-        ensure_normal_mode, ensure_program_permissions, ensure_user_program_agent_capability,
-        finish_skill_event_session, inspect_asset_catalog, install_gltf_character,
-        open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
-        permission_grant, persist_active_character, prepare_agent_tool_inner,
-        reject_agent_tool_inner, resolve_active_character, resolve_character_renderer,
-        run_live_automation, run_local_agent_inner, run_skill_agent_task,
-        run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
+        default_agent_model, default_agent_provider_id, desktop_tool_registry, diagnostic_report,
+        dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
+        ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
+        install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
+        parse_user_program_plan, permission_grant, persist_active_character,
+        prepare_agent_tool_inner, reject_agent_tool_inner, resolve_active_character,
+        resolve_character_renderer, run_live_automation, run_local_agent_inner,
+        run_skill_agent_task, run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
         skill_capability_names, skill_event_types, stop_skill_event_sessions, test_automation,
         user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
         validate_requested_animation_map,
@@ -6992,14 +7052,14 @@ mod tests {
         SkillExecutionHistoryStatus, SkillStateRecord, SqliteAutomationJournal,
         SqliteProgramPermissionRepository,
     };
-    use nimora_runtime_core::{Event, EventSource, Position, RuntimeMode};
+    use nimora_runtime_core::{CommandRisk, Event, EventSource, Position, RuntimeMode};
     use nimora_skill_host::{
         SkillAgentTaskRequest, SkillCommandRequest, SkillContextSegment, SkillExecutionOutput,
     };
     use nimora_skill_package::install_skill_atomically;
     use nimora_skill_runtime::{
-        SkillCapability, SkillContributions, SkillGrant, SkillManifest, SkillStatus,
-        validate_manifest,
+        SkillAgentToolContribution, SkillAgentToolEffect, SkillCapability, SkillContributions,
+        SkillGrant, SkillManifest, SkillStatus, validate_manifest,
     };
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
@@ -9084,6 +9144,178 @@ mod tests {
                 "runtime.profile.changed".to_owned(),
             ])
         );
+    }
+
+    fn activate_test_skill_agent_tool(state: &DesktopState) -> &'static str {
+        let skill_id = "studio.example.agent-tools";
+        let capabilities = BTreeSet::from([
+            SkillCapability::ContributeAgentTools,
+            SkillCapability::InvokeCommands,
+        ]);
+        let manifest = SkillManifest {
+            spec: nimora_skill_runtime::SKILL_SPEC.to_owned(),
+            id: skill_id.to_owned(),
+            version: "1.0.0".to_owned(),
+            publisher: "studio.example".to_owned(),
+            entrypoint: "main.js".to_owned(),
+            capabilities: capabilities.clone(),
+            activation_events: BTreeSet::new(),
+            command_allowlist: BTreeSet::from(["safe.pet.animate".to_owned()]),
+            contributions: SkillContributions {
+                commands: Vec::new(),
+                agent_tools: vec![SkillAgentToolContribution {
+                    id: format!("{skill_id}.wave"),
+                    title: "Wave through Skill".to_owned(),
+                    description: "Plays a validated wave through the shared Capability Gateway."
+                        .to_owned(),
+                    command: "safe.pet.animate".to_owned(),
+                    input_schema: json!({
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["action"],
+                        "properties": {"action": {"type": "string"}}
+                    }),
+                    output_schema: json!({"type": "object"}),
+                    base_risk: CommandRisk::Low,
+                    effect: SkillAgentToolEffect::ReversibleWrite,
+                }],
+                agent_tasks: false,
+            },
+        };
+        let mut host = state.skill_host.lock().expect("Skill Host");
+        host.install(validate_manifest(manifest).expect("valid Skill"))
+            .expect("install Skill");
+        host.authorize(SkillGrant {
+            skill_id: skill_id.to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities,
+        })
+        .expect("authorize Skill");
+        host.activate(skill_id).expect("activate Skill");
+        skill_id
+    }
+
+    #[test]
+    fn activated_skill_agent_tool_joins_registry_executes_and_revokes() {
+        let (root, state) = normal_desktop_state();
+        let skill_id = activate_test_skill_agent_tool(&state);
+
+        let registry = desktop_tool_registry(&state).expect("dynamic Tool Registry");
+        assert!(
+            registry
+                .descriptors()
+                .iter()
+                .any(|descriptor| descriptor.id.as_str() == format!("{skill_id}.wave"))
+        );
+        let prepared = prepare_agent_tool_inner(
+            PrepareAgentToolRequest {
+                tool_id: format!("{skill_id}.wave"),
+                arguments: json!({"action": "celebrate"}),
+            },
+            &state,
+        )
+        .expect("prepare contributed tool");
+        assert!(prepared.requires_confirmation);
+        let (completed, continuation) = confirm_agent_tool_with_registry(
+            &ResolveAgentToolRequest {
+                invocation_id: prepared.invocation.invocation_id,
+            },
+            &state,
+            &ProviderRegistry::default(),
+        )
+        .expect("execute contributed tool");
+        assert!(completed.output.is_some());
+        assert!(continuation.is_none());
+
+        state
+            .runtime
+            .play_action(PetAction::Idle)
+            .expect("reset pet state");
+        let snapshot_before_revocation = state.runtime.snapshot().expect("pet snapshot");
+        let revoked = prepare_agent_tool_inner(
+            PrepareAgentToolRequest {
+                tool_id: format!("{skill_id}.wave"),
+                arguments: json!({"action": "celebrate"}),
+            },
+            &state,
+        )
+        .expect("prepare tool before revocation");
+
+        state
+            .skill_host
+            .lock()
+            .expect("Skill Host")
+            .suspend(skill_id)
+            .expect("suspend Skill");
+        assert!(
+            desktop_tool_registry(&state)
+                .expect("revoked Tool Registry")
+                .descriptors()
+                .iter()
+                .all(|descriptor| descriptor.id.as_str() != format!("{skill_id}.wave"))
+        );
+        assert!(
+            confirm_agent_tool_with_registry(
+                &ResolveAgentToolRequest {
+                    invocation_id: revoked.invocation.invocation_id,
+                },
+                &state,
+                &ProviderRegistry::default(),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            state.runtime.snapshot().expect("pet snapshot"),
+            snapshot_before_revocation
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn skill_agent_tool_cannot_understate_registered_command_risk() {
+        let (root, state) = normal_desktop_state();
+        let skill_id = "studio.example.risk";
+        let capabilities = BTreeSet::from([
+            SkillCapability::ContributeAgentTools,
+            SkillCapability::InvokeCommands,
+        ]);
+        let manifest = SkillManifest {
+            spec: nimora_skill_runtime::SKILL_SPEC.to_owned(),
+            id: skill_id.to_owned(),
+            version: "1.0.0".to_owned(),
+            publisher: "studio.example".to_owned(),
+            entrypoint: "main.js".to_owned(),
+            capabilities: capabilities.clone(),
+            activation_events: BTreeSet::new(),
+            command_allowlist: BTreeSet::from(["safe.profile.switch".to_owned()]),
+            contributions: SkillContributions {
+                commands: Vec::new(),
+                agent_tools: vec![SkillAgentToolContribution {
+                    id: format!("{skill_id}.switch"),
+                    title: "Switch profile".to_owned(),
+                    description: "Attempts to switch the active profile.".to_owned(),
+                    command: "safe.profile.switch".to_owned(),
+                    input_schema: json!({"type": "object"}),
+                    output_schema: json!({"type": "object"}),
+                    base_risk: CommandRisk::Low,
+                    effect: SkillAgentToolEffect::ReversibleWrite,
+                }],
+                agent_tasks: false,
+            },
+        };
+        let mut host = state.skill_host.lock().expect("Skill Host");
+        host.install(validate_manifest(manifest).expect("valid Skill"))
+            .expect("install Skill");
+        host.authorize(SkillGrant {
+            skill_id: skill_id.to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities,
+        })
+        .expect("authorize Skill");
+        host.activate(skill_id).expect("activate Skill");
+        drop(host);
+        assert!(desktop_tool_registry(&state).is_err());
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]

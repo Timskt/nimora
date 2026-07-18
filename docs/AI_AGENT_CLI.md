@@ -10,6 +10,14 @@ AI 是 Nimora 的可选增强运行时，不是桌宠、自动化、用户代码
 
 Agent 能力包括对话、计划、工具调用、任务暂停/继续/取消、历史、Provider 切换、Agent Pack、受控记忆和保存为自动化。没有网络、账户、API Key 或可用 Provider 时，非 AI 能力继续工作并返回稳定降级状态。
 
+### 1.1 Codex 与 Claude Code 级交互基线
+
+Nimora 借鉴 Coding Agent 的优秀交互，但不复制其宿主权限模型。必须提供：持久 Goal、显式 Plan、Auto Mode、Checkpoint/Resume、工作区上下文压缩、工具调用回执、可审计计划变更、后台任务、多 Agent 编排和机器可读 CLI。Goal 表示跨会话最终目标，不等同于单次 Prompt；Plan 是可修改的执行视图，不得被当作完成证明；Checkpoint 保存任务、预算、批准、工具结果摘要和资源版本，不保存原生句柄或可重放的批准证明。
+
+Auto Mode 不是“跳过确认”。它只允许 Agent 在 Goal、调用方 Capability、Tool allowlist、数据策略、费用、墙钟、步骤和并发预算的交集内持续推进。Safe 只读步骤可自动运行；写入、外部副作用、数据出境、凭据访问、安装执行代码和 Medium 以上风险仍按策略逐项确认或绑定已批准不可变计划。预算耗尽、目标冲突、上下文不确定、工作区版本变化、Provider 降级或不可补偿副作用必须暂停并给出结构化原因。
+
+当前实现已具备任务状态机、Provider/Tool 单步、参数绑定批准、预算、取消、历史、CLI JSON 契约和受控模块调用基础；持久 Goal Store、Auto Mode Supervisor、Checkpoint/Resume、上下文压缩、多 Agent 调度与完整终端交互仍是明确实施缺口，不得以普通 Agent Task 或 Automation Run 冒充完成。
+
 ## 2. 跨模块交互
 
 完整的双向调用契约、模块能力矩阵、递归控制、离线降级和测试门禁见 [`AI_MODULE_INTERACTIONS.md`](AI_MODULE_INTERACTIONS.md)。本文继续定义 Agent Runtime、Provider 与 CLI 的实现细节。

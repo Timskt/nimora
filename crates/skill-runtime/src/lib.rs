@@ -1,4 +1,6 @@
+use nimora_runtime_core::CommandRisk;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ffi::OsStr;
 use std::path::Path;
@@ -8,6 +10,8 @@ pub const SKILL_SPEC: &str = "nimora.skill/1";
 const MAX_CAPABILITIES: usize = 64;
 const MAX_ACTIVATION_EVENTS: usize = 64;
 const MAX_COMMANDS: usize = 128;
+const MAX_AGENT_TOOLS: usize = 32;
+const MAX_TOOL_SCHEMA_BYTES: usize = 16 * 1024;
 const MAX_COMMAND_ALLOWLIST: usize = 64;
 const CRASH_WINDOW_MS: u64 = 5 * 60 * 1_000;
 const CRASH_QUARANTINE_THRESHOLD: usize = 3;
@@ -17,6 +21,7 @@ const CRASH_QUARANTINE_THRESHOLD: usize = 3;
 pub enum SkillCapability {
     InvokeAgentTasks,
     InvokeCommands,
+    ContributeAgentTools,
     StoreLocalData,
     SubscribeEvents,
 }
@@ -45,7 +50,30 @@ pub struct SkillContributions {
     #[serde(default)]
     pub commands: Vec<SkillCommandContribution>,
     #[serde(default)]
+    pub agent_tools: Vec<SkillAgentToolContribution>,
+    #[serde(default)]
     pub agent_tasks: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillAgentToolEffect {
+    ReversibleWrite,
+    IrreversibleWrite,
+    ExternalSideEffect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkillAgentToolContribution {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub command: String,
+    pub input_schema: Value,
+    pub output_schema: Value,
+    pub base_risk: CommandRisk,
+    pub effect: SkillAgentToolEffect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +121,7 @@ pub struct ActiveSkill {
     pub id: String,
     pub version: String,
     pub commands: Vec<SkillCommandContribution>,
+    pub agent_tools: Vec<SkillAgentToolContribution>,
     pub can_invoke_agent_tasks: bool,
 }
 
@@ -163,6 +192,7 @@ pub fn validate_manifest(manifest: SkillManifest) -> Result<ValidatedSkillManife
         || manifest.activation_events.len() > MAX_ACTIVATION_EVENTS
         || manifest.command_allowlist.len() > MAX_COMMAND_ALLOWLIST
         || manifest.contributions.commands.len() > MAX_COMMANDS
+        || manifest.contributions.agent_tools.len() > MAX_AGENT_TOOLS
     {
         return Err(SkillError::LimitExceeded);
     }
@@ -191,6 +221,22 @@ pub fn validate_manifest(manifest: SkillManifest) -> Result<ValidatedSkillManife
             return Err(SkillError::InvalidContribution);
         }
     }
+    let mut tool_ids = BTreeSet::new();
+    for tool in &manifest.contributions.agent_tools {
+        if !tool.id.starts_with(&format!("{}.", manifest.id))
+            || !valid_qualified_id(&tool.id)
+            || tool.title.trim().is_empty()
+            || tool.title.len() > 128
+            || tool.description.trim().is_empty()
+            || tool.description.len() > 512
+            || !manifest.command_allowlist.contains(&tool.command)
+            || !valid_tool_schema(&tool.input_schema)
+            || !valid_tool_schema(&tool.output_schema)
+            || !tool_ids.insert(tool.id.as_str())
+        {
+            return Err(SkillError::InvalidContribution);
+        }
+    }
     if ((!manifest.contributions.commands.is_empty() || !manifest.command_allowlist.is_empty())
         && !manifest
             .capabilities
@@ -199,6 +245,10 @@ pub fn validate_manifest(manifest: SkillManifest) -> Result<ValidatedSkillManife
             && !manifest
                 .capabilities
                 .contains(&SkillCapability::InvokeAgentTasks))
+        || (!manifest.contributions.agent_tools.is_empty()
+            && !manifest
+                .capabilities
+                .contains(&SkillCapability::ContributeAgentTools))
         || (manifest
             .activation_events
             .iter()
@@ -435,8 +485,14 @@ fn active_skill(record: &SkillRecord) -> ActiveSkill {
         id: manifest.id.clone(),
         version: manifest.version.clone(),
         commands: manifest.contributions.commands.clone(),
+        agent_tools: manifest.contributions.agent_tools.clone(),
         can_invoke_agent_tasks: manifest.contributions.agent_tasks,
     }
+}
+
+fn valid_tool_schema(schema: &Value) -> bool {
+    schema.is_object()
+        && serde_json::to_vec(schema).is_ok_and(|encoded| encoded.len() <= MAX_TOOL_SCHEMA_BYTES)
 }
 
 fn valid_qualified_id(value: &str) -> bool {
@@ -483,9 +539,12 @@ fn valid_activation_event(value: &str, skill_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        SkillCapability, SkillCommandContribution, SkillContributions, SkillError, SkillGrant,
-        SkillHost, SkillManifest, SkillStatus, validate_manifest,
+        SkillAgentToolContribution, SkillAgentToolEffect, SkillCapability,
+        SkillCommandContribution, SkillContributions, SkillError, SkillGrant, SkillHost,
+        SkillManifest, SkillStatus, validate_manifest,
     };
+    use nimora_runtime_core::CommandRisk;
+    use serde_json::json;
     use std::collections::BTreeSet;
 
     fn manifest() -> SkillManifest {
@@ -509,6 +568,7 @@ mod tests {
                     id: "studio.example.focus.start".to_owned(),
                     title: "Start focus".to_owned(),
                 }],
+                agent_tools: Vec::new(),
                 agent_tasks: true,
             },
         }
@@ -524,6 +584,49 @@ mod tests {
         assert_eq!(
             validate_manifest(invalid),
             Err(SkillError::MissingCapability)
+        );
+    }
+
+    #[test]
+    fn agent_tool_contributions_require_capability_namespace_and_allowlisted_command() {
+        let mut manifest = manifest();
+        manifest
+            .capabilities
+            .insert(SkillCapability::ContributeAgentTools);
+        manifest.contributions.agent_tools = vec![SkillAgentToolContribution {
+            id: "studio.example.focus.start-tool".to_owned(),
+            title: "Start focus tool".to_owned(),
+            description: "Starts the declared focus action through the Capability Gateway."
+                .to_owned(),
+            command: "safe.pet.animate".to_owned(),
+            input_schema: json!({"type": "object"}),
+            output_schema: json!({"type": "object"}),
+            base_risk: CommandRisk::Low,
+            effect: SkillAgentToolEffect::ReversibleWrite,
+        }];
+        assert!(validate_manifest(manifest.clone()).is_ok());
+
+        let mut missing_capability = manifest.clone();
+        missing_capability
+            .capabilities
+            .remove(&SkillCapability::ContributeAgentTools);
+        assert_eq!(
+            validate_manifest(missing_capability),
+            Err(SkillError::MissingCapability)
+        );
+
+        let mut outside_namespace = manifest.clone();
+        outside_namespace.contributions.agent_tools[0].id = "studio.other.tool".to_owned();
+        assert_eq!(
+            validate_manifest(outside_namespace),
+            Err(SkillError::InvalidContribution)
+        );
+
+        let mut undeclared_command = manifest;
+        undeclared_command.contributions.agent_tools[0].command = "safe.pet.move".to_owned();
+        assert_eq!(
+            validate_manifest(undeclared_command),
+            Err(SkillError::InvalidContribution)
         );
     }
 

@@ -7,7 +7,10 @@ use nimora_user_code_gateway::{
     CapabilityResponse, GatewayEnvelope,
 };
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 const PET_STATE_READ: &str = "pet.state.read";
 const PET_ACTION_CATALOG_READ: &str = "pet.action.catalog.read";
@@ -219,6 +222,7 @@ fn program_execute_descriptor() -> Result<ToolDescriptor, AgentRuntimeError> {
 pub struct GatewayToolBackend<B> {
     gateway: CapabilityGateway<B>,
     policy: AgentGatewayPolicy,
+    contributed_commands: BTreeMap<String, String>,
 }
 
 impl<B: CapabilityBackend> GatewayToolBackend<B> {
@@ -227,7 +231,20 @@ impl<B: CapabilityBackend> GatewayToolBackend<B> {
         Self {
             gateway: CapabilityGateway::new(backend),
             policy,
+            contributed_commands: BTreeMap::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_contributed_commands(
+        mut self,
+        contributed_commands: BTreeMap<String, String>,
+    ) -> Self {
+        self.policy
+            .commands
+            .extend(contributed_commands.values().cloned());
+        self.contributed_commands = contributed_commands;
+        self
     }
 
     #[must_use]
@@ -321,7 +338,15 @@ impl<B: CapabilityBackend> ToolBackend for GatewayToolBackend<B> {
                 command: SAFE_PET_MOVE.to_owned(),
                 arguments: invocation.arguments.clone(),
             },
-            _ => return Err("tool has no registered Capability Gateway adapter".to_owned()),
+            _ => {
+                let command = self.contributed_commands.get(&tool_id).ok_or_else(|| {
+                    "tool has no registered Capability Gateway adapter".to_owned()
+                })?;
+                CapabilityRequest::InvokeCommand {
+                    command: command.clone(),
+                    arguments: invocation.arguments.clone(),
+                }
+            }
         };
         let response = self
             .gateway
