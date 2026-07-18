@@ -45,13 +45,15 @@ describe("CapabilityGapPreview", () => {
       finishReason: "stop",
     };
 
-    const markup = renderToStaticMarkup(<CapabilityGapPreview disabled={false} gap={result.capabilityGap!} onSave={() => undefined} result={result} saveNotice={null} />);
+    const markup = renderToStaticMarkup(<CapabilityGapPreview disabled={false} gap={result.capabilityGap!} onSave={() => undefined} onSubmitProposal={() => undefined} result={result} saveNotice={null} />);
     expect(markup).toContain("CAPABILITY GAP · NON-EXECUTABLE");
     expect(markup).toContain("perception.camera.observe");
     expect(markup).toContain("需要平台提案");
     expect(markup).toContain("宿主双重核验");
     expect(markup).toContain("perception.gesture-event");
     expect(markup).toContain("不证明自然语言映射绝对完整");
+    expect(markup).toContain("提交平台能力提案");
+    expect(markup).toContain("不会创建 Handler");
     expect(markup).not.toContain("批准此权限与行为审查");
     expect(markup).not.toContain("原子安装");
     expect(markup).toContain("保存缺口报告");

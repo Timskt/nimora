@@ -196,6 +196,29 @@ describe("desktop platform adapter", () => {
     expect(invoke).toHaveBeenCalledWith("save_capability_gap_command", { request: { workspaceRoot: "/workspace", capabilityGap } });
   });
 
+  it("submits a capability proposal only through the dedicated review command", async () => {
+    const invoke = vi.fn(async () => ({
+      spec: "nimora.capability-proposal-receipt/1",
+      proposalId: "capability-proposal-018f0000-0000-7000-8000-000000000033",
+      relativeFile: ".nimora-proposals/capability-proposal-018f0000-0000-7000-8000-000000000033.json",
+      status: "pending-review",
+    }));
+    const api = createDesktopApi(true, invoke);
+    const capabilityGap = {
+      spec: "nimora.capability-gap/1" as const,
+      title: "Missing camera capability", summary: "No adapter exists.",
+      requestedOutcome: "Observe a gesture.",
+      missingCapabilities: [{ capability: "perception.camera.observe", reason: "No adapter exists.", requiredOperations: ["Produce a gesture event."] }],
+      availableSemanticInputs: ["perception.gesture-request"], requiredSemanticOutputs: ["perception.gesture-event"],
+      closestAlternatives: [], platformProposalRequired: true,
+    };
+
+    const receipt = await api.submitCapabilityProposal("/workspace", capabilityGap);
+
+    expect(receipt.status).toBe("pending-review");
+    expect(invoke).toHaveBeenCalledWith("submit_capability_proposal_command", { request: { workspaceRoot: "/workspace", capabilityGap } });
+  });
+
   it("maps typed calls to the Tauri command contract", async () => {
     const invoke = vi.fn(async (command: string) => command === "delete_agent_history"
       ? { spec: "nimora.desktop-agent-history-delete/1", deleted: 1 }

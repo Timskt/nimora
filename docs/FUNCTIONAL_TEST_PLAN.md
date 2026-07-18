@@ -659,6 +659,9 @@ ID / 标题 / 优先级 / 前置条件
 - Verify 所有 Builder Tool 使用版本化 Schema、Task/Trace ID、截止时间、取消、幂等键、稳定错误码和脱敏审计；Provider 不能覆盖宿主身份。
 - Verify AI 生成的测试报告、自评结论和聊天同意不能推进 `validated`、`approved`、`installed` 或 `activated` 状态。
 - Verify Capability Proposal 只能进入评审队列，不能动态修改当前 Registry、风险等级、安全策略或 Capability Grant。
+- Verify 仅 `platformProposalRequired=true` 的实时复验 Gap 可提交；宿主提交时重建 Catalog 与 Semantic Graph 并重算双计划，前端摘要和旧计划不能成为提案事实。
+- Verify Proposal 使用 `.nimora-proposals/capability-proposal-<uuid>.json` 不可覆盖原子文件，状态固定为 `pending-review`，响应只返回相对路径。
+- Verify Proposal 不含批准凭证、可执行代码、Handler、Grant 或自动 Registry 更新入口；提交按钮与 Draft 审查、批准、安装按钮完全分离。
 - Verify 两个不同 Provider 可从同一 Creator Project 接力，且 Goal、决定、文件追踪、Diff、测试证据、预算和回滚点不丢失或被摘要伪造。
 - Verify Prompt 污染的网页、文档、Schema、模型资产和 Connector 数据保持 Untrusted Data，不能成为 Creator System 指令。
 - Verify 生成、验证、自动修复和 Agent 循环分别受费用、Token、时间、步骤、工具、内存和重试硬上限约束；超限后项目保留最后有效检查点。

@@ -14,6 +14,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 const DRAFTS_DIRECTORY: &str = ".nimora-drafts";
+const PROPOSALS_DIRECTORY: &str = ".nimora-proposals";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,10 +33,31 @@ pub struct CapabilityGapSaveReceipt {
     pub relative_file: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityProposalReceipt {
+    pub spec: &'static str,
+    pub proposal_id: String,
+    pub relative_file: String,
+    pub status: &'static str,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PersistedCapabilityGapReport<'a> {
     spec: &'static str,
+    gap: &'a CapabilityGap,
+    composition_plan: &'a CapabilityCompositionPlan,
+    semantic_composition_plan: &'a SemanticCompositionPlan,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedCapabilityProposal<'a> {
+    spec: &'static str,
+    proposal_id: &'a str,
+    status: &'static str,
+    submitted_at_ms: u64,
     gap: &'a CapabilityGap,
     composition_plan: &'a CapabilityCompositionPlan,
     semantic_composition_plan: &'a SemanticCompositionPlan,
@@ -107,6 +129,71 @@ pub fn save_capability_gap(
     semantic_composition_plan: &SemanticCompositionPlan,
     operation_id: &str,
 ) -> Result<CapabilityGapSaveReceipt, CreatorWorkspaceError> {
+    validate_gap_proof(gap, composition_plan, semantic_composition_plan)?;
+    validate_segment(operation_id)?;
+    let root = validated_workspace_root(workspace_root)?;
+    let drafts_root = root.join(DRAFTS_DIRECTORY);
+    create_or_verify_directory(&drafts_root)?;
+    let report_id = format!("capability-gap-{operation_id}");
+    let file_name = format!("{report_id}.json");
+    let destination = drafts_root.join(&file_name);
+    let bytes = serde_json::to_vec_pretty(&PersistedCapabilityGapReport {
+        spec: "nimora.persisted-capability-gap/2",
+        gap,
+        composition_plan,
+        semantic_composition_plan,
+    })
+    .map_err(|_| CreatorWorkspaceError::Io)?;
+    write_new(&destination, &bytes)?;
+    Ok(CapabilityGapSaveReceipt {
+        spec: "nimora.capability-gap-save/1",
+        report_id,
+        relative_file: format!("{DRAFTS_DIRECTORY}/{file_name}"),
+    })
+}
+
+pub fn submit_capability_proposal(
+    workspace_root: &Path,
+    gap: &CapabilityGap,
+    composition_plan: &CapabilityCompositionPlan,
+    semantic_composition_plan: &SemanticCompositionPlan,
+    operation_id: &str,
+    submitted_at_ms: u64,
+) -> Result<CapabilityProposalReceipt, CreatorWorkspaceError> {
+    validate_gap_proof(gap, composition_plan, semantic_composition_plan)?;
+    if !gap.platform_proposal_required {
+        return Err(CreatorWorkspaceError::InvalidGapProof);
+    }
+    validate_segment(operation_id)?;
+    let root = validated_workspace_root(workspace_root)?;
+    let proposals_root = root.join(PROPOSALS_DIRECTORY);
+    create_or_verify_directory(&proposals_root)?;
+    let proposal_id = format!("capability-proposal-{operation_id}");
+    let file_name = format!("{proposal_id}.json");
+    let bytes = serde_json::to_vec_pretty(&PersistedCapabilityProposal {
+        spec: "nimora.capability-proposal/1",
+        proposal_id: &proposal_id,
+        status: "pending-review",
+        submitted_at_ms,
+        gap,
+        composition_plan,
+        semantic_composition_plan,
+    })
+    .map_err(|_| CreatorWorkspaceError::Io)?;
+    write_new(&proposals_root.join(&file_name), &bytes)?;
+    Ok(CapabilityProposalReceipt {
+        spec: "nimora.capability-proposal-receipt/1",
+        proposal_id,
+        relative_file: format!("{PROPOSALS_DIRECTORY}/{file_name}"),
+        status: "pending-review",
+    })
+}
+
+fn validate_gap_proof(
+    gap: &CapabilityGap,
+    composition_plan: &CapabilityCompositionPlan,
+    semantic_composition_plan: &SemanticCompositionPlan,
+) -> Result<(), CreatorWorkspaceError> {
     validate_capability_gap(gap)?;
     let requested = gap
         .missing_capabilities
@@ -152,7 +239,12 @@ pub fn save_capability_gap(
     {
         return Err(CreatorWorkspaceError::InvalidGapProof);
     }
-    validate_segment(operation_id)?;
+    Ok(())
+}
+
+fn validated_workspace_root(
+    workspace_root: &Path,
+) -> Result<std::path::PathBuf, CreatorWorkspaceError> {
     let root = fs::canonicalize(workspace_root).map_err(|_| CreatorWorkspaceError::InvalidRoot)?;
     if !root.is_dir()
         || fs::symlink_metadata(&root)
@@ -162,24 +254,7 @@ pub fn save_capability_gap(
     {
         return Err(CreatorWorkspaceError::InvalidRoot);
     }
-    let drafts_root = root.join(DRAFTS_DIRECTORY);
-    create_or_verify_directory(&drafts_root)?;
-    let report_id = format!("capability-gap-{operation_id}");
-    let file_name = format!("{report_id}.json");
-    let destination = drafts_root.join(&file_name);
-    let bytes = serde_json::to_vec_pretty(&PersistedCapabilityGapReport {
-        spec: "nimora.persisted-capability-gap/2",
-        gap,
-        composition_plan,
-        semantic_composition_plan,
-    })
-    .map_err(|_| CreatorWorkspaceError::Io)?;
-    write_new(&destination, &bytes)?;
-    Ok(CapabilityGapSaveReceipt {
-        spec: "nimora.capability-gap-save/1",
-        report_id,
-        relative_file: format!("{DRAFTS_DIRECTORY}/{file_name}"),
-    })
+    Ok(root)
 }
 
 fn valid_sha256_digest(value: &str) -> bool {
@@ -324,27 +399,12 @@ mod tests {
         .expect("draft")
     }
 
-    #[test]
-    fn atomically_creates_a_non_overwriting_draft_directory() {
-        let root = fixture_root();
-        let draft = automation_draft();
-        let receipt = save_creator_draft(&root, &draft, "1").expect("save");
-        assert_eq!(receipt.files_written, 2);
-        let destination = root.join(&receipt.relative_directory);
-        assert!(destination.join("nimora-draft.json").is_file());
-        assert!(destination.join("automation.json").is_file());
-        assert_eq!(
-            save_creator_draft(&root, &draft, "2")
-                .unwrap_err()
-                .to_string(),
-            CreatorWorkspaceError::AlreadyExists.to_string()
-        );
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn saves_a_validated_capability_gap_as_an_inert_report() {
-        let root = fixture_root();
+    fn gap_proof_fixture() -> (
+        CapabilityGap,
+        CapabilityCatalogSnapshot,
+        CapabilityCompositionPlan,
+        SemanticCompositionPlan,
+    ) {
         let gap = serde_json::from_value(json!({
             "spec": "nimora.capability-gap/1",
             "title": "Missing camera capability",
@@ -385,6 +445,31 @@ mod tests {
             fully_resolved: false,
             expanded_states: 1,
         };
+        (gap, catalog, plan, semantic_plan)
+    }
+
+    #[test]
+    fn atomically_creates_a_non_overwriting_draft_directory() {
+        let root = fixture_root();
+        let draft = automation_draft();
+        let receipt = save_creator_draft(&root, &draft, "1").expect("save");
+        assert_eq!(receipt.files_written, 2);
+        let destination = root.join(&receipt.relative_directory);
+        assert!(destination.join("nimora-draft.json").is_file());
+        assert!(destination.join("automation.json").is_file());
+        assert_eq!(
+            save_creator_draft(&root, &draft, "2")
+                .unwrap_err()
+                .to_string(),
+            CreatorWorkspaceError::AlreadyExists.to_string()
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn saves_a_validated_capability_gap_as_an_inert_report() {
+        let root = fixture_root();
+        let (gap, catalog, plan, semantic_plan) = gap_proof_fixture();
         let receipt = save_capability_gap(
             &root,
             &gap,
@@ -410,6 +495,46 @@ mod tests {
             .unwrap_err()
             .to_string(),
             CreatorWorkspaceError::Io.to_string()
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn submits_only_required_gaps_to_an_inert_proposal_queue() {
+        let root = fixture_root();
+        let (gap, _, plan, semantic_plan) = gap_proof_fixture();
+        let proposal = submit_capability_proposal(
+            &root,
+            &gap,
+            &plan,
+            &semantic_plan,
+            "018f0000-0000-7000-8000-000000000033",
+            1_726_000_000_000,
+        )
+        .expect("proposal");
+        assert_eq!(proposal.status, "pending-review");
+        let proposal_report: serde_json::Value = serde_json::from_slice(
+            &fs::read(root.join(&proposal.relative_file)).expect("proposal report"),
+        )
+        .expect("proposal JSON");
+        assert_eq!(proposal_report["spec"], "nimora.capability-proposal/1");
+        assert_eq!(proposal_report["status"], "pending-review");
+        assert!(proposal_report.get("approvalId").is_none());
+        assert!(proposal_report.get("executable").is_none());
+        let mut no_proposal_gap = gap.clone();
+        no_proposal_gap.platform_proposal_required = false;
+        assert_eq!(
+            submit_capability_proposal(
+                &root,
+                &no_proposal_gap,
+                &plan,
+                &semantic_plan,
+                "018f0000-0000-7000-8000-000000000034",
+                1_726_000_000_001,
+            )
+            .unwrap_err()
+            .to_string(),
+            CreatorWorkspaceError::InvalidGapProof.to_string()
         );
         fs::remove_dir_all(root).expect("cleanup");
     }

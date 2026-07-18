@@ -9,6 +9,7 @@
 - Desktop 从同一实时 Tool Registry 合并内建契约与当前激活 Skill 的已验证契约；Skill 暂停后图节点立即撤销且摘要变化。Creator 的受信 System Message 只接收实现无关的 Catalog 与 Semantic Graph 快照。
 - Gap Schema 已接收排序、去重、有界的 `availableSemanticInputs/requiredSemanticOutputs` 候选；模型无权声明前置条件已满足。宿主使用固定数据等级、副作用、成本策略和空可信前置事实运行确定性 Graph Planner，若找到完整路径则拒绝模型的伪缺口。
 - Creator 结果同时投影 Exact-ID 与 Semantic Plan；Gap 保存时重新读取实时 Registry 和 Graph、重算双计划，并写入 `nimora.persisted-capability-gap/2`。该证据只覆盖候选语义映射和当前宿主事实，不宣称自然语言理解绝对完备。
+- 经双重复验且明确要求平台扩展的 Gap 可由用户提交为 `nimora.capability-proposal/1`，原子写入 Workspace 的 `.nimora-proposals` 待评审队列；提交时再次重建实时 Catalog/Graph，不信任前端计划。Proposal 没有批准 ID、可执行标志、Handler、Grant 或 Registry 修改路径。
 
 ## 2026-07-18 — Creator Catalog Snapshot 与精确组合核验纵切
 
@@ -24,7 +25,7 @@
 - `creator-draft` 在同一有界 JSON 信任边界解析 Draft 或 Gap，验证字段白名单、文本预算、能力命名、数量、重复项和替代方案；Gap 永远不能进入 Draft 的检查、批准或安装函数。
 - Desktop Host 使用 `outcome`、互斥 `draft/capabilityGap` 投影；Creator Studio 为 Gap 提供独立警示界面，不渲染权限批准、原子安装或 Draft Workspace 保存入口。
 - 用户可将经过复验的 Gap 原子保存为 `.nimora-drafts/capability-gap-<uuid>.json` 项目事实；报告只有结构化数据，无源码、运行 Grant、Secret 或宿主路径回传，Safe/Recovery 下仍可导出恢复资料。
-- Creator Contract 8 项、Desktop Host 129 项、Frontend 42 项测试通过；该纵切当时只实现真实动态 Catalog 的精确 ID 确定性核验，Gap 到 L4 Proposal 的评审工作流仍未实现。
+- Creator Contract 8 项、Desktop Host 131 项、Frontend 43 项测试通过；最初仅有精确 ID 核验，后续已补齐 Semantic Plan 与不可执行 L4 Proposal 提交队列。平台维护者的评审、状态流转与实现项目关联仍未实现。
 
 ## 2026-07-18 — 外接 AI 原生扩展能力面基线
 
