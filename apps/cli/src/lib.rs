@@ -7,6 +7,9 @@ use nimora_agent_runtime::{
     ProviderMessage, ProviderMessageRole, ProviderRegistry, ProviderStepInput, ProviderStepOutcome,
 };
 use nimora_agent_tools::production_tool_registry;
+use nimora_agent_workspace_host::{
+    GitWorkspaceAdapter, WorkspaceScanPolicy, WorkspaceScanner, unix_time_ms,
+};
 use nimora_persistence_sqlite::{
     AgentHistoryRecord, SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
     SqliteAutoModeRepository,
@@ -103,6 +106,7 @@ pub fn run(arguments: &[String]) -> Result<String, CliError> {
         ["ai", "tool", "describe", tool_id] => tool_describe(tool_id)?,
         ["ai", "history", "export", rest @ ..] => history_export(rest)?,
         ["ai", "history", "delete", rest @ ..] => history_delete(rest)?,
+        ["ai", "workspace", "inspect", rest @ ..] => workspace_inspect(rest)?,
         ["ai", "goal", "create", rest @ ..] => goal_create(rest)?,
         ["ai", "goal", "list", rest @ ..] => goal_list(rest)?,
         ["ai", "goal", "show", rest @ ..] => goal_show(rest)?,
@@ -131,6 +135,7 @@ fn help() -> Value {
             "nimora ai run --input <path|-> --output json [--offline] [--history-database <path>] [--sidecar-root <path> --sidecar-manifest-sha256 <digest>]",
             "nimora ai history export --database <path> [--limit <1..200>] [--before-created-at-ms <timestamp> --before-task-id <uuid>]",
             "nimora ai history delete --database <path> (--task-id <uuid>|--all)",
+            "nimora ai workspace inspect --root <path> [--revision <number> --parent-fingerprint <digest>] [--git]",
             "nimora ai goal create --database <path> --input <path|->",
             "nimora ai goal list --database <path> [--limit <1..200>]",
             "nimora ai goal show --database <path> --goal-id <uuid>",
@@ -143,6 +148,72 @@ fn help() -> Value {
             "nimora ai goal auto cancel --database <path> --session-id <uuid>"
         ]
     })
+}
+
+fn workspace_inspect(arguments: &[&str]) -> Result<Value, CliError> {
+    let mut root = None;
+    let mut revision = 1_u64;
+    let mut parent_fingerprint = None;
+    let mut inspect_git = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "--root" if index + 1 < arguments.len() => {
+                root = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--revision" if index + 1 < arguments.len() => {
+                revision = arguments[index + 1]
+                    .parse()
+                    .map_err(|_| CliError::new("usage", "workspace revision is invalid", 2))?;
+                index += 2;
+            }
+            "--parent-fingerprint" if index + 1 < arguments.len() => {
+                parent_fingerprint = Some(arguments[index + 1].to_owned());
+                index += 2;
+            }
+            "--git" => {
+                inspect_git = true;
+                index += 1;
+            }
+            _ => {
+                return Err(CliError::new(
+                    "usage",
+                    "workspace inspect requires --root and optional revision, parent fingerprint, and --git",
+                    2,
+                ));
+            }
+        }
+    }
+    let root = root.ok_or_else(|| CliError::new("usage", "missing --root", 2))?;
+    if revision == 1 && parent_fingerprint.is_some() || revision > 1 && parent_fingerprint.is_none()
+    {
+        return Err(CliError::new(
+            "usage",
+            "workspace parent fingerprint is required exactly when revision is greater than one",
+            2,
+        ));
+    }
+    let scanner = WorkspaceScanner::open(Path::new(root), WorkspaceScanPolicy::default())
+        .map_err(|_| CliError::new("workspace", "cannot open workspace safely", 4))?;
+    let snapshot = scanner
+        .scan(revision, parent_fingerprint, unix_time_ms())
+        .map_err(|_| CliError::new("workspace", "workspace scan failed closed", 4))?;
+    let git = if inspect_git {
+        Some(
+            GitWorkspaceAdapter::open(Path::new(root), Duration::from_secs(5))
+                .and_then(|adapter| adapter.inspect())
+                .map_err(|_| CliError::new("git-workspace", "cannot inspect Git workspace", 4))?,
+        )
+    } else {
+        None
+    };
+    Ok(json!({
+        "spec": "nimora.ai-workspace-inspection/1",
+        "rootFingerprint": scanner.root_fingerprint(),
+        "snapshot": snapshot,
+        "git": git
+    }))
 }
 
 fn history_repository(path: &str) -> Result<SqliteAgentHistoryRepository, CliError> {

@@ -312,6 +312,9 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-081 | 上下文压缩协议完整性 | 压缩必须保留全部可信 System 消息与结构化 Goal/约束/待办/证据 Anchor；Assistant Tool Call 与对应 Tool Result 作为原子单元保留或整体移除，预算不足时拒绝而非截断 | P0 |
 | AGT-082 | Context Cache 隔离与治理 | Cache Key 绑定 Provider、模型、Plan revision、Workspace fingerprint 与压缩消息；TTL 到期不可命中，容量超限按 LRU 淘汰，不允许跨资源版本复用 | P0 |
 | AGT-083 | Workspace 文件版本链 | Snapshot 拒绝绝对路径、逃逸、反斜杠、重复路径、超限文件和篡改指纹；后继 revision 必须绑定父指纹，并稳定输出 Added/Modified/Deleted 和可执行位变化 | P0 |
+| AGT-084 | 宿主安全 Workspace 扫描 | canonical root 下不跟随 symlink，遵循 Git、通用与 Nimora ignore，并受文件数、单文件、总字节、深度和墙钟限制；读取期间 metadata 或文件身份变化 fail-closed | P0 |
+| AGT-085 | Git 工作区版本检查 | 无 Shell 调用读取 HEAD commit/tree、index tree、分支 ahead/behind 以及 staged/unstaged/untracked/conflict；超时、超量输出、非仓库和畸形协议稳定失败 | P0 |
+| AGT-086 | Workspace CLI 信息边界 | `ai workspace inspect` 输出稳定 JSON、相对路径、快照与 Git 指纹，不返回 canonical 绝对根路径；revision 大于一时强制绑定父 fingerprint | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |

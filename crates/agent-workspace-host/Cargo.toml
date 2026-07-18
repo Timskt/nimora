@@ -1,0 +1,20 @@
+[package]
+name = "nimora-agent-workspace-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ignore.workspace = true
+nimora-agent-runtime = { path = "../agent-runtime" }
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+wait-timeout.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -19,6 +19,12 @@ fn temporary_database(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("nimora-cli-{name}-{unique}.sqlite3"))
 }
 
+fn temporary_directory(name: &str) -> PathBuf {
+    let path = temporary_database(name).with_extension("workspace");
+    fs::create_dir_all(&path).expect("temporary directory");
+    path
+}
+
 fn nimora_with_stdin(arguments: &[&str], input: &[u8]) -> Output {
     let mut child = nimora()
         .args(arguments)
@@ -132,6 +138,65 @@ fn invalid_command_has_stable_exit_and_keeps_stdout_empty() {
     let document: Value = serde_json::from_slice(&output.stderr).expect("json error");
     assert_eq!(document["spec"], "nimora.cli-error/1");
     assert_eq!(document["error"], "usage");
+}
+
+#[test]
+fn workspace_inspect_tracks_files_and_git_drift() {
+    let root = temporary_directory("workspace-inspect");
+    let git = |arguments: &[&str]| {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(arguments)
+            .status()
+            .expect("git");
+        assert!(status.success());
+    };
+    git(&["init", "--quiet"]);
+    git(&["config", "user.email", "nimora@example.invalid"]);
+    git(&["config", "user.name", "Nimora Test"]);
+    fs::write(root.join("tracked.txt"), b"one").expect("tracked file");
+    git(&["add", "tracked.txt"]);
+    git(&["commit", "--quiet", "-m", "initial"]);
+    fs::write(root.join("tracked.txt"), b"two").expect("modified file");
+
+    let output = nimora()
+        .args([
+            "ai",
+            "workspace",
+            "inspect",
+            "--root",
+            root.to_str().expect("UTF-8 root"),
+            "--git",
+        ])
+        .output()
+        .expect("inspect workspace");
+    assert!(output.status.success());
+    let document: Value = serde_json::from_slice(&output.stdout).expect("JSON output");
+    assert_eq!(document["spec"], "nimora.ai-workspace-inspection/1");
+    assert_eq!(document["snapshot"]["revision"], 1);
+    assert!(
+        document["snapshot"]["files"]
+            .as_array()
+            .is_some_and(|files| {
+                files
+                    .iter()
+                    .any(|file| file["relativePath"] == "tracked.txt")
+            })
+    );
+    assert!(document["git"]["headCommit"].is_string());
+    assert!(
+        document["git"]["changes"]
+            .as_array()
+            .is_some_and(|changes| changes.iter().any(|change| change == "unstaged"))
+    );
+    assert!(
+        !document["rootFingerprint"]
+            .as_str()
+            .expect("root fingerprint")
+            .contains(root.to_str().expect("UTF-8 root"))
+    );
+    fs::remove_dir_all(root).expect("cleanup");
 }
 
 #[test]
