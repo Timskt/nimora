@@ -223,5 +223,14 @@ Actions 分钟：
 
 - 不足：资产 URL 的 Window、Method、Host、Query、路径解码、活动角色和 Inventory 复验直接依赖 Tauri HTTP 类型，安全规则与原生协议注册无法独立演进。
 - 修正：新增纯数据 `AssetProtocolRequest/Result/Status` 与 Tauri-free `asset_protocol` Application Module；模块自行复验当前 Character 包和唯一 Inventory Entry，不接受调用方注入“已验证”闭包。
+
 - Adapter：Tauri URI Scheme 仅提取 Method/Host/Path/Query 并映射状态码，不拥有授权或文件读取规则；错误响应保持无路径、无内部原因的固定正文。
 - 证据：路径歧义、编码逃逸、错误窗口/Host/Method、Safe Mode、非活动资产、Manifest/Integrity/非入口文件拒绝及真实 GLB 字节读取继续由 Desktop Host 95 项测试覆盖；架构门禁拒绝 Tauri 类型回流。
+
+## M-2026-07-18 Diagnostic Report 应用服务拆分
+
+- 不足：诊断报告规格、运行模式映射、数据保护摘要和隐私声明直接构造在 Tauri 组合根中，未来 CLI/恢复工具复用时容易复制并漂移隐私语义。
+- 修正：新增 Tauri-free `diagnostic_report` Application Module，只消费归一化事实并生成 `nimora.diagnostic-report/1`；宿主仅采集 Safety、Outbox、Backup 和 Journal 投影。
+- 隐私边界：`includes_logs`、用户内容、Secret、文件路径和自动上传全部在单一服务中 fail closed；调用方不能通过输入扩大这些声明。
+- 防回退：架构门禁拒绝该模块引入 Tauri Command、`State` 或 `AppHandle`；独立测试覆盖版本契约、Normal/Recovery/Safe 映射和隐私不变量。
+- 证据：Desktop Host 98 项测试通过；组合根仍超过一万行，Agent、Automation、Skill、Profile 与 Backup 服务拆分仍需继续，不能宣称 R-019 已关闭。

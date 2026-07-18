@@ -88,6 +88,7 @@ async function checkDesktopApplicationModules() {
   const modules = [
     "apps/desktop/src-tauri/src/asset_protocol.rs",
     "apps/desktop/src-tauri/src/asset_selection.rs",
+    "apps/desktop/src-tauri/src/diagnostic_report.rs",
   ];
   for (const relativePath of modules) {
     const source = await readFile(path.join(root, relativePath), "utf8");

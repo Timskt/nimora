@@ -2,6 +2,7 @@ mod asset_protocol;
 mod asset_selection;
 pub mod auto_mode_jobs;
 mod auto_mode_runner;
+mod diagnostic_report;
 
 #[cfg(test)]
 use asset_protocol::parse_asset_protocol_path;
@@ -12,6 +13,9 @@ use asset_selection::{
     ACTIVE_THEME_SPEC, ACTIVE_VOICE_SPEC, BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID, BUILTIN_VOICE_ID,
     CHARACTER_SELECTION, ResolvedAssetSelection, THEME_SELECTION, VOICE_SELECTION,
     persist_asset_selection, resolve_asset_selection,
+};
+use diagnostic_report::{
+    DiagnosticReportFacts, DiagnosticSafetyMode, DiagnosticStartupMode, build_diagnostic_report,
 };
 
 use auto_mode_jobs::{
@@ -54,11 +58,9 @@ use nimora_automation_runtime::{
     AutomationExecutionContext, AutomationRun, RunControl, RunMode, Uncancelled,
 };
 use nimora_diagnostics_bundle::{
-    ApplicationSummary, DataProtectionSummary, DiagnosticBundleError, DiagnosticBundleReceipt,
-    DiagnosticBundleSelection, DiagnosticComponent, DiagnosticContextAdmissionAudit,
-    DiagnosticEvent, DiagnosticEventCode, DiagnosticJournalPolicy, DiagnosticReport,
-    DiagnosticSeverity, DiagnosticSourcesSummary, PersistentDiagnosticJournal, PrivacySummary,
-    RuntimeSummary, SystemSummary, export_diagnostic_bundle,
+    DiagnosticBundleError, DiagnosticBundleReceipt, DiagnosticBundleSelection, DiagnosticComponent,
+    DiagnosticContextAdmissionAudit, DiagnosticEvent, DiagnosticEventCode, DiagnosticJournalPolicy,
+    DiagnosticReport, DiagnosticSeverity, PersistentDiagnosticJournal, export_diagnostic_bundle,
 };
 use nimora_model_importer::{
     ModelProbeReport, ModelProbeRequest, ModelWorkerError, probe_model_in_worker,
@@ -3511,52 +3513,31 @@ fn diagnostic_report(state: &DesktopState) -> Result<DiagnosticReport, DesktopEr
         .len()
         .try_into()
         .map_err(|_| SqlitePersistenceError::InvalidBackupRequest)?;
-    Ok(DiagnosticReport {
-        spec: "nimora.diagnostic-report/1".to_owned(),
+    Ok(build_diagnostic_report(DiagnosticReportFacts {
         generated_at_ms,
-        application: ApplicationSummary {
-            name: "Nimora".to_owned(),
-            version: env!("CARGO_PKG_VERSION").to_owned(),
+        application_version: env!("CARGO_PKG_VERSION").to_owned(),
+        operating_system: std::env::consts::OS.to_owned(),
+        architecture: std::env::consts::ARCH.to_owned(),
+        startup_mode: match state.startup.mode {
+            StartupMode::Normal => DiagnosticStartupMode::Normal,
+            StartupMode::Recovery => DiagnosticStartupMode::Recovery,
         },
-        system: SystemSummary {
-            os: std::env::consts::OS.to_owned(),
-            architecture: std::env::consts::ARCH.to_owned(),
+        startup_reason: state.startup.reason.map(str::to_owned),
+        safety_mode: match safety.mode {
+            RuntimeMode::Normal => DiagnosticSafetyMode::Normal,
+            RuntimeMode::Safe => DiagnosticSafetyMode::Safe,
         },
-        runtime: RuntimeSummary {
-            startup_mode: match state.startup.mode {
-                StartupMode::Normal => "normal",
-                StartupMode::Recovery => "recovery",
-            }
-            .to_owned(),
-            startup_reason: state.startup.reason.map(str::to_owned),
-            safety_mode: match safety.mode {
-                RuntimeMode::Normal => "normal",
-                RuntimeMode::Safe => "safe",
-            }
-            .to_owned(),
-            outbox_pending: outbox.pending,
-            outbox_dead_letter: outbox.dead_letter,
-        },
-        data_protection: DataProtectionSummary {
-            database_schema: u32::try_from(DATABASE_VERSION)
-                .map_err(|_| SqlitePersistenceError::InvalidBackupRequest)?,
-            backup_count: backup_health.available.len() as u64,
-            latest_backup_at_ms: backup_health.latest.map(|record| record.created_at_ms),
-            pending_restore: backup_health.pending_restore.is_some(),
-            last_backup_error: backup_health.last_error.is_some(),
-        },
-        sources: DiagnosticSourcesSummary {
-            event_count,
-            event_retention_days: DiagnosticJournalPolicy::default().retention_days,
-        },
-        privacy: PrivacySummary {
-            includes_logs: false,
-            includes_user_content: false,
-            includes_secrets: false,
-            includes_file_paths: false,
-            automatically_uploaded: false,
-        },
-    })
+        outbox_pending: outbox.pending,
+        outbox_dead_letter: outbox.dead_letter,
+        database_schema: u32::try_from(DATABASE_VERSION)
+            .map_err(|_| SqlitePersistenceError::InvalidBackupRequest)?,
+        backup_count: backup_health.available.len() as u64,
+        latest_backup_at_ms: backup_health.latest.map(|record| record.created_at_ms),
+        pending_restore: backup_health.pending_restore.is_some(),
+        last_backup_error: backup_health.last_error.is_some(),
+        event_count,
+        event_retention_days: DiagnosticJournalPolicy::default().retention_days,
+    }))
 }
 
 #[tauri::command]
