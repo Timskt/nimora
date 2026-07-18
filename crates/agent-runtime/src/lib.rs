@@ -6,6 +6,7 @@ use std::{collections::BTreeMap, fmt, str::FromStr, time::Duration};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod auto_execution;
 mod auto_mode;
 mod coordinator;
 mod deterministic;
@@ -13,6 +14,7 @@ mod goal;
 mod provider;
 mod task_gateway;
 
+pub use auto_execution::{AutoModeTurnError, AutoModeTurnOutcome, AutoModeTurnSupervisor};
 pub use auto_mode::{
     AutoModeError, AutoModePauseReason, AutoModePolicy, AutoModeSession, AutoModeStatus,
     AutoModeStepDecision, AutoModeStepRequest, AutoModeUsage,
@@ -556,6 +558,11 @@ impl<R: ToolRiskEvaluator> ToolRegistry<R> {
         }
         self.descriptors.insert(descriptor.id.clone(), descriptor);
         Ok(())
+    }
+
+    #[must_use]
+    pub fn descriptor(&self, tool_id: &ToolId) -> Option<&ToolDescriptor> {
+        self.descriptors.get(tool_id)
     }
 
     /// Evaluates a concrete invocation before any side effect occurs.
