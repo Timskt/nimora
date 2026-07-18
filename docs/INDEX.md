@@ -26,6 +26,8 @@ AI 与其它模块的双向调用以 [`AI_MODULE_INTERACTIONS.md`](AI_MODULE_INT
 
 Coding Agent 竞品能力吸收、持久 Goal、无人值守预授权和模型推理策略分别以 [`AGENT_COMPETITIVE_DESIGN.md`](AGENT_COMPETITIVE_DESIGN.md)、[`AUTO_AUTHORIZATION.md`](AUTO_AUTHORIZATION.md) 与 [`MODEL_REASONING_POLICY.md`](MODEL_REASONING_POLICY.md) 为实现基线。
 
+阶段性方向校准、偏差纠正、GitHub Actions 分钟复核与下一纵切硬验收统一记录在 [`MILESTONE_REVIEWS.md`](MILESTONE_REVIEWS.md)，不得只存在于对话或提交说明中。
+
 ## 2. 规范用词
 
 - **MUST / 必须**：违反即不兼容或不能发布。

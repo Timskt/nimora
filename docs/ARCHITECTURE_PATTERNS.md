@@ -71,3 +71,17 @@ CI 必须逐步加入依赖方向检查、禁止依赖扫描、协议 Schema Con
 ## 8. 模式决策记录
 
 跨域新模式或依赖方向变化必须新增 ADR，至少记录 Context、Decision、Alternatives、Consequences、Security、Migration 和 Verification。局部重构无需 ADR，但不得违反本文件和 `docs/ARCHITECTURE.md`。模式一旦不再减少耦合，应删除而不是保留“历史包袱”。
+
+## 9. 当前架构不足与强制纠偏
+
+当前方向正确，但还没有达到可长期扩展的完成态，以下不足必须作为架构工作而非普通待办处理：
+
+1. `apps/desktop/src-tauri/src/lib.rs` 同时承担装配、IPC、生命周期、多个领域应用服务和大量测试，已经接近 Modular Monolith 的组合根上限。新增纵切必须优先抽取领域 Application Service 与版本化 DTO 模块，Tauri 层只保留参数翻译、State 获取和错误映射，禁止继续加入跨域业务规则。
+2. `AutoModeLoopService` 已有领域续体，但桌面尚无统一 Job Supervisor。Supervisor 必须管理 Job 身份、Session 唯一性、调度公平、取消传播、退出收敛、休眠恢复和版本化快照；不得用 detached thread 或反复调用同步 Resume Facade 代替。
+3. `AuthorizationGrant` 与推理策略是正确领域模型，但尚未成为所有执行入口的强制 Admission Context。接入前任何“全部权限无人值守”只能描述为设计能力，不能标记已完成。
+4. 当前 Registry/Gateway 边界能阻止明显旁路，但缺少自动架构适应性测试。必须加入禁止模块直连 Provider、禁止扩展依赖 Tauri/SQLite/Node 原生对象、禁止 UI 访问 Repository 的依赖扫描。
+5. 状态、Outbox、Agent History、诊断与审计已经分别可靠，但跨存储删除、导出、保留期和 Trace 一致性尚未形成 Data Lifecycle Coordinator。用户执行“删除记忆/历史”时必须证明缓存、索引、导出与投影同步失效。
+6. Renderer Adapter 支持扩展方向，但 glTF 大包体警告说明前端资源治理尚未闭环。Live2D/VRM/glTF 必须按需加载，并建立 CPU、内存、显存、帧率、首开时间和后台降频预算。
+7. 常规 CI 已节省分钟，但路径过滤和风险驱动平台验证仍需自动生成“建议矩阵”，由里程碑负责人一次触发；不能依赖记忆决定是否跑 macOS/Windows。
+
+每项纠偏都必须包含可执行测试或机器检查。只有文档、接口或空实现不能关闭风险；关闭证据记录到 [`MILESTONE_REVIEWS.md`](MILESTONE_REVIEWS.md) 和 [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md)。
