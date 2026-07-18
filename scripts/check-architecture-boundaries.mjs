@@ -24,12 +24,20 @@ function findForbiddenCargoDependencies(manifest, forbiddenNames) {
   return matches;
 }
 
+function findForbiddenRustHostSymbols(source) {
+  const forbidden = ["tauri::", "use tauri", "State<'", "AppHandle", "#[tauri::command]"];
+  return forbidden.filter((symbol) => source.includes(symbol));
+}
+
 function assertDetectorCoverage() {
   if (!findForbiddenImports('import { invoke } from "@tauri-apps/api/core";', ["@tauri-apps"]).length) {
     throw new Error("architecture detector failed its TypeScript self-check");
   }
   if (!findForbiddenCargoDependencies("rusqlite.workspace = true\n", new Set(["rusqlite"])).length) {
     throw new Error("architecture detector failed its Cargo self-check");
+  }
+  if (!findForbiddenRustHostSymbols("fn command(state: State<'_, Host>) {}\n").length) {
+    throw new Error("architecture detector failed its Rust host-symbol self-check");
   }
 }
 
@@ -76,8 +84,18 @@ async function checkRustLayers() {
   }
 }
 
+async function checkDesktopApplicationModules() {
+  const modules = ["apps/desktop/src-tauri/src/asset_selection.rs"];
+  for (const relativePath of modules) {
+    const source = await readFile(path.join(root, relativePath), "utf8");
+    for (const symbol of findForbiddenRustHostSymbols(source)) {
+      violations.push(`${relativePath} references ${symbol}; application modules must remain Tauri-free`);
+    }
+  }
+}
+
 assertDetectorCoverage();
-await Promise.all([checkDesktopUi(), checkRustLayers()]);
+await Promise.all([checkDesktopUi(), checkRustLayers(), checkDesktopApplicationModules()]);
 
 if (violations.length) {
   console.error("Architecture boundary violations:\n" + violations.map((item) => `- ${item}`).join("\n"));

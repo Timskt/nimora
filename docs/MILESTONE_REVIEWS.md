@@ -202,3 +202,10 @@ Actions 分钟：
 - 修正：UI 文件选择、保存与角色变更事件全部收敛到 `platform/desktop.ts`；Creator Studio 同时开放严格 `.glb/.vrm` 选择，不再让页面持有插件协议或原生事件名。
 - 门禁：新增自验证 `pnpm check:architecture`，检查 UI 原生导入和关键 Rust 层的禁止依赖，并接入本地 `check` 与低成本 Ubuntu CI。
 - 边界：当前实现是确定性文本扫描，不证明传递依赖；后续需基于 Cargo Metadata 与 TypeScript AST 扩展，但新增直接旁路现在会立即失败。
+
+## M-2026-07-18 Desktop 组合根首轮拆分
+
+- 不足：`src-tauri/lib.rs` 超过 11,000 行，资产选择 Policy、存储契约、Safe Mode 解析和原子写与 Tauri IPC 混在同一组合根。
+- 修正：新增 Tauri-free `asset_selection` Application Module，统一拥有 Character、Theme、Voice 的类型化 Policy、持久契约、损坏回退和原子替换；组合根只消费结果并保留资产专属复验与 Renderer 回滚。
+- 防回退：架构门禁自验证后扫描该模块，拒绝 `tauri::`、`State`、`AppHandle` 和命令宏；不使用空 Trait 或兼容转发层。
+- 证据：Desktop Host 95 项真实文件/错误/回退测试保持通过；后续继续拆 DTO、Agent、Skill 和 Asset Application Service，不能将首轮拆分描述为组合根治理完成。

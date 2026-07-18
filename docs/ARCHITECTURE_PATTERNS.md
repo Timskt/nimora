@@ -78,7 +78,7 @@ CI 必须逐步加入依赖方向检查、禁止依赖扫描、协议 Schema Con
 
 当前方向正确，但还没有达到可长期扩展的完成态，以下不足必须作为架构工作而非普通待办处理：
 
-1. `apps/desktop/src-tauri/src/lib.rs` 同时承担装配、IPC、生命周期、多个领域应用服务和大量测试，已经接近 Modular Monolith 的组合根上限。新增纵切必须优先抽取领域 Application Service 与版本化 DTO 模块，Tauri 层只保留参数翻译、State 获取和错误映射，禁止继续加入跨域业务规则。
+1. `apps/desktop/src-tauri/src/lib.rs` 同时承担装配、IPC、生命周期、多个领域应用服务和大量测试，已经超过 Modular Monolith 的组合根上限。资产选择生命周期已先行抽到 Tauri-free `asset_selection` Application Module，并由架构门禁拒绝 `State`、`AppHandle` 与命令宏回流；后续纵切必须继续抽取版本化 DTO 与领域 Application Service，Tauri 层只保留参数翻译、State 获取和错误映射。
 2. `AutoModeLoopService` 已有领域续体，但桌面尚无统一 Job Supervisor。Supervisor 必须管理 Job 身份、Session 唯一性、调度公平、取消传播、退出收敛、休眠恢复和版本化快照；不得用 detached thread 或反复调用同步 Resume Facade 代替。
 3. `AuthorizationGrant` 与推理策略是正确领域模型，但尚未成为所有执行入口的强制 Admission Context。接入前任何“全部权限无人值守”只能描述为设计能力，不能标记已完成。
 4. Registry/Gateway 边界已有首个自动架构适应性门禁：`pnpm check:architecture` 自验证检测器后，拒绝 UI 绕过 `platform/desktop.ts` 导入 Tauri，并拒绝纯领域、Policy、Skill/User Worker 与 Module Adapter 依赖 Tauri、SQLite、HTTP Client 或 Provider Worker。后续仍需升级为基于 Cargo Metadata/TypeScript AST 的传递依赖图和 UI Repository 扫描，不能把当前文本门禁误称为完整证明。
