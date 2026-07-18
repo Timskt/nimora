@@ -1,8 +1,9 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction, PetCareAction } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 import { RendererErrorBoundary } from "./RendererErrorBoundary";
 import { petStatusMessage } from "./petPresentation";
+import { exceedsPetDragThreshold, PET_LONG_PRESS_MS, PET_SINGLE_CLICK_DELAY_MS, type PointerOrigin } from "./petGesture";
 import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
 
 const GltfRenderer = lazy(async () => {
@@ -15,6 +16,14 @@ export function PetOverlay() {
   const [renderer, setRenderer] = useState<CharacterRendererSnapshot | null>(null);
   const [rendererFailed, setRendererFailed] = useState(false);
   const [message, setMessage] = useState("正在醒来…");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const pointerOrigin = useRef<PointerOrigin | null>(null);
+  const dragging = useRef(false);
+  const suppressClick = useRef(false);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const singleClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const petButton = useRef<HTMLButtonElement | null>(null);
+  const menu = useRef<HTMLDivElement | null>(null);
 
   const refreshRenderer = useCallback(async () => {
     const descriptor = await desktopApi.activeCharacterRenderer();
@@ -82,6 +91,25 @@ export function PetOverlay() {
     };
   }, [refreshRenderer]);
 
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        petButton.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("keydown", closeOnEscape);
+      if (longPressTimer.current) clearTimeout(longPressTimer.current);
+      if (singleClickTimer.current) clearTimeout(singleClickTimer.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (menuOpen) menu.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [menuOpen]);
+
   const handleRendererFailure = useCallback(() => {
     setRendererFailed(true);
     setMessage("角色渲染失败，已使用内置角色");
@@ -132,15 +160,86 @@ export function PetOverlay() {
     setMessage(enabled ? "已开启鼠标穿透，可从托盘恢复" : "可以互动啦");
   }
 
+
+  function clearLongPress() {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    longPressTimer.current = null;
+  }
+
+  function openPetMenu() {
+    setMenuOpen(true);
+    setMessage("想做什么呢？");
+  }
+
+  function handlePointerDown(event: React.PointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) return;
+    setMenuOpen(false);
+    pointerOrigin.current = { clientX: event.clientX, clientY: event.clientY };
+    dragging.current = false;
+    suppressClick.current = false;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    clearLongPress();
+    longPressTimer.current = setTimeout(() => {
+      pointerOrigin.current = null;
+      suppressClick.current = true;
+      openPetMenu();
+    }, PET_LONG_PRESS_MS);
+  }
+
+  function handlePointerMove(event: React.PointerEvent<HTMLButtonElement>) {
+    if (!pointerOrigin.current || dragging.current) return;
+    if (!exceedsPetDragThreshold(pointerOrigin.current, event.clientX, event.clientY)) return;
+    clearLongPress();
+    dragging.current = true;
+    suppressClick.current = true;
+    pointerOrigin.current = null;
+    void drag();
+  }
+
+  function finishPointerGesture() {
+    clearLongPress();
+    pointerOrigin.current = null;
+    dragging.current = false;
+  }
+
+  function handlePetClick(event: React.MouseEvent<HTMLButtonElement>) {
+    if (suppressClick.current) {
+      suppressClick.current = false;
+      return;
+    }
+    if (event.detail >= 2) {
+      if (singleClickTimer.current) clearTimeout(singleClickTimer.current);
+      singleClickTimer.current = null;
+      void play("celebrate");
+      return;
+    }
+    const { screenX, screenY } = event;
+    singleClickTimer.current = setTimeout(() => {
+      singleClickTimer.current = null;
+      void interact(screenX, screenY);
+    }, PET_SINGLE_CLICK_DELAY_MS);
+  }
+
   return (
     <main className="pet-overlay" aria-label="Nimora 桌面宠物">
       <button
+        ref={petButton}
         className="overlay-drag-region"
         type="button"
-        onPointerDown={(event) => {
-          if (event.button === 0) void drag();
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={finishPointerGesture}
+        onPointerCancel={finishPointerGesture}
+        onClick={handlePetClick}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          clearLongPress();
+          suppressClick.current = true;
+          openPetMenu();
         }}
-        aria-label="拖动 Aster"
+        aria-label="与 Aster 互动或拖动"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
       >
         <span className="overlay-status">{message}</span>
         {renderer && renderer.backend !== "built-in" && !rendererFailed ? (
@@ -167,6 +266,15 @@ export function PetOverlay() {
         )}
         <span className="overlay-shadow" aria-hidden="true" />
       </button>
+      {menuOpen ? (
+        <div ref={menu} className="overlay-pet-menu" role="menu" aria-label="宠物菜单">
+          <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("feed"); }}><span>◒</span>喂食</button>
+          <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("play"); }}><span>✧</span>玩耍</button>
+          <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void care("groom"); }}><span>♢</span>梳理</button>
+          <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("sleep"); }}><span>☾</span>休息</button>
+          <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void toggleClickThrough(); }}><span>⌁</span>鼠标穿透</button>
+        </div>
+      ) : null}
       <div className="overlay-actions" aria-label="宠物快捷操作">
         <button type="button" onClick={() => void care("feed")} aria-label="给 Aster 喂食">◒</button>
         <button type="button" onClick={() => void care("play")} aria-label="陪 Aster 玩耍">✧</button>
