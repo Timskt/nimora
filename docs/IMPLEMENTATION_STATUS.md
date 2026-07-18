@@ -1,5 +1,13 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — Provider 推理能力与缓存隔离可信核心
+
+- Provider Descriptor 新增显式、版本化推理能力声明；`auto` 不能伪装为 Provider 具体能力，空集合和非法 Mapping Version 在注册前拒绝。
+- Provider Request 可绑定宿主解析后的 requested/actual/provider value/mapping version；Registry 在 Adapter 与任何计费副作用前复验声明、实际等级和版本，未声明能力、越界等级及版本漂移均失败关闭。
+- Compacted Context 与持久 Context Cache 的内容寻址身份纳入完整推理映射，不同等级、Provider 参数或映射版本不会错误共享缓存；旧无推理上下文保持可读取兼容。
+- Runtime 41 项、Auto Host 20 项、Persistence 79 项以及 Provider Worker 的单元、真实子进程、Ollama/OpenAI-compatible HTTP 契约测试通过。
+- 本纵切是可信核心而非 UI 完成声明；真实 Adapter 映射、Auto Loop 策略解析、持久默认配置、桌面与 CLI 选择器和审计展示仍待后续纵切。
+
 ## 2026-07-19 — 真实桌面启动迁移与 macOS Keychain 演练
 
 - 使用现存真实应用数据库启动 Tauri 时发现 `user_version=1` 数据库缺少后续加入的 `automation_run_journal`，导致 setup hook 崩溃；根因是同一数据库版本内的幂等 Schema Extension 漏项，而不是数据库损坏。

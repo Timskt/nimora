@@ -322,6 +322,9 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-059 | Agent 已安装程序执行 | `program.installed.execute` 必须绑定 `programId + version` 批准，只映射到 `safe.program.execute`；执行前重验 active 安装、完整性、精确版本和持久授权，仅经隔离 Worker 与 Capability Gateway 执行，无原生上下文时零副作用 | P0 |
 | AGT-060 | 持久 Goal 与 Plan 分离 | Goal 可跨会话恢复，Plan 可演进但不能单独证明 Goal 完成；完成必须关联逐项证据 | P0 |
 | AGT-061 | Auto Mode 权限不扩张 | 自动循环只能在 Capability、Tool、数据、费用、时间、步骤和并发预算交集内推进，不能借 `--yes` 绕过写入或数据出境确认 | P0 |
+| AGT-061A | Provider 推理能力声明 | 推理集合非空且不包含 `auto`；Mapping Version 为空、超长或漂移时在 Adapter 调用前失败关闭 | P0 |
+| AGT-061B | 推理请求前置复验 | 未声明能力、actual effort 越界或 Mapping Version 不一致不得调用 Provider、产生网络请求或费用 | P0 |
+| AGT-061C | 推理缓存身份隔离 | 消息、模型、Plan 与 Workspace 相同时，改变 actual effort、Provider value 或 Mapping Version 仍生成不同缓存键且不能命中旧条目 | P0 |
 | AGT-062 | Checkpoint 安全恢复 | 恢复保留任务因果、预算和结果摘要，但旧批准证明、原生句柄与版本已变化的工具租约必须失效 | P0 |
 | AGT-063 | 上下文压缩可追溯 | 压缩前后保留 Goal、约束、未完成项、关键证据和来源引用；不可信正文不能被提升为系统约束 | P0 |
 | AGT-064 | 多 Agent 权限与预算继承 | 子 Agent 继承 Trace、最小 Tool allowlist 和父级剩余预算，不能重置深度、费用或主动性，也不能读取兄弟任务私有上下文 | P0 |

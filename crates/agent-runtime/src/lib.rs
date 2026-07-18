@@ -45,8 +45,8 @@ pub use provider::{
     CancellationFlag, ProviderAdapter, ProviderCapabilities, ProviderCapability,
     ProviderDataPreview, ProviderDescriptor, ProviderError, ProviderErrorKind,
     ProviderExecutionContext, ProviderFinishReason, ProviderLocality, ProviderMessage,
-    ProviderMessageRole, ProviderRegistry, ProviderRequest, ProviderResponse, ProviderToolCall,
-    ProviderUsage,
+    ProviderMessageRole, ProviderReasoningCapabilities, ProviderRegistry, ProviderRequest,
+    ProviderResponse, ProviderToolCall, ProviderUsage,
 };
 pub use reasoning::{
     ModelReasoningPolicy, ReasoningEffort, ReasoningMapping, ReasoningPolicyError,

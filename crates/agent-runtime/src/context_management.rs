@@ -1,4 +1,6 @@
-use crate::{ProviderMessage, ProviderMessageRole, ProviderRequest, ToolDescriptor};
+use crate::{
+    ProviderMessage, ProviderMessageRole, ProviderRequest, ReasoningMapping, ToolDescriptor,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -18,6 +20,8 @@ pub struct ContextAnchor {
     pub evidence: Vec<String>,
     pub workspace_fingerprint: String,
     pub plan_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningMapping>,
 }
 
 impl ContextAnchor {
@@ -87,6 +91,8 @@ pub struct CompactedContext {
     pub model: String,
     pub workspace_fingerprint: String,
     pub plan_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningMapping>,
     pub messages: Vec<ProviderMessage>,
     pub source_message_count: usize,
     pub retained_message_count: usize,
@@ -106,6 +112,7 @@ impl CompactedContext {
             &self.model,
             &self.workspace_fingerprint,
             self.plan_revision,
+            self.reasoning.as_ref(),
             &self.messages,
         )?;
         if self.spec != "nimora.compacted-context/1"
@@ -214,6 +221,7 @@ impl ContextCompactor {
                     model,
                     &anchor.workspace_fingerprint,
                     anchor.plan_revision,
+                    anchor.reasoning.as_ref(),
                     &messages,
                 )?;
                 return Ok(CompactedContext {
@@ -224,6 +232,7 @@ impl ContextCompactor {
                     model: model.to_owned(),
                     workspace_fingerprint: anchor.workspace_fingerprint.clone(),
                     plan_revision: anchor.plan_revision,
+                    reasoning: anchor.reasoning.clone(),
                     source_message_count: source.len(),
                     retained_message_count: messages.len(),
                     dropped_message_count: source
@@ -287,6 +296,7 @@ fn context_cache_key(
     model: &str,
     workspace_fingerprint: &str,
     plan_revision: u64,
+    reasoning: Option<&ReasoningMapping>,
     messages: &[ProviderMessage],
 ) -> Result<String, ContextManagementError> {
     digest_json(&(
@@ -294,6 +304,7 @@ fn context_cache_key(
         model,
         workspace_fingerprint,
         plan_revision,
+        reasoning,
         messages,
     ))
 }
@@ -464,6 +475,7 @@ mod tests {
             evidence: vec!["compile passed".to_owned()],
             workspace_fingerprint: "sha256:workspace".to_owned(),
             plan_revision: 2,
+            reasoning: None,
         }
     }
 
@@ -556,6 +568,7 @@ mod tests {
                 "model:local",
                 "sha256:workspace",
                 1,
+                None,
                 &messages,
             )
             .expect("key");
@@ -567,6 +580,7 @@ mod tests {
                 model: "model:local".to_owned(),
                 workspace_fingerprint: "sha256:workspace".to_owned(),
                 plan_revision: 1,
+                reasoning: None,
                 messages,
                 source_message_count: 0,
                 retained_message_count: 1,
@@ -589,5 +603,71 @@ mod tests {
         cache.insert(three, 2_000).expect("three");
         assert!(cache.get(&two_key, 1_500).is_none());
         assert!(cache.get(&one_key, 2_000).is_none());
+    }
+
+    #[test]
+    fn cache_identity_separates_reasoning_effort_and_mapping_version() {
+        let source = vec![ProviderMessage::text(
+            ProviderMessageRole::User,
+            "Inspect the workspace",
+            DataClassification::Personal,
+            false,
+        )];
+        let policy = ContextCompactionPolicy {
+            max_messages: 8,
+            max_content_bytes: 8 * 1024,
+            retain_recent_units: 2,
+        };
+        let mut low_anchor = anchor();
+        low_anchor.reasoning = Some(
+            ReasoningMapping::new(
+                crate::ReasoningEffort::Low,
+                crate::ReasoningEffort::Low,
+                "low",
+                "mock-mapping/1",
+            )
+            .expect("low mapping"),
+        );
+        let mut high_anchor = low_anchor.clone();
+        high_anchor.reasoning = Some(
+            ReasoningMapping::new(
+                crate::ReasoningEffort::High,
+                crate::ReasoningEffort::High,
+                "high",
+                "mock-mapping/1",
+            )
+            .expect("high mapping"),
+        );
+        let mut version_anchor = low_anchor.clone();
+        version_anchor.reasoning = Some(
+            ReasoningMapping::new(
+                crate::ReasoningEffort::Low,
+                crate::ReasoningEffort::Low,
+                "low",
+                "mock-mapping/2",
+            )
+            .expect("versioned mapping"),
+        );
+        let compact = |anchor: &ContextAnchor| {
+            ContextCompactor
+                .compact(
+                    Uuid::now_v7(),
+                    Uuid::now_v7(),
+                    "provider:local",
+                    "model:local",
+                    &source,
+                    &[],
+                    anchor,
+                    policy,
+                    1_000,
+                )
+                .expect("compact")
+        };
+        let low = compact(&low_anchor);
+        let high = compact(&high_anchor);
+        let versioned = compact(&version_anchor);
+        assert_ne!(low.cache_key, high.cache_key);
+        assert_ne!(low.cache_key, versioned.cache_key);
+        low.validate().expect("low context remains valid");
     }
 }

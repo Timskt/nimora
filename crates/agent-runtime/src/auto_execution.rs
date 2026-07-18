@@ -290,6 +290,7 @@ mod tests {
             1_024,
             ProviderCapabilities {
                 supported: BTreeSet::from([ProviderCapability::StructuredToolCalls]),
+                reasoning: None,
             },
         )
         .expect("provider");

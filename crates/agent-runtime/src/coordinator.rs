@@ -338,6 +338,7 @@ mod tests {
                     ProviderCapability::StructuredToolCalls,
                     ProviderCapability::UsageReporting,
                 ]),
+                reasoning: None,
             },
         )
         .expect("provider descriptor");

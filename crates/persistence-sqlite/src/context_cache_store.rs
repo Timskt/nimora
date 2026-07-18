@@ -615,6 +615,7 @@ mod tests {
                     evidence: vec![],
                     workspace_fingerprint: workspace.to_owned(),
                     plan_revision: 1,
+                    reasoning: None,
                 },
                 ContextCompactionPolicy {
                     max_messages: 4,

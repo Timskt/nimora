@@ -10923,6 +10923,7 @@ mod tests {
                     512,
                     ProviderCapabilities {
                         supported: BTreeSet::from([ProviderCapability::Cancellation]),
+                        reasoning: None,
                     },
                 )
                 .expect("provider descriptor"),
@@ -10966,6 +10967,7 @@ mod tests {
                             ProviderCapability::StructuredToolCalls,
                             ProviderCapability::UsageReporting,
                         ]),
+                        reasoning: None,
                     },
                 )
                 .expect("provider descriptor"),
@@ -10987,6 +10989,7 @@ mod tests {
                             ProviderCapability::StructuredToolCalls,
                             ProviderCapability::UsageReporting,
                         ]),
+                        reasoning: None,
                     },
                 )
                 .expect("provider descriptor"),

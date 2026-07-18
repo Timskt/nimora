@@ -289,6 +289,7 @@ fn context_anchor(turn: &RecoveredAutoModeTurn, constraints: Vec<String>) -> Con
             .collect(),
         workspace_fingerprint: turn.workspace.fingerprint.clone(),
         plan_revision: turn.plan.revision,
+        reasoning: None,
     }
 }
 
@@ -1275,6 +1276,7 @@ mod tests {
             1_024,
             ProviderCapabilities {
                 supported: BTreeSet::from([ProviderCapability::StructuredToolCalls]),
+                reasoning: None,
             },
         )
         .expect("provider descriptor");
@@ -1725,6 +1727,7 @@ mod tests {
             evidence: Vec::new(),
             workspace_fingerprint: recovered.workspace.fingerprint.clone(),
             plan_revision: recovered.plan.revision,
+            reasoning: None,
         };
         let first = service
             .compact_or_load(

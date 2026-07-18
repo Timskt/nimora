@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use thiserror::Error;
 
 const MAX_PROVIDER_VALUE_BYTES: usize = 64;
+const MAX_MAPPING_VERSION_BYTES: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,6 +96,7 @@ pub struct ReasoningMapping {
     pub requested: ReasoningEffort,
     pub actual: ReasoningEffort,
     pub provider_value: String,
+    pub mapping_version: String,
     pub downgraded: bool,
 }
 
@@ -108,15 +110,22 @@ impl ReasoningMapping {
         requested: ReasoningEffort,
         actual: ReasoningEffort,
         provider_value: impl Into<String>,
+        mapping_version: impl Into<String>,
     ) -> Result<Self, ReasoningPolicyError> {
         let provider_value = provider_value.into();
-        if provider_value.trim().is_empty() || provider_value.len() > MAX_PROVIDER_VALUE_BYTES {
+        let mapping_version = mapping_version.into();
+        if provider_value.trim().is_empty()
+            || provider_value.len() > MAX_PROVIDER_VALUE_BYTES
+            || mapping_version.trim().is_empty()
+            || mapping_version.len() > MAX_MAPPING_VERSION_BYTES
+        {
             return Err(ReasoningPolicyError::InvalidMapping);
         }
         Ok(Self {
             requested,
             actual,
             provider_value,
+            mapping_version,
             downgraded: requested != ReasoningEffort::Auto && actual < requested,
         })
     }

@@ -29,6 +29,7 @@ impl DeterministicLocalProvider {
                         ProviderCapability::Cancellation,
                         ProviderCapability::UsageReporting,
                     ]),
+                    reasoning: None,
                 },
             )?,
         })

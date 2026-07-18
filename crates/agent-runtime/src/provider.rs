@@ -1,4 +1,6 @@
-use super::{DataClassification, ToolDescriptor, ToolId, valid_principal};
+use super::{
+    DataClassification, ReasoningEffort, ReasoningMapping, ToolDescriptor, ToolId, valid_principal,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -39,12 +41,47 @@ pub enum ProviderCapability {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderCapabilities {
     pub supported: BTreeSet<ProviderCapability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ProviderReasoningCapabilities>,
 }
 
 impl ProviderCapabilities {
     #[must_use]
     pub fn supports(&self, capability: ProviderCapability) -> bool {
         self.supported.contains(&capability)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderReasoningCapabilities {
+    pub supported_efforts: BTreeSet<ReasoningEffort>,
+    pub mapping_version: String,
+}
+
+impl ProviderReasoningCapabilities {
+    /// Creates a bounded, versioned reasoning capability declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `auto` is advertised as a concrete Provider effort, the set is
+    /// empty, or the mapping version cannot be safely persisted and compared.
+    pub fn new(
+        supported_efforts: BTreeSet<ReasoningEffort>,
+        mapping_version: impl Into<String>,
+    ) -> Result<Self, ProviderError> {
+        let mapping_version = mapping_version.into();
+        if supported_efforts.is_empty()
+            || supported_efforts.contains(&ReasoningEffort::Auto)
+            || mapping_version.trim().is_empty()
+            || mapping_version.len() > 64
+        {
+            return Err(ProviderError::invalid_request());
+        }
+        Ok(Self {
+            supported_efforts,
+            mapping_version,
+        })
     }
 }
 
@@ -188,6 +225,8 @@ pub struct ProviderRequest {
     pub messages: Vec<ProviderMessage>,
     pub tools: Vec<ToolDescriptor>,
     pub max_output_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningMapping>,
 }
 
 impl ProviderRequest {
@@ -239,7 +278,15 @@ impl ProviderRequest {
             messages,
             tools,
             max_output_tokens,
+            reasoning: None,
         })
+    }
+
+    /// Binds an already resolved, auditable reasoning mapping to this exact request.
+    #[must_use]
+    pub fn with_reasoning(mut self, reasoning: ReasoningMapping) -> Self {
+        self.reasoning = Some(reasoning);
+        self
     }
 
     #[must_use]
@@ -476,6 +523,7 @@ impl ProviderRegistry {
         if request.max_output_tokens > descriptor.max_output_tokens {
             return Err(ProviderError::invalid_request());
         }
+        validate_reasoning_request(descriptor, request)?;
         context.timeout = context.timeout.min(Duration::from_mins(10));
         if context.timeout.is_zero() {
             return Err(ProviderError::invalid_request());
@@ -512,6 +560,22 @@ impl ProviderRegistry {
         let mut preview = request.data_preview();
         preview.locality = Some(descriptor.locality);
         Ok(preview)
+    }
+}
+
+fn validate_reasoning_request(
+    descriptor: &ProviderDescriptor,
+    request: &ProviderRequest,
+) -> Result<(), ProviderError> {
+    match (&descriptor.capabilities.reasoning, &request.reasoning) {
+        (_, None) => Ok(()),
+        (Some(capabilities), Some(mapping))
+            if capabilities.supported_efforts.contains(&mapping.actual)
+                && capabilities.mapping_version == mapping.mapping_version =>
+        {
+            Ok(())
+        }
+        (_, Some(_)) => Err(ProviderError::invalid_request()),
     }
 }
 
@@ -647,6 +711,7 @@ mod tests {
                     ProviderCapability::Cancellation,
                     ProviderCapability::UsageReporting,
                 ]),
+                reasoning: None,
             },
         )
         .expect("descriptor")
@@ -761,6 +826,127 @@ mod tests {
                 ProviderErrorKind::OfflineDenied,
                 "network provider is disabled in offline mode"
             ))
+        );
+    }
+
+    #[test]
+    fn reasoning_mapping_is_validated_before_provider_execution() {
+        let mut reasoning_descriptor = descriptor(ProviderLocality::Local);
+        reasoning_descriptor.capabilities.reasoning = Some(
+            ProviderReasoningCapabilities::new(
+                BTreeSet::from([ReasoningEffort::Low, ReasoningEffort::High]),
+                "mock-mapping/1",
+            )
+            .expect("reasoning capabilities"),
+        );
+        let valid_request = request().with_reasoning(
+            ReasoningMapping::new(
+                ReasoningEffort::High,
+                ReasoningEffort::High,
+                "high",
+                "mock-mapping/1",
+            )
+            .expect("reasoning mapping"),
+        );
+        let response = ProviderResponse {
+            spec: "nimora.agent-provider-response/1".to_owned(),
+            request_id: valid_request.request_id,
+            content: "Done".to_owned(),
+            tool_calls: Vec::new(),
+            finish_reason: ProviderFinishReason::Completed,
+            usage: ProviderUsage {
+                input_tokens: 20,
+                output_tokens: 2,
+                cost_microunits: 1,
+            },
+        };
+        let mut registry = ProviderRegistry::default();
+        registry
+            .register(MockProvider {
+                descriptor: reasoning_descriptor,
+                response,
+            })
+            .expect("register");
+        assert!(registry.complete(&valid_request, context(), false).is_ok());
+
+        let stale_mapping = request().with_reasoning(
+            ReasoningMapping::new(
+                ReasoningEffort::High,
+                ReasoningEffort::High,
+                "high",
+                "mock-mapping/0",
+            )
+            .expect("stale mapping"),
+        );
+        assert_eq!(
+            registry
+                .complete(&stale_mapping, context(), false)
+                .expect_err("stale mapping version must fail")
+                .kind,
+            ProviderErrorKind::InvalidRequest
+        );
+
+        let unsupported_effort = request().with_reasoning(
+            ReasoningMapping::new(
+                ReasoningEffort::Maximum,
+                ReasoningEffort::Maximum,
+                "maximum",
+                "mock-mapping/1",
+            )
+            .expect("unsupported mapping"),
+        );
+        assert_eq!(
+            registry
+                .complete(&unsupported_effort, context(), false)
+                .expect_err("unsupported effort must fail")
+                .kind,
+            ProviderErrorKind::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn reasoning_request_requires_explicit_provider_capability() {
+        let request = request().with_reasoning(
+            ReasoningMapping::new(
+                ReasoningEffort::Low,
+                ReasoningEffort::Low,
+                "low",
+                "mock-mapping/1",
+            )
+            .expect("reasoning mapping"),
+        );
+        let response = ProviderResponse {
+            spec: "nimora.agent-provider-response/1".to_owned(),
+            request_id: request.request_id,
+            content: "unused".to_owned(),
+            tool_calls: Vec::new(),
+            finish_reason: ProviderFinishReason::Completed,
+            usage: ProviderUsage {
+                input_tokens: 0,
+                output_tokens: 0,
+                cost_microunits: 0,
+            },
+        };
+        let mut registry = ProviderRegistry::default();
+        registry
+            .register(MockProvider {
+                descriptor: descriptor(ProviderLocality::Local),
+                response,
+            })
+            .expect("register");
+        assert_eq!(
+            registry
+                .complete(&request, context(), false)
+                .expect_err("undeclared reasoning must fail")
+                .kind,
+            ProviderErrorKind::InvalidRequest
+        );
+        assert!(
+            ProviderReasoningCapabilities::new(
+                BTreeSet::from([ReasoningEffort::Auto]),
+                "mock-mapping/1"
+            )
+            .is_err()
         );
     }
 
