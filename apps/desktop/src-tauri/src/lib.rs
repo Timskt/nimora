@@ -60,12 +60,13 @@ use nimora_persistence_sqlite::{
     BackupHealth, BackupPolicy, BackupRecord, ContextCachePolicy, DATABASE_VERSION, OutboxSnapshot,
     ProgramPermissionGrant, ResolveAutoModeAttemptRequest, SkillApprovalJournalEntry,
     SkillApprovalJournalStatus, SkillExecutionHistoryRecord, SkillExecutionHistoryStatus,
-    SkillStateRecord, SqliteAgentHistoryRepository, SqliteAutoModeAttemptResolutionRepository,
-    SqliteAutoModeCheckpointRepository, SqliteAutoModeRepository,
-    SqliteAutoModeTurnAttemptRepository, SqliteAutomationAgentJournal, SqliteAutomationJournal,
-    SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
-    SqliteProgramPermissionRepository, SqliteSkillApprovalJournal, SqliteSkillExecutionHistory,
-    SqliteSkillStateRepository, apply_pending_restore, verify_database_file,
+    SkillStateRecord, SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
+    SqliteAutoModeAttemptResolutionRepository, SqliteAutoModeCheckpointRepository,
+    SqliteAutoModeRepository, SqliteAutoModeTurnAttemptRepository, SqliteAutomationAgentJournal,
+    SqliteAutomationJournal, SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository,
+    SqliteProfileRepository, SqliteProgramPermissionRepository, SqliteSkillApprovalJournal,
+    SqliteSkillExecutionHistory, SqliteSkillStateRepository, apply_pending_restore,
+    verify_database_file,
 };
 use nimora_runtime_app::{
     ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBatch,
@@ -1198,6 +1199,25 @@ struct DesktopAutoModeAttemptDetail {
     next_actions: [&'static str; 2],
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopAutoModeControlCenter {
+    spec: &'static str,
+    entries: Vec<DesktopAutoModeControlEntry>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopAutoModeControlEntry {
+    job: AutoModeJobSnapshot,
+    session: nimora_agent_runtime::AutoModeSession,
+    goal: nimora_agent_runtime::AgentGoal,
+    plan: nimora_agent_runtime::AgentPlan,
+    checkpoint: Option<nimora_agent_runtime::AutoModeCheckpoint>,
+    attempt: Option<AutoModeTurnAttempt>,
+    resolutions: Vec<AutoModeAttemptResolution>,
+}
+
 const fn default_auto_mode_output_tokens() -> u64 {
     512
 }
@@ -2104,6 +2124,55 @@ fn auto_mode_job_history(
     state: State<'_, DesktopState>,
 ) -> Result<Vec<AutoModeJobSnapshot>, DesktopError> {
     state.auto_mode_jobs.snapshots().map_err(agent_error)
+}
+
+fn auto_mode_control_center_inner(
+    state: &DesktopState,
+) -> Result<DesktopAutoModeControlCenter, DesktopError> {
+    let database_path = state
+        .database_path
+        .as_ref()
+        .ok_or_else(|| DesktopError::Agent("Auto Mode persistence is unavailable".to_owned()))?;
+    let sessions = SqliteAutoModeRepository::open(database_path)?;
+    let goals = SqliteAgentGoalRepository::open(database_path)?;
+    let checkpoints = SqliteAutoModeCheckpointRepository::open(database_path)?;
+    let attempts = SqliteAutoModeTurnAttemptRepository::open(database_path)?;
+    let resolutions = SqliteAutoModeAttemptResolutionRepository::open(database_path)?;
+    let mut entries = Vec::new();
+    for job in state.auto_mode_jobs.snapshots().map_err(agent_error)? {
+        let session = sessions.get(job.session_id)?.ok_or_else(|| {
+            DesktopError::Agent("Auto Mode job has no persisted session".to_owned())
+        })?;
+        let goal_snapshot = goals.get(session.goal_id)?.ok_or_else(|| {
+            DesktopError::Agent("Auto Mode session has no persisted Goal".to_owned())
+        })?;
+        let plan = goals
+            .get_plan(session.goal_id, session.plan_revision)?
+            .ok_or_else(|| {
+                DesktopError::Agent("Auto Mode session plan revision is unavailable".to_owned())
+            })?;
+        entries.push(DesktopAutoModeControlEntry {
+            checkpoint: checkpoints.get(session.id)?,
+            attempt: attempts.get(session.id)?,
+            resolutions: resolutions.list_for_session(session.id, 100)?,
+            job,
+            session,
+            goal: goal_snapshot.goal,
+            plan,
+        });
+    }
+    Ok(DesktopAutoModeControlCenter {
+        spec: "nimora.desktop-auto-mode-control-center/1",
+        entries,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn auto_mode_control_center(
+    state: State<'_, DesktopState>,
+) -> Result<DesktopAutoModeControlCenter, DesktopError> {
+    auto_mode_control_center_inner(&state)
 }
 
 #[tauri::command]
@@ -7253,6 +7322,7 @@ pub fn run() {
             start_auto_mode_job,
             auto_mode_job_status,
             auto_mode_job_history,
+            auto_mode_control_center,
             auto_mode_attempt_detail,
             resolve_auto_mode_attempt,
             pause_auto_mode_job,
@@ -7456,11 +7526,11 @@ mod tests {
         ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SkillEventSession, StartupMode,
         TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
         UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
-        approve_skill_execution_inner, automation_agent_messages, cancel_agent_task_inner,
-        cancel_all_pending_agent_tools, cancel_automation_run_inner, cancel_skill_execution_inner,
-        confirm_agent_tool_inner, confirm_agent_tool_with_registry, current_time_ms,
-        default_agent_model, default_agent_provider_id, desktop_tool_registry, diagnostic_report,
-        dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
+        approve_skill_execution_inner, auto_mode_control_center_inner, automation_agent_messages,
+        cancel_agent_task_inner, cancel_all_pending_agent_tools, cancel_automation_run_inner,
+        cancel_skill_execution_inner, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
+        current_time_ms, default_agent_model, default_agent_provider_id, desktop_tool_registry,
+        diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
         parse_user_program_plan, permission_grant, persist_active_character,
@@ -7596,6 +7666,18 @@ mod tests {
                 .expect("active")
                 .is_empty()
         );
+        let control_center = auto_mode_control_center_inner(&state).expect("control center");
+        assert_eq!(control_center.entries.len(), 1);
+        assert_eq!(control_center.entries[0].session.id, session.id);
+        assert_eq!(
+            control_center.entries[0].session.status,
+            nimora_agent_runtime::AutoModeStatus::Paused
+        );
+        assert_eq!(control_center.entries[0].goal, goal);
+        assert_eq!(control_center.entries[0].plan, plan);
+        assert!(control_center.entries[0].checkpoint.is_none());
+        assert!(control_center.entries[0].attempt.is_none());
+        assert!(control_center.entries[0].resolutions.is_empty());
         drop(state);
         std::fs::remove_dir_all(root).expect("cleanup");
     }

@@ -140,3 +140,11 @@ Actions 分钟：
 新增需求：
 下一纵切硬验收：
 ```
+
+## M-2026-07-18 Goal/Plan/Job 聚合控制中心
+
+- 纠偏：前端分别查询 Job 与恢复事实会产生竞态，也会错误地把内存投影视为事实源。
+- 修正：新增宿主侧 `auto_mode_control_center` 有界聚合；Session 精确读取其历史 Plan revision，并同时返回 Goal、Checkpoint、Attempt 与不可变 Resolution。
+- UI：Agent 一级工作区新增“对话运行 / 目标控制 / 执行历史”，控制页展示进度、预算边界、Checkpoint、缓存、模型、计划步骤与未知结果风险。
+- 验证：Rust 历史 Plan/重启聚合测试、TypeScript 类型检查和浏览器宽屏截图/语义树通过；720px 响应式规则已落地，浏览器当前未暴露视口切换能力。
+- 后续：补齐真实 Tauri Pause/Cancel/人工对账交互面，随后独立处理 `GltfRenderer` 分包与性能预算。

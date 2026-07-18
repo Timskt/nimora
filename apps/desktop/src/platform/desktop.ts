@@ -136,6 +136,24 @@ export interface DesktopAutoModeAttemptDetail {
   nextActions: AutoModeAttemptResolutionDecision[];
 }
 
+export interface DesktopAutoModeControlCenter {
+  spec: "nimora.desktop-auto-mode-control-center/1";
+  entries: Array<{
+    job: DesktopAutoModeJobSnapshot;
+    session: {
+      id: string; goalId: string; planRevision: number; status: "running" | "paused" | "completed" | "cancelled";
+      pauseReason: string | null; usage: { cycles: number; toolCalls: number; elapsedMs: number; inputTokens: number; outputTokens: number; costMicrounits: number };
+      policy: { maxCycles: number; maxConcurrency: number; budget: { maxSteps: number; maxToolCalls: number; maxElapsedMs: number; maxInputTokens: number; maxOutputTokens: number; maxCostMicrounits: number }; workspaceRevision: string };
+      createdAtMs: number; updatedAtMs: number;
+    };
+    goal: { id: string; title: string; objective: string; status: string; currentPlanRevision: number };
+    plan: { goalId: string; revision: number; summary: string; steps: Array<{ id: string; description: string; status: string }> };
+    checkpoint: ({ sequence: number; model: string; workspaceRevision: string; task: { id: string; status: string; usage: { steps: number; toolCalls: number; inputTokens: number; outputTokens: number; costMicrounits: number } } } & Record<string, unknown>) | null;
+    attempt: DesktopAutoModeAttemptDetail["attempt"];
+    resolutions: DesktopAutoModeAttemptResolution[];
+  }>;
+}
+
 export interface AgentHistoryRecord {
   spec: "nimora.agent-history/1";
   task: { id: string; createdAtMs: number; providerId: string; status: string };
@@ -547,6 +565,7 @@ export interface DesktopApi {
   startAutoModeJob(request: StartAutoModeJobRequest): Promise<DesktopAutoModeJobSnapshot>;
   autoModeJobStatus(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
   autoModeJobHistory(): Promise<DesktopAutoModeJobSnapshot[]>;
+  autoModeControlCenter(): Promise<DesktopAutoModeControlCenter>;
   autoModeAttemptDetail(sessionId: string): Promise<DesktopAutoModeAttemptDetail>;
   resolveAutoModeAttempt(request: {
     sessionId: string; attemptId: string; checkpointSequence: number; requestFingerprint: string;
@@ -807,6 +826,17 @@ export function createDesktopApi(
       async autoModeJobHistory() {
         throw new Error("desktop-host-required");
       },
+      async autoModeControlCenter() {
+        const now = Date.now();
+        const sessionId = "preview-session";
+        return { spec: "nimora.desktop-auto-mode-control-center/1", entries: [{
+          job: { spec: "nimora.desktop-auto-mode-job/1", jobId: "preview-job", sessionId, status: "paused", turnsExecuted: 7, cacheHits: 3, checkpointSequence: 7, pauseReason: "confirmation_required", errorCode: null, startedAtMs: now - 420_000, updatedAtMs: now - 12_000 },
+          session: { id: sessionId, goalId: "preview-goal", planRevision: 2, status: "paused", pauseReason: "confirmation_required", usage: { cycles: 7, toolCalls: 4, elapsedMs: 408_000, inputTokens: 8400, outputTokens: 2100, costMicrounits: 0 }, policy: { maxCycles: 32, maxConcurrency: 1, budget: { maxSteps: 32, maxToolCalls: 16, maxElapsedMs: 3_600_000, maxInputTokens: 64_000, maxOutputTokens: 16_000, maxCostMicrounits: 0 }, workspaceRevision: "git:preview" }, createdAtMs: now - 420_000, updatedAtMs: now - 12_000 },
+          goal: { id: "preview-goal", title: "完善 Nimora 控制中心", objective: "完成安全、可审计的 Agent 长任务体验", status: "active", currentPlanRevision: 2 },
+          plan: { goalId: "preview-goal", revision: 2, summary: "实现聚合控制中心", steps: [{ id: "step-1", description: "聚合运行事实", status: "completed" }, { id: "step-2", description: "等待高风险操作确认", status: "in_progress" }] },
+          checkpoint: { sequence: 7, model: "qwen3:8b", workspaceRevision: "git:preview", task: { id: "preview-task", status: "paused", usage: { steps: 7, toolCalls: 4, inputTokens: 8400, outputTokens: 2100, costMicrounits: 0 } } }, attempt: null, resolutions: [],
+        }] };
+      },
       async autoModeAttemptDetail() {
         throw new Error("desktop-host-required");
       },
@@ -957,6 +987,7 @@ export function createDesktopApi(
     }) as DesktopAutoModeJobSnapshot,
     autoModeJobStatus: async (jobId) => await invokeCommand("auto_mode_job_status", { jobId }) as DesktopAutoModeJobSnapshot,
     autoModeJobHistory: async () => await invokeCommand("auto_mode_job_history") as DesktopAutoModeJobSnapshot[],
+    autoModeControlCenter: async () => await invokeCommand("auto_mode_control_center") as DesktopAutoModeControlCenter,
     autoModeAttemptDetail: async (sessionId) => await invokeCommand("auto_mode_attempt_detail", { sessionId }) as DesktopAutoModeAttemptDetail,
     resolveAutoModeAttempt: async (request) => await invokeCommand("resolve_auto_mode_attempt", { request }) as DesktopAutoModeAttemptResolution,
     pauseAutoModeJob: async (jobId) => await invokeCommand("pause_auto_mode_job", { jobId }) as DesktopAutoModeJobSnapshot,

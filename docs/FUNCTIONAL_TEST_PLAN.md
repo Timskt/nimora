@@ -501,3 +501,11 @@ ID / 标题 / 优先级 / 前置条件
 - Verify stale Session, Attempt, Checkpoint sequence, request fingerprint, non-indeterminate status, replay, invalid actor, and oversized/control-character reason fail with zero partial writes.
 - Verify resolution audit survives database reopen and list bounds reject zero or more than 100 records.
 - Verify browser preview rejects detail and resolution commands with `desktop-host-required`.
+
+## Agent control center aggregation
+
+- Verify a restarted Auto Mode job returns its persisted Session, exact historical Plan revision, Goal, optional Checkpoint/Attempt, immutable Resolutions, and rebuilt Job projection in one response.
+- Verify revising a Goal does not change the Plan shown for an older Session binding.
+- Verify missing Session, Goal, bound Plan revision, corrupt payload, or index/payload divergence fails the entire query without returning partial entries.
+- Verify browser preview labels its deterministic sample as preview data and never permits Pause, Cancel, resolution, Provider, Tool, or filesystem side effects.
+- Verify the three workspace tabs expose accessible names/current state, preserve safe/recovery write restrictions, and remain usable at the 720px layout breakpoint.

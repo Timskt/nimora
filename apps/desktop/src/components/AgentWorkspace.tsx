@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { desktopApi, type AgentCatalog, type AgentHistoryPage, type AgentProviderStatus, type AgentToolResult, type LocalAgentResult } from "../platform/desktop";
+import { desktopApi, type AgentCatalog, type AgentHistoryPage, type AgentProviderStatus, type AgentToolResult, type DesktopAutoModeControlCenter, type LocalAgentResult } from "../platform/desktop";
 
 interface AgentWorkspaceProps {
   safeMode: boolean;
@@ -31,6 +31,8 @@ export function providerStatusLabel(status: AgentProviderStatus | null): string 
 }
 
 export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorkspaceProps) {
+  const [view, setView] = useState<"run" | "control" | "history">("run");
+  const [controlCenter, setControlCenter] = useState<DesktopAutoModeControlCenter | null>(null);
   const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
   const [prompt, setPrompt] = useState("总结一下当前可用的本地能力");
   const [providerId, setProviderId] = useState("provider:deterministic-local");
@@ -49,6 +51,11 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
     void desktopApi.agentCatalog().then(setCatalog).catch(() => onNotice("Agent 工具目录暂时不可用"));
     void desktopApi.agentHistory(5).then(setHistory).catch(() => onNotice("Agent 历史暂时不可用"));
   }, [onNotice]);
+
+  useEffect(() => {
+    if (view !== "control") return;
+    void desktopApi.autoModeControlCenter().then(setControlCenter).catch(() => onNotice("目标控制中心暂时不可用"));
+  }, [view, onNotice]);
 
   async function refreshHistory() {
     setHistory(await desktopApi.agentHistory(5));
@@ -159,7 +166,24 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
     }
   }
 
-  return <section className="agent-workspace" aria-labelledby="agent-heading">
+  const tabs = <nav className="agent-view-tabs" aria-label="Agent 工作区视图">
+    {(["run", "control", "history"] as const).map((item) => <button aria-current={view === item ? "page" : undefined} key={item} onClick={() => setView(item)} type="button">{{ run: "对话运行", control: "目标控制", history: "执行历史" }[item]}</button>)}
+  </nav>;
+
+  if (view === "control") return <><header className="agent-section-header"><div><p className="card-label">GOAL CONTROL CENTER</p><h2>目标、计划与每一次执行，都有据可查。</h2></div><span>{controlCenter?.entries.length ?? 0} 个任务</span></header>{tabs}<section className="control-center" aria-label="目标控制中心">
+    {controlCenter?.entries.length ? controlCenter.entries.map((entry) => <article className={entry.job.status === "indeterminate" ? "control-entry risk" : "control-entry"} key={entry.job.jobId}>
+      <header><div><span>{entry.job.status}</span><h3>{entry.goal.title}</h3><p>{entry.goal.objective}</p></div><strong>Plan r{entry.plan.revision}</strong></header>
+      <div className="control-metrics"><div><small>进度</small><b>{entry.session.usage.cycles} / {entry.session.policy.maxCycles}</b></div><div><small>Checkpoint</small><b>#{entry.checkpoint?.sequence ?? 0}</b></div><div><small>缓存命中</small><b>{entry.job.cacheHits}</b></div><div><small>模型</small><b>{entry.checkpoint?.model ?? "待启动"}</b></div></div>
+      <div className="control-budget"><span style={{ width: `${Math.min(100, entry.session.usage.cycles / entry.session.policy.maxCycles * 100)}%` }} /></div>
+      <ol>{entry.plan.steps.map((step) => <li key={step.id}><i aria-hidden="true" /> <span>{step.description}</span><em>{step.status}</em></li>)}</ol>
+      <footer><code>{entry.session.policy.workspaceRevision}</code><span>{entry.job.pauseReason ?? "运行边界正常"}</span></footer>
+      {entry.attempt?.status === "indeterminate" && <div className="control-risk" role="alert"><strong>外部执行结果未知，禁止自动重试</strong><p>Attempt {entry.attempt.id} · Checkpoint #{entry.attempt.checkpointSequence}</p><code>{entry.attempt.requestFingerprint}</code></div>}
+    </article>) : <div className="control-empty"><strong>还没有 Auto Mode 目标</strong><p>控制中心只展示宿主持久化并验证过的事实；浏览器预览使用明确的演示数据。</p></div>}
+  </section></>;
+
+  if (view === "history") return <><header className="agent-section-header"><div><p className="card-label">LOCAL EXECUTION HISTORY</p><h2>本机记录，清晰、私密、可删除。</h2></div></header>{tabs}<section className="history-page" aria-labelledby="history-page-heading"><div><h3 id="history-page-heading">最近完成</h3><button disabled={busy || !history?.records.length} onClick={() => void clearHistory()} type="button">清除全部</button></div>{history?.records.length ? history.records.map((record) => <article key={record.task.id}><strong>{record.prompt}</strong><p>{record.response || "任务已完成，无文本回答"}</p><small>{record.model} · {record.usage.inputTokens + record.usage.outputTokens} tokens · {new Date(record.completedAtMs).toLocaleString("zh-CN")}</small></article>) : <p>完成一次任务后，记录会安全保存在本机。</p>}</section></>;
+
+  return <>{tabs}<section className="agent-workspace" aria-labelledby="agent-heading">
     <div className="agent-main">
       <header className="agent-hero">
         <div>
@@ -216,5 +240,5 @@ export function AgentWorkspace({ safeMode, recoveryMode, onNotice }: AgentWorksp
       {toolResult && !toolResult.requiresConfirmation && <div className="tool-complete" role="status"><strong>Gateway 执行完成</strong><p>{toolResult.invocation.toolId}</p></div>}
       {result?.usage && <div className="usage-card"><p className="card-label">最近任务</p><dl><div><dt>输入</dt><dd>{result.usage.inputTokens}</dd></div><div><dt>输出</dt><dd>{result.usage.outputTokens}</dd></div><div><dt>费用</dt><dd>0</dd></div></dl></div>}
     </aside>
-  </section>;
+  </section></>;
 }

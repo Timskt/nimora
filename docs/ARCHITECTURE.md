@@ -189,3 +189,11 @@ Domain Core
 - 模块通过公开接口和 Schema 通信，禁止访问其他模块内部文件。
 - 网络发送、系统调用和密钥读取必须经过统一端口。
 - 禁止创建无边界的 `common` 或 `utils` 包。
+
+## Agent 控制中心读模型
+
+- React 不并发拼装 Job、Session、Goal、Plan、Checkpoint、Attempt 与 Resolution；Tauri 宿主通过 `auto_mode_control_center` 返回一次有界聚合。
+- Job 是可重建的进程内投影，Session、Goal、不可变 Plan revision、Checkpoint、Attempt 与 Resolution 才是持久化事实；响应结构保留两者，禁止互相冒充。
+- Session 必须读取其启动时绑定的历史 Plan revision，不能用 Goal 当前 Plan 替代；缺失绑定、损坏载荷或元数据分叉全部失败关闭。
+- 聚合只属于宿主应用服务层，不进入纯领域 Agent Runtime，也不向 UI 暴露数据库连接、Provider、文件句柄或原生对象。
+- 控制中心查询只读；Pause、Cancel 与 Attempt 对账继续使用独立命令、精确身份绑定和安全模式门禁。

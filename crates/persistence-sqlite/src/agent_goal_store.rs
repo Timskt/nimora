@@ -93,6 +93,52 @@ impl SqliteAgentGoalRepository {
         load_snapshot(&connection, goal_id)
     }
 
+    /// Loads one immutable historical plan revision for audit and continuation bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid identifiers, corrupt payloads, or unavailable storage.
+    pub fn get_plan(
+        &self,
+        goal_id: Uuid,
+        revision: u64,
+    ) -> Result<Option<AgentPlan>, SqlitePersistenceError> {
+        if revision == 0 {
+            return Err(SqlitePersistenceError::InvalidAgentGoal);
+        }
+        let stored = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?
+            .query_row(
+                "SELECT schema_version, payload, created_at_ms FROM agent_goal_plan
+                 WHERE goal_id = ?1 AND revision = ?2",
+                params![goal_id.to_string(), to_i64(revision)?],
+                |row| {
+                    Ok((
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((version, payload, created_at_ms)) = stored else {
+            return Ok(None);
+        };
+        ensure_version(version)?;
+        let plan = serde_json::from_str::<AgentPlan>(&payload)?;
+        plan.validate()
+            .map_err(|_| SqlitePersistenceError::InvalidAgentGoal)?;
+        if plan.goal_id != goal_id
+            || plan.revision != revision
+            || to_i64(plan.created_at_ms)? != created_at_ms
+        {
+            return Err(SqlitePersistenceError::InvalidAgentGoal);
+        }
+        Ok(Some(plan))
+    }
+
     /// Lists Goals in stable newest-first order without returning historical plans.
     ///
     /// # Errors
@@ -378,6 +424,19 @@ mod tests {
         let restored = repository.get(goal.id).expect("get").expect("Goal");
         assert_eq!(restored.goal, goal);
         assert_eq!(restored.current_plan, revised);
+        assert_eq!(
+            repository
+                .get_plan(goal.id, 1)
+                .expect("historical plan")
+                .expect("revision one"),
+            plan
+        );
+        assert!(
+            repository
+                .get_plan(goal.id, 3)
+                .expect("missing plan")
+                .is_none()
+        );
     }
 
     #[test]
