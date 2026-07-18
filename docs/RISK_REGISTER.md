@@ -46,3 +46,4 @@
 | R-037 | Renderer 仅在模型含动画 Clip 时建立动作通道，导致纯 Expression VRM 静默失效 | 低（已缓解） | 高 | 动作通道统一组合可选 Animation 与 Expression Adapter；无 Clip 回归测试证明表情路径独立，Reduced Motion 不阻断静态投影 |
 | R-038 | 第三方模型借私有 Expression 名称扩大宿主语义或制造跨模型不一致 | 低（首纵切已缓解） | 高 | 首纵切仅允许固定 VRM 标准 Preset 并先 reset；未来用户映射必须经版本化 Schema、能力发现、预览和预算门禁，禁止直接参数透传 |
 | R-039 | 诊断报告由多个宿主入口各自拼装，导致隐私声明、恢复状态或 Schema 信息漂移 | 低（已缓解） | 严重 | Tauri-free Diagnostic Report Service 集中版本化报告与 fail-closed 隐私不变量；宿主只提供归一化事实，架构门禁阻止服务反向依赖 Tauri |
+| R-040 | 手动备份与后台调度各自维护错误状态，导致健康页误报成功或旧故障永久残留 | 低（已缓解） | 高 | Tauri-free Backup Service 统一成功清错、失败记错、Health 聚合和恢复请求；手动/定时真实 I/O 故障使用同一回归夹具 |

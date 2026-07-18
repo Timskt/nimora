@@ -2,6 +2,7 @@ mod asset_protocol;
 mod asset_selection;
 pub mod auto_mode_jobs;
 mod auto_mode_runner;
+mod backup_service;
 mod diagnostic_report;
 
 #[cfg(test)]
@@ -14,6 +15,7 @@ use asset_selection::{
     CHARACTER_SELECTION, ResolvedAssetSelection, THEME_SELECTION, VOICE_SELECTION,
     persist_asset_selection, resolve_asset_selection,
 };
+use backup_service::BackupService;
 use diagnostic_report::{
     DiagnosticReportFacts, DiagnosticSafetyMode, DiagnosticStartupMode, build_diagnostic_report,
 };
@@ -3408,13 +3410,7 @@ fn backup_health(
     if window.label() != CONTROL_CENTER_LABEL {
         return Err(DesktopError::WindowForbidden);
     }
-    let mut health = state.backups.health()?;
-    let last_error = state
-        .backup_last_error
-        .lock()
-        .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
-    health.last_error.clone_from(&last_error);
-    Ok(health)
+    Ok(BackupService::new(&state.backups, &state.backup_last_error).health()?)
 }
 
 #[tauri::command]
@@ -3427,21 +3423,7 @@ fn create_backup(
         return Err(DesktopError::WindowForbidden);
     }
     ensure_normal_mode(&state)?;
-    match state.backups.create_now() {
-        Ok(record) => {
-            *state
-                .backup_last_error
-                .lock()
-                .map_err(|_| SqlitePersistenceError::StatePoisoned)? = None;
-            Ok(record)
-        }
-        Err(error) => {
-            if let Ok(mut last_error) = state.backup_last_error.lock() {
-                *last_error = Some(error.to_string());
-            }
-            Err(error.into())
-        }
-    }
+    Ok(BackupService::new(&state.backups, &state.backup_last_error).create_now()?)
 }
 
 #[tauri::command]
@@ -3455,7 +3437,7 @@ fn request_database_restore(
         return Err(DesktopError::WindowForbidden);
     }
     ensure_safe_mode_inactive(&state)?;
-    state.backups.request_restore(&backup_id)?;
+    BackupService::new(&state.backups, &state.backup_last_error).request_restore(&backup_id)?;
     Ok(())
 }
 
@@ -7602,11 +7584,8 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
         std::thread::spawn(move || {
             loop {
                 let state = backup_app.state::<DesktopState>();
-                match state.backups.create_if_due() {
+                match BackupService::new(&state.backups, &state.backup_last_error).create_if_due() {
                     Ok(created) => {
-                        if let Ok(mut last_error) = state.backup_last_error.lock() {
-                            *last_error = None;
-                        }
                         if created.is_some() {
                             let _ = record_diagnostic_event(
                                 &state,
@@ -7616,10 +7595,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
                             );
                         }
                     }
-                    Err(error) => {
-                        if let Ok(mut last_error) = state.backup_last_error.lock() {
-                            *last_error = Some(error.to_string());
-                        }
+                    Err(_) => {
                         let _ = record_diagnostic_event(
                             &state,
                             DiagnosticSeverity::Warning,

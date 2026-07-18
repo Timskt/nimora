@@ -234,3 +234,11 @@ Actions 分钟：
 - 隐私边界：`includes_logs`、用户内容、Secret、文件路径和自动上传全部在单一服务中 fail closed；调用方不能通过输入扩大这些声明。
 - 防回退：架构门禁拒绝该模块引入 Tauri Command、`State` 或 `AppHandle`；独立测试覆盖版本契约、Normal/Recovery/Safe 映射和隐私不变量。
 - 证据：Desktop Host 98 项测试通过；组合根仍超过一万行，Agent、Automation、Skill、Profile 与 Backup 服务拆分仍需继续，不能宣称 R-019 已关闭。
+
+## M-2026-07-18 Backup 应用服务收敛
+
+- 不足：手动备份 Command 和后台定时线程分别维护 `backup_last_error`，成功清错、失败记错和 Health 聚合存在两套实现，未来 CLI 入口会进一步分叉。
+- 修正：新增 Tauri-free `BackupService`，统一 `health`、`create_now`、`create_if_due` 与 `request_restore`；Tauri Command 和调度线程只负责授权及诊断事件。
+- 错误语义：成功操作必须清除旧错误；真实 I/O 失败保留原始错误并以共享投影暴露给所有健康消费者；错误锁损坏时成功路径 fail closed。
+- 防回退：架构门禁拒绝 Backup Service 引入 Tauri 类型；稳定的“数据库路径被目录占用”故障夹具同时覆盖手动与定时入口。
+- 证据：Desktop Host 102 项测试覆盖手动/定时失败共享投影与成功后清除旧错误；跨休眠调度、磁盘耗尽、并发手动/定时备份和真实恢复重启仍需平台故障注入。
