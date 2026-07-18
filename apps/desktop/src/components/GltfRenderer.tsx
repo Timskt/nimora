@@ -1,5 +1,25 @@
 import { useEffect, useRef } from "react";
-import * as THREE from "three";
+import {
+  AnimationAction,
+  AnimationClip,
+  AnimationMixer,
+  Box3,
+  Clock,
+  DirectionalLight,
+  HemisphereLight,
+  LoopOnce,
+  LoopRepeat,
+  MathUtils,
+  Mesh,
+  Object3D,
+  PerspectiveCamera,
+  Scene,
+  Sphere,
+  SRGBColorSpace,
+  Texture,
+  Vector3,
+  WebGLRenderer,
+} from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { CharacterRendererSnapshot, ModelAnimationBinding } from "../platform/desktop";
 
@@ -10,18 +30,18 @@ export function modelAssetUrl(baseUrl: string, relativePath: string): string {
 
 export function cameraDistanceForRadius(radius: number, verticalFovDegrees: number): number {
   const safeRadius = Math.max(radius, 0.001);
-  const halfFov = THREE.MathUtils.degToRad(verticalFovDegrees / 2);
+  const halfFov = MathUtils.degToRad(verticalFovDegrees / 2);
   return safeRadius / Math.sin(halfFov);
 }
 
-export function disposeObjectTree(root: THREE.Object3D): void {
+export function disposeObjectTree(root: Object3D): void {
   root.traverse((object) => {
-    if (!(object instanceof THREE.Mesh)) return;
+    if (!(object instanceof Mesh)) return;
     object.geometry?.dispose();
     const materials = Array.isArray(object.material) ? object.material : [object.material];
     for (const material of materials) {
       for (const value of Object.values(material)) {
-        if (value instanceof THREE.Texture) value.dispose();
+        if (value instanceof Texture) value.dispose();
       }
       material.dispose();
     }
@@ -68,23 +88,23 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
 
     let disposed = false;
     let animationFrame = 0;
-    let loadedRoot: THREE.Object3D | null = null;
-    let mixer: THREE.AnimationMixer | null = null;
-    let renderer: THREE.WebGLRenderer;
+    let loadedRoot: Object3D | null = null;
+    let mixer: AnimationMixer | null = null;
+    let renderer: WebGLRenderer;
     try {
-      renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+      renderer = new WebGLRenderer({ canvas, alpha: true, antialias: true });
     } catch {
       onFailure();
       return;
     }
     renderer.setClearColor(0x000000, 0);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.outputColorSpace = SRGBColorSpace;
 
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
-    scene.add(new THREE.HemisphereLight(0xfff5e8, 0x586270, 2.2));
-    const keyLight = new THREE.DirectionalLight(0xffffff, 2.8);
+    const scene = new Scene();
+    const camera = new PerspectiveCamera(35, 1, 0.01, 1000);
+    scene.add(new HemisphereLight(0xfff5e8, 0x586270, 2.2));
+    const keyLight = new DirectionalLight(0xffffff, 2.8);
     keyLight.position.set(3, 5, 4);
     scene.add(keyLight);
 
@@ -100,7 +120,7 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
     resize();
 
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const clock = new THREE.Clock();
+    const clock = new Clock();
     const renderFrame = () => {
       if (disposed) return;
       animationFrame = window.requestAnimationFrame(renderFrame);
@@ -128,13 +148,13 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
           return;
         }
         loadedRoot = gltf.scene;
-        const bounds = new THREE.Box3().setFromObject(loadedRoot);
+        const bounds = new Box3().setFromObject(loadedRoot);
         if (bounds.isEmpty()) {
           fail();
           return;
         }
-        const center = bounds.getCenter(new THREE.Vector3());
-        const sphere = bounds.getBoundingSphere(new THREE.Sphere());
+        const center = bounds.getCenter(new Vector3());
+        const sphere = bounds.getBoundingSphere(new Sphere());
         loadedRoot.position.sub(center);
         loadedRoot.scale.multiplyScalar(descriptor.defaultScale);
         scene.add(loadedRoot);
@@ -148,9 +168,9 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
         const firstAnimation = gltf.animations[0];
         const animationMap = descriptor.animationMap;
         if (firstAnimation && animationMap) {
-          mixer = new THREE.AnimationMixer(loadedRoot);
+          mixer = new AnimationMixer(loadedRoot);
           const available = new Set(gltf.animations.map((clip) => clip.name));
-          let current: THREE.AnimationAction | null = null;
+          let current: AnimationAction | null = null;
           playActionRef.current = (nextAction) => {
             if (reducedMotion.matches || !mixer) return;
             const binding = resolveModelAnimation(
@@ -160,12 +180,12 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
               available,
             );
             if (!binding) return;
-            const clip = THREE.AnimationClip.findByName(gltf.animations, binding.animation);
+            const clip = AnimationClip.findByName(gltf.animations, binding.animation);
             if (!clip) return;
             const next = mixer.clipAction(clip);
             if (next === current) return;
             next.reset();
-            next.setLoop(binding.looped ? THREE.LoopRepeat : THREE.LoopOnce, binding.looped ? Infinity : 1);
+            next.setLoop(binding.looped ? LoopRepeat : LoopOnce, binding.looped ? Infinity : 1);
             next.clampWhenFinished = !binding.looped;
             next.fadeIn(0.18).play();
             current?.fadeOut(0.18);

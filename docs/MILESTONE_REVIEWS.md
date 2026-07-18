@@ -148,3 +148,11 @@ Actions 分钟：
 - UI：Agent 一级工作区新增“对话运行 / 目标控制 / 执行历史”，控制页展示进度、预算边界、Checkpoint、缓存、模型、计划步骤与未知结果风险。
 - 验证：Rust 历史 Plan/重启聚合测试、TypeScript 类型检查和浏览器宽屏截图/语义树通过；720px 响应式规则已落地，浏览器当前未暴露视口切换能力。
 - 后续：补齐真实 Tauri Pause/Cancel/人工对账交互面，随后独立处理 `GltfRenderer` 分包与性能预算。
+
+## M-2026-07-18 3D 渲染加载与性能预算
+
+- 审计：`PetOverlay` 已使用 React lazy/Suspense，615 KB 警告来自 Three.js 单体异步入口，并非首屏同步回归；盲目按符号拆分没有改变真实产物。
+- 修正：Three.js 使用显式渲染原语导入；Vite 输出 Manifest，并由 `scripts/check-bundle-budget.mjs` 校验入口关系与原始字节预算。
+- 证据：主入口 285,916 / 350,000 bytes；独立 GLTF 动态入口 615,183 / 650,000 bytes；生产构建不再产生泛化大块警告。
+- 边界：GLTF 仍由受控角色描述符触发，加载中使用稳定占位，WebGL 初始化、资源加载或 Context 丢失继续降级至内置角色。
+- 后续：真实 Tauri/WebGL 连续模型切换与 GPU 资源释放仍需进入跨平台发布验收，不以 Bundle Budget 替代运行时测试。

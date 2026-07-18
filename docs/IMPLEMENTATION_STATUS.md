@@ -75,3 +75,10 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - Desktop IPC exposes bounded detail/history and resolution commands; browser preview fails closed with `desktop-host-required`.
 - Resolution binds Session, Attempt, Checkpoint sequence, request fingerprint, actor, reason, decision, and host timestamp. Stale or replayed requests roll back as a unit.
 - Five dedicated real-SQLite tests now prove both decisions, zero-write rejection, one-winner concurrent reconciliation, replay rejection, audit persistence across reopen, bounded queries, and index/payload divergence detection.
+
+## 2026-07-18 — GLTF lazy-loading performance gate
+
+- Confirmed the Three.js renderer remains a direct dynamic dependency and is absent from the desktop entry chunk.
+- Added a generated Vite Manifest and an executable build budget gate instead of hiding the previous warning without evidence.
+- Current raw production sizes are 285,916 bytes for the desktop entry and 615,183 bytes for the lazy GLTF renderer, under hard budgets of 350,000 and 650,000 bytes.
+- The existing Suspense placeholder and built-in renderer fallback remain active for module loading, WebGL initialization, asset loading, and context-loss failures.
