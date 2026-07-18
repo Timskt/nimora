@@ -1,0 +1,100 @@
+use crate::{SqlitePersistenceError, prepare_connection};
+use nimora_agent_runtime::{AgentTaskStatus, AutoModeCheckpoint, AutoModeSession, AutoModeStatus};
+use rusqlite::{Connection, TransactionBehavior, params};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct SqliteAutoModeCommitRepository {
+    connection: Connection,
+}
+
+impl SqliteAutoModeCommitRepository {
+    /// Opens the shared database used for atomic Auto Mode state commits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot be opened or validated.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, SqlitePersistenceError> {
+        let mut connection = Connection::open(path)?;
+        prepare_connection(&mut connection)?;
+        Ok(Self { connection })
+    }
+
+    /// Atomically resumes a session and advances its checkpoint with dual optimistic concurrency.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid state or when either expected persisted version is stale.
+    pub fn commit_resume(
+        &mut self,
+        session: &AutoModeSession,
+        previous_session_updated_at_ms: u64,
+        checkpoint: &AutoModeCheckpoint,
+        previous_checkpoint_sequence: u64,
+    ) -> Result<(), SqlitePersistenceError> {
+        session
+            .validate()
+            .map_err(|_| SqlitePersistenceError::InvalidAutoModeSession)?;
+        checkpoint
+            .validate()
+            .map_err(|_| SqlitePersistenceError::InvalidAutoModeCheckpoint)?;
+        if session.status != AutoModeStatus::Running
+            || checkpoint.task.status != AgentTaskStatus::Running
+            || checkpoint.sequence != previous_checkpoint_sequence.saturating_add(1)
+            || !checkpoint.matches_bindings(
+                session.id,
+                session.goal_id,
+                session.plan_revision,
+                &session.policy.workspace_revision,
+                &session.policy_fingerprint,
+            )
+        {
+            return Err(SqlitePersistenceError::InvalidAutoModeCheckpoint);
+        }
+
+        let session_payload = serde_json::to_string(session)?;
+        let checkpoint_payload = serde_json::to_string(checkpoint)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let session_changed = transaction.execute(
+            "UPDATE auto_mode_session SET status = 'running', pause_reason = NULL,
+                updated_at_ms = ?1, payload = ?2
+             WHERE session_id = ?3 AND goal_id = ?4 AND plan_revision = ?5
+                AND created_at_ms = ?6 AND updated_at_ms = ?7 AND status = 'paused'",
+            params![
+                to_i64(session.updated_at_ms)?,
+                session_payload,
+                session.id.to_string(),
+                session.goal_id.to_string(),
+                to_i64(session.plan_revision)?,
+                to_i64(session.created_at_ms)?,
+                to_i64(previous_session_updated_at_ms)?,
+            ],
+        )?;
+        let checkpoint_changed = transaction.execute(
+            "UPDATE auto_mode_checkpoint SET sequence = ?1, task_id = ?2, updated_at_ms = ?3,
+                payload = ?4
+             WHERE session_id = ?5 AND goal_id = ?6 AND plan_revision = ?7 AND sequence = ?8",
+            params![
+                to_i64(checkpoint.sequence)?,
+                checkpoint.task.id.to_string(),
+                to_i64(checkpoint.updated_at_ms)?,
+                checkpoint_payload,
+                checkpoint.session_id.to_string(),
+                checkpoint.goal_id.to_string(),
+                to_i64(checkpoint.plan_revision)?,
+                to_i64(previous_checkpoint_sequence)?,
+            ],
+        )?;
+        if session_changed != 1 || checkpoint_changed != 1 {
+            return Err(SqlitePersistenceError::AutoModeCommitConflict);
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+}
+
+fn to_i64(value: u64) -> Result<i64, SqlitePersistenceError> {
+    i64::try_from(value).map_err(|_| SqlitePersistenceError::InvalidAutoModeCheckpoint)
+}

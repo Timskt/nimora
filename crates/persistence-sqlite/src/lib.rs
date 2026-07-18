@@ -2,6 +2,7 @@
 
 mod agent_goal_store;
 mod auto_mode_checkpoint_store;
+mod auto_mode_commit_store;
 mod auto_mode_store;
 mod automation_agent_journal;
 mod automation_journal;
@@ -13,6 +14,7 @@ mod workspace_snapshot_store;
 
 pub use agent_goal_store::{AgentGoalSnapshot, SqliteAgentGoalRepository};
 pub use auto_mode_checkpoint_store::SqliteAutoModeCheckpointRepository;
+pub use auto_mode_commit_store::SqliteAutoModeCommitRepository;
 pub use auto_mode_store::SqliteAutoModeRepository;
 pub use automation_agent_journal::{
     AutomationAgentJournalEntry, AutomationAgentJournalStatus, SqliteAutomationAgentJournal,
@@ -1481,6 +1483,8 @@ pub enum SqlitePersistenceError {
     InvalidAutoModeCheckpoint,
     #[error("Auto Mode checkpoint was changed by another writer")]
     AutoModeCheckpointConflict,
+    #[error("Auto Mode session or checkpoint was changed by another writer")]
+    AutoModeCommitConflict,
     #[error("Workspace snapshot record or request is invalid")]
     InvalidWorkspaceSnapshot,
     #[error("Workspace snapshot was changed by another writer")]

@@ -20,6 +20,8 @@ Auto Mode 不是“跳过确认”。它只允许 Agent 在 Goal、调用方 Cap
 
 Goal CLI 的所有内容输入均使用 256 KiB 有界 JSON 文件或 stdin；Goal 标题、目标、步骤、证据数量与单项字节数还受领域硬上限约束。Plan 替换创建新修订而不覆盖历史修订；`completed` 不是任意可写字段，只有当前修订非空且所有步骤为 `completed` 并携带非空有界证据时才允许进入。暂停、恢复、取消和完成均由领域状态机与仓储二次复核，CLI 不能直接修改数据库 Payload 绕过门禁。
 
+恢复候选现在必须经过显式 Resume：Session `updated_at_ms` 与 Checkpoint `sequence` 双 CAS 在单一 SQLite Immediate 事务内同时提交 Session 与 Task 的 `running` 状态。任一陈旧或并发写入都会整体回滚；提交阶段不调用 Provider/Tool，也不恢复旧 Approval。后续缺口收窄为单轮 Provider/Tool 结果持久提交、每轮 Workspace 重扫及持久 Context Cache 接入。
+
 ### 1.2 Coding Agent 能力对照与取舍
 
 Nimora 不以复刻某个 CLI 为目标，而是吸收 Codex、Claude Code 等 Coding Agent 已验证的交互模式，再用统一 Capability Gateway、桌面运行时和跨模块 Agent 能力扩展它们。任何“借鉴”必须落到可测试契约，不能只表现为相似命令名。
@@ -29,7 +31,7 @@ Nimora 不以复刻某个 CLI 为目标，而是吸收 Codex、Claude Code 等 C
 | Goal / Plan | Goal 跨会话持久化；Plan 独立修订；完成需要逐步证据 | 核心、SQLite 与机器可读 CLI 已实现 | 桌面 Goal 工作台、交互式 Plan diff、证据查看与回退 |
 | Auto Mode | 在 Tool、Capability、风险、数据、费用、时间、步骤和并发预算交集内自动推进 | Supervisor 领域、SQLite 会话、CLI 控制面及安全单轮 Provider/Tool 协调已实现 | 桌面 Gateway 持久循环、桌面控制与真实执行端到端验证 |
 | 权限模式 | 支持建议、只读、受控执行等主动性；批准绑定具体参数，不提供全局永久绕过 | Task/Tool 准入和一次性批准已实现 | 面向用户的模式预设、会话权限摘要、计划级不可变批准 |
-| Checkpoint / Resume | 保存 Goal、Plan 修订、Task 预算、Provider continuation、工具摘要和资源版本；批准不可重放 | 版本化领域对象、SQLite 单调序号 CAS 仓储及跨仓储恢复候选服务已实现 | 桌面原子轮次提交、显式 Resume 后续执行、损坏处置和版本漂移 UI |
+| Checkpoint / Resume | 保存 Goal、Plan 修订、Task 预算、Provider continuation、工具摘要和资源版本；批准不可重放 | 版本化领域对象、SQLite 单调序号 CAS、跨仓储恢复候选，以及 Session/Checkpoint 双 CAS 显式 Resume 原子提交已实现 | Provider/Tool 单轮结果原子提交、损坏处置和版本漂移 UI |
 | 上下文压缩 | 压缩时保留目标、约束、待办、证据与来源；不提升不可信内容权限 | 结构化 Anchor、系统指令保留、Tool 原子单元、源摘要和预算门禁已实现 | Tokenizer 水位适配、语义摘要 Provider、压缩前后一致性评估和桌面 Timeline |
 | Context Cache | Provider、模型、Plan、Workspace 与消息内容共同组成缓存身份；不得跨权限或资源版本复用 | 内容寻址内存 Cache，以及 SQLite TTL/LRU/容量仓储、敏感等级门禁、元数据复验和 Workspace 失效已实现 | Auto Host Loop 接入、系统密钥加密、清理 UI、保留策略和命中指标 |
 | 工具执行 | Schema 化 Tool Registry、参数风险复核、Capability Gateway、结构化回执 | 已形成生产基础 | 更完整工具覆盖、流式进度、可重试/可补偿状态展示 |

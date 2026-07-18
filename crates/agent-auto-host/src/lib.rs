@@ -6,8 +6,8 @@ use nimora_agent_runtime::{
 };
 use nimora_agent_workspace_host::{WorkspaceHostError, WorkspaceScanPolicy, WorkspaceScanner};
 use nimora_persistence_sqlite::{
-    SqliteAgentGoalRepository, SqliteAutoModeCheckpointRepository, SqliteAutoModeRepository,
-    SqlitePersistenceError, SqliteWorkspaceSnapshotRepository,
+    SqliteAgentGoalRepository, SqliteAutoModeCheckpointRepository, SqliteAutoModeCommitRepository,
+    SqliteAutoModeRepository, SqlitePersistenceError, SqliteWorkspaceSnapshotRepository,
 };
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -123,6 +123,61 @@ impl AutoModeRecoveryService {
             messages,
             workspace,
         })
+    }
+
+    /// Explicitly resumes a previously recovered candidate using an atomic dual-CAS commit.
+    ///
+    /// This method performs no Provider or Tool call and does not restore approval state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when bindings changed, time moved backwards, or another writer won.
+    pub fn commit_resume(
+        &self,
+        recovered: RecoveredAutoModeTurn,
+        now_ms: u64,
+    ) -> Result<RecoveredAutoModeTurn, AutoModeRecoveryError> {
+        let previous_session_updated_at_ms = recovered.session.updated_at_ms;
+        let previous_checkpoint_sequence = recovered.checkpoint_sequence;
+        let mut resumed = recovered;
+        resumed
+            .session
+            .resume(
+                &resumed.goal,
+                &resumed.plan,
+                &resumed.workspace.fingerprint,
+                &resumed.session.policy_fingerprint.clone(),
+                now_ms,
+            )
+            .map_err(|_| AutoModeRecoveryError::BindingChanged)?;
+        resumed
+            .task
+            .transition(AgentTaskStatus::Running, now_ms)
+            .map_err(|_| AutoModeRecoveryError::UnsafeTaskState)?;
+        resumed.checkpoint_sequence = previous_checkpoint_sequence
+            .checked_add(1)
+            .ok_or(AutoModeRecoveryError::UnsafeTaskState)?;
+        let checkpoint = AutoModeCheckpoint::new(
+            resumed.session.id,
+            resumed.goal.id,
+            resumed.plan.revision,
+            resumed.checkpoint_sequence,
+            resumed.task.clone(),
+            resumed.model.clone(),
+            resumed.messages.clone(),
+            resumed.workspace.fingerprint.clone(),
+            resumed.session.policy_fingerprint.clone(),
+            resumed.session.created_at_ms,
+            now_ms,
+        )
+        .map_err(|_| AutoModeRecoveryError::UnsafeTaskState)?;
+        SqliteAutoModeCommitRepository::open(&self.database_path)?.commit_resume(
+            &resumed.session,
+            previous_session_updated_at_ms,
+            &checkpoint,
+            previous_checkpoint_sequence,
+        )?;
+        Ok(resumed)
     }
 }
 
@@ -275,6 +330,83 @@ mod tests {
             .recover(session_id, &workspace, 1_100)
             .expect_err("drift must fail");
         assert!(matches!(error, AutoModeRecoveryError::WorkspaceChanged));
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn explicitly_resumes_session_and_checkpoint_atomically() {
+        let (database, workspace, session_id) = fixture();
+        let service = AutoModeRecoveryService::new(&database, WorkspaceScanPolicy::default());
+        let recovered = service
+            .recover(session_id, &workspace, 1_100)
+            .expect("recover");
+        let resumed = service.commit_resume(recovered, 1_101).expect("resume");
+        assert_eq!(resumed.session.status, AutoModeStatus::Running);
+        assert_eq!(resumed.task.status, AgentTaskStatus::Running);
+        assert_eq!(resumed.checkpoint_sequence, 2);
+        assert_eq!(
+            SqliteAutoModeRepository::open(&database)
+                .expect("sessions")
+                .get(session_id)
+                .expect("session")
+                .expect("stored session")
+                .status,
+            AutoModeStatus::Running
+        );
+        let checkpoint = SqliteAutoModeCheckpointRepository::open(&database)
+            .expect("checkpoints")
+            .get(session_id)
+            .expect("checkpoint")
+            .expect("stored checkpoint");
+        assert_eq!(checkpoint.sequence, 2);
+        assert_eq!(checkpoint.task.status, AgentTaskStatus::Running);
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn stale_checkpoint_rolls_back_session_resume() {
+        let (database, workspace, session_id) = fixture();
+        let service = AutoModeRecoveryService::new(&database, WorkspaceScanPolicy::default());
+        let recovered = service
+            .recover(session_id, &workspace, 1_100)
+            .expect("recover");
+        let competing = AutoModeCheckpoint::new(
+            recovered.session.id,
+            recovered.goal.id,
+            recovered.plan.revision,
+            2,
+            recovered.task.clone(),
+            recovered.model.clone(),
+            recovered.messages.clone(),
+            recovered.workspace.fingerprint.clone(),
+            recovered.session.policy_fingerprint.clone(),
+            1_000,
+            1_101,
+        )
+        .expect("competing checkpoint");
+        SqliteAutoModeCheckpointRepository::open(&database)
+            .expect("checkpoints")
+            .replace(&competing, 1)
+            .expect("competing write");
+
+        let error = service
+            .commit_resume(recovered, 1_102)
+            .expect_err("stale resume must fail");
+        assert!(matches!(
+            error,
+            AutoModeRecoveryError::Persistence(SqlitePersistenceError::AutoModeCommitConflict)
+        ));
+        assert_eq!(
+            SqliteAutoModeRepository::open(&database)
+                .expect("sessions")
+                .get(session_id)
+                .expect("session")
+                .expect("stored session")
+                .status,
+            AutoModeStatus::Paused
+        );
         fs::remove_file(database).expect("database cleanup");
         fs::remove_dir_all(workspace).expect("workspace cleanup");
     }

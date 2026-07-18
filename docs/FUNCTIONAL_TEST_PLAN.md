@@ -320,6 +320,7 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-089 | Auto Mode 恢复漂移阻断 | `resume --workspace-root` 对相同根与相同内容成功恢复；根变化立即拒绝，内容变化持久化绑定旧 fingerprint 的后继快照并返回 `workspace-changed`，Session 保持 paused | P0 |
 | AGT-090 | 持久 Context Cache 隔离治理 | SQLite Cache 命中必须复验内容地址、Provider、模型、Plan、Workspace、数据等级、TTL 与索引/Payload；过期项删除，容量超限按稳定 LRU 淘汰，旧 Workspace 可显式整体失效且不影响其他分区 | P0 |
 | AGT-091 | Checkpoint 安全恢复应用服务 | 恢复候选跨 Goal、Session、Checkpoint、Workspace 仓储复验 ID、Plan revision、Policy 与 Workspace fingerprint，并真实重扫根目录；只返回 paused Task 和 continuation，不调用 Provider/Tool、不携带 Approval，文件漂移时零 continuation 释放 | P0 |
+| AGT-092 | Auto Mode 显式恢复原子提交 | 只有显式 Resume 才可把 Session 与 Checkpoint Task 同时恢复为 running；提交使用 Session timestamp 与 Checkpoint sequence 双 CAS，任一竞争或陈旧写入必须整体回滚，且提交阶段不得调用 Provider/Tool 或恢复 Approval | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |
