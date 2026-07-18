@@ -421,3 +421,10 @@ Actions 分钟：
 - 修正：能力面扩展为 32 类；新增 8 类均定义标准产物、权限边界、离线/撤销/漂移行为和确定性测试，不以“AI 能做到”替代 Runtime 与 Validator。
 - 安全：密码、验证码、私钥、支付凭据和最终法律/金融确认不能交给模型；跨设备、联邦评测、XR 感知与个人训练统一采用最小数据、逐端撤销和删除传播。
 - 状态：以上新增能力均为目标架构，尚未形成生产纵切；Creator 遇到对应请求必须返回 Capability Gap，不得生成伪可用包或调用私有 IPC。
+
+## M-2026-07-19 统一 Secret Store 核心纵切
+
+- 触发：OpenAI-compatible Provider 需要 API Key，但项目没有安全凭据后端；直接把 Key 放入配置、IPC 或环境变量会违反安全红线。
+- 实现：新增 `nimora-secret-store`，统一严格 `secret:<domain>:<name>` 引用、macOS Keychain、Windows Credential Manager、Linux Secret Service、自动清零读取、幂等删除和确定性内存后端。
+- 边界：当前只完成核心存储层，不宣称网络 Provider 已支持凭据；桌面设置、Provider 配置、Worker 单次传递、缓存加密和授权签名必须分别形成后续纵切。
+- Actions：新增依赖和核心测试先在本地验证；保持完整纵切后单次推送，不增加高频远端触发。

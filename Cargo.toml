@@ -10,6 +10,7 @@ members = [
   "crates/skill-host",
   "crates/skill-worker",
   "crates/skill-package",
+  "crates/secret-store",
   "crates/agent-provider-worker",
   "crates/agent-tools",
   "crates/automation-runtime",
@@ -52,6 +53,8 @@ zip = { version = "7.2", default-features = false, features = ["deflate"] }
 boa_engine = "0.21.1"
 ignore = "0.4"
 wait-timeout = "0.2"
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
+zeroize = "1.8"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

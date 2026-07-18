@@ -72,6 +72,7 @@
 - Agent 任务设置最大步骤、时间、Token、工具次数和费用预算。
 - 记忆写入需要策略过滤；敏感推断应要求用户确认。
 - Provider 请求前展示或记录将发送的数据分类。
+- Provider、Connector、缓存与授权签名材料统一遵循 [`SECRET_MANAGEMENT.md`](SECRET_MANAGEMENT.md)：配置与 IPC 只保存严格 `secret:<domain>:<name>` 引用；明文只能由宿主从系统密钥后端解析到自动清零内存，禁止降级写入文件、SQLite、环境变量、命令行或模型上下文。
 
 ## 9. 审计
 

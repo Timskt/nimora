@@ -22,6 +22,8 @@
 
 AI 与其它模块的双向调用以 [`AI_MODULE_INTERACTIONS.md`](AI_MODULE_INTERACTIONS.md) 为开发约束；Desktop、Automation、Skill、Connector 和用户代码不得直接调用 Provider 或建立绕过 Capability Gateway 的执行旁路。
 
+Provider、Connector、缓存与授权材料的系统密钥存储、非敏感引用和撤销边界以 [`SECRET_MANAGEMENT.md`](SECRET_MANAGEMENT.md) 为唯一基线；任何模块不得自行降级保存明文凭据。
+
 用户借助外接 AI 创建、测试、安装、维护 User Program、Skill、Automation、Connector、Agent、角色资产和声明式 UI 的完整能力边界，以 [`AI_EXTENSION_FACTORY.md`](AI_EXTENSION_FACTORY.md) 为产品与工程基线。
 
 外接 AI 可创建、组合与演进的跨领域能力矩阵见 [`AI_AUGMENTED_CAPABILITY_CATALOG.md`](AI_AUGMENTED_CAPABILITY_CATALOG.md)。
