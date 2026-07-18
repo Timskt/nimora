@@ -690,6 +690,23 @@ export interface AutomationJournalEntry {
   interruptionReason: string | null;
 }
 
+export interface AutomationRunHistoryPage {
+  spec: "nimora.desktop-automation-run-history/1";
+  records: AutomationJournalEntry[];
+}
+
+export interface AutomationEventHealthSnapshot {
+  spec: "nimora.automation-event-health/1";
+  sessions: Array<{
+    automationId: string;
+    sessionId: string;
+    active: boolean;
+    executed: number;
+    dropped: number;
+    failures: number;
+  }>;
+}
+
 export interface AutomationAgentJournalEntry {
   spec: "nimora.automation-agent-journal/1";
   runId: string;
@@ -717,7 +734,8 @@ export interface DesktopApi {
   rollbackAutomation(automationId: string): Promise<AutomationInstallReceipt>;
   runAutomation(definition: AutomationDefinition, eventType: string, eventData: unknown): Promise<AutomationRun>;
   automationRunStatus(runId: string): Promise<AutomationJournalEntry | null>;
-  automationRunHistory(limit?: number): Promise<AutomationJournalEntry[]>;
+  automationRunHistory(limit?: number, before?: { startedAtMs: number; runId: string }): Promise<AutomationRunHistoryPage>;
+  automationEventHealth(): Promise<AutomationEventHealthSnapshot>;
   deleteAutomationRunHistory(runId?: string): Promise<number>;
   automationAgentTaskStatus(taskId: string): Promise<AutomationAgentJournalEntry | null>;
   automationRunAgentTasks(runId: string): Promise<AutomationAgentJournalEntry[]>;
@@ -915,7 +933,8 @@ export function createDesktopApi(
       async rollbackAutomation() { throw new Error("Automation catalog requires the Nimora desktop runtime."); },
       async runAutomation() { throw new Error("Live automation requires the Nimora desktop runtime."); },
       async automationRunStatus() { return null; },
-      async automationRunHistory() { return []; },
+      async automationRunHistory() { return { spec: "nimora.desktop-automation-run-history/1", records: [] }; },
+      async automationEventHealth() { return { spec: "nimora.automation-event-health/1", sessions: [] }; },
       async deleteAutomationRunHistory() { return 0; },
       async automationAgentTaskStatus() { return null; },
       async automationRunAgentTasks() { return []; },
@@ -1190,7 +1209,8 @@ export function createDesktopApi(
     rollbackAutomation: async (automationId) => await invokeCommand("rollback_automation", { automationId }) as AutomationInstallReceipt,
     runAutomation: async (definition, eventType, eventData) => await invokeCommand("run_automation", { request: { definition, eventType, eventData } }) as AutomationRun,
     automationRunStatus: async (runId) => await invokeCommand("automation_run_status", { runId }) as AutomationJournalEntry | null,
-    automationRunHistory: async (limit = 20) => await invokeCommand("automation_run_history", { limit }) as AutomationJournalEntry[],
+    automationRunHistory: async (limit = 20, before) => await invokeCommand("automation_run_history", { request: { beforeStartedAtMs: before?.startedAtMs ?? null, beforeRunId: before?.runId ?? null, limit } }) as AutomationRunHistoryPage,
+    automationEventHealth: async () => await invokeCommand("automation_event_health") as AutomationEventHealthSnapshot,
     deleteAutomationRunHistory: async (runId) => await invokeCommand("delete_automation_run_history", { runId: runId ?? null }) as number,
     automationAgentTaskStatus: async (taskId) => await invokeCommand("automation_agent_task_status", { taskId }) as AutomationAgentJournalEntry | null,
     automationRunAgentTasks: async (runId) => await invokeCommand("automation_run_agent_tasks", { runId }) as AutomationAgentJournalEntry[],

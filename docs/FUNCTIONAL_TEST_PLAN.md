@@ -162,7 +162,7 @@ ID / 标题 / 优先级 / 前置条件
 
 当前自动化证据：`nimora-automation-runtime` 单元测试覆盖条件短路、dry-run 零 Backend 调用、幂等重试门禁、瞬时错误三次尝试、失败后的逆序补偿、取消与超时前零执行；桌面 Rust 测试验证 IPC 与 Agent `automation.definition.validate` 工具都只返回 `planned` 步骤且尝试次数为零，Agent 测试同时证明无需确认、无待处理项、无 Runtime 状态变化且普通用户程序不能继承专用 Query；前端测试验证匹配与不匹配事件的离线预览。Interval、分支/并行、持久调度、真实 Action Gateway、运行历史和事件回放仍不得标记通过。
 
-事件驱动补充证据：桌面测试证明真实 Event Bus 来源的 `eventId/traceId` 不被重建并同时进入 Run 与 SQLite Journal；Safe Mode 收敛测试将 Automation Event Session 作为独立隔离步骤，即使前序隔离失败也不会跳过。SQLite 测试覆盖历史有界倒序读取、非法上限拒绝以及运行中记录不可删除；前端 Browser Preview 返回空历史且不伪造原生写成功。仍需补真实 Tauri AppHandle 的订阅线程端到端、稳定游标翻页、队列溢出指标、跨重启启用恢复、参数级批准和回放测试。
+事件驱动补充证据：桌面测试证明真实 Event Bus 来源的 `eventId/traceId` 不被重建并同时进入 Run 与 SQLite Journal；Safe Mode 收敛测试将 Automation Event Session 作为独立隔离步骤，即使前序隔离失败也不会跳过。SQLite 测试覆盖历史有界倒序读取、非法上限拒绝、运行中记录不可删除，以及相同毫秒 UUID 排序、跨页无重复和较新并发插入不改变旧游标链。事件会话指标测试覆盖 executed/dropped/failures 累计与饱和不回绕；桌面健康 DTO 不包含事件正文，Browser Preview 返回空会话而不伪造健康。仍需补真实 Tauri AppHandle 的队列溢出端到端、跨重启启用恢复、参数级批准、持久健康趋势和回放测试。
 
 ## 10. Skill 与扩展宿主
 

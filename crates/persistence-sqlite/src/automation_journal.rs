@@ -208,11 +208,22 @@ impl SqliteAutomationJournal {
     /// Rejects zero or oversized limits and malformed stored rows.
     pub fn list(
         &self,
+        before: Option<(u64, Uuid)>,
         limit: usize,
     ) -> Result<Vec<AutomationJournalEntry>, SqlitePersistenceError> {
         if limit == 0 || limit > MAX_AUTOMATION_HISTORY_PAGE_SIZE {
             return Err(SqlitePersistenceError::InvalidAutomationJournal);
         }
+        let (before_ms, before_id) = before
+            .map(|(started_at_ms, run_id)| {
+                Ok::<_, SqlitePersistenceError>((
+                    i64::try_from(started_at_ms)
+                        .map_err(|_| SqlitePersistenceError::InvalidAutomationJournal)?,
+                    run_id.to_string(),
+                ))
+            })
+            .transpose()?
+            .unwrap_or((i64::MAX, "~".to_owned()));
         let connection = self
             .connection
             .lock()
@@ -221,12 +232,17 @@ impl SqliteAutomationJournal {
             "SELECT run_id, automation_id, trace_id, event_id, status, started_at_ms,
                     updated_at_ms, schema_version, payload, interruption_reason
              FROM automation_run_journal
-             ORDER BY started_at_ms DESC, run_id DESC LIMIT ?1",
+             WHERE started_at_ms < ?1 OR (started_at_ms = ?1 AND run_id < ?2)
+             ORDER BY started_at_ms DESC, run_id DESC LIMIT ?3",
         )?;
         statement
             .query_map(
-                [i64::try_from(limit)
-                    .map_err(|_| SqlitePersistenceError::InvalidAutomationJournal)?],
+                params![
+                    before_ms,
+                    before_id,
+                    i64::try_from(limit)
+                        .map_err(|_| SqlitePersistenceError::InvalidAutomationJournal)?
+                ],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -489,11 +505,15 @@ mod tests {
         newer.started_at_ms = 2_000;
         journal.start(&newer).expect("start newer");
 
-        let entries = journal.list(2).expect("history");
+        let entries = journal.list(None, 2).expect("history");
         assert_eq!(entries[0].run_id, newer.run_id);
         assert_eq!(entries[1].run_id, older.run_id);
-        assert!(journal.list(0).is_err());
-        assert!(journal.list(MAX_AUTOMATION_HISTORY_PAGE_SIZE + 1).is_err());
+        assert!(journal.list(None, 0).is_err());
+        assert!(
+            journal
+                .list(None, MAX_AUTOMATION_HISTORY_PAGE_SIZE + 1)
+                .is_err()
+        );
         assert_eq!(
             journal
                 .delete_terminal(Some(newer.run_id))
@@ -506,6 +526,43 @@ mod tests {
                 .expect("delete older"),
             1
         );
-        assert_eq!(journal.list(10).expect("remaining").len(), 1);
+        assert_eq!(journal.list(None, 10).expect("remaining").len(), 1);
+    }
+
+    #[test]
+    fn history_cursor_is_stable_for_equal_timestamps_and_newer_inserts() {
+        let journal = SqliteAutomationJournal::in_memory().expect("journal");
+        let starts = [
+            ("00000000-0000-7000-8000-000000000003", 2_000),
+            ("00000000-0000-7000-8000-000000000002", 2_000),
+            ("00000000-0000-7000-8000-000000000001", 1_000),
+        ]
+        .map(|(run_id, started_at_ms)| {
+            let mut value = start();
+            value.run_id = Uuid::parse_str(run_id).expect("UUID");
+            value.started_at_ms = started_at_ms;
+            journal.start(&value).expect("start run");
+            value
+        });
+
+        let first = journal.list(None, 2).expect("first page");
+        assert_eq!(first[0].run_id, starts[0].run_id);
+        assert_eq!(first[1].run_id, starts[1].run_id);
+        let cursor = (first[1].started_at_ms, first[1].run_id);
+        let second_before_insert = journal.list(Some(cursor), 2).expect("second page");
+        assert_eq!(second_before_insert.len(), 1);
+        assert_eq!(second_before_insert[0].run_id, starts[2].run_id);
+
+        let mut inserted = start();
+        inserted.run_id = Uuid::parse_str("00000000-0000-7000-8000-000000000004").expect("UUID");
+        inserted.started_at_ms = 3_000;
+        journal.start(&inserted).expect("insert newer run");
+        let second_after_insert = journal.list(Some(cursor), 2).expect("stable second page");
+        assert_eq!(second_after_insert, second_before_insert);
+        assert!(first.iter().all(|entry| {
+            second_after_insert
+                .iter()
+                .all(|older| older.run_id != entry.run_id)
+        }));
     }
 }

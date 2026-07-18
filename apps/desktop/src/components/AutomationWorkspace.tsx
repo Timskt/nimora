@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AutomationCatalogEntry, AutomationDefinition, AutomationJournalEntry, AutomationRun } from "../platform/desktop";
+import type { AutomationCatalogEntry, AutomationDefinition, AutomationEventHealthSnapshot, AutomationJournalEntry, AutomationRun } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const sampleDefinition: AutomationDefinition = {
@@ -32,6 +32,8 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
   const [run, setRun] = useState<AutomationRun | null>(null);
   const [catalog, setCatalog] = useState<AutomationCatalogEntry[]>([]);
   const [history, setHistory] = useState<AutomationJournalEntry[]>([]);
+  const [historyExhausted, setHistoryExhausted] = useState(false);
+  const [eventHealth, setEventHealth] = useState<AutomationEventHealthSnapshot["sessions"]>([]);
   const definition = useMemo(() => sampleDefinition, []);
 
   async function refreshCatalog() {
@@ -42,15 +44,26 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
     }
   }
 
-  async function refreshHistory() {
+  async function refreshHistory(append = false) {
     try {
-      setHistory(await desktopApi.automationRunHistory());
+      const cursor = append ? history.at(-1) : undefined;
+      const page = await desktopApi.automationRunHistory(20, cursor ? { startedAtMs: cursor.startedAtMs, runId: cursor.runId } : undefined);
+      setHistory((current) => append ? [...current, ...page.records] : page.records);
+      setHistoryExhausted(page.records.length < 20);
     } catch {
-      setHistory([]);
+      if (!append) setHistory([]);
     }
   }
 
-  useEffect(() => { void Promise.all([refreshCatalog(), refreshHistory()]); }, []);
+  async function refreshEventHealth() {
+    try {
+      setEventHealth((await desktopApi.automationEventHealth()).sessions);
+    } catch {
+      setEventHealth([]);
+    }
+  }
+
+  useEffect(() => { void Promise.all([refreshCatalog(), refreshHistory(), refreshEventHealth()]); }, []);
 
   async function deleteHistory(runId?: string) {
     setBusy(true);
@@ -69,7 +82,7 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
     setBusy(true);
     try {
       await desktopApi.setAutomationEnabled(entry.definition.id, !entry.enabled);
-      await refreshCatalog();
+      await Promise.all([refreshCatalog(), refreshEventHealth()]);
       onNotice(!entry.enabled ? "自动化已显式启用" : "自动化已停用");
     } catch {
       onNotice("自动化状态更新失败，未改变目录状态");
@@ -129,6 +142,14 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
           <div><strong>{entry.automationId}</strong><code>{entry.result?.status ?? entry.status}</code><small>{new Date(entry.startedAtMs).toLocaleString()} · Event {entry.eventId}</small></div>
           <span className={entry.status === "running" ? "automation-enabled" : "automation-disabled"}>{entry.status === "running" ? "运行中" : entry.status === "interrupted" ? "已中断" : "已完成"}</span>
           <button disabled={disabled || busy || entry.status === "running"} onClick={() => void deleteHistory(entry.runId)} type="button">删除</button>
+        </article>)}
+        {history.length > 0 && !historyExhausted && <button disabled={disabled || busy} onClick={() => void refreshHistory(true)} type="button">加载更早记录</button>}
+      </section>
+      <section className="automation-catalog" aria-label="自动化事件会话健康">
+        <div className="section-heading"><div><p className="card-label">EVENT HEALTH</p><h3>事件会话</h3></div><button disabled={disabled || busy} onClick={() => void refreshEventHealth()} type="button">刷新</button></div>
+        {eventHealth.length === 0 ? <p>当前没有活跃事件会话；这不代表已安装自动化处于健康状态。</p> : eventHealth.map((session) => <article className="automation-catalog-entry" key={session.sessionId}>
+          <div><strong>{session.automationId}</strong><code>{session.sessionId}</code><small>已执行 {session.executed} · 丢弃 {session.dropped} · 失败 {session.failures}</small></div>
+          <span className={session.dropped > 0 || session.failures > 0 ? "automation-disabled" : "automation-enabled"}>{session.dropped > 0 ? "队列有丢弃" : session.failures > 0 ? "会话失败" : session.active ? "会话活跃" : "正在停止"}</span>
         </article>)}
       </section>
       <article className="automation-rule-card">

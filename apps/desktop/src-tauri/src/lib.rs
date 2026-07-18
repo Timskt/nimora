@@ -368,6 +368,52 @@ struct SkillEventSession {
 struct AutomationEventSession {
     session_id: Uuid,
     cancellation: CancellationFlag,
+    metrics: Arc<AutomationEventMetrics>,
+}
+
+#[derive(Debug, Default)]
+struct AutomationEventMetrics {
+    executed: AtomicU64,
+    dropped: AtomicU64,
+    failures: AtomicU64,
+}
+
+impl AutomationEventMetrics {
+    fn add(counter: &AtomicU64, value: u64) {
+        let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            Some(current.saturating_add(value))
+        });
+    }
+
+    fn record_dropped(&self, dropped: u64) {
+        Self::add(&self.dropped, dropped);
+    }
+
+    fn record_executed(&self) {
+        Self::add(&self.executed, 1);
+    }
+
+    fn record_failure(&self) {
+        Self::add(&self.failures, 1);
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationEventHealthSession {
+    automation_id: String,
+    session_id: Uuid,
+    active: bool,
+    executed: u64,
+    dropped: u64,
+    failures: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationEventHealthSnapshot {
+    spec: &'static str,
+    sessions: Vec<AutomationEventHealthSession>,
 }
 
 struct ActiveSkillExecutionGuard<'a> {
@@ -1436,6 +1482,21 @@ struct AutomationTestRequest {
     event_data: serde_json::Value,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AutomationRunHistoryRequest {
+    before_started_at_ms: Option<u64>,
+    before_run_id: Option<Uuid>,
+    limit: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationRunHistoryPage {
+    spec: &'static str,
+    records: Vec<AutomationJournalEntry>,
+}
+
 #[derive(Debug)]
 struct DryRunAutomationBackend;
 
@@ -1874,10 +1935,48 @@ fn automation_run_status(
     reason = "Tauri managed state command arguments are owned extractors"
 )]
 fn automation_run_history(
-    limit: usize,
+    request: AutomationRunHistoryRequest,
     state: State<'_, DesktopState>,
-) -> Result<Vec<AutomationJournalEntry>, DesktopError> {
-    state.automation_journal.list(limit).map_err(Into::into)
+) -> Result<AutomationRunHistoryPage, DesktopError> {
+    let before = match (request.before_started_at_ms, request.before_run_id) {
+        (Some(started_at_ms), Some(run_id)) => Some((started_at_ms, run_id)),
+        (None, None) => None,
+        _ => return Err(SqlitePersistenceError::InvalidAutomationJournal.into()),
+    };
+    Ok(AutomationRunHistoryPage {
+        spec: "nimora.desktop-automation-run-history/1",
+        records: state.automation_journal.list(before, request.limit)?,
+    })
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri managed state command arguments are owned extractors"
+)]
+fn automation_event_health(
+    state: State<'_, DesktopState>,
+) -> Result<AutomationEventHealthSnapshot, DesktopError> {
+    let sessions = state
+        .automation_event_sessions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    let mut sessions = sessions
+        .iter()
+        .map(|(automation_id, session)| AutomationEventHealthSession {
+            automation_id: automation_id.clone(),
+            session_id: session.session_id,
+            active: !session.cancellation.is_cancelled(),
+            executed: session.metrics.executed.load(Ordering::Relaxed),
+            dropped: session.metrics.dropped.load(Ordering::Relaxed),
+            failures: session.metrics.failures.load(Ordering::Relaxed),
+        })
+        .collect::<Vec<_>>();
+    sessions.sort_by(|left, right| left.automation_id.cmp(&right.automation_id));
+    Ok(AutomationEventHealthSnapshot {
+        spec: "nimora.automation-event-health/1",
+        sessions,
+    })
 }
 
 #[tauri::command]
@@ -7336,6 +7435,7 @@ fn start_automation_event_session(
         AUTOMATION_EVENT_QUEUE_CAPACITY,
     )?;
     let cancellation = CancellationFlag::default();
+    let metrics = Arc::new(AutomationEventMetrics::default());
     let session_id = Uuid::now_v7();
     state
         .automation_event_sessions
@@ -7346,6 +7446,7 @@ fn start_automation_event_session(
             AutomationEventSession {
                 session_id,
                 cancellation: cancellation.clone(),
+                metrics: Arc::clone(&metrics),
             },
         );
     let app = app.clone();
@@ -7353,7 +7454,7 @@ fn start_automation_event_session(
     if let Err(error) = std::thread::Builder::new()
         .name(format!("nimora-automation-event-{automation_id}"))
         .spawn(move || {
-            run_automation_event_session(&app, &definition, &subscription, &cancellation);
+            run_automation_event_session(&app, &definition, &subscription, &cancellation, &metrics);
             finish_automation_event_session(
                 &app.state::<DesktopState>(),
                 &thread_automation_id,
@@ -7376,11 +7477,14 @@ fn run_automation_event_session(
     definition: &AutomationDefinition,
     subscription: &RuntimeEventSubscription,
     cancellation: &CancellationFlag,
+    metrics: &AutomationEventMetrics,
 ) {
     while !cancellation.is_cancelled() {
         let Ok(batch) = subscription.pop() else {
+            metrics.record_failure();
             break;
         };
+        metrics.record_dropped(batch.dropped);
         let Some(event) = batch.events.into_iter().next() else {
             std::thread::sleep(AUTOMATION_EVENT_POLL_INTERVAL);
             continue;
@@ -7390,8 +7494,10 @@ fn run_automation_event_session(
         }
         let state = app.state::<DesktopState>();
         if run_live_automation_event(&state, definition, &event, cancellation.clone()).is_err() {
+            metrics.record_failure();
             break;
         }
+        metrics.record_executed();
     }
 }
 
@@ -8783,6 +8889,7 @@ pub fn run() {
             run_automation,
             automation_run_status,
             automation_run_history,
+            automation_event_health,
             delete_automation_run_history,
             automation_agent_task_status,
             automation_run_agent_tasks,
@@ -8999,12 +9106,12 @@ fn discover_ollama_worker(app: &AppHandle) -> Option<PathBuf> {
 mod tests {
     use super::{
         ACTIVE_CHARACTER_FILE, ACTIVE_THEME_FILE, ACTIVE_VOICE_FILE, ActiveSkillExecution,
-        AssetInstallReceipt, AutoModeJobStatus, AutomationTestRequest, BUILTIN_CHARACTER_ID,
-        BUILTIN_THEME_ID, BUILTIN_VOICE_ID, CHARACTER_SELECTION, CapabilityBackend,
-        DETERMINISTIC_PROVIDER_ID, DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
-        DesktopResolveAutoModeAttemptRequest, DesktopState, ExecutionCancellation,
-        LocalAgentRequest, PendingCreatorApproval, PendingSkillExecution, PetAction,
-        PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
+        AssetInstallReceipt, AutoModeJobStatus, AutomationEventMetrics, AutomationTestRequest,
+        BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID, BUILTIN_VOICE_ID, CHARACTER_SELECTION,
+        CapabilityBackend, DETERMINISTIC_PROVIDER_ID, DesktopAgentRunStatus,
+        DesktopCapabilityBackend, DesktopError, DesktopResolveAutoModeAttemptRequest, DesktopState,
+        ExecutionCancellation, LocalAgentRequest, PendingCreatorApproval, PendingSkillExecution,
+        PetAction, PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
         ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SkillEventSession, StartupMode,
         THEME_SELECTION, TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
         UserProgramRollbackReceipt, VOICE_SELECTION, WindowPolicy, agent_catalog_inner,
@@ -9575,6 +9682,22 @@ mod tests {
         assert_eq!(run.steps.len(), 1);
         assert_eq!(run.steps[0].command, "pet.animation.play");
         assert_eq!(run.steps[0].attempts, 0);
+    }
+
+    #[test]
+    fn automation_event_metrics_accumulate_and_saturate_without_payloads() {
+        let metrics = AutomationEventMetrics::default();
+        metrics.record_dropped(3);
+        metrics.record_dropped(4);
+        metrics.record_executed();
+        metrics.record_failure();
+        assert_eq!(metrics.dropped.load(Ordering::Relaxed), 7);
+        assert_eq!(metrics.executed.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.failures.load(Ordering::Relaxed), 1);
+
+        metrics.dropped.store(u64::MAX - 1, Ordering::Relaxed);
+        metrics.record_dropped(10);
+        assert_eq!(metrics.dropped.load(Ordering::Relaxed), u64::MAX);
     }
 
     fn live_move_request(command: &str, risk: &str) -> AutomationTestRequest {
