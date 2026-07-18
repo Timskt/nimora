@@ -234,6 +234,8 @@ nimora ai history delete --database <path> (--task-id <uuid>|--all)
 
 桌面宿主现已提供版本化 `resume_auto_mode_turn` IPC 与 TypeScript 平台契约。一次调用执行显式 Resume、真实 Workspace 重扫、持久 Context Cache、durable Turn Attempt、生产 Provider/Tool Registry、共享 Capability Gateway 和 Session/Checkpoint/Attempt 原子结果提交；默认离线，输出预算限制为 `1..=16384`，Safe Mode 与 Recovery Mode 在 Provider 前 fail-closed。浏览器预览不会伪造 Auto Mode 执行，而返回 `desktop-host-required` 暂停结果。
 
+宿主无关的 `AutoModeLoopService` 已在相同单轮流水线上提供公平有界批次：最多执行 `1..=256` 个 Turn，遇到完成、业务暂停、Workspace 漂移或任何不确定错误立即停止；批次额度用尽返回 `yielded` 且保持持久 Running，供宿主调度器续调。每轮仍独立真实扫描、创建 durable Attempt 并原子提交，循环层不能吞错或自动重放。
+
 该控制面目前只推进一个持久 Turn，不能描述为后台无限自动运行。仍需实现有界后台 Supervisor、暂停/取消控制、Goal/Plan/Attempt 桌面 UI、不确定 Attempt 人工对账、网络 Provider 数据出境交互和系统密钥加密缓存。
 
 桌面 Control Center 已提供 Agent 一级入口。工作台从宿主读取与 CLI、Provider 请求相同的十项生产 Tool Catalog，明确区分只读能力与必须确认的可逆写能力，并显示本地、无凭据、零费用边界。当前对话路径为 `provider:deterministic-local` 的确定性离线诊断单步，返回真实 Task、Finish Reason 与 Usage；它不伪装成通用对话模型，也不会自行产生 Tool Call。

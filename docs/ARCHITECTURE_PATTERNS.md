@@ -33,6 +33,8 @@
 
 `AutoModeExecutionService` 是应用层 Facade：依次执行 Workspace 预检、Context Strategy/Cache、durable Turn Attempt、Runtime Supervisor 和原子 Commit。`AutoModeTurnSupervisor` 是领域协调器；Provider 与 Tool Backend 是 Adapter；Tool Registry、Risk Evaluator 和 Capability Gateway 构成责任链；Session、Task 与 Attempt 是显式状态机。
 
+`AutoModeLoopService` 在单轮 Facade 之上实现 Cooperative Scheduling：每个宿主批次限制为 `1..=256` 个 Turn，完成、业务暂停、Workspace 漂移或错误立即停止；达到批次上限只返回 `yielded` 并保留持久 Running 状态，不能伪装成 Pause，也不能绕过 Session 自身 Cycle/Budget 上限。下一批次仍必须重新执行完整 Workspace、Cache、Attempt 与 Gateway 流水线。
+
 桌面 `resume_auto_mode_turn` 也是应用层 Facade：负责 Normal/Safe Mode 门禁、恢复、生产依赖装配和一次有界执行，不重新实现风险判断、Tool 准入或持久化不变量。Provider 与 Tool 通过 Registry 发现，真实模块副作用只允许经过 Capability Gateway；Session、Checkpoint、Attempt 与 Workspace 的结果由 Repository 和 Unit of Work 原子提交。该入口不创建第二套 Agent 执行栈，也不把 Tauri、SQLite、Provider SDK 或原生对象泄漏到领域层。
 
 Attempt 创建后，Provider 或 Tool 的未知结果使用“不可确定结果隔离”模式：不自动重试、不释放 continuation、不通过超时租约重新领取。人工对账或确定性恢复是唯一后续入口。该规则优先于可用性和自动推进速度。

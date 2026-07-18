@@ -299,6 +299,150 @@ pub enum AutoModeExecutionError {
     },
 }
 
+#[derive(Debug)]
+pub struct AutoModeLoopRequest {
+    pub turn: RecoveredAutoModeTurn,
+    pub workspace_root: PathBuf,
+    pub constraints: Vec<String>,
+    pub max_output_tokens: u64,
+    pub provider_context: ProviderExecutionContext,
+    pub offline: bool,
+    pub data_classification: DataClassification,
+    pub maximum_data_classification: DataClassification,
+    pub max_turns: u16,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AutoModeLoopStop {
+    Yielded(Box<RecoveredAutoModeTurn>),
+    WorkspaceDrift {
+        session: Box<AutoModeSession>,
+        checkpoint_sequence: u64,
+        workspace: Box<WorkspaceSnapshot>,
+    },
+    Paused(Box<RecoveredAutoModeTurn>),
+    Completed(Box<RecoveredAutoModeTurn>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoModeLoopResult {
+    pub turns_executed: u16,
+    pub cache_hits: u16,
+    pub stop: AutoModeLoopStop,
+}
+
+#[derive(Debug, Clone)]
+pub struct AutoModeLoopService {
+    execution: AutoModeExecutionService,
+}
+
+impl AutoModeLoopService {
+    #[must_use]
+    pub const fn new(execution: AutoModeExecutionService) -> Self {
+        Self { execution }
+    }
+
+    /// Runs a fair, bounded batch of persistent Auto Mode turns.
+    ///
+    /// A yielded result remains durably running and may be scheduled again. Business pauses,
+    /// completion, workspace drift, and indeterminate failures stop the batch immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid host batch bound or any single-turn execution failure.
+    pub fn run<R, B, F>(
+        &self,
+        providers: &ProviderRegistry,
+        tools: &ToolRegistry<R>,
+        backend: &B,
+        request: AutoModeLoopRequest,
+        mut now_ms: F,
+    ) -> Result<AutoModeLoopResult, AutoModeLoopError>
+    where
+        R: ToolRiskEvaluator,
+        B: ToolBackend,
+        F: FnMut() -> u64,
+    {
+        if request.max_turns == 0 || request.max_turns > 256 {
+            return Err(AutoModeLoopError::InvalidTurnLimit);
+        }
+        let mut turn = request.turn;
+        let mut cache_hits = 0_u16;
+        for turn_index in 1..=request.max_turns {
+            let result = self.execution.execute(
+                providers,
+                tools,
+                backend,
+                AutoModeExecutionRequest {
+                    turn,
+                    workspace_root: request.workspace_root.clone(),
+                    constraints: request.constraints.clone(),
+                    max_output_tokens: request.max_output_tokens,
+                    provider_context: request.provider_context.clone(),
+                    offline: request.offline,
+                    data_classification: request.data_classification,
+                    maximum_data_classification: request.maximum_data_classification,
+                    now_ms: now_ms(),
+                },
+            )?;
+            match result {
+                AutoModeExecutionResult::WorkspaceDrift {
+                    session,
+                    checkpoint_sequence,
+                    workspace,
+                } => {
+                    return Ok(AutoModeLoopResult {
+                        turns_executed: turn_index,
+                        cache_hits,
+                        stop: AutoModeLoopStop::WorkspaceDrift {
+                            session,
+                            checkpoint_sequence,
+                            workspace,
+                        },
+                    });
+                }
+                AutoModeExecutionResult::Committed {
+                    turn: committed,
+                    cache_hit,
+                    ..
+                } => {
+                    cache_hits = cache_hits.saturating_add(u16::from(cache_hit));
+                    match committed {
+                        CommittedAutoModeTurn::Continue(next) => turn = *next,
+                        CommittedAutoModeTurn::Paused(paused) => {
+                            return Ok(AutoModeLoopResult {
+                                turns_executed: turn_index,
+                                cache_hits,
+                                stop: AutoModeLoopStop::Paused(paused),
+                            });
+                        }
+                        CommittedAutoModeTurn::Completed(completed) => {
+                            return Ok(AutoModeLoopResult {
+                                turns_executed: turn_index,
+                                cache_hits,
+                                stop: AutoModeLoopStop::Completed(completed),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(AutoModeLoopResult {
+            turns_executed: request.max_turns,
+            cache_hits,
+            stop: AutoModeLoopStop::Yielded(Box::new(turn)),
+        })
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum AutoModeLoopError {
+    #[error("Auto Mode host turn limit must be between 1 and 256")]
+    InvalidTurnLimit,
+    #[error(transparent)]
+    Execution(#[from] AutoModeExecutionError),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecoveredAutoModeTurn {
     pub session: AutoModeSession,
@@ -902,6 +1046,7 @@ mod tests {
     enum TestProviderMode {
         Completed,
         Tool(ToolDescriptor),
+        ToolThenCompleted(ToolDescriptor),
         Failed,
     }
 
@@ -922,26 +1067,26 @@ mod tests {
             request: &ProviderRequest,
             _context: &ProviderExecutionContext,
         ) -> Result<ProviderResponse, ProviderError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
+            let call_index = self.calls.fetch_add(1, Ordering::SeqCst);
+            let completed = || ProviderResponse {
+                spec: "nimora.agent-provider-response/1".to_owned(),
+                request_id: request.request_id,
+                content: "done".to_owned(),
+                tool_calls: Vec::new(),
+                finish_reason: ProviderFinishReason::Completed,
+                usage: ProviderUsage {
+                    input_tokens: 2,
+                    output_tokens: 1,
+                    cost_microunits: 0,
+                },
+            };
             match &self.mode {
-                TestProviderMode::Completed => Ok(ProviderResponse {
-                    spec: "nimora.agent-provider-response/1".to_owned(),
-                    request_id: request.request_id,
-                    content: "done".to_owned(),
-                    tool_calls: Vec::new(),
-                    finish_reason: ProviderFinishReason::Completed,
-                    usage: ProviderUsage {
-                        input_tokens: 2,
-                        output_tokens: 1,
-                        cost_microunits: 0,
-                    },
-                }),
                 TestProviderMode::Tool(tool) => Ok(ProviderResponse {
                     spec: "nimora.agent-provider-response/1".to_owned(),
                     request_id: request.request_id,
                     content: String::new(),
                     tool_calls: vec![ProviderToolCall {
-                        id: "call:1".to_owned(),
+                        id: format!("call:{}", call_index + 1),
                         tool_id: tool.id.clone(),
                         arguments: json!({}),
                     }],
@@ -952,6 +1097,27 @@ mod tests {
                         cost_microunits: 0,
                     },
                 }),
+                TestProviderMode::ToolThenCompleted(tool) if call_index == 0 => {
+                    Ok(ProviderResponse {
+                        spec: "nimora.agent-provider-response/1".to_owned(),
+                        request_id: request.request_id,
+                        content: String::new(),
+                        tool_calls: vec![ProviderToolCall {
+                            id: "call:1".to_owned(),
+                            tool_id: tool.id.clone(),
+                            arguments: json!({}),
+                        }],
+                        finish_reason: ProviderFinishReason::ToolCalls,
+                        usage: ProviderUsage {
+                            input_tokens: 2,
+                            output_tokens: 1,
+                            cost_microunits: 0,
+                        },
+                    })
+                }
+                TestProviderMode::Completed | TestProviderMode::ToolThenCompleted(_) => {
+                    Ok(completed())
+                }
                 TestProviderMode::Failed => Err(ProviderError::new(
                     ProviderErrorKind::Unavailable,
                     "test provider unavailable",
@@ -1036,6 +1202,28 @@ mod tests {
         }
     }
 
+    fn loop_request(
+        turn: RecoveredAutoModeTurn,
+        workspace: &Path,
+        max_turns: u16,
+    ) -> AutoModeLoopRequest {
+        AutoModeLoopRequest {
+            turn,
+            workspace_root: workspace.to_path_buf(),
+            constraints: vec!["stay offline".to_owned()],
+            max_output_tokens: 32,
+            provider_context: ProviderExecutionContext {
+                timeout: Duration::from_secs(1),
+                cancellation: CancellationFlag::default(),
+                credential_reference: None,
+            },
+            offline: true,
+            data_classification: DataClassification::Personal,
+            maximum_data_classification: DataClassification::Personal,
+            max_turns,
+        }
+    }
+
     fn running_turn(database: &Path, workspace: &Path, session_id: Uuid) -> RecoveredAutoModeTurn {
         let recovery = AutoModeRecoveryService::new(database, WorkspaceScanPolicy::default());
         let recovered = recovery
@@ -1086,6 +1274,88 @@ mod tests {
                 .expect("attempt")
                 .is_none()
         );
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn loop_service_runs_continuation_to_completion() {
+        let (database, workspace, session_id) = fixture();
+        let turn = running_turn(&database, &workspace, session_id);
+        let tool = test_tool(ToolEffect::ReadOnly);
+        let (providers, calls) =
+            provider_registry(TestProviderMode::ToolThenCompleted(tool.clone()));
+        let mut tools = ToolRegistry::default();
+        tools.register(tool).expect("register tool");
+        let backend = TestBackend::default();
+        let mut now_ms = 1_102_u64;
+        let result = AutoModeLoopService::new(execution_service(&database))
+            .run(
+                &providers,
+                &tools,
+                &backend,
+                loop_request(turn, &workspace, 4),
+                || {
+                    let current = now_ms;
+                    now_ms += 1;
+                    current
+                },
+            )
+            .expect("loop");
+        assert_eq!(result.turns_executed, 2);
+        assert!(matches!(result.stop, AutoModeLoopStop::Completed(_)));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(backend.0.load(Ordering::SeqCst), 1);
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn loop_service_yields_running_turn_at_host_bound() {
+        let (database, workspace, session_id) = fixture();
+        let turn = running_turn(&database, &workspace, session_id);
+        let tool = test_tool(ToolEffect::ReadOnly);
+        let (providers, calls) = provider_registry(TestProviderMode::Tool(tool.clone()));
+        let mut tools = ToolRegistry::default();
+        tools.register(tool).expect("register tool");
+        let backend = TestBackend::default();
+        let result = AutoModeLoopService::new(execution_service(&database))
+            .run(
+                &providers,
+                &tools,
+                &backend,
+                loop_request(turn, &workspace, 1),
+                || 1_102,
+            )
+            .expect("loop");
+        assert_eq!(result.turns_executed, 1);
+        let AutoModeLoopStop::Yielded(yielded) = result.stop else {
+            panic!("running loop should yield");
+        };
+        assert_eq!(yielded.session.status, AutoModeStatus::Running);
+        assert_eq!(yielded.checkpoint_sequence, 3);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.0.load(Ordering::SeqCst), 1);
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn loop_service_rejects_unbounded_host_batch_before_provider() {
+        let (database, workspace, session_id) = fixture();
+        let turn = running_turn(&database, &workspace, session_id);
+        let (providers, calls) = provider_registry(TestProviderMode::Completed);
+        let error = AutoModeLoopService::new(execution_service(&database))
+            .run(
+                &providers,
+                &ToolRegistry::default(),
+                &TestBackend::default(),
+                loop_request(turn, &workspace, 0),
+                || 1_102,
+            )
+            .expect_err("invalid bound");
+        assert!(matches!(error, AutoModeLoopError::InvalidTurnLimit));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
         fs::remove_file(database).expect("database cleanup");
         fs::remove_dir_all(workspace).expect("workspace cleanup");
     }
