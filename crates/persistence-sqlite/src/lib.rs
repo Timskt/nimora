@@ -1,11 +1,13 @@
 //! `SQLite` persistence adapters for the `Nimora` runtime.
 
+mod agent_goal_store;
 mod automation_agent_journal;
 mod automation_journal;
 mod backup;
 mod skill_approval_journal;
 mod skill_execution_history;
 
+pub use agent_goal_store::{AgentGoalSnapshot, SqliteAgentGoalRepository};
 pub use automation_agent_journal::{
     AutomationAgentJournalEntry, AutomationAgentJournalStatus, SqliteAutomationAgentJournal,
 };
@@ -1137,6 +1139,25 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
             authorized INTEGER NOT NULL CHECK (authorized IN (0, 1)),
             enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS agent_goal (
+            goal_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'completed', 'cancelled')),
+            current_plan_revision INTEGER NOT NULL CHECK (current_plan_revision > 0),
+            created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+            updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
+            schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS agent_goal_updated_idx
+            ON agent_goal(updated_at_ms DESC, goal_id DESC);
+        CREATE TABLE IF NOT EXISTS agent_goal_plan (
+            goal_id TEXT NOT NULL REFERENCES agent_goal(goal_id) ON DELETE CASCADE,
+            revision INTEGER NOT NULL CHECK (revision > 0),
+            created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+            schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (goal_id, revision)
         );",
     )?;
     Ok(())
@@ -1361,6 +1382,12 @@ pub enum SqlitePersistenceError {
     InvalidOutboxRequest,
     #[error("Agent history record or request is invalid")]
     InvalidAgentHistory,
+    #[error("Agent Goal record or request is invalid")]
+    InvalidAgentGoal,
+    #[error("Agent Goal was not found")]
+    AgentGoalNotFound,
+    #[error("Agent Goal was changed by another writer")]
+    AgentGoalConflict,
     #[error("Automation journal record or state transition is invalid")]
     InvalidAutomationJournal,
     #[error("Automation Agent journal record or state transition is invalid")]
@@ -1383,6 +1410,8 @@ pub enum SqlitePersistenceError {
     UnsupportedSkillExecutionHistoryVersion(u32),
     #[error("Agent history version {0} is unsupported")]
     UnsupportedAgentHistoryVersion(u32),
+    #[error("Agent Goal version {0} is unsupported")]
+    UnsupportedAgentGoalVersion(u32),
     #[error("outbox lease is not owned by this consumer")]
     OutboxLeaseNotOwned,
     #[error("backup or restore request is invalid")]

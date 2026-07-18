@@ -1,13 +1,16 @@
 use nimora_agent_provider_worker::{OllamaEndpoint, WorkerOllamaProvider, verify_provider_sidecar};
 use nimora_agent_runtime::{
-    AgentAutonomy, AgentBudget, AgentCoordinator, AgentTask, AgentTaskGateway,
-    AgentTaskGatewayPolicy, AgentTaskOrigin, AgentTaskRequest, CancellationFlag,
-    DataClassification, DeterministicLocalProvider, ProviderExecutionContext, ProviderMessage,
-    ProviderMessageRole, ProviderRegistry, ProviderStepInput, ProviderStepOutcome,
+    AgentAutonomy, AgentBudget, AgentCoordinator, AgentGoal, AgentGoalStatus, AgentPlan,
+    AgentPlanStep, AgentPlanStepStatus, AgentTask, AgentTaskGateway, AgentTaskGatewayPolicy,
+    AgentTaskOrigin, AgentTaskRequest, CancellationFlag, DataClassification,
+    DeterministicLocalProvider, ProviderExecutionContext, ProviderMessage, ProviderMessageRole,
+    ProviderRegistry, ProviderStepInput, ProviderStepOutcome,
 };
 use nimora_agent_tools::production_tool_registry;
-use nimora_persistence_sqlite::{AgentHistoryRecord, SqliteAgentHistoryRepository};
-use serde::Deserialize;
+use nimora_persistence_sqlite::{
+    AgentHistoryRecord, SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
+};
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -99,6 +102,11 @@ pub fn run(arguments: &[String]) -> Result<String, CliError> {
         ["ai", "tool", "describe", tool_id] => tool_describe(tool_id)?,
         ["ai", "history", "export", rest @ ..] => history_export(rest)?,
         ["ai", "history", "delete", rest @ ..] => history_delete(rest)?,
+        ["ai", "goal", "create", rest @ ..] => goal_create(rest)?,
+        ["ai", "goal", "list", rest @ ..] => goal_list(rest)?,
+        ["ai", "goal", "show", rest @ ..] => goal_show(rest)?,
+        ["ai", "goal", "plan", "replace", rest @ ..] => goal_plan_replace(rest)?,
+        ["ai", "goal", "status", "set", rest @ ..] => goal_status_set(rest)?,
         ["ai", "run", rest @ ..] => run_task(rest)?,
         _ => return Err(CliError::new("usage", "unsupported command; use --help", 2)),
     };
@@ -116,7 +124,12 @@ fn help() -> Value {
             "nimora ai tool describe <tool-id>",
             "nimora ai run --input <path|-> --output json [--offline] [--history-database <path>] [--sidecar-root <path> --sidecar-manifest-sha256 <digest>]",
             "nimora ai history export --database <path> [--limit <1..200>] [--before-created-at-ms <timestamp> --before-task-id <uuid>]",
-            "nimora ai history delete --database <path> (--task-id <uuid>|--all)"
+            "nimora ai history delete --database <path> (--task-id <uuid>|--all)",
+            "nimora ai goal create --database <path> --input <path|->",
+            "nimora ai goal list --database <path> [--limit <1..200>]",
+            "nimora ai goal show --database <path> --goal-id <uuid>",
+            "nimora ai goal plan replace --database <path> --goal-id <uuid> --input <path|->",
+            "nimora ai goal status set --database <path> --goal-id <uuid> --status <active|paused|completed|cancelled>"
         ]
     })
 }
@@ -252,6 +265,311 @@ fn history_delete(arguments: &[&str]) -> Result<Value, CliError> {
 
 fn history_storage_error(_: impl std::fmt::Display) -> CliError {
     CliError::new("history-storage", "Agent history operation failed", 10)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GoalCreateInput {
+    title: String,
+    objective: String,
+    steps: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GoalPlanInput {
+    rationale: String,
+    steps: Vec<GoalPlanStepInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GoalPlanStepInput {
+    id: Option<uuid::Uuid>,
+    text: String,
+    status: AgentPlanStepStatus,
+    #[serde(default)]
+    evidence: Vec<String>,
+}
+
+fn goal_repository(path: &str) -> Result<SqliteAgentGoalRepository, CliError> {
+    if path.is_empty() {
+        return Err(CliError::new("usage", "database path cannot be empty", 2));
+    }
+    SqliteAgentGoalRepository::open(Path::new(path)).map_err(goal_storage_error)
+}
+
+fn goal_create(arguments: &[&str]) -> Result<Value, CliError> {
+    let (database, input_path) = parse_goal_database_input(arguments)?;
+    let input = read_bounded_json::<GoalCreateInput>(input_path, "Goal create input")?;
+    let now_ms = current_time_ms()?;
+    let goal_id = uuid::Uuid::now_v7();
+    let steps = input
+        .steps
+        .into_iter()
+        .map(AgentPlanStep::new)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(goal_input_error)?;
+    let plan = AgentPlan::new(goal_id, steps, "Initial plan", now_ms).map_err(goal_input_error)?;
+    let goal =
+        AgentGoal::new(input.title, input.objective, &plan, now_ms).map_err(goal_input_error)?;
+    goal_repository(database)?
+        .create(&goal, &plan)
+        .map_err(goal_storage_error)?;
+    Ok(json!({"spec": "nimora.ai-goal-snapshot/1", "goal": goal, "currentPlan": plan}))
+}
+
+fn goal_list(arguments: &[&str]) -> Result<Value, CliError> {
+    let mut database = None;
+    let mut limit = 50_usize;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "--database" if index + 1 < arguments.len() => {
+                database = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--limit" if index + 1 < arguments.len() => {
+                limit = arguments[index + 1]
+                    .parse()
+                    .map_err(|_| CliError::new("usage", "Goal limit is invalid", 2))?;
+                index += 2;
+            }
+            _ => return Err(goal_usage_error()),
+        }
+    }
+    let database = database.ok_or_else(goal_usage_error)?;
+    let goals = goal_repository(database)?
+        .list(limit)
+        .map_err(goal_storage_error)?;
+    Ok(json!({"spec": "nimora.ai-goal-list/1", "goals": goals}))
+}
+
+fn goal_show(arguments: &[&str]) -> Result<Value, CliError> {
+    let (database, goal_id) = parse_goal_identity(arguments)?;
+    let snapshot = goal_repository(database)?
+        .get(goal_id)
+        .map_err(goal_storage_error)?
+        .ok_or_else(|| CliError::new("goal-not-found", "Agent Goal was not found", 5))?;
+    Ok(json!({
+        "spec": "nimora.ai-goal-snapshot/1",
+        "goal": snapshot.goal,
+        "currentPlan": snapshot.current_plan
+    }))
+}
+
+fn goal_plan_replace(arguments: &[&str]) -> Result<Value, CliError> {
+    let (database, goal_id, input_path) = parse_goal_identity_input(arguments)?;
+    let input = read_bounded_json::<GoalPlanInput>(input_path, "Goal plan input")?;
+    let repository = goal_repository(database)?;
+    let mut snapshot = repository
+        .get(goal_id)
+        .map_err(goal_storage_error)?
+        .ok_or_else(|| CliError::new("goal-not-found", "Agent Goal was not found", 5))?;
+    let steps = input
+        .steps
+        .into_iter()
+        .map(|input| {
+            let mut step = AgentPlanStep::new(input.text)?;
+            if let Some(id) = input.id {
+                step.id = id;
+            }
+            step.update(input.status, input.evidence)?;
+            Ok(step)
+        })
+        .collect::<Result<Vec<_>, nimora_agent_runtime::AgentGoalError>>()
+        .map_err(goal_input_error)?;
+    let now_ms = current_time_ms()?.max(snapshot.goal.updated_at_ms);
+    let plan = snapshot
+        .current_plan
+        .revise(steps, input.rationale, now_ms)
+        .map_err(goal_input_error)?;
+    snapshot
+        .goal
+        .adopt_plan(&plan, now_ms)
+        .map_err(goal_input_error)?;
+    repository
+        .revise(&snapshot.goal, &plan)
+        .map_err(goal_storage_error)?;
+    Ok(json!({"spec": "nimora.ai-goal-snapshot/1", "goal": snapshot.goal, "currentPlan": plan}))
+}
+
+fn goal_status_set(arguments: &[&str]) -> Result<Value, CliError> {
+    let mut database = None;
+    let mut goal_id = None;
+    let mut status = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "--database" if index + 1 < arguments.len() => {
+                database = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--goal-id" if index + 1 < arguments.len() => {
+                goal_id = Some(parse_goal_id(arguments[index + 1])?);
+                index += 2;
+            }
+            "--status" if index + 1 < arguments.len() => {
+                status = Some(parse_goal_status(arguments[index + 1])?);
+                index += 2;
+            }
+            _ => return Err(goal_usage_error()),
+        }
+    }
+    let database = database.ok_or_else(goal_usage_error)?;
+    let goal_id = goal_id.ok_or_else(goal_usage_error)?;
+    let status = status.ok_or_else(goal_usage_error)?;
+    let repository = goal_repository(database)?;
+    let mut snapshot = repository
+        .get(goal_id)
+        .map_err(goal_storage_error)?
+        .ok_or_else(|| CliError::new("goal-not-found", "Agent Goal was not found", 5))?;
+    let now_ms = current_time_ms()?.max(snapshot.goal.updated_at_ms);
+    snapshot
+        .goal
+        .transition(status, &snapshot.current_plan, now_ms)
+        .map_err(goal_input_error)?;
+    repository
+        .transition(&snapshot.goal)
+        .map_err(goal_storage_error)?;
+    Ok(
+        json!({"spec": "nimora.ai-goal-snapshot/1", "goal": snapshot.goal, "currentPlan": snapshot.current_plan}),
+    )
+}
+
+fn parse_goal_database_input<'a>(arguments: &'a [&'a str]) -> Result<(&'a str, &'a str), CliError> {
+    let mut database = None;
+    let mut input = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "--database" if index + 1 < arguments.len() => {
+                database = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--input" if index + 1 < arguments.len() => {
+                input = Some(arguments[index + 1]);
+                index += 2;
+            }
+            _ => return Err(goal_usage_error()),
+        }
+    }
+    Ok((
+        database.ok_or_else(goal_usage_error)?,
+        input.ok_or_else(goal_usage_error)?,
+    ))
+}
+
+fn parse_goal_identity<'a>(arguments: &'a [&'a str]) -> Result<(&'a str, uuid::Uuid), CliError> {
+    let mut database = None;
+    let mut goal_id = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "--database" if index + 1 < arguments.len() => {
+                database = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--goal-id" if index + 1 < arguments.len() => {
+                goal_id = Some(parse_goal_id(arguments[index + 1])?);
+                index += 2;
+            }
+            _ => return Err(goal_usage_error()),
+        }
+    }
+    Ok((
+        database.ok_or_else(goal_usage_error)?,
+        goal_id.ok_or_else(goal_usage_error)?,
+    ))
+}
+
+fn parse_goal_identity_input<'a>(
+    arguments: &'a [&'a str],
+) -> Result<(&'a str, uuid::Uuid, &'a str), CliError> {
+    let mut database = None;
+    let mut goal_id = None;
+    let mut input = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "--database" if index + 1 < arguments.len() => {
+                database = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--goal-id" if index + 1 < arguments.len() => {
+                goal_id = Some(parse_goal_id(arguments[index + 1])?);
+                index += 2;
+            }
+            "--input" if index + 1 < arguments.len() => {
+                input = Some(arguments[index + 1]);
+                index += 2;
+            }
+            _ => return Err(goal_usage_error()),
+        }
+    }
+    Ok((
+        database.ok_or_else(goal_usage_error)?,
+        goal_id.ok_or_else(goal_usage_error)?,
+        input.ok_or_else(goal_usage_error)?,
+    ))
+}
+
+fn parse_goal_id(value: &str) -> Result<uuid::Uuid, CliError> {
+    uuid::Uuid::parse_str(value).map_err(|_| CliError::new("usage", "Goal ID is invalid", 2))
+}
+
+fn parse_goal_status(value: &str) -> Result<AgentGoalStatus, CliError> {
+    match value {
+        "active" => Ok(AgentGoalStatus::Active),
+        "paused" => Ok(AgentGoalStatus::Paused),
+        "completed" => Ok(AgentGoalStatus::Completed),
+        "cancelled" => Ok(AgentGoalStatus::Cancelled),
+        _ => Err(CliError::new("usage", "Goal status is invalid", 2)),
+    }
+}
+
+fn read_bounded_json<T: DeserializeOwned>(path: &str, label: &str) -> Result<T, CliError> {
+    let bytes = if path == "-" {
+        let mut bytes = Vec::new();
+        io::stdin()
+            .take(256 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| CliError::new("input", "cannot read standard input", 3))?;
+        bytes
+    } else {
+        fs::read(Path::new(path))
+            .map_err(|_| CliError::new("input", "cannot read input file", 3))?
+    };
+    if bytes.len() > 256 * 1024 {
+        return Err(CliError::new("input", "input file exceeds 256 KiB", 3));
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|_| CliError::new("input", format!("{label} is invalid"), 3))
+}
+
+fn current_time_ms() -> Result<u64, CliError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| CliError::new("clock", "system clock is before Unix epoch", 10))?
+        .as_millis()
+        .try_into()
+        .map_err(|_| CliError::new("clock", "system clock is outside supported range", 10))
+}
+
+fn goal_input_error(_: impl std::fmt::Display) -> CliError {
+    CliError::new(
+        "goal-input",
+        "Agent Goal input violates its bounded contract",
+        3,
+    )
+}
+
+fn goal_storage_error(_: impl std::fmt::Display) -> CliError {
+    CliError::new("goal-storage", "Agent Goal storage operation failed", 10)
+}
+
+fn goal_usage_error() -> CliError {
+    CliError::new("usage", "Agent Goal command arguments are invalid", 2)
 }
 
 fn registry(

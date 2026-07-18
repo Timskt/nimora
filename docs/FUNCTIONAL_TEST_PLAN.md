@@ -300,6 +300,8 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-069 | 用户程序 Agent 审计故障 fail-closed | Context 被拒绝但安全 Journal 不可写时返回审计不可用，Provider、History 与模块 Backend 零调用，攻击正文和密钥不出现在序列化诊断中 | P0 |
 | AGT-070 | 通用 Module Agent Adapter | Program、Skill、Connector 共用 Adapter 固定 `Module + Personal + draft + no-tools`；越权 Provider 在 Context/Provider 前拒绝，合法 Context 分离为 trusted instruction 与 untrusted data message | P0 |
 | AGT-071 | Module Context Trace 相关性 | Adapter 先生成 Gateway Task/Trace 再做 Context Admission；拒绝错误携带同一 Trace 和无正文审计，宿主不得在准入后修改 Task Trace | P0 |
+| AGT-072 | Goal 双表事务仓储 | Goal 当前状态与不可变 Plan 修订分表持久化；创建、修订和状态变化保持事务一致，陈旧修订、跨 Goal 绑定、索引元数据/Payload 不一致与未知版本 fail-closed | P0 |
+| AGT-073 | Goal CLI 跨进程闭环 | `goal create|list|show`、`goal plan replace`、`goal status set` 使用显式数据库和有界 JSON；跨进程恢复修订，缺少逐步证据时完成失败且 stdout 为空，补齐证据后完成成功 | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |

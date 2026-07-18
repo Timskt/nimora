@@ -3,7 +3,7 @@ use std::{
     fs,
     io::Write,
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -17,6 +17,22 @@ fn temporary_database(name: &str) -> PathBuf {
         .expect("clock")
         .as_nanos();
     std::env::temp_dir().join(format!("nimora-cli-{name}-{unique}.sqlite3"))
+}
+
+fn nimora_with_stdin(arguments: &[&str], input: &[u8]) -> Output {
+    let mut child = nimora()
+        .args(arguments)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn nimora");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(input)
+        .expect("write stdin");
+    child.wait_with_output().expect("wait for nimora")
 }
 
 #[test]
@@ -399,5 +415,98 @@ fn history_cursor_must_be_paired_and_run_storage_failure_is_degraded() {
     assert_eq!(result["task"]["status"], "succeeded");
     assert_eq!(result["history"]["persisted"], false);
     assert_eq!(result["history"]["degraded"], true);
+    let _ = fs::remove_file(database);
+}
+
+#[test]
+fn goal_cli_persists_revises_and_requires_completion_evidence() {
+    let database = temporary_database("goals");
+    let database_path = database.to_str().expect("database path");
+    let created = nimora_with_stdin(
+        &[
+            "ai",
+            "goal",
+            "create",
+            "--database",
+            database_path,
+            "--input",
+            "-",
+        ],
+        br#"{"title":"Ship Goal mode","objective":"Persist and resume a Goal","steps":["Implement store"]}"#,
+    );
+    assert!(created.status.success());
+    let created: Value = serde_json::from_slice(&created.stdout).expect("create output");
+    let goal_id = created["goal"]["id"].as_str().expect("Goal ID");
+    let step_id = created["currentPlan"]["steps"][0]["id"]
+        .as_str()
+        .expect("step ID");
+
+    let incomplete = nimora()
+        .args([
+            "ai",
+            "goal",
+            "status",
+            "set",
+            "--database",
+            database_path,
+            "--goal-id",
+            goal_id,
+            "--status",
+            "completed",
+        ])
+        .output()
+        .expect("attempt incomplete Goal");
+    assert_eq!(incomplete.status.code(), Some(3));
+    assert!(incomplete.stdout.is_empty());
+
+    let plan = format!(
+        r#"{{"rationale":"Implementation verified","steps":[{{"id":"{step_id}","text":"Implement store","status":"completed","evidence":["cargo test passed"]}}]}}"#
+    );
+    let revised = nimora_with_stdin(
+        &[
+            "ai",
+            "goal",
+            "plan",
+            "replace",
+            "--database",
+            database_path,
+            "--goal-id",
+            goal_id,
+            "--input",
+            "-",
+        ],
+        plan.as_bytes(),
+    );
+    assert!(revised.status.success());
+    let revised: Value = serde_json::from_slice(&revised.stdout).expect("revision output");
+    assert_eq!(revised["currentPlan"]["revision"], 2);
+
+    let completed = nimora()
+        .args([
+            "ai",
+            "goal",
+            "status",
+            "set",
+            "--database",
+            database_path,
+            "--goal-id",
+            goal_id,
+            "--status",
+            "completed",
+        ])
+        .output()
+        .expect("complete Goal");
+    assert!(completed.status.success());
+    let completed: Value = serde_json::from_slice(&completed.stdout).expect("completion output");
+    assert_eq!(completed["goal"]["status"], "completed");
+
+    let listed = nimora()
+        .args(["ai", "goal", "list", "--database", database_path])
+        .output()
+        .expect("list Goals");
+    assert!(listed.status.success());
+    let listed: Value = serde_json::from_slice(&listed.stdout).expect("list output");
+    assert_eq!(listed["goals"][0]["id"], goal_id);
+    assert_eq!(listed["goals"][0]["currentPlanRevision"], 2);
     let _ = fs::remove_file(database);
 }

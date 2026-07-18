@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 mod coordinator;
 mod deterministic;
+mod goal;
 mod provider;
 mod task_gateway;
 
@@ -16,6 +17,9 @@ pub use coordinator::{
     ProviderToolTurn, ToolStepOutcome,
 };
 pub use deterministic::DeterministicLocalProvider;
+pub use goal::{
+    AgentGoal, AgentGoalError, AgentGoalStatus, AgentPlan, AgentPlanStep, AgentPlanStepStatus,
+};
 pub use provider::{
     CancellationFlag, ProviderAdapter, ProviderCapabilities, ProviderCapability,
     ProviderDataPreview, ProviderDescriptor, ProviderError, ProviderErrorKind,
