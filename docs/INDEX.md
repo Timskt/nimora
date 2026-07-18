@@ -1,7 +1,7 @@
 # Nimora 文档控制中心
 
 > 版本：0.1.0-draft  
-> 更新日期：2026-07-17  
+> 更新日期：2026-07-18  
 > 所有者：产品与架构负责人
 
 ## 1. 文档优先级
@@ -11,9 +11,10 @@
 1. 已接受的 `docs/adr/ADR-*.md`
 2. `docs/SECURITY_PRIVACY.md` 中的安全红线
 3. `docs/ARCHITECTURE.md` 中的系统边界与依赖规则
-4. `docs/PRODUCT_SPEC.md` 中的功能与验收要求
-5. 专项契约文档
-6. 根目录原始需求文档
+4. `docs/ARCHITECTURE_PATTERNS.md` 中的模式选择、扩展点与反模式
+5. `docs/PRODUCT_SPEC.md` 中的功能与验收要求
+6. 专项契约文档
+7. 根目录原始需求文档
 
 原始需求统一保存在 `archive/original-docs/`，只用于追溯。新开发只能以本目录文档和已接受 ADR 为依据。
 

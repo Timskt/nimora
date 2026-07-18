@@ -325,6 +325,7 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-094 | Auto Mode 每轮 Workspace 漂移门禁 | 每次 Provider 轮次前必须真实有界重扫 Workspace；未变化才释放 continuation，变化时在单一事务中以 Session timestamp、Checkpoint sequence、Workspace revision/fingerprint 三重 CAS 同时暂停 Session/Task 并追加 successor，任何竞争整体回滚 | P0 |
 | AGT-095 | Auto Mode 单轮结果原子提交 | Continue、Paused、Completed 必须将 Session/Task 生命周期、完整 continuation 与 Checkpoint sequence 以 Session timestamp + Checkpoint sequence 双 CAS 原子提交；陈旧结果整体回滚，Provider/Tool 已执行后的提交失败标记为不确定且禁止自动重放 | P0 |
 | AGT-096 | Auto Mode durable Turn Attempt | Provider/Tool 前创建精确绑定 Session、Checkpoint sequence、Session timestamp 与请求指纹的唯一 Attempt，禁止过期重领；结果事务必须原子消费 Attempt，提交失败或崩溃遗留转为 indeterminate，恢复不得释放 continuation 或自动重放 | P0 |
+| AGT-097 | Auto Host 持久单轮执行流水线 | 真实 Workspace 预检、持久 Context Cache、durable Attempt、Provider/Tool Supervisor 与结果 Commit 按序组合；安全只读 Tool 实际派发并持久 continuation，写 Tool 整批零派发暂停，Provider 失败隔离为 indeterminate，Workspace 漂移在 Provider 与 Attempt 前退出 | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |

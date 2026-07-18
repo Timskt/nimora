@@ -267,7 +267,21 @@ fn validate_message_protocol(
     messages: &[ProviderMessage],
     tools: &[ToolDescriptor],
 ) -> Result<(), ProviderError> {
-    let allowed_tools = tools.iter().map(|tool| &tool.id).collect::<BTreeSet<_>>();
+    validate_message_protocol_with_tools(messages, Some(tools))
+}
+
+pub(crate) fn validate_checkpoint_messages(
+    messages: &[ProviderMessage],
+) -> Result<(), ProviderError> {
+    validate_message_protocol_with_tools(messages, None)
+}
+
+fn validate_message_protocol_with_tools(
+    messages: &[ProviderMessage],
+    tools: Option<&[ToolDescriptor]>,
+) -> Result<(), ProviderError> {
+    let allowed_tools =
+        tools.map(|tools| tools.iter().map(|tool| &tool.id).collect::<BTreeSet<_>>());
     let mut pending_calls = BTreeMap::<&str, &ToolId>::new();
     let mut resolved_calls = BTreeSet::<&str>::new();
     for message in messages {
@@ -288,7 +302,9 @@ fn validate_message_protocol(
                     if call.id.is_empty()
                         || call.id.len() > 128
                         || !call.arguments.is_object()
-                        || !allowed_tools.contains(&call.tool_id)
+                        || allowed_tools
+                            .as_ref()
+                            .is_some_and(|tools| !tools.contains(&call.tool_id))
                         || pending_calls.insert(&call.id, &call.tool_id).is_some()
                     {
                         return Err(ProviderError::invalid_request());

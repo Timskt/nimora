@@ -1,4 +1,4 @@
-use crate::{AgentTask, AgentTaskStatus, ProviderMessage, ProviderRequest};
+use crate::{AgentTask, AgentTaskStatus, ProviderMessage, provider::validate_checkpoint_messages};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -88,16 +88,8 @@ impl AutoModeCheckpoint {
         {
             return Err(AutoModeCheckpointError::InvalidCheckpoint);
         }
-        ProviderRequest::new(
-            self.task.id,
-            self.task.trace_id,
-            self.task.provider_id.clone(),
-            self.model.clone(),
-            self.messages.clone(),
-            Vec::new(),
-            1,
-        )
-        .map_err(|_| AutoModeCheckpointError::InvalidCheckpoint)?;
+        validate_checkpoint_messages(&self.messages)
+            .map_err(|_| AutoModeCheckpointError::InvalidCheckpoint)?;
         Ok(())
     }
 

@@ -26,6 +26,8 @@ Auto Host 已新增每轮 Provider 前 Workspace 门禁：按当前 revision 真
 
 Auto Host 的上下文准备现已接入 SQLite Context Cache：每次从完整 continuation 重新生成可验证内容身份，再按 Provider、模型、Plan、Workspace、消息内容与数据等级精确查询；命中直接复用经过 Payload 复验的压缩上下文，miss 才写入受 TTL/LRU/容量约束的条目。模型或资源版本变化不会误命中。
 
+Auto Host 现已提供可由桌面宿主装配的持久单轮执行 Facade。每轮严格按 Workspace 真实重扫、Context 压缩/精确缓存、durable Turn Attempt、`AutoModeTurnSupervisor`、Session/Checkpoint/Attempt 原子结果提交的顺序执行。安全只读 Tool 经原 Tool Registry 与 Backend 实际派发并保存严格关联 continuation；写入或外部副作用整批零派发暂停。Attempt 创建后的 Provider/Tool 错误被立即标记为 `indeterminate`，不得自动重放；Workspace 漂移发生在 Attempt 与 Provider 前并原子暂停。Checkpoint 对历史 Assistant Tool Call/Tool Result 做结构协议校验，但不要求持久化第三方 Tool Descriptor；下一次真实 Provider Request 仍使用当前 Tool Registry 重新约束可调用工具。
+
 ### 1.2 Coding Agent 能力对照与取舍
 
 Nimora 不以复刻某个 CLI 为目标，而是吸收 Codex、Claude Code 等 Coding Agent 已验证的交互模式，再用统一 Capability Gateway、桌面运行时和跨模块 Agent 能力扩展它们。任何“借鉴”必须落到可测试契约，不能只表现为相似命令名。

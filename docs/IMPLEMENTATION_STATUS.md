@@ -55,3 +55,5 @@ Auto Host 已进一步实现显式恢复原子提交：Session timestamp 与 Che
 Auto Host 上下文准备已接入持久 Context Cache：完整 continuation 经协议安全压缩后，以 Provider、模型、Plan revision、Workspace fingerprint、消息内容和数据等级进行精确命中；miss 写入沿用 SQLite TTL/LRU/容量治理。尚未完成 Provider/Tool 单轮结果提交、每轮 Workspace 重扫、缓存系统密钥加密与指标控制面。
 
 Auto Host 每轮 Workspace 门禁已实现真实有界重扫；一致时才允许继续，漂移时以 Session/Checkpoint/Workspace 三重 CAS 原子暂停 Session 与 Task 并追加 successor，竞争写入整体回滚且零 Provider 释放。单轮结果提交服务已支持 Continue、Paused、Completed 三类结果，将 Session/Task 生命周期、完整 continuation 与单调 Checkpoint sequence 以 timestamp + sequence 双 CAS 原子提交。调用前 durable Turn Attempt 已精确绑定 Session、Checkpoint、timestamp 与请求指纹且禁止过期重领；结果事务原子消费 Attempt，重复 Begin、陈旧提交与崩溃遗留均 fail-closed，遗留 Attempt 转为 indeterminate 并阻断 continuation 自动恢复。尚未完成该链路与桌面持久监督循环的生产执行接线、人工处置/对账 UI、缓存系统密钥加密与桌面控制面。
+
+Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Workspace 预检、Context Cache、durable Attempt、Provider/Tool Supervisor 和原子 Commit 按固定顺序执行。真实 SQLite/Workspace 测试覆盖 Provider 完成、安全只读 Tool continuation、写 Tool 整批零派发暂停、Provider 失败 indeterminate 隔离及漂移前置退出；Checkpoint 同时支持验证历史 Tool Call/Result 结构而不持久化 Tool Descriptor。尚未完成桌面后台持续监督循环、Goal/Plan/Attempt 人工处置 UI、缓存系统密钥加密和跨重启桌面端到端验证。

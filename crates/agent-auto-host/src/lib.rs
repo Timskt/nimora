@@ -1,10 +1,13 @@
 //! Host-side recovery and supervision services for persistent Auto Mode sessions.
 
 use nimora_agent_runtime::{
-    AgentGoal, AgentPlan, AgentTask, AgentTaskStatus, AutoModeCheckpoint, AutoModePauseReason,
-    AutoModeSession, AutoModeStatus, AutoModeTurnOutcome, CompactedContext, ContextAnchor,
+    AgentCoordinator, AgentGoal, AgentPlan, AgentPlanStepStatus, AgentTask, AgentTaskStatus,
+    AutoModeCheckpoint, AutoModePauseReason, AutoModeSession, AutoModeStatus, AutoModeTurnError,
+    AutoModeTurnOutcome, AutoModeTurnSupervisor, CompactedContext, ContextAnchor,
     ContextCompactionPolicy, ContextCompactor, ContextManagementError, DataClassification,
-    ProviderMessage, ProviderMessageRole, ToolDescriptor, WorkspaceSnapshot,
+    ProviderExecutionContext, ProviderMessage, ProviderMessageRole, ProviderRegistry,
+    ProviderStepInput, ToolBackend, ToolDescriptor, ToolRegistry, ToolRiskEvaluator,
+    WorkspaceSnapshot,
 };
 use nimora_agent_workspace_host::{WorkspaceHostError, WorkspaceScanPolicy, WorkspaceScanner};
 use nimora_persistence_sqlite::{
@@ -119,6 +122,183 @@ pub enum AutoModeContextError {
     Persistence(#[from] SqlitePersistenceError),
 }
 
+#[derive(Debug)]
+pub struct AutoModeExecutionRequest {
+    pub turn: RecoveredAutoModeTurn,
+    pub workspace_root: PathBuf,
+    pub constraints: Vec<String>,
+    pub max_output_tokens: u64,
+    pub provider_context: ProviderExecutionContext,
+    pub offline: bool,
+    pub data_classification: DataClassification,
+    pub maximum_data_classification: DataClassification,
+    pub now_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AutoModeExecutionResult {
+    WorkspaceDrift {
+        session: Box<AutoModeSession>,
+        checkpoint_sequence: u64,
+        workspace: Box<WorkspaceSnapshot>,
+    },
+    Committed {
+        turn: CommittedAutoModeTurn,
+        cache_hit: bool,
+        request_fingerprint: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct AutoModeExecutionService {
+    context: AutoModeContextService,
+    recovery: AutoModeRecoveryService,
+    commit: AutoModeTurnCommitService,
+}
+
+impl AutoModeExecutionService {
+    /// Creates the host-owned persistent single-turn execution pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the context cache TTL is invalid.
+    pub fn new(
+        database_path: impl Into<PathBuf>,
+        workspace_policy: WorkspaceScanPolicy,
+        cache_policy: ContextCachePolicy,
+        compaction_policy: ContextCompactionPolicy,
+        ttl_ms: u64,
+    ) -> Result<Self, AutoModeExecutionError> {
+        let database_path = database_path.into();
+        Ok(Self {
+            context: AutoModeContextService::new(
+                &database_path,
+                cache_policy,
+                compaction_policy,
+                ttl_ms,
+            )?,
+            recovery: AutoModeRecoveryService::new(&database_path, workspace_policy),
+            commit: AutoModeTurnCommitService::new(database_path),
+        })
+    }
+
+    /// Executes and atomically persists exactly one Auto Mode Provider turn.
+    ///
+    /// Workspace drift exits before an attempt is created. After an attempt exists, every
+    /// execution failure is quarantined as indeterminate and must never be replayed automatically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for preflight, context, attempt, execution, or atomic commit failure.
+    pub fn execute<R: ToolRiskEvaluator, B: ToolBackend>(
+        &self,
+        providers: &ProviderRegistry,
+        tools: &ToolRegistry<R>,
+        backend: &B,
+        request: AutoModeExecutionRequest,
+    ) -> Result<AutoModeExecutionResult, AutoModeExecutionError> {
+        let preflight = self.recovery.preflight_workspace(
+            request.turn,
+            &request.workspace_root,
+            request.now_ms,
+        )?;
+        let WorkspaceTurnPreflight::Ready(turn) = preflight else {
+            let WorkspaceTurnPreflight::PausedForDrift {
+                session,
+                checkpoint_sequence,
+                workspace,
+            } = preflight
+            else {
+                unreachable!();
+            };
+            return Ok(AutoModeExecutionResult::WorkspaceDrift {
+                session,
+                checkpoint_sequence,
+                workspace,
+            });
+        };
+        let mut turn = *turn;
+        let anchor = context_anchor(&turn, request.constraints);
+        let descriptors = tools.descriptors().into_iter().cloned().collect::<Vec<_>>();
+        let prepared = self.context.compact_or_load(
+            &turn.task,
+            &turn.model,
+            &turn.messages,
+            &descriptors,
+            &anchor,
+            request.data_classification,
+            request.maximum_data_classification,
+            request.now_ms,
+        )?;
+        let request_fingerprint = prepared.context.cache_key.clone();
+        let attempt = self
+            .commit
+            .begin(&turn, request_fingerprint.clone(), request.now_ms)?;
+        let input = ProviderStepInput {
+            model: prepared.context.model,
+            messages: prepared.context.messages,
+            max_output_tokens: request.max_output_tokens,
+            context: request.provider_context,
+            offline: request.offline,
+            now_ms: request.now_ms,
+        };
+        let coordinator = AgentCoordinator::new(providers, tools);
+        let supervisor = AutoModeTurnSupervisor::new(coordinator, tools, backend);
+        let outcome = supervisor
+            .advance(&mut turn.session, &mut turn.task, input)
+            .map_err(|source| {
+                let quarantine = self.commit.quarantine(&attempt, request.now_ms);
+                AutoModeExecutionError::ExecutionIndeterminate { source, quarantine }
+            })?;
+        let committed = self
+            .commit
+            .commit(&attempt, turn, outcome, request.now_ms)?;
+        Ok(AutoModeExecutionResult::Committed {
+            turn: committed,
+            cache_hit: prepared.cache_hit,
+            request_fingerprint,
+        })
+    }
+}
+
+fn context_anchor(turn: &RecoveredAutoModeTurn, constraints: Vec<String>) -> ContextAnchor {
+    ContextAnchor {
+        goal: turn.goal.objective.clone(),
+        constraints,
+        pending_steps: turn
+            .plan
+            .steps
+            .iter()
+            .filter(|step| step.status != AgentPlanStepStatus::Completed)
+            .map(|step| step.text.clone())
+            .collect(),
+        evidence: turn
+            .plan
+            .steps
+            .iter()
+            .flat_map(|step| step.evidence.iter().cloned())
+            .collect(),
+        workspace_fingerprint: turn.workspace.fingerprint.clone(),
+        plan_revision: turn.plan.revision,
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum AutoModeExecutionError {
+    #[error(transparent)]
+    Context(#[from] AutoModeContextError),
+    #[error(transparent)]
+    Recovery(#[from] AutoModeRecoveryError),
+    #[error(transparent)]
+    Commit(#[from] AutoModeTurnCommitError),
+    #[error("Auto Mode execution result is indeterminate and must not be replayed automatically")]
+    ExecutionIndeterminate {
+        #[source]
+        source: AutoModeTurnError,
+        quarantine: Result<(), SqlitePersistenceError>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecoveredAutoModeTurn {
     pub session: AutoModeSession,
@@ -188,6 +368,15 @@ impl AutoModeTurnCommitService {
                 now_ms,
             )
             .map_err(AutoModeTurnCommitError::Persistence)
+    }
+
+    fn quarantine(
+        &self,
+        attempt: &AutoModeTurnAttempt,
+        now_ms: u64,
+    ) -> Result<(), SqlitePersistenceError> {
+        SqliteAutoModeTurnAttemptRepository::open(&self.database_path)?
+            .mark_indeterminate(attempt, now_ms)
     }
 
     /// Durably couples a post-Provider turn to its session and checkpoint versions.
@@ -598,12 +787,23 @@ mod tests {
     use super::*;
     use nimora_agent_runtime::{
         AgentBudget, AgentPlanStep, AgentTaskOrigin, AutoModePolicy, AutoModeStepRequest,
-        AutoModeUsage, DataClassification, ProviderFinishReason, ProviderMessageRole,
-        ProviderResponse, ProviderUsage, ToolEffect,
+        AutoModeUsage, CancellationFlag, ProviderAdapter, ProviderCapabilities, ProviderCapability,
+        ProviderDescriptor, ProviderError, ProviderErrorKind, ProviderFinishReason,
+        ProviderLocality, ProviderMessageRole, ProviderRequest, ProviderResponse, ProviderToolCall,
+        ProviderUsage, ToolEffect, ToolInvocation,
     };
     use nimora_persistence_sqlite::StoredWorkspaceSnapshot;
     use nimora_runtime_core::CommandRisk;
-    use std::fs;
+    use serde_json::{Value, json};
+    use std::{
+        collections::BTreeSet,
+        fs,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     fn temporary_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!("nimora-auto-host-{label}-{}", Uuid::now_v7()))
@@ -696,6 +896,320 @@ mod tests {
             .create(&checkpoint)
             .expect("checkpoint");
         (database, workspace_root, session.id)
+    }
+
+    #[derive(Debug)]
+    enum TestProviderMode {
+        Completed,
+        Tool(ToolDescriptor),
+        Failed,
+    }
+
+    #[derive(Debug)]
+    struct TestProvider {
+        descriptor: ProviderDescriptor,
+        mode: TestProviderMode,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ProviderAdapter for TestProvider {
+        fn descriptor(&self) -> &ProviderDescriptor {
+            &self.descriptor
+        }
+
+        fn complete(
+            &self,
+            request: &ProviderRequest,
+            _context: &ProviderExecutionContext,
+        ) -> Result<ProviderResponse, ProviderError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match &self.mode {
+                TestProviderMode::Completed => Ok(ProviderResponse {
+                    spec: "nimora.agent-provider-response/1".to_owned(),
+                    request_id: request.request_id,
+                    content: "done".to_owned(),
+                    tool_calls: Vec::new(),
+                    finish_reason: ProviderFinishReason::Completed,
+                    usage: ProviderUsage {
+                        input_tokens: 2,
+                        output_tokens: 1,
+                        cost_microunits: 0,
+                    },
+                }),
+                TestProviderMode::Tool(tool) => Ok(ProviderResponse {
+                    spec: "nimora.agent-provider-response/1".to_owned(),
+                    request_id: request.request_id,
+                    content: String::new(),
+                    tool_calls: vec![ProviderToolCall {
+                        id: "call:1".to_owned(),
+                        tool_id: tool.id.clone(),
+                        arguments: json!({}),
+                    }],
+                    finish_reason: ProviderFinishReason::ToolCalls,
+                    usage: ProviderUsage {
+                        input_tokens: 2,
+                        output_tokens: 1,
+                        cost_microunits: 0,
+                    },
+                }),
+                TestProviderMode::Failed => Err(ProviderError::new(
+                    ProviderErrorKind::Unavailable,
+                    "test provider unavailable",
+                )),
+            }
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct TestBackend(AtomicUsize);
+
+    impl ToolBackend for TestBackend {
+        fn invoke(
+            &self,
+            _invocation: &ToolInvocation,
+            _descriptor: &ToolDescriptor,
+            _timeout: Duration,
+        ) -> Result<Value, String> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(json!({"state": "idle"}))
+        }
+    }
+
+    fn execution_service(database: &Path) -> AutoModeExecutionService {
+        AutoModeExecutionService::new(
+            database,
+            WorkspaceScanPolicy::default(),
+            ContextCachePolicy::new(16, 1024 * 1024).expect("cache policy"),
+            ContextCompactionPolicy {
+                max_messages: 32,
+                max_content_bytes: 32 * 1024,
+                retain_recent_units: 8,
+            },
+            60_000,
+        )
+        .expect("execution service")
+    }
+
+    fn provider_registry(mode: TestProviderMode) -> (ProviderRegistry, Arc<AtomicUsize>) {
+        let descriptor = ProviderDescriptor::new(
+            "provider:local",
+            "Local",
+            ProviderLocality::Local,
+            4_096,
+            1_024,
+            ProviderCapabilities {
+                supported: BTreeSet::from([ProviderCapability::StructuredToolCalls]),
+            },
+        )
+        .expect("provider descriptor");
+        let mut providers = ProviderRegistry::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        providers
+            .register(TestProvider {
+                descriptor,
+                mode,
+                calls: Arc::clone(&calls),
+            })
+            .expect("provider");
+        (providers, calls)
+    }
+
+    fn execution_request(
+        turn: RecoveredAutoModeTurn,
+        workspace_root: &Path,
+        now_ms: u64,
+    ) -> AutoModeExecutionRequest {
+        AutoModeExecutionRequest {
+            turn,
+            workspace_root: workspace_root.to_path_buf(),
+            constraints: vec!["Do not invent evidence".to_owned()],
+            max_output_tokens: 128,
+            provider_context: ProviderExecutionContext {
+                timeout: Duration::from_secs(5),
+                cancellation: CancellationFlag::default(),
+                credential_reference: None,
+            },
+            offline: true,
+            data_classification: DataClassification::Personal,
+            maximum_data_classification: DataClassification::Personal,
+            now_ms,
+        }
+    }
+
+    fn running_turn(database: &Path, workspace: &Path, session_id: Uuid) -> RecoveredAutoModeTurn {
+        let recovery = AutoModeRecoveryService::new(database, WorkspaceScanPolicy::default());
+        let recovered = recovery
+            .recover(session_id, workspace, 1_100)
+            .expect("recover");
+        recovery.commit_resume(recovered, 1_101).expect("resume")
+    }
+
+    fn test_tool(effect: ToolEffect) -> ToolDescriptor {
+        ToolDescriptor::new(
+            "pet.state.read",
+            "Read pet",
+            "Reads bounded pet state.",
+            json!({"type": "object"}),
+            json!({"type": "object"}),
+            CommandRisk::Safe,
+            effect,
+        )
+        .expect("tool")
+    }
+
+    #[test]
+    fn execution_service_commits_completed_provider_turn() {
+        let (database, workspace, session_id) = fixture();
+        let turn = running_turn(&database, &workspace, session_id);
+        let (providers, calls) = provider_registry(TestProviderMode::Completed);
+        let result = execution_service(&database)
+            .execute(
+                &providers,
+                &ToolRegistry::default(),
+                &TestBackend::default(),
+                execution_request(turn, &workspace, 1_102),
+            )
+            .expect("execute");
+        assert!(matches!(
+            result,
+            AutoModeExecutionResult::Committed {
+                turn: CommittedAutoModeTurn::Completed(_),
+                cache_hit: false,
+                ..
+            }
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(
+            SqliteAutoModeTurnAttemptRepository::open(&database)
+                .expect("attempts")
+                .get(session_id)
+                .expect("attempt")
+                .is_none()
+        );
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn execution_service_dispatches_safe_tool_and_commits_continuation() {
+        let (database, workspace, session_id) = fixture();
+        let turn = running_turn(&database, &workspace, session_id);
+        let tool = test_tool(ToolEffect::ReadOnly);
+        let (providers, _) = provider_registry(TestProviderMode::Tool(tool.clone()));
+        let mut tools = ToolRegistry::default();
+        tools.register(tool).expect("register tool");
+        let backend = TestBackend::default();
+        let result = execution_service(&database)
+            .execute(
+                &providers,
+                &tools,
+                &backend,
+                execution_request(turn, &workspace, 1_102),
+            )
+            .expect("execute");
+        assert!(matches!(
+            result,
+            AutoModeExecutionResult::Committed {
+                turn: CommittedAutoModeTurn::Continue(_),
+                ..
+            }
+        ));
+        assert_eq!(backend.0.load(Ordering::SeqCst), 1);
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn execution_service_pauses_write_tool_before_dispatch() {
+        let (database, workspace, session_id) = fixture();
+        let turn = running_turn(&database, &workspace, session_id);
+        let tool = test_tool(ToolEffect::ReversibleWrite);
+        let (providers, _) = provider_registry(TestProviderMode::Tool(tool.clone()));
+        let mut tools = ToolRegistry::default();
+        tools.register(tool).expect("register tool");
+        let backend = TestBackend::default();
+        let result = execution_service(&database)
+            .execute(
+                &providers,
+                &tools,
+                &backend,
+                execution_request(turn, &workspace, 1_102),
+            )
+            .expect("execute");
+        assert!(matches!(
+            result,
+            AutoModeExecutionResult::Committed {
+                turn: CommittedAutoModeTurn::Paused(_),
+                ..
+            }
+        ));
+        assert_eq!(backend.0.load(Ordering::SeqCst), 0);
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn execution_service_quarantines_provider_failure() {
+        let (database, workspace, session_id) = fixture();
+        let turn = running_turn(&database, &workspace, session_id);
+        let (providers, calls) = provider_registry(TestProviderMode::Failed);
+        let error = execution_service(&database)
+            .execute(
+                &providers,
+                &ToolRegistry::default(),
+                &TestBackend::default(),
+                execution_request(turn, &workspace, 1_102),
+            )
+            .expect_err("provider failure");
+        assert!(matches!(
+            error,
+            AutoModeExecutionError::ExecutionIndeterminate {
+                quarantine: Ok(()),
+                ..
+            }
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            SqliteAutoModeTurnAttemptRepository::open(&database)
+                .expect("attempts")
+                .get(session_id)
+                .expect("attempt")
+                .expect("stored attempt")
+                .status,
+            AutoModeTurnAttemptStatus::Indeterminate
+        );
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn execution_service_stops_drift_before_attempt_or_provider() {
+        let (database, workspace, session_id) = fixture();
+        let turn = running_turn(&database, &workspace, session_id);
+        fs::write(workspace.join("task.txt"), b"drifted").expect("drift");
+        let (providers, calls) = provider_registry(TestProviderMode::Completed);
+        let result = execution_service(&database)
+            .execute(
+                &providers,
+                &ToolRegistry::default(),
+                &TestBackend::default(),
+                execution_request(turn, &workspace, 1_102),
+            )
+            .expect("drift result");
+        assert!(matches!(
+            result,
+            AutoModeExecutionResult::WorkspaceDrift { .. }
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(
+            SqliteAutoModeTurnAttemptRepository::open(&database)
+                .expect("attempts")
+                .get(session_id)
+                .expect("attempt")
+                .is_none()
+        );
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
     }
 
     #[test]
