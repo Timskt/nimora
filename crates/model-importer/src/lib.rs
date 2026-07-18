@@ -93,6 +93,10 @@ enum WorkerResponse {
 #[serde(rename_all = "camelCase")]
 struct GltfDocument {
     asset: GltfAsset,
+    #[serde(default, rename = "extensionsUsed")]
+    extensions_used: Vec<String>,
+    #[serde(default)]
+    extensions: serde_json::Map<String, serde_json::Value>,
     #[serde(default)]
     nodes: Vec<serde_json::Value>,
     #[serde(default)]
@@ -168,6 +172,19 @@ pub fn probe_staged_model(
         return Err(ModelImportError::InputBudgetExceeded);
     }
     probe_glb(&bytes)
+}
+
+/// Probes already-isolated model bytes with the same format and resource gates.
+///
+/// # Errors
+///
+/// Returns an error when the byte budget, GLB container, resource limits, or
+/// supported model format contract is invalid.
+pub fn probe_model_bytes(bytes: &[u8]) -> Result<ModelProbeReport, ModelImportError> {
+    if bytes.len() as u64 > MAX_MODEL_BYTES {
+        return Err(ModelImportError::InputBudgetExceeded);
+    }
+    probe_glb(bytes)
 }
 
 /// Runs the model probe in a one-shot child process with a deadline and bounded
@@ -295,10 +312,11 @@ fn probe_glb(bytes: &[u8]) -> Result<ModelProbeReport, ModelImportError> {
         .map(str::to_owned)
         .collect();
     let binary_bytes = parse_optional_binary_chunk(bytes, json_end)?;
+    let (format, format_version) = detect_model_format(&document)?;
     Ok(ModelProbeReport {
         spec: "nimora.model-probe-report/1".to_owned(),
-        format: "glb".to_owned(),
-        format_version: document.asset.version,
+        format,
+        format_version,
         bytes: bytes.len() as u64,
         json_bytes: json_length,
         binary_bytes,
@@ -310,6 +328,32 @@ fn probe_glb(bytes: &[u8]) -> Result<ModelProbeReport, ModelImportError> {
         animation_names,
         skins: document.skins.len(),
     })
+}
+
+fn detect_model_format(document: &GltfDocument) -> Result<(String, String), ModelImportError> {
+    let Some(vrm) = document.extensions.get("VRMC_vrm") else {
+        return Ok(("glb".to_owned(), document.asset.version.clone()));
+    };
+    if !document
+        .extensions_used
+        .iter()
+        .any(|extension| extension == "VRMC_vrm")
+    {
+        return Err(ModelImportError::InvalidGlb(
+            "VRM extension must be declared in extensionsUsed",
+        ));
+    }
+    let version = vrm
+        .get("specVersion")
+        .and_then(serde_json::Value::as_str)
+        .filter(|version| version.starts_with("1.0"))
+        .ok_or(ModelImportError::InvalidGlb("only VRM 1.0 is accepted"))?;
+    if vrm.get("humanoid").is_none() || vrm.get("meta").is_none() {
+        return Err(ModelImportError::InvalidGlb(
+            "VRM requires meta and humanoid contracts",
+        ));
+    }
+    Ok(("vrm".to_owned(), version.to_owned()))
 }
 
 fn parse_optional_binary_chunk(bytes: &[u8], json_end: usize) -> Result<usize, ModelImportError> {
@@ -355,4 +399,68 @@ fn safe_relative_file(path: &Path) -> Result<&Path, ModelImportError> {
         return Err(ModelImportError::UnsafeSource);
     }
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ModelImportError, probe_glb};
+
+    fn glb(document: &serde_json::Value) -> Vec<u8> {
+        let mut json = serde_json::to_vec(document).unwrap();
+        while !json.len().is_multiple_of(4) {
+            json.push(b' ');
+        }
+        let length = 20 + json.len();
+        let mut bytes = Vec::with_capacity(length);
+        bytes.extend_from_slice(b"glTF");
+        bytes.extend_from_slice(&2_u32.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(length).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(json.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&0x4e4f_534a_u32.to_le_bytes());
+        bytes.extend_from_slice(&json);
+        bytes
+    }
+
+    #[test]
+    fn recognizes_strict_vrm_one_contracts() {
+        let report = probe_glb(&glb(&serde_json::json!({
+            "asset": { "version": "2.0" },
+            "extensionsUsed": ["VRMC_vrm"],
+            "extensions": {
+                "VRMC_vrm": {
+                    "specVersion": "1.0",
+                    "meta": {},
+                    "humanoid": {}
+                }
+            }
+        })))
+        .unwrap();
+        assert_eq!(report.format, "vrm");
+        assert_eq!(report.format_version, "1.0");
+    }
+
+    #[test]
+    fn rejects_undeclared_or_legacy_vrm_contracts() {
+        let undeclared = glb(&serde_json::json!({
+            "asset": { "version": "2.0" },
+            "extensions": {
+                "VRMC_vrm": { "specVersion": "1.0", "meta": {}, "humanoid": {} }
+            }
+        }));
+        assert!(matches!(
+            probe_glb(&undeclared),
+            Err(ModelImportError::InvalidGlb(_))
+        ));
+        let legacy = glb(&serde_json::json!({
+            "asset": { "version": "2.0" },
+            "extensionsUsed": ["VRMC_vrm"],
+            "extensions": {
+                "VRMC_vrm": { "specVersion": "0.0", "meta": {}, "humanoid": {} }
+            }
+        }));
+        assert!(matches!(
+            probe_glb(&legacy),
+            Err(ModelImportError::InvalidGlb(_))
+        ));
+    }
 }

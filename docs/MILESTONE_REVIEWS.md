@@ -188,3 +188,10 @@ Actions 分钟：
 - UI：Creator Studio 支持安装前本地音频预览、声音激活和恢复静音；动作成功后才异步播放，Quiet Mode 在 Clip 请求前阻断，播放失败不影响动作。
 - 证据：Asset Installer 36 项、Desktop Host 91 项、前端 32 项、TypeScript 生产构建与 Bundle Budget 已通过专项验证。
 - 架构收敛：角色、主题、声音已复用类型化 `AssetSelectionPolicy`；统一 Schema、Safe Mode、错误分类和原子写，同时保留各资产独立内容复验及 Character Renderer 回滚，Desktop Host 测试增至 95 项。
+
+## M-2026-07-18 VRM 1.0 开放角色纵切
+
+- 修正能力漂移：Manifest 不再接受尚无合规 Runtime 的 Live2D；VRM 只有通过真实格式复验后才进入 Renderer。
+- 安全边界：Importer 识别 GLB 2.0 内声明的 `VRMC_vrm`，强制 1.0、meta、humanoid、无外部 URI与既有资源预算；Installer 重开内容复验并拒绝普通 GLB 伪装。
+- 渲染边界：`@pixiv/three-vrm` 仅在活动 VRM 时动态加载，驱动 MToon/Spring Bone 更新；卸载时深度释放 VRM 场景，失败沿用内置角色回退。
+- 性能边界：Bundle Gate 按依赖图计算 GLTF 基础图，并单独限制 VRM 增量，不能通过代码拆块隐藏真实成本。

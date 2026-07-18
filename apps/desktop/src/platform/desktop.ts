@@ -432,7 +432,7 @@ export interface CharacterRendererSnapshot {
   spec: "nimora.renderer/1";
   assetId: string;
   assetBaseUrl: string | null;
-  backend: "built-in" | "sprite-sequence" | "sprite-atlas" | "gltf";
+  backend: "built-in" | "sprite-sequence" | "sprite-atlas" | "gltf" | "vrm";
   canvas: { width: number; height: number };
   anchor: { x: number; y: number };
   defaultScale: number;

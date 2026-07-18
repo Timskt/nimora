@@ -976,11 +976,10 @@ pub fn read_verified_asset_model(
     let media_type = package.media_types.get(relative_path).ok_or_else(|| {
         InstallError::InvalidMetadata("model is outside the verified inventory".to_owned())
     })?;
-    if media_type != "model/gltf-binary"
-        || relative_path.extension().and_then(|value| value.to_str()) != Some("glb")
-    {
+    let extension = relative_path.extension().and_then(|value| value.to_str());
+    if media_type != "model/gltf-binary" || !matches!(extension, Some("glb" | "vrm")) {
         return Err(InstallError::InvalidMetadata(
-            "model entrypoint must be GLB".to_owned(),
+            "model entrypoint must be GLB or VRM".to_owned(),
         ));
     }
     let root = source_root.canonicalize()?;
@@ -1219,20 +1218,41 @@ fn load_asset_renderer(
     let Some(render) = manifest.render.as_ref() else {
         return Ok(None);
     };
-    if render.backend == "gltf" {
+    if ["gltf", "vrm"].contains(&render.backend.as_str()) {
         let model = manifest
             .entrypoints
             .as_ref()
             .and_then(|entrypoints| entrypoints.model.as_ref())
             .ok_or_else(|| {
-                InstallError::InvalidMetadata("gltf renderer requires entrypoints.model".to_owned())
+                InstallError::InvalidMetadata(
+                    "model renderer requires entrypoints.model".to_owned(),
+                )
             })?;
         let model = safe_relative_path(model)?;
         require_inventory_media(inventory, model, &["model/gltf-binary"])?;
-        if model.extension().and_then(|value| value.to_str()) != Some("glb") {
-            return Err(InstallError::InvalidMetadata(
-                "gltf renderer model must be a GLB file".to_owned(),
-            ));
+        let expected_extension = if render.backend == "vrm" {
+            "vrm"
+        } else {
+            "glb"
+        };
+        if model.extension().and_then(|value| value.to_str()) != Some(expected_extension) {
+            return Err(InstallError::InvalidMetadata(format!(
+                "{} renderer model must use .{expected_extension}",
+                render.backend
+            )));
+        }
+        let report = nimora_model_importer::probe_model_bytes(&fs::read(source_root.join(model))?)
+            .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+        let expected_format = if render.backend == "gltf" {
+            "glb"
+        } else {
+            "vrm"
+        };
+        if report.format != expected_format {
+            return Err(InstallError::InvalidMetadata(format!(
+                "model content is {}, not {}",
+                report.format, render.backend
+            )));
         }
         return Ok(Some(AssetRendererDescriptor {
             backend: render.backend.clone(),
@@ -1661,7 +1681,7 @@ fn require_media_extension(path: &Path, media_type: &str) -> Result<(), InstallE
         "image/webp" => &["webp"][..],
         "image/jpeg" => &["jpg", "jpeg"][..],
         "image/gif" => &["gif"][..],
-        "model/gltf-binary" => &["glb"][..],
+        "model/gltf-binary" => &["glb", "vrm"][..],
         "audio/wav" => &["wav"][..],
         "audio/ogg" => &["ogg"][..],
         _ => &[][..],
@@ -1696,8 +1716,7 @@ fn validate_manifest_header(manifest: &AssetManifestHeader) -> Result<(), Instal
         || (["character", "skin"].contains(&manifest.asset_type.as_str())
             && manifest.render.is_none())
         || manifest.render.as_ref().is_some_and(|render| {
-            !["sprite-sequence", "sprite-atlas", "live2d", "vrm", "gltf"]
-                .contains(&render.backend.as_str())
+            !["sprite-sequence", "sprite-atlas", "vrm", "gltf"].contains(&render.backend.as_str())
                 || render.canvas.width == 0
                 || render.canvas.height == 0
                 || render.canvas.width > 4_096
@@ -2090,6 +2109,51 @@ mod tests {
 
     fn sha256(contents: &[u8]) -> String {
         format!("{:x}", Sha256::digest(contents))
+    }
+
+    fn model_glb(document: &serde_json::Value) -> Vec<u8> {
+        let mut json = serde_json::to_vec(document).unwrap();
+        while !json.len().is_multiple_of(4) {
+            json.push(b' ');
+        }
+        let length = 20 + json.len();
+        let mut bytes = Vec::with_capacity(length);
+        bytes.extend_from_slice(b"glTF");
+        bytes.extend_from_slice(&2_u32.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(length).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(json.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&0x4e4f_534a_u32.to_le_bytes());
+        bytes.extend_from_slice(&json);
+        bytes
+    }
+
+    fn minimal_glb() -> Vec<u8> {
+        model_glb(&serde_json::json!({ "asset": { "version": "2.0" } }))
+    }
+
+    fn write_vrm_package(root: &Path, model: &[u8]) {
+        fs::create_dir_all(root.join("models")).unwrap();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "spec": "nimora.asset/1", "id": "character.example.vrm", "type": "character",
+            "version": "1.0.0", "name": { "en": "VRM" }, "publisher": "publisher.example",
+            "license": "CC0-1.0", "engines": { "nimora": ">=0.1.0" },
+            "render": { "backend": "vrm", "canvas": { "width": 512, "height": 512 },
+                "anchor": { "x": 0.5, "y": 1.0 }, "defaultScale": 1.0, "pixelArt": false },
+            "entrypoints": { "model": "models/character.vrm" }, "capabilities": [],
+            "fallbacks": {}, "locales": ["en"],
+            "integrity": { "algorithm": "sha256", "files": "integrity.json" }
+        }))
+        .unwrap();
+        fs::write(root.join(MANIFEST_FILE), &manifest).unwrap();
+        fs::write(root.join("models/character.vrm"), model).unwrap();
+        let integrity = serde_json::to_vec(&serde_json::json!({
+            "files": [
+                { "path": MANIFEST_FILE, "sha256": sha256(&manifest), "bytes": manifest.len(), "mediaType": "application/json" },
+                { "path": "models/character.vrm", "sha256": sha256(model), "bytes": model.len(), "mediaType": "model/gltf-binary" }
+            ],
+            "totalBytes": manifest.len() + model.len()
+        })).unwrap();
+        fs::write(root.join("integrity.json"), integrity).unwrap();
     }
 
     const ONE_PIXEL_PNG: &[u8] = &[
@@ -2977,7 +3041,8 @@ mod tests {
         let store = root.join("assets");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(staged.parent().unwrap()).unwrap();
-        fs::write(&staged, b"glTF-probed-model").unwrap();
+        let model = minimal_glb();
+        fs::write(&staged, &model).unwrap();
 
         let result = install_gltf_character(
             &staged,
@@ -3012,7 +3077,7 @@ mod tests {
         let active = store.join("character.local.aurora");
         assert_eq!(
             fs::read(active.join("models/character.glb")).unwrap(),
-            b"glTF-probed-model"
+            model
         );
         let summary = inspect_asset_package(&active).unwrap();
         assert_eq!(summary.renderer_backend.as_deref(), Some("gltf"));
@@ -3034,7 +3099,7 @@ mod tests {
         );
         assert_eq!(
             read_verified_asset_model(&active, Path::new("models/character.glb")).unwrap(),
-            b"glTF-probed-model"
+            minimal_glb()
         );
         for forbidden in [
             Path::new("manifest.json"),
@@ -3062,7 +3127,7 @@ mod tests {
         let staged = root.join("character.glb");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        fs::write(&staged, b"glTF-probed-model").unwrap();
+        fs::write(&staged, minimal_glb()).unwrap();
         let error = install_gltf_character(
             &staged,
             &root.join("assets"),
@@ -3115,7 +3180,7 @@ mod tests {
         let staged = root.join("character.glb");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        fs::write(&staged, b"glTF-probed-model").unwrap();
+        fs::write(&staged, minimal_glb()).unwrap();
         install_gltf_character(
             &staged,
             &root.join("assets"),
@@ -3134,6 +3199,29 @@ mod tests {
         )
         .unwrap();
         assert!(manifest.pointer("/entrypoints/animationGraph").is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn accepts_verified_vrm_one_and_rejects_disguised_glb() {
+        let root = std::env::temp_dir().join("nimora-installer-vrm");
+        let _ = fs::remove_dir_all(&root);
+        let valid = model_glb(&serde_json::json!({
+            "asset": { "version": "2.0" },
+            "extensionsUsed": ["VRMC_vrm"],
+            "extensions": { "VRMC_vrm": { "specVersion": "1.0", "meta": {}, "humanoid": {} } }
+        }));
+        write_vrm_package(&root, &valid);
+        let renderer = inspect_asset_renderer(&root).unwrap();
+        assert_eq!(renderer.backend, "vrm");
+        assert_eq!(
+            renderer.model.as_deref(),
+            Some(Path::new("models/character.vrm"))
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+        write_vrm_package(&root, &minimal_glb());
+        assert!(inspect_asset_renderer(&root).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

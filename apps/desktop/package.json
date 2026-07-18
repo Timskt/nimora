@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@nimora/schemas": "workspace:*",
+    "@pixiv/three-vrm": "^3.5.5",
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.6.0",
     "@vitejs/plugin-react": "latest",

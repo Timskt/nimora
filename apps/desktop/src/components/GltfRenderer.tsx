@@ -21,6 +21,7 @@ import {
   WebGLRenderer,
 } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import type { VRM } from "@pixiv/three-vrm";
 import type { CharacterRendererSnapshot, ModelAnimationBinding } from "../platform/desktop";
 
 export function modelAssetUrl(baseUrl: string, relativePath: string): string {
@@ -32,6 +33,10 @@ export function cameraDistanceForRadius(radius: number, verticalFovDegrees: numb
   const safeRadius = Math.max(radius, 0.001);
   const halfFov = MathUtils.degToRad(verticalFovDegrees / 2);
   return safeRadius / Math.sin(halfFov);
+}
+
+export function isThreeDimensionalBackend(backend: string): boolean {
+  return backend === "gltf" || backend === "vrm";
 }
 
 export function disposeObjectTree(root: Object3D): void {
@@ -84,12 +89,14 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
     const canvas = canvasRef.current;
     const baseUrl = descriptor.assetBaseUrl;
     const model = descriptor.model;
-    if (!canvas || !baseUrl || !model || descriptor.backend !== "gltf") return;
+    if (!canvas || !baseUrl || !model || !isThreeDimensionalBackend(descriptor.backend)) return;
 
     let disposed = false;
     let animationFrame = 0;
     let loadedRoot: Object3D | null = null;
     let mixer: AnimationMixer | null = null;
+    let vrm: VRM | null = null;
+    let disposeVrm: ((value: VRM) => void) | null = null;
     let renderer: WebGLRenderer;
     try {
       renderer = new WebGLRenderer({ canvas, alpha: true, antialias: true });
@@ -126,6 +133,7 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
       animationFrame = window.requestAnimationFrame(renderFrame);
       const delta = clock.getDelta();
       if (!reducedMotion.matches) mixer?.update(delta);
+      if (!reducedMotion.matches) vrm?.update(delta);
       renderer.render(scene, camera);
     };
     animationFrame = window.requestAnimationFrame(renderFrame);
@@ -139,8 +147,15 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
     };
     canvas.addEventListener("webglcontextlost", handleContextLost);
 
-    const loader = new GLTFLoader();
-    loader.load(
+    const loadModel = async () => {
+      const loader = new GLTFLoader();
+      if (descriptor.backend === "vrm") {
+        const { VRMLoaderPlugin, VRMUtils } = await import("@pixiv/three-vrm");
+        if (disposed) return;
+        loader.register((parser) => new VRMLoaderPlugin(parser));
+        disposeVrm = (value) => VRMUtils.deepDispose(value.scene);
+      }
+      loader.load(
       modelAssetUrl(baseUrl, model),
       (gltf) => {
         if (disposed) {
@@ -148,6 +163,14 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
           return;
         }
         loadedRoot = gltf.scene;
+        if (descriptor.backend === "vrm") {
+          vrm = gltf.userData.vrm as VRM | undefined ?? null;
+          if (!vrm) {
+            fail();
+            disposeObjectTree(gltf.scene);
+            return;
+          }
+        }
         const bounds = new Box3().setFromObject(loadedRoot);
         if (bounds.isEmpty()) {
           fail();
@@ -196,7 +219,9 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
       },
       undefined,
       fail,
-    );
+      );
+    };
+    void loadModel().catch(fail);
 
     return () => {
       disposed = true;
@@ -207,7 +232,8 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
       playActionRef.current = () => undefined;
       if (loadedRoot) {
         scene.remove(loadedRoot);
-        disposeObjectTree(loadedRoot);
+        if (vrm && disposeVrm) disposeVrm(vrm);
+        else disposeObjectTree(loadedRoot);
       }
       renderer.dispose();
       renderer.forceContextLoss();

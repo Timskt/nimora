@@ -9804,7 +9804,16 @@ mod tests {
         let store = root.join("assets");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
-        std::fs::write(&staged, b"verified-glb").unwrap();
+        let json = br#"{"asset":{"version":"2.0"}} "#;
+        let length = 20 + json.len();
+        let mut verified_glb = Vec::with_capacity(length);
+        verified_glb.extend_from_slice(b"glTF");
+        verified_glb.extend_from_slice(&2_u32.to_le_bytes());
+        verified_glb.extend_from_slice(&u32::try_from(length).unwrap().to_le_bytes());
+        verified_glb.extend_from_slice(&u32::try_from(json.len()).unwrap().to_le_bytes());
+        verified_glb.extend_from_slice(&0x4e4f_534a_u32.to_le_bytes());
+        verified_glb.extend_from_slice(json);
+        std::fs::write(&staged, &verified_glb).unwrap();
         install_gltf_character(
             &staged,
             &store,
@@ -9833,7 +9842,7 @@ mod tests {
         );
         assert_eq!(response.status, tauri::http::StatusCode::OK);
         assert_eq!(response.media_type, "model/gltf-binary");
-        assert_eq!(response.body, b"verified-glb");
+        assert_eq!(response.body, verified_glb);
 
         for forbidden in [
             "nimora-asset://localhost/character.local.aurora/manifest.json",

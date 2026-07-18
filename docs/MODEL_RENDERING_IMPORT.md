@@ -28,9 +28,10 @@ Nimora 将静态序列帧、2D 骨骼模型和实时 3D 角色视为同等的一
 | PNG/WebP 序列帧、Atlas | 核心 | 原生 | 基础回退格式 |
 | Lottie | 扩展 | Renderer Adapter | 限制表达式与外部资源 |
 | Spine | 扩展 | Renderer Adapter | 用户需满足运行时许可证 |
-| Live2D Cubism | 扩展 | Renderer Adapter | SDK/runtime 不随意再分发，遵守 Cubism 条款 |
+| Live2D Cubism | 扩展（未启用） | 许可证感知 Renderer Adapter | Installer 当前提前拒绝，禁止在缺少合规 Runtime 时伪装支持 |
 | glTF 2.0/GLB | 核心 3D | 原生或规范化 | 禁止导入时执行脚本与任意 URI |
-| VRM 0.x/1.0 | 核心 3D | 规范化为统一角色模型 | 支持 humanoid、expression、Spring Bone、MToon |
+| VRM 1.0 | 核心 3D（已接入） | 原生复验并按需加载 | 强制 `VRMC_vrm`、meta、humanoid；MToon/Spring Bone 由独立懒加载 Runtime 驱动 |
+| VRM 0.x | 导入转换 | 转换为 VRM 1.0 或 glTF | 不在运行时直接接受旧契约 |
 | OBJ/FBX | 创作者导入 | 隔离转换为 glTF/GLB | 不作为运行时分发格式 |
 
 所有格式能力必须声明平台、GPU 后端、最大格式版本和降级路径。缺失专有运行时时，产品展示安装说明或回退角色，不静默下载受限组件。
@@ -142,4 +143,4 @@ pnpm deskpet pack build ./character-pack
 
 当前规范化封装已经通过探测的原始 GLB 和用户确认的动作映射，不进行网格重写、纹理转码或许可证扫描；用户填写的许可证只是包元数据，不代表平台完成权利认证。`nimora.animation-map/1` 将平台动作绑定到精确动画名和循环语义，要求 `pet.idle`，限制 64 项并拒绝空白、超长或控制字符名称；宿主还会把每个绑定与安装时最新 Worker 报告中的动画名逐项比对，拒绝绕过 UI 提交的空映射或不存在片段。Pet Overlay 通过 `nimora.renderer/1` 获取验证后的映射，在模型只加载一次的前提下按状态切换 AnimationAction，以 180 ms cross-fade 过渡；一次性动作使用 `LoopOnce` 并停在末帧，循环动作使用 `LoopRepeat`，缺失动作沿 Manifest fallback 回到 `pet.idle`，映射到模型不存在的动画时拒绝播放而非猜测。减少动画偏好下 Mixer 保持暂停。切换或卸载时停止 Mixer、取消帧循环、断开 ResizeObserver 并释放几何体、材质、纹理和 WebGL context，context 丢失则显式回退内置角色。
 
-上述能力是 GLB 2.0 Renderer，不是 VRM/Live2D 支持，也不是标准动作语义映射完成。inventory 与容器验证不等于发布者签名认证，许可证字段不等于权利扫描，Three.js WebGLRenderer 也不等于独立 Renderer 进程或 OS/GPU 沙箱。Importer Worker 的进程边界只能隔离崩溃、超时和协议输出，不能证明其无法访问其它 OS 资源。GLTF JSON、VRM、Live2D 和其它格式仍未实现，不能据此宣称格式矩阵全部可用。
+当前能力包含 GLB 2.0 与严格 VRM 1.0 Renderer，但尚未完成 VRM expression/look-at 公共语义映射，也不代表 Live2D 已启用。Inventory 与容器验证不等于发布者签名认证，许可证字段不等于权利扫描，Three.js WebGLRenderer 也不等于独立 Renderer 进程或 OS/GPU 沙箱。Importer Worker 的进程边界只能隔离崩溃、超时和协议输出，不能证明其无法访问其它 OS 资源。GLTF JSON、VRM 0.x、Live2D 和其它格式仍需各自完整边界，不能据此宣称格式矩阵全部可用。

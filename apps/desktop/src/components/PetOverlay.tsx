@@ -104,7 +104,7 @@ export function PetOverlay() {
       >
         <span className="overlay-status">{message}</span>
         {renderer && renderer.backend !== "built-in" && !rendererFailed ? (
-          renderer.backend === "gltf" ? (
+          ["gltf", "vrm"].includes(renderer.backend) ? (
             <RendererErrorBoundary resetKey={renderer.assetId} onFailure={handleRendererFailure}>
               <Suspense fallback={<GltfLoadingPlaceholder descriptor={renderer} />}>
                 <GltfRenderer descriptor={renderer} action={petStateAction(snapshot?.pet.state ?? "idle")} onFailure={handleRendererFailure} />

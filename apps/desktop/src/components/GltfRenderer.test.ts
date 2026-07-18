@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { resolveModelAnimation } from "./GltfRenderer";
+import { isThreeDimensionalBackend, resolveModelAnimation } from "./GltfRenderer";
+
+it("routes only verified GLTF and VRM backends through the 3D adapter", () => {
+  expect(isThreeDimensionalBackend("gltf")).toBe(true);
+  expect(isThreeDimensionalBackend("vrm")).toBe(true);
+  expect(isThreeDimensionalBackend("live2d")).toBe(false);
+  expect(isThreeDimensionalBackend("sprite-atlas")).toBe(false);
+});
 
 const clips = {
   "pet.idle": { animation: "Idle", looped: true },

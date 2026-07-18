@@ -1,5 +1,11 @@
 # Nimora 功能测试计划
 
+## VRM 1.0 纵切增量
+
+- Verify VRM 安装必须使用 `.vrm`、`model/gltf-binary`、GLB 2.0、声明的 `VRMC_vrm`、1.0 `specVersion`、meta 与 humanoid；普通 GLB 伪装 VRM、VRM 0.x 和未声明扩展全部拒绝。
+- Verify glTF 只加载 Three 基础图，VRM 才动态加载独立 Runtime；GLTF 依赖图与 VRM 增量分别执行 Bundle Budget，禁止拆块规避总图计费。
+- Verify WebGL Context 丢失、组件卸载和模型切换停止 Mixer/VRM 更新并释放纹理、材质、场景与 Context；第三方模型失败回退内置角色。
+
 > 版本：0.1.0-draft  
 > 更新日期：2026-07-18
 > 状态：测试基线

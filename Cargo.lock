@@ -2270,6 +2270,7 @@ dependencies = [
 name = "nimora-asset-installer"
 version = "0.1.0"
 dependencies = [
+ "nimora-model-importer",
  "serde",
  "serde_json",
  "sha2",
