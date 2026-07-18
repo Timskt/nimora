@@ -135,6 +135,21 @@ const ACTIVE_THEME_FILE: &str = ".active-theme.json";
 const BUILTIN_VOICE_ID: &str = "builtin.silent";
 const ACTIVE_VOICE_SPEC: &str = "nimora.active-voice/1";
 const ACTIVE_VOICE_FILE: &str = ".active-voice.json";
+const CHARACTER_SELECTION: AssetSelectionPolicy = AssetSelectionPolicy {
+    spec: ACTIVE_CHARACTER_SPEC,
+    file: ACTIVE_CHARACTER_FILE,
+    builtin_id: BUILTIN_CHARACTER_ID,
+};
+const THEME_SELECTION: AssetSelectionPolicy = AssetSelectionPolicy {
+    spec: ACTIVE_THEME_SPEC,
+    file: ACTIVE_THEME_FILE,
+    builtin_id: BUILTIN_THEME_ID,
+};
+const VOICE_SELECTION: AssetSelectionPolicy = AssetSelectionPolicy {
+    spec: ACTIVE_VOICE_SPEC,
+    file: ACTIVE_VOICE_FILE,
+    builtin_id: BUILTIN_VOICE_ID,
+};
 const PET_WINDOW_LABEL: &str = "pet";
 const CHARACTER_RENDERER_CHANGED_EVENT: &str = "nimora://character-renderer-changed";
 const ASSET_PROTOCOL: &str = "nimora-asset";
@@ -702,7 +717,7 @@ struct AssetCatalogSnapshot {
 #[serde(rename_all = "camelCase")]
 struct ActiveCharacterSnapshot {
     asset_id: String,
-    source: ActiveCharacterSource,
+    source: ActiveAssetSource,
     fallback_reason: Option<String>,
 }
 
@@ -725,30 +740,29 @@ struct CharacterRendererSnapshot {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum ActiveCharacterSource {
+enum ActiveAssetSource {
     BuiltIn,
     Installed,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct StoredActiveCharacter {
+struct StoredAssetSelection {
     spec: String,
     asset_id: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct StoredActiveTheme {
-    spec: String,
-    asset_id: String,
+#[derive(Debug, Clone, Copy)]
+struct AssetSelectionPolicy {
+    spec: &'static str,
+    file: &'static str,
+    builtin_id: &'static str,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct StoredActiveVoice {
-    spec: String,
-    asset_id: String,
+#[derive(Debug, PartialEq, Eq)]
+enum ResolvedAssetSelection {
+    BuiltIn { fallback_reason: Option<String> },
+    Installed { asset_id: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -756,7 +770,7 @@ struct StoredActiveVoice {
 struct ActiveThemeSnapshot {
     spec: &'static str,
     asset_id: String,
-    source: ActiveCharacterSource,
+    source: ActiveAssetSource,
     theme: ThemeDescriptor,
     fallback_reason: Option<String>,
 }
@@ -766,7 +780,7 @@ struct ActiveThemeSnapshot {
 struct ActiveVoiceSnapshot {
     spec: &'static str,
     asset_id: String,
-    source: ActiveCharacterSource,
+    source: ActiveAssetSource,
     voice: Option<VoiceDescriptor>,
     fallback_reason: Option<String>,
 }
@@ -4148,13 +4162,78 @@ fn active_character_renderer(
     resolve_character_renderer(&state.asset_store, state.safety.snapshot()?.mode)
 }
 
+fn resolve_asset_selection(
+    asset_store: &Path,
+    runtime_mode: RuntimeMode,
+    policy: AssetSelectionPolicy,
+    safe_mode_reason: &str,
+) -> Result<ResolvedAssetSelection, DesktopError> {
+    if runtime_mode == RuntimeMode::Safe {
+        return Ok(ResolvedAssetSelection::BuiltIn {
+            fallback_reason: Some(safe_mode_reason.to_owned()),
+        });
+    }
+    let bytes = match fs::read(asset_store.join(policy.file)) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(ResolvedAssetSelection::BuiltIn {
+                fallback_reason: None,
+            });
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let stored = match serde_json::from_slice::<StoredAssetSelection>(&bytes) {
+        Ok(stored) if stored.spec == policy.spec => stored,
+        Ok(_) => {
+            return Ok(ResolvedAssetSelection::BuiltIn {
+                fallback_reason: Some("unknown selection contract".to_owned()),
+            });
+        }
+        Err(_) => {
+            return Ok(ResolvedAssetSelection::BuiltIn {
+                fallback_reason: Some("selection record is corrupt".to_owned()),
+            });
+        }
+    };
+    if stored.asset_id == policy.builtin_id {
+        return Ok(ResolvedAssetSelection::BuiltIn {
+            fallback_reason: None,
+        });
+    }
+    if !valid_asset_identifier(&stored.asset_id) {
+        return Ok(ResolvedAssetSelection::BuiltIn {
+            fallback_reason: Some("selection identifier is invalid".to_owned()),
+        });
+    }
+    Ok(ResolvedAssetSelection::Installed {
+        asset_id: stored.asset_id,
+    })
+}
+
+fn persist_asset_selection(
+    asset_store: &Path,
+    policy: AssetSelectionPolicy,
+    asset_id: &str,
+) -> Result<(), DesktopError> {
+    fs::create_dir_all(asset_store)?;
+    let destination = asset_store.join(policy.file);
+    let temporary = asset_store.join(format!("{}.{}.tmp", policy.file, Uuid::now_v7()));
+    let payload = serde_json::to_vec(&StoredAssetSelection {
+        spec: policy.spec.to_owned(),
+        asset_id: asset_id.to_owned(),
+    })?;
+    fs::write(&temporary, payload)?;
+    if let Err(error) = fs::rename(&temporary, &destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn active_theme(state: State<'_, DesktopState>) -> Result<ActiveThemeSnapshot, DesktopError> {
-    Ok(resolve_active_theme(
-        &state.asset_store,
-        state.safety.snapshot()?.mode,
-    ))
+    resolve_active_theme(&state.asset_store, state.safety.snapshot()?.mode)
 }
 
 #[tauri::command]
@@ -4178,44 +4257,52 @@ fn activate_theme(
         }
         inspect_asset_theme(&state.asset_store.join(&asset_id))?;
     }
-    persist_active_theme(&state.asset_store, &asset_id)?;
-    Ok(resolve_active_theme(
-        &state.asset_store,
-        RuntimeMode::Normal,
-    ))
+    persist_asset_selection(&state.asset_store, THEME_SELECTION, &asset_id)?;
+    resolve_active_theme(&state.asset_store, RuntimeMode::Normal)
 }
 
-fn resolve_active_theme(asset_store: &Path, runtime_mode: RuntimeMode) -> ActiveThemeSnapshot {
-    if runtime_mode == RuntimeMode::Safe {
-        return builtin_theme(Some("safe mode uses the built-in theme".to_owned()));
-    }
-    let stored = fs::read(asset_store.join(ACTIVE_THEME_FILE))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<StoredActiveTheme>(&bytes).ok())
-        .filter(|stored| stored.spec == ACTIVE_THEME_SPEC);
-    let Some(stored) = stored else {
-        return builtin_theme(None);
+fn resolve_active_theme(
+    asset_store: &Path,
+    runtime_mode: RuntimeMode,
+) -> Result<ActiveThemeSnapshot, DesktopError> {
+    let selection = resolve_asset_selection(
+        asset_store,
+        runtime_mode,
+        THEME_SELECTION,
+        "safe mode uses the built-in theme",
+    )?;
+    let ResolvedAssetSelection::Installed { asset_id } = selection else {
+        let ResolvedAssetSelection::BuiltIn { fallback_reason } = selection else {
+            unreachable!()
+        };
+        return Ok(builtin_theme(fallback_reason));
     };
-    if stored.asset_id == BUILTIN_THEME_ID {
-        return builtin_theme(None);
-    }
-    match inspect_asset_theme(&asset_store.join(&stored.asset_id)) {
+    let root = asset_store.join(&asset_id);
+    let verified = inspect_asset_package(&root).and_then(|summary| {
+        if summary.id != asset_id || summary.asset_type != "theme" {
+            return Err(InstallError::InvalidMetadata(
+                "selected asset identity or type does not match theme selection".to_owned(),
+            ));
+        }
+        inspect_asset_theme(&root)
+    });
+    Ok(match verified {
         Ok(theme) => ActiveThemeSnapshot {
             spec: ACTIVE_THEME_SPEC,
-            asset_id: stored.asset_id,
-            source: ActiveCharacterSource::Installed,
+            asset_id,
+            source: ActiveAssetSource::Installed,
             theme,
             fallback_reason: None,
         },
         Err(error) => builtin_theme(Some(format!("selected theme failed verification: {error}"))),
-    }
+    })
 }
 
 fn builtin_theme(fallback_reason: Option<String>) -> ActiveThemeSnapshot {
     ActiveThemeSnapshot {
         spec: ACTIVE_THEME_SPEC,
         asset_id: BUILTIN_THEME_ID.to_owned(),
-        source: ActiveCharacterSource::BuiltIn,
+        source: ActiveAssetSource::BuiltIn,
         theme: ThemeDescriptor {
             spec: "nimora.theme/1".to_owned(),
             mode: ThemeMode::Light,
@@ -4237,29 +4324,10 @@ fn builtin_theme(fallback_reason: Option<String>) -> ActiveThemeSnapshot {
     }
 }
 
-fn persist_active_theme(asset_store: &Path, asset_id: &str) -> Result<(), DesktopError> {
-    fs::create_dir_all(asset_store)?;
-    let destination = asset_store.join(ACTIVE_THEME_FILE);
-    let temporary = asset_store.join(format!("{ACTIVE_THEME_FILE}.{}.tmp", Uuid::now_v7()));
-    let payload = serde_json::to_vec(&StoredActiveTheme {
-        spec: ACTIVE_THEME_SPEC.to_owned(),
-        asset_id: asset_id.to_owned(),
-    })?;
-    fs::write(&temporary, payload)?;
-    if let Err(error) = fs::rename(&temporary, &destination) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error.into());
-    }
-    Ok(())
-}
-
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn active_voice(state: State<'_, DesktopState>) -> Result<ActiveVoiceSnapshot, DesktopError> {
-    Ok(resolve_active_voice(
-        &state.asset_store,
-        state.safety.snapshot()?.mode,
-    ))
+    resolve_active_voice(&state.asset_store, state.safety.snapshot()?.mode)
 }
 
 #[tauri::command]
@@ -4284,11 +4352,8 @@ fn activate_voice(
         }
         inspect_asset_voice(&root)?;
     }
-    persist_active_voice(&state.asset_store, &asset_id)?;
-    Ok(resolve_active_voice(
-        &state.asset_store,
-        RuntimeMode::Normal,
-    ))
+    persist_asset_selection(&state.asset_store, VOICE_SELECTION, &asset_id)?;
+    resolve_active_voice(&state.asset_store, RuntimeMode::Normal)
 }
 
 #[tauri::command]
@@ -4297,7 +4362,7 @@ fn active_voice_clip(
     state: State<'_, DesktopState>,
     cue: String,
 ) -> Result<Option<AssetPreviewAudio>, DesktopError> {
-    let active = resolve_active_voice(&state.asset_store, state.safety.snapshot()?.mode);
+    let active = resolve_active_voice(&state.asset_store, state.safety.snapshot()?.mode)?;
     if active.asset_id == BUILTIN_VOICE_ID {
         return Ok(None);
     }
@@ -4306,65 +4371,51 @@ fn active_voice_clip(
         .map_err(Into::into)
 }
 
-fn resolve_active_voice(asset_store: &Path, runtime_mode: RuntimeMode) -> ActiveVoiceSnapshot {
-    if runtime_mode == RuntimeMode::Safe {
-        return builtin_voice(Some("safe mode uses the silent built-in voice".to_owned()));
-    }
-    let stored = fs::read(asset_store.join(ACTIVE_VOICE_FILE))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<StoredActiveVoice>(&bytes).ok())
-        .filter(|stored| stored.spec == ACTIVE_VOICE_SPEC);
-    let Some(stored) = stored else {
-        return builtin_voice(None);
+fn resolve_active_voice(
+    asset_store: &Path,
+    runtime_mode: RuntimeMode,
+) -> Result<ActiveVoiceSnapshot, DesktopError> {
+    let selection = resolve_asset_selection(
+        asset_store,
+        runtime_mode,
+        VOICE_SELECTION,
+        "safe mode uses the silent built-in voice",
+    )?;
+    let ResolvedAssetSelection::Installed { asset_id } = selection else {
+        let ResolvedAssetSelection::BuiltIn { fallback_reason } = selection else {
+            unreachable!()
+        };
+        return Ok(builtin_voice(fallback_reason));
     };
-    if stored.asset_id == BUILTIN_VOICE_ID {
-        return builtin_voice(None);
-    }
-    if !valid_asset_identifier(&stored.asset_id) {
-        return builtin_voice(Some("selected voice identifier is invalid".to_owned()));
-    }
-    let root = asset_store.join(&stored.asset_id);
-    let valid_type = inspect_asset_package(&root)
-        .is_ok_and(|summary| summary.id == stored.asset_id && summary.asset_type == "voice");
-    if !valid_type {
-        return builtin_voice(Some("selected voice package is invalid".to_owned()));
-    }
-    match inspect_asset_voice(&root) {
+    let root = asset_store.join(&asset_id);
+    let verified = inspect_asset_package(&root).and_then(|summary| {
+        if summary.id != asset_id || summary.asset_type != "voice" {
+            return Err(InstallError::InvalidMetadata(
+                "selected asset identity or type does not match voice selection".to_owned(),
+            ));
+        }
+        inspect_asset_voice(&root)
+    });
+    Ok(match verified {
         Ok(voice) => ActiveVoiceSnapshot {
             spec: ACTIVE_VOICE_SPEC,
-            asset_id: stored.asset_id,
-            source: ActiveCharacterSource::Installed,
+            asset_id,
+            source: ActiveAssetSource::Installed,
             voice: Some(voice),
             fallback_reason: None,
         },
         Err(error) => builtin_voice(Some(format!("selected voice failed verification: {error}"))),
-    }
+    })
 }
 
 fn builtin_voice(fallback_reason: Option<String>) -> ActiveVoiceSnapshot {
     ActiveVoiceSnapshot {
         spec: ACTIVE_VOICE_SPEC,
         asset_id: BUILTIN_VOICE_ID.to_owned(),
-        source: ActiveCharacterSource::BuiltIn,
+        source: ActiveAssetSource::BuiltIn,
         voice: None,
         fallback_reason,
     }
-}
-
-fn persist_active_voice(asset_store: &Path, asset_id: &str) -> Result<(), DesktopError> {
-    fs::create_dir_all(asset_store)?;
-    let destination = asset_store.join(ACTIVE_VOICE_FILE);
-    let temporary = asset_store.join(format!("{ACTIVE_VOICE_FILE}.{}.tmp", Uuid::now_v7()));
-    let payload = serde_json::to_vec(&StoredActiveVoice {
-        spec: ACTIVE_VOICE_SPEC.to_owned(),
-        asset_id: asset_id.to_owned(),
-    })?;
-    fs::write(&temporary, payload)?;
-    if let Err(error) = fs::rename(&temporary, &destination) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error.into());
-    }
-    Ok(())
 }
 
 #[tauri::command]
@@ -4397,7 +4448,7 @@ fn activate_character_inner(
         }
     }
     let previous = resolve_active_character(&state.asset_store, RuntimeMode::Normal)?;
-    persist_active_character(&state.asset_store, asset_id)?;
+    persist_asset_selection(&state.asset_store, CHARACTER_SELECTION, asset_id)?;
     let activation = (|| {
         let snapshot = resolve_active_character(&state.asset_store, RuntimeMode::Normal)?;
         app.emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
@@ -4405,7 +4456,11 @@ fn activate_character_inner(
     })();
     match activation {
         Ok(snapshot) => Ok(snapshot),
-        Err(primary) => match persist_active_character(&state.asset_store, &previous.asset_id) {
+        Err(primary) => match persist_asset_selection(
+            &state.asset_store,
+            CHARACTER_SELECTION,
+            &previous.asset_id,
+        ) {
             Ok(()) => Err(primary),
             Err(rollback) => Err(DesktopError::CharacterActivationRollback {
                 primary: primary.to_string(),
@@ -4419,44 +4474,23 @@ fn resolve_active_character(
     asset_store: &Path,
     runtime_mode: RuntimeMode,
 ) -> Result<ActiveCharacterSnapshot, DesktopError> {
-    if runtime_mode == RuntimeMode::Safe {
-        return Ok(builtin_character(Some(
-            "safe mode uses the built-in character".to_owned(),
-        )));
-    }
-    let selection_path = asset_store.join(ACTIVE_CHARACTER_FILE);
-    let stored = match fs::read(&selection_path) {
-        Ok(bytes) => match serde_json::from_slice::<StoredActiveCharacter>(&bytes) {
-            Ok(stored) if stored.spec == ACTIVE_CHARACTER_SPEC => stored,
-            Ok(_) => {
-                return Ok(builtin_character(Some(
-                    "unknown selection contract".to_owned(),
-                )));
-            }
-            Err(_) => {
-                return Ok(builtin_character(Some(
-                    "selection record is corrupt".to_owned(),
-                )));
-            }
-        },
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(builtin_character(None));
-        }
-        Err(error) => return Err(error.into()),
+    let selection = resolve_asset_selection(
+        asset_store,
+        runtime_mode,
+        CHARACTER_SELECTION,
+        "safe mode uses the built-in character",
+    )?;
+    let ResolvedAssetSelection::Installed { asset_id } = selection else {
+        let ResolvedAssetSelection::BuiltIn { fallback_reason } = selection else {
+            unreachable!()
+        };
+        return Ok(builtin_character(fallback_reason));
     };
-    if stored.asset_id == BUILTIN_CHARACTER_ID {
-        return Ok(builtin_character(None));
-    }
-    if !valid_asset_identifier(&stored.asset_id) {
-        return Ok(builtin_character(Some(
-            "selection identifier is invalid".to_owned(),
-        )));
-    }
-    match inspect_asset_package(&asset_store.join(&stored.asset_id)) {
-        Ok(asset) if asset.id == stored.asset_id && asset.asset_type == "character" => {
+    match inspect_asset_package(&asset_store.join(&asset_id)) {
+        Ok(asset) if asset.id == asset_id && asset.asset_type == "character" => {
             Ok(ActiveCharacterSnapshot {
-                asset_id: stored.asset_id,
-                source: ActiveCharacterSource::Installed,
+                asset_id,
+                source: ActiveAssetSource::Installed,
                 fallback_reason: None,
             })
         }
@@ -4472,7 +4506,7 @@ fn resolve_active_character(
 fn builtin_character(fallback_reason: Option<String>) -> ActiveCharacterSnapshot {
     ActiveCharacterSnapshot {
         asset_id: BUILTIN_CHARACTER_ID.to_owned(),
-        source: ActiveCharacterSource::BuiltIn,
+        source: ActiveAssetSource::BuiltIn,
         fallback_reason,
     }
 }
@@ -4482,7 +4516,7 @@ fn resolve_character_renderer(
     runtime_mode: RuntimeMode,
 ) -> Result<CharacterRendererSnapshot, DesktopError> {
     let active = resolve_active_character(asset_store, runtime_mode)?;
-    if matches!(active.source, ActiveCharacterSource::BuiltIn) {
+    if matches!(active.source, ActiveAssetSource::BuiltIn) {
         return Ok(builtin_renderer(active.fallback_reason));
     }
     match inspect_asset_renderer(&asset_store.join(&active.asset_id)) {
@@ -4539,22 +4573,6 @@ fn asset_base_url(asset_id: &str) -> String {
     } else {
         format!("{ASSET_PROTOCOL}://localhost/{asset_id}/")
     }
-}
-
-fn persist_active_character(asset_store: &Path, asset_id: &str) -> Result<(), DesktopError> {
-    fs::create_dir_all(asset_store)?;
-    let destination = asset_store.join(ACTIVE_CHARACTER_FILE);
-    let temporary = asset_store.join(format!("{ACTIVE_CHARACTER_FILE}.{}.tmp", Uuid::now_v7()));
-    let payload = serde_json::to_vec(&StoredActiveCharacter {
-        spec: ACTIVE_CHARACTER_SPEC.to_owned(),
-        asset_id: asset_id.to_owned(),
-    })?;
-    fs::write(&temporary, payload)?;
-    if let Err(error) = fs::rename(&temporary, &destination) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error.into());
-    }
-    Ok(())
 }
 
 fn inspect_asset_catalog(asset_store: &Path) -> Result<AssetCatalogSnapshot, DesktopError> {
@@ -4615,7 +4633,7 @@ fn serve_asset_protocol(
     let Ok(active) = resolve_active_character(asset_store, runtime_mode) else {
         return asset_protocol_error(tauri::http::StatusCode::SERVICE_UNAVAILABLE);
     };
-    if !matches!(active.source, ActiveCharacterSource::Installed) || active.asset_id != asset_id {
+    if !matches!(active.source, ActiveAssetSource::Installed) || active.asset_id != asset_id {
         return asset_protocol_error(tauri::http::StatusCode::FORBIDDEN);
     }
     match read_verified_asset_image(&asset_store.join(&asset_id), &relative_path) {
@@ -7847,14 +7865,14 @@ mod tests {
     use super::{
         ACTIVE_CHARACTER_FILE, ACTIVE_THEME_FILE, ACTIVE_VOICE_FILE, ActiveSkillExecution,
         AssetInstallReceipt, AutoModeJobStatus, AutomationTestRequest, BUILTIN_CHARACTER_ID,
-        BUILTIN_THEME_ID, BUILTIN_VOICE_ID, CapabilityBackend, DETERMINISTIC_PROVIDER_ID,
-        DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
+        BUILTIN_THEME_ID, BUILTIN_VOICE_ID, CHARACTER_SELECTION, CapabilityBackend,
+        DETERMINISTIC_PROVIDER_ID, DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
         DesktopResolveAutoModeAttemptRequest, DesktopState, ExecutionCancellation,
         LocalAgentRequest, PendingSkillExecution, PetAction, PrepareAgentToolRequest,
         ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest,
-        ResumeAutoModeTurnRequest, SkillEventSession, StartupMode, TrayAction,
+        ResumeAutoModeTurnRequest, SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
         UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
-        WindowPolicy, agent_catalog_inner, approve_skill_execution_inner,
+        VOICE_SELECTION, WindowPolicy, agent_catalog_inner, approve_skill_execution_inner,
         auto_mode_control_center_inner, automation_agent_messages, cancel_agent_task_inner,
         cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
         cancel_skill_execution_inner, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
@@ -7863,15 +7881,14 @@ mod tests {
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
         parse_user_program_plan, pause_auto_mode_job_inner, permission_grant,
-        persist_active_character, persist_active_theme, persist_active_voice,
-        prepare_agent_tool_inner, quiesce_auto_mode_jobs, reject_agent_tool_inner,
-        resolve_active_character, resolve_active_theme, resolve_active_voice,
-        resolve_auto_mode_attempt_inner, resolve_character_renderer, resume_auto_mode_turn_inner,
-        run_live_automation, run_local_agent_inner, run_skill_agent_task,
-        run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
-        skill_capability_names, skill_event_types, stop_skill_event_sessions, test_automation,
-        user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
-        validate_requested_animation_map,
+        persist_asset_selection, prepare_agent_tool_inner, quiesce_auto_mode_jobs,
+        reject_agent_tool_inner, resolve_active_character, resolve_active_theme,
+        resolve_active_voice, resolve_asset_selection, resolve_auto_mode_attempt_inner,
+        resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
+        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
+        screen_coordinate, serve_asset_protocol, skill_capability_names, skill_event_types,
+        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
+        validate_model_source, validate_package_source, validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -9801,7 +9818,7 @@ mod tests {
             },
         )
         .unwrap();
-        persist_active_character(&store, "character.local.aurora").unwrap();
+        persist_asset_selection(&store, CHARACTER_SELECTION, "character.local.aurora").unwrap();
 
         let model: tauri::http::Uri =
             "nimora-asset://localhost/character.local.aurora/models/character.glb"
@@ -9885,7 +9902,7 @@ mod tests {
         let initial = resolve_active_character(&root, RuntimeMode::Normal).unwrap();
         assert_eq!(initial.asset_id, BUILTIN_CHARACTER_ID);
         assert!(initial.fallback_reason.is_none());
-        persist_active_character(&root, BUILTIN_CHARACTER_ID).unwrap();
+        persist_asset_selection(&root, CHARACTER_SELECTION, BUILTIN_CHARACTER_ID).unwrap();
         let restored = resolve_active_character(&root, RuntimeMode::Normal).unwrap();
         assert_eq!(restored.asset_id, BUILTIN_CHARACTER_ID);
         std::fs::remove_dir_all(root).unwrap();
@@ -9910,16 +9927,16 @@ mod tests {
     fn active_theme_defaults_persists_and_falls_back_safely() {
         let root = std::env::temp_dir().join("nimora-active-theme-fallback");
         let _ = std::fs::remove_dir_all(&root);
-        let initial = resolve_active_theme(&root, RuntimeMode::Normal);
+        let initial = resolve_active_theme(&root, RuntimeMode::Normal).unwrap();
         assert_eq!(initial.asset_id, BUILTIN_THEME_ID);
         assert!(initial.fallback_reason.is_none());
-        persist_active_theme(&root, BUILTIN_THEME_ID).unwrap();
-        let restored = resolve_active_theme(&root, RuntimeMode::Normal);
+        persist_asset_selection(&root, THEME_SELECTION, BUILTIN_THEME_ID).unwrap();
+        let restored = resolve_active_theme(&root, RuntimeMode::Normal).unwrap();
         assert_eq!(restored.asset_id, BUILTIN_THEME_ID);
         std::fs::write(root.join(ACTIVE_THEME_FILE), b"not-json").unwrap();
-        let corrupt = resolve_active_theme(&root, RuntimeMode::Normal);
+        let corrupt = resolve_active_theme(&root, RuntimeMode::Normal).unwrap();
         assert_eq!(corrupt.asset_id, BUILTIN_THEME_ID);
-        let safe = resolve_active_theme(&root, RuntimeMode::Safe);
+        let safe = resolve_active_theme(&root, RuntimeMode::Safe).unwrap();
         assert_eq!(safe.asset_id, BUILTIN_THEME_ID);
         assert!(safe.fallback_reason.is_some());
         std::fs::remove_dir_all(root).unwrap();
@@ -9929,19 +9946,137 @@ mod tests {
     fn active_voice_defaults_persists_and_falls_back_to_silence() {
         let root = std::env::temp_dir().join("nimora-active-voice-fallback");
         let _ = std::fs::remove_dir_all(&root);
-        let initial = resolve_active_voice(&root, RuntimeMode::Normal);
+        let initial = resolve_active_voice(&root, RuntimeMode::Normal).unwrap();
         assert_eq!(initial.asset_id, BUILTIN_VOICE_ID);
         assert!(initial.voice.is_none());
-        persist_active_voice(&root, BUILTIN_VOICE_ID).unwrap();
-        let restored = resolve_active_voice(&root, RuntimeMode::Normal);
+        persist_asset_selection(&root, VOICE_SELECTION, BUILTIN_VOICE_ID).unwrap();
+        let restored = resolve_active_voice(&root, RuntimeMode::Normal).unwrap();
         assert_eq!(restored.asset_id, BUILTIN_VOICE_ID);
         std::fs::write(root.join(ACTIVE_VOICE_FILE), b"not-json").unwrap();
-        let corrupt = resolve_active_voice(&root, RuntimeMode::Normal);
+        let corrupt = resolve_active_voice(&root, RuntimeMode::Normal).unwrap();
         assert_eq!(corrupt.asset_id, BUILTIN_VOICE_ID);
         assert!(corrupt.voice.is_none());
-        let safe = resolve_active_voice(&root, RuntimeMode::Safe);
+        let safe = resolve_active_voice(&root, RuntimeMode::Safe).unwrap();
         assert_eq!(safe.asset_id, BUILTIN_VOICE_ID);
         assert!(safe.fallback_reason.is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn asset_selection_policies_preserve_distinct_contracts() {
+        assert_eq!(CHARACTER_SELECTION.spec, "nimora.active-character/1");
+        assert_eq!(CHARACTER_SELECTION.file, ".active-character.json");
+        assert_eq!(CHARACTER_SELECTION.builtin_id, BUILTIN_CHARACTER_ID);
+        assert_eq!(THEME_SELECTION.spec, "nimora.active-theme/1");
+        assert_eq!(THEME_SELECTION.file, ".active-theme.json");
+        assert_eq!(THEME_SELECTION.builtin_id, BUILTIN_THEME_ID);
+        assert_eq!(VOICE_SELECTION.spec, "nimora.active-voice/1");
+        assert_eq!(VOICE_SELECTION.file, ".active-voice.json");
+        assert_eq!(VOICE_SELECTION.builtin_id, BUILTIN_VOICE_ID);
+    }
+
+    #[test]
+    fn asset_selection_resolution_is_consistent_across_policies() {
+        for (index, policy) in [CHARACTER_SELECTION, THEME_SELECTION, VOICE_SELECTION]
+            .into_iter()
+            .enumerate()
+        {
+            let root = std::env::temp_dir().join(format!("nimora-selection-policy-{index}"));
+            let _ = std::fs::remove_dir_all(&root);
+
+            let missing =
+                resolve_asset_selection(&root, RuntimeMode::Normal, policy, "safe").unwrap();
+            assert_eq!(
+                missing,
+                super::ResolvedAssetSelection::BuiltIn {
+                    fallback_reason: None
+                }
+            );
+
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join(policy.file), b"not-json").unwrap();
+            let corrupt =
+                resolve_asset_selection(&root, RuntimeMode::Normal, policy, "safe").unwrap();
+            assert_eq!(
+                corrupt,
+                super::ResolvedAssetSelection::BuiltIn {
+                    fallback_reason: Some("selection record is corrupt".to_owned())
+                }
+            );
+
+            std::fs::write(
+                root.join(policy.file),
+                br#"{"spec":"unknown/1","assetId":"asset.local.valid"}"#,
+            )
+            .unwrap();
+            let unknown =
+                resolve_asset_selection(&root, RuntimeMode::Normal, policy, "safe").unwrap();
+            assert_eq!(
+                unknown,
+                super::ResolvedAssetSelection::BuiltIn {
+                    fallback_reason: Some("unknown selection contract".to_owned())
+                }
+            );
+
+            persist_asset_selection(&root, policy, "../invalid").unwrap();
+            let invalid =
+                resolve_asset_selection(&root, RuntimeMode::Normal, policy, "safe").unwrap();
+            assert_eq!(
+                invalid,
+                super::ResolvedAssetSelection::BuiltIn {
+                    fallback_reason: Some("selection identifier is invalid".to_owned())
+                }
+            );
+
+            let safe = resolve_asset_selection(&root, RuntimeMode::Safe, policy, "safe").unwrap();
+            assert_eq!(
+                safe,
+                super::ResolvedAssetSelection::BuiltIn {
+                    fallback_reason: Some("safe".to_owned())
+                }
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn asset_selection_persistence_is_atomic_and_isolated() {
+        let root = std::env::temp_dir().join("nimora-selection-persistence");
+        let _ = std::fs::remove_dir_all(&root);
+        persist_asset_selection(&root, CHARACTER_SELECTION, "character.local.aurora").unwrap();
+        persist_asset_selection(&root, THEME_SELECTION, "theme.local.nocturne").unwrap();
+        persist_asset_selection(&root, VOICE_SELECTION, "voice.local.sora").unwrap();
+
+        assert_eq!(
+            std::fs::read(root.join(CHARACTER_SELECTION.file)).unwrap(),
+            br#"{"spec":"nimora.active-character/1","assetId":"character.local.aurora"}"#
+        );
+        assert_eq!(
+            std::fs::read(root.join(THEME_SELECTION.file)).unwrap(),
+            br#"{"spec":"nimora.active-theme/1","assetId":"theme.local.nocturne"}"#
+        );
+        assert_eq!(
+            std::fs::read(root.join(VOICE_SELECTION.file)).unwrap(),
+            br#"{"spec":"nimora.active-voice/1","assetId":"voice.local.sora"}"#
+        );
+        assert!(std::fs::read_dir(&root).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn asset_selection_propagates_non_not_found_io_errors() {
+        let root = std::env::temp_dir().join("nimora-selection-io-error");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(VOICE_SELECTION.file)).unwrap();
+        assert!(
+            resolve_asset_selection(&root, RuntimeMode::Normal, VOICE_SELECTION, "safe").is_err()
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

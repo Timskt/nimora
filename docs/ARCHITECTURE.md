@@ -210,9 +210,9 @@ Domain Core
 
 ## Asset Selection 生命周期与当前收敛要求
 
-角色、主题、声音及后续交互资产共享同一种生命周期：验证安装包、串行写入选择事实、每次使用前复验、按运行模式降级、原子持久化和返回无路径快照。宿主当前已经共享选择写锁，但各子类型仍分别实现存储记录、解析与回退流程；继续复制会造成 Safe Mode 语义、错误分类和原子写策略分叉。这是待消除的架构不足，不是长期模式。
+角色、主题、声音及后续交互资产共享同一种生命周期：验证安装包、串行写入选择事实、每次使用前复验、按运行模式降级、原子持久化和返回无路径快照。宿主已落地类型化 `AssetSelectionPolicy` 与统一 Envelope Resolver/Persister，集中处理 Schema、内置 ID、Safe Mode、NotFound、损坏记录、非法 ID、真实 I/O 错误和临时文件原子替换，避免子类型语义分叉。
 
-收敛后的应用服务必须提供类型化 `AssetSelectionPolicy`，统一负责选择文件 Envelope、Schema 版本、原子写、运行模式门禁、损坏记录回退和诊断；每个资产类型只提供 `assetType`、内置 ID、复验函数与安全快照构造器。不得以动态字符串或无类型 `serde_json::Value` 换取表面复用，也不得让通用服务绕过 Voice、Theme、Character 各自的内容白名单。
+每个资产类型仍独立负责 `assetType`、内容复验、白名单与安全快照构造；Character 额外保留 Renderer 事件失败后的选择回滚和双错误报告。不得以动态字符串或无类型 `serde_json::Value` 换取表面复用，也不得让通用服务绕过 Voice、Theme、Character 各自的内容白名单。新增可选择资产类型必须声明静态 Policy，并复用统一生命周期契约测试。
 
 Voice 是静态、无代码资产：`nimora.voice/1` 只允许 Inventory 内的有界 WAV/OGG Clip、动作 Cue、字幕与有限增益。UI 与用户代码只能获得已复验字节和元数据，不能获得文件路径、URL、解码器、网络、TTS Provider 或宿主对象。平台权限、危险、错误与恢复提示音不进入第三方 Cue 命名空间；Quiet Mode 必须在最终播放边界强制执行。TTS 属于独立 Provider Capability，不得伪装成 Voice 资产字段。
 

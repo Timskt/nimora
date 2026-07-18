@@ -49,6 +49,8 @@ Attempt 创建后，Provider 或 Tool 的未知结果使用“不可确定结果
 
 新增模块调用 AI 时，统一经过 `module-agent-adapter` 与 `AgentTaskGateway`。新增 AI 调用模块时，统一经过 Tool Registry、风险/批准和 Capability Gateway。双向调用均继承 Trace、预算、取消和审计，不允许模块直连 Provider。
 
+资产选择使用 Policy + Template Method：`AssetSelectionPolicy` 只提供静态 Schema、文件名和内置 ID，通用 Resolver/Persister 固化读取、错误分类、Safe Mode 与原子写步骤，各资产 Resolver 完成类型专属复验和快照构造。该模式禁止演化成携带动态回调、原生对象或无类型 JSON 的万能 Manager。
+
 ## 5. UI 模式
 
 UI 使用状态容器 + View Model + Design Token，而不是让组件直接调用原生能力。异步操作必须表达 idle、loading、success、empty、partial、waiting-for-confirmation、offline、recovery 和 error。危险动作使用参数预览与可撤销反馈；长任务使用可取消进度；桌宠 Overlay 与 Control Center 共享领域状态但不共享组件内部可变状态。

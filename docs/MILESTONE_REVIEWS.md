@@ -187,4 +187,4 @@ Actions 分钟：
 - 宿主：新增原子活动声音选择、`builtin.silent`、Safe Mode 静音回退和逐次重开复验；WebView 只获得无路径 Descriptor 与有界字节。
 - UI：Creator Studio 支持安装前本地音频预览、声音激活和恢复静音；动作成功后才异步播放，Quiet Mode 在 Clip 请求前阻断，播放失败不影响动作。
 - 证据：Asset Installer 36 项、Desktop Host 91 项、前端 32 项、TypeScript 生产构建与 Bundle Budget 已通过专项验证。
-- 后续收敛：角色、主题、声音已证明共享选择生命周期，应提取类型化 `AssetSelectionPolicy`，但不能用无类型 JSON 牺牲各资产契约。
+- 架构收敛：角色、主题、声音已复用类型化 `AssetSelectionPolicy`；统一 Schema、Safe Mode、错误分类和原子写，同时保留各资产独立内容复验及 Character Renderer 回滚，Desktop Host 测试增至 95 项。

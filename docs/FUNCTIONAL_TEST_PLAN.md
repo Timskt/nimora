@@ -530,6 +530,7 @@ ID / 标题 / 优先级 / 前置条件
 - Verify WAV/OGG 媒体类型、扩展名与 Header 必须一致，单 Clip 超过 2 MiB、未声明 Cue 和 Inventory 外路径拒绝。
 - Verify `.nimora` 导出、预览、安装和重开保持 Descriptor、字幕与已验证字节一致，篡改后不返回音频。
 - Verify 激活选择原子持久化，重启复验；损坏选择、缺失包和 Safe Mode 返回 `builtin.silent`，不暴露文件路径。
+- Contract-test Character、Theme、Voice 的类型化选择 Policy：各自 Schema/File/Builtin ID 不串写；NotFound 无告警回退；损坏 JSON、未知 Schema、非法 ID 和 Safe Mode 给出确定原因；非 NotFound I/O 错误向上传播；成功写入无遗留临时文件。
 - Verify Creator Studio 不自动播放，展示 Cue、字幕、格式、大小和增益；取消预览释放 Blob URL 且不改变活动声音。
 - Verify Quiet Mode 在 Clip IPC 前阻断；动作成功后音频读取或播放失败不改变动作结果与用户通知。
 - Verify 平台权限、危险、错误和恢复提示 Cue 永远不查询第三方 Voice 包。
