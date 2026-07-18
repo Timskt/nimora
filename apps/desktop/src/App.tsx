@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { ProfileManager } from "./components/ProfileManager";
-import { CreatorStudio } from "./components/CreatorStudio";
-import { DataProtection } from "./components/DataProtection";
-import { AgentWorkspace } from "./components/AgentWorkspace";
-import { AutomationWorkspace } from "./components/AutomationWorkspace";
-import { AiCreatorWorkspace } from "./components/AiCreatorWorkspace";
+import { LazyWorkspace } from "./components/LazyWorkspace";
 import { petGrowth } from "./components/petGrowth";
 import type { ActiveThemeSnapshot, AssetPreviewAudio, DesktopSnapshot, OutboxSnapshot, PetCareAction, ThemeDescriptor } from "./platform/desktop";
 import { desktopApi } from "./platform/desktop";
+
+const loadCreatorStudio = () => import("./components/CreatorStudio").then((module) => ({ default: module.CreatorStudio }));
+const loadAgentWorkspace = () => import("./components/AgentWorkspace").then((module) => ({ default: module.AgentWorkspace }));
+const loadAutomationWorkspace = () => import("./components/AutomationWorkspace").then((module) => ({ default: module.AutomationWorkspace }));
+const loadAiCreatorWorkspace = () => import("./components/AiCreatorWorkspace").then((module) => ({ default: module.AiCreatorWorkspace }));
+const loadDataProtection = () => import("./components/DataProtection").then((module) => ({ default: module.DataProtection }));
 
 export const navigation = ["概览", "角色", "Agent", "自动化", "扩展", "活动", "设置"] as const;
 
@@ -202,7 +204,7 @@ export function App() {
           </div>
         </section>}
 
-        {active === "角色" ? <CreatorStudio onThemeChange={setActiveTheme} /> : active === "扩展" ? <AiCreatorWorkspace disabled={safeMode || recoveryMode} /> : active === "Agent" ? <AgentWorkspace safeMode={safeMode} recoveryMode={recoveryMode} onNotice={updateNotice} /> : active === "自动化" ? <AutomationWorkspace disabled={safeMode || recoveryMode} onNotice={updateNotice} /> : active === "设置" ? <DataProtection recoveryMode={recoveryMode} onNotice={updateNotice} /> : <div className="dashboard-grid">
+        {active === "角色" ? <LazyWorkspace loader={loadCreatorStudio} name="角色工作室" componentProps={{ onThemeChange: setActiveTheme }} /> : active === "扩展" ? <LazyWorkspace loader={loadAiCreatorWorkspace} name="AI 扩展工坊" componentProps={{ disabled: safeMode || recoveryMode }} /> : active === "Agent" ? <LazyWorkspace loader={loadAgentWorkspace} name="Agent 工作区" componentProps={{ safeMode, recoveryMode, onNotice: updateNotice }} /> : active === "自动化" ? <LazyWorkspace loader={loadAutomationWorkspace} name="自动化工作区" componentProps={{ disabled: safeMode || recoveryMode, onNotice: updateNotice }} /> : active === "设置" ? <LazyWorkspace loader={loadDataProtection} name={recoveryMode ? "数据恢复中心" : "设置与数据保护"} componentProps={{ recoveryMode, onNotice: updateNotice }} /> : <div className="dashboard-grid">
           <section className="pet-stage" aria-labelledby="pet-heading">
             <div className="stage-copy">
               <span className="pill">{notice}</span>

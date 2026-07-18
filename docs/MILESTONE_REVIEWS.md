@@ -435,3 +435,11 @@ Actions 分钟：
 - 实现：新增 `nimora-secret-store`，统一严格 `secret:<domain>:<name>` 引用、macOS Keychain、Windows Credential Manager、Linux Secret Service、自动清零读取、幂等删除和确定性内存后端。
 - 边界：当前只完成核心存储层，不宣称网络 Provider 已支持凭据；桌面设置、Provider 配置、Worker 单次传递、缓存加密和授权签名必须分别形成后续纵切。
 - Actions：新增依赖和核心测试先在本地验证；保持完整纵切后单次推送，不增加高频远端触发。
+
+## M-2026-07-19 控制中心工作区分包治理
+
+- 问题：桌面入口已达 348,284/350,000 bytes，继续增加正式能力会突破性能门禁；提高预算会把架构问题延后并拖慢桌宠首屏。
+- 实现：保留概览与 Profile 首屏，把角色、Agent、自动化、AI 扩展和数据保护拆成五个直接动态入口；桌宠 Overlay 仍不依赖这些控制中心工作区。
+- 恢复：统一加载壳具备状态语义、减少视觉跳变；独立 Error Boundary 将 Chunk 故障限制在当前工作区，并提供无需重启应用的重新加载动作。
+- 预算：入口降至 262,845 bytes，释放约 85 KB；五个工作区各自设置 50 KB 原始图预算，原有 GLTF/VRM 预算不放宽。
+- 验证：Frontend 61 项测试、TypeScript、Vite 构建与 Bundle Budget 通过；浏览器逐项进入 Agent 和设置，结构与完整截图无视觉回归。
