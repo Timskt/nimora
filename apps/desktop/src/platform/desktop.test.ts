@@ -225,9 +225,11 @@ describe("desktop platform adapter", () => {
 
     await api.capabilityProposalQueue("/workspace");
     await api.reviewCapabilityProposal("/workspace", "capability-proposal-1", "rejected", "Not feasible within the safety boundary.");
+    await api.reviewCapabilityProposal("/workspace", "capability-proposal-2", "duplicate", "Same deterministic gap.", "capability-proposal-1");
 
     expect(invoke).toHaveBeenNthCalledWith(1, "capability_proposal_queue", { request: { workspaceRoot: "/workspace" } });
-    expect(invoke).toHaveBeenNthCalledWith(2, "review_capability_proposal_command", { request: { workspaceRoot: "/workspace", proposalId: "capability-proposal-1", status: "rejected", reason: "Not feasible within the safety boundary." } });
+    expect(invoke).toHaveBeenNthCalledWith(2, "review_capability_proposal_command", { request: { workspaceRoot: "/workspace", proposalId: "capability-proposal-1", status: "rejected", reason: "Not feasible within the safety boundary.", duplicateOfProposalId: null } });
+    expect(invoke).toHaveBeenNthCalledWith(3, "review_capability_proposal_command", { request: { workspaceRoot: "/workspace", proposalId: "capability-proposal-2", status: "duplicate", reason: "Same deterministic gap.", duplicateOfProposalId: "capability-proposal-1" } });
   });
 
   it("maps typed calls to the Tauri command contract", async () => {

@@ -20,10 +20,10 @@ use asset_selection::{
 };
 use backup_service::BackupService;
 use creator_workspace::{
-    CapabilityGapSaveReceipt, CapabilityProposalReceipt, CapabilityProposalRecord,
-    CapabilityProposalStatus, CreatorDraftSaveReceipt, CreatorWorkspaceError,
-    list_capability_proposals, review_capability_proposal, save_capability_gap, save_creator_draft,
-    submit_capability_proposal,
+    CapabilityGapSaveReceipt, CapabilityProposalGovernanceItem, CapabilityProposalReceipt,
+    CapabilityProposalRecord, CapabilityProposalStatus, CreatorDraftSaveReceipt,
+    CreatorWorkspaceError, capability_proposal_governance, review_capability_proposal,
+    save_capability_gap, save_creator_draft, submit_capability_proposal,
 };
 use diagnostic_report::{
     DiagnosticReportFacts, DiagnosticSafetyMode, DiagnosticStartupMode, build_diagnostic_report,
@@ -1386,6 +1386,7 @@ struct ReviewCapabilityProposalRequest {
     proposal_id: String,
     status: CapabilityProposalStatus,
     reason: String,
+    duplicate_of_proposal_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3337,8 +3338,8 @@ fn submit_capability_proposal_command(
 #[allow(clippy::needless_pass_by_value)]
 fn capability_proposal_queue(
     request: CapabilityProposalQueueRequest,
-) -> Result<Vec<CapabilityProposalRecord>, DesktopError> {
-    list_capability_proposals(&request.workspace_root).map_err(Into::into)
+) -> Result<Vec<CapabilityProposalGovernanceItem>, DesktopError> {
+    capability_proposal_governance(&request.workspace_root).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -3356,6 +3357,7 @@ fn review_capability_proposal_command(
         &request.proposal_id,
         request.status,
         &request.reason,
+        request.duplicate_of_proposal_id.as_deref(),
         current_time_ms()?,
         &Uuid::now_v7().to_string(),
     )

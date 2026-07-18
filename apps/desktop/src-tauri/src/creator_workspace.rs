@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path};
@@ -67,6 +67,7 @@ pub struct CapabilityProposalReview {
     pub status: CapabilityProposalStatus,
     pub reason: String,
     pub reviewed_at_ms: u64,
+    pub duplicate_of_proposal_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +95,31 @@ struct CapabilityProposalIntegrityPayload<'a> {
     composition_plan: &'a CapabilityCompositionPlan,
     semantic_composition_plan: &'a SemanticCompositionPlan,
     review: &'a Option<CapabilityProposalReview>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CapabilityProposalTriagePriority {
+    Normal,
+    Elevated,
+    High,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityProposalCluster {
+    pub cluster_key: String,
+    pub occurrence_count: usize,
+    pub canonical_proposal_id: String,
+    pub related_proposal_ids: Vec<String>,
+    pub triage_priority: CapabilityProposalTriagePriority,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityProposalGovernanceItem {
+    pub record: CapabilityProposalRecord,
+    pub cluster: CapabilityProposalCluster,
 }
 
 #[derive(Debug, Error)]
@@ -258,6 +284,25 @@ pub fn list_capability_proposals(
         }
         records.push(record);
     }
+    let records_by_id = records
+        .iter()
+        .map(|record| (record.proposal_id.as_str(), record))
+        .collect::<BTreeMap<_, _>>();
+    for record in &records {
+        if let Some(target_id) = record
+            .review
+            .as_ref()
+            .and_then(|review| review.duplicate_of_proposal_id.as_deref())
+        {
+            let target = records_by_id
+                .get(target_id)
+                .ok_or(CreatorWorkspaceError::InvalidProposal)?;
+            if capability_proposal_cluster_key(record)? != capability_proposal_cluster_key(target)?
+            {
+                return Err(CreatorWorkspaceError::InvalidProposal);
+            }
+        }
+    }
     records.sort_by(|left, right| {
         right
             .submitted_at_ms
@@ -267,11 +312,71 @@ pub fn list_capability_proposals(
     Ok(records)
 }
 
+pub fn capability_proposal_governance(
+    workspace_root: &Path,
+) -> Result<Vec<CapabilityProposalGovernanceItem>, CreatorWorkspaceError> {
+    let records = list_capability_proposals(workspace_root)?;
+    let mut clusters = BTreeMap::<String, Vec<(String, u64)>>::new();
+    for record in &records {
+        clusters
+            .entry(capability_proposal_cluster_key(record)?)
+            .or_default()
+            .push((record.proposal_id.clone(), record.submitted_at_ms));
+    }
+    let mut items = Vec::with_capacity(records.len());
+    for record in records {
+        let cluster_key = capability_proposal_cluster_key(&record)?;
+        let mut related = clusters
+            .get(&cluster_key)
+            .ok_or(CreatorWorkspaceError::InvalidProposal)?
+            .iter()
+            .map(|(proposal_id, _)| proposal_id.clone())
+            .collect::<Vec<_>>();
+        related.sort();
+        let occurrence_count = related.len();
+        let canonical_proposal_id = clusters[&cluster_key]
+            .iter()
+            .min_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)))
+            .ok_or(CreatorWorkspaceError::InvalidProposal)?
+            .0
+            .clone();
+        items.push(CapabilityProposalGovernanceItem {
+            record,
+            cluster: CapabilityProposalCluster {
+                cluster_key,
+                occurrence_count,
+                canonical_proposal_id,
+                related_proposal_ids: related,
+                triage_priority: match occurrence_count {
+                    4.. => CapabilityProposalTriagePriority::High,
+                    2..=3 => CapabilityProposalTriagePriority::Elevated,
+                    _ => CapabilityProposalTriagePriority::Normal,
+                },
+            },
+        });
+    }
+    items.sort_by(|left, right| {
+        right
+            .cluster
+            .occurrence_count
+            .cmp(&left.cluster.occurrence_count)
+            .then_with(|| {
+                right
+                    .record
+                    .submitted_at_ms
+                    .cmp(&left.record.submitted_at_ms)
+            })
+            .then_with(|| left.record.proposal_id.cmp(&right.record.proposal_id))
+    });
+    Ok(items)
+}
+
 pub fn review_capability_proposal(
     workspace_root: &Path,
     proposal_id: &str,
     status: CapabilityProposalStatus,
     reason: &str,
+    duplicate_of_proposal_id: Option<&str>,
     reviewed_at_ms: u64,
     operation_id: &str,
 ) -> Result<CapabilityProposalRecord, CreatorWorkspaceError> {
@@ -294,11 +399,32 @@ pub fn review_capability_proposal(
     {
         return Err(CreatorWorkspaceError::InvalidProposal);
     }
+    let duplicate_of_proposal_id = match (status, duplicate_of_proposal_id) {
+        (CapabilityProposalStatus::Duplicate, Some(target_id)) => {
+            validate_segment(target_id)?;
+            if target_id == proposal_id {
+                return Err(CreatorWorkspaceError::InvalidProposal);
+            }
+            let target =
+                read_capability_proposal(&proposals_root.join(format!("{target_id}.json")))?;
+            if capability_proposal_cluster_key(&record)?
+                != capability_proposal_cluster_key(&target)?
+            {
+                return Err(CreatorWorkspaceError::InvalidProposal);
+            }
+            Some(target_id.to_owned())
+        }
+        (CapabilityProposalStatus::Duplicate, None) | (_, Some(_)) => {
+            return Err(CreatorWorkspaceError::InvalidProposal);
+        }
+        (_, None) => None,
+    };
     record.status = status;
     record.review = Some(CapabilityProposalReview {
         status,
         reason: reason.to_owned(),
         reviewed_at_ms,
+        duplicate_of_proposal_id,
     });
     record.integrity_digest = capability_proposal_digest(&record)?;
     let bytes = serde_json::to_vec_pretty(&record).map_err(|_| CreatorWorkspaceError::Io)?;
@@ -340,6 +466,15 @@ fn validate_capability_proposal(
                 && review.reason.len() <= 1_024
                 && review.reason.trim() == review.reason
                 && !review.reason.chars().any(char::is_control)
+                && match status {
+                    CapabilityProposalStatus::Duplicate => review
+                        .duplicate_of_proposal_id
+                        .as_deref()
+                        .is_some_and(|target| {
+                            target != record.proposal_id && validate_segment(target).is_ok()
+                        }),
+                    _ => review.duplicate_of_proposal_id.is_none(),
+                }
         }
         _ => false,
     };
@@ -351,6 +486,28 @@ fn validate_capability_proposal(
         return Err(CreatorWorkspaceError::InvalidProposal);
     }
     Ok(())
+}
+
+fn capability_proposal_cluster_key(
+    record: &CapabilityProposalRecord,
+) -> Result<String, CreatorWorkspaceError> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ClusterPayload<'a> {
+        missing_capabilities: &'a [String],
+        missing_semantic_outputs: &'a [String],
+    }
+
+    let mut missing_capabilities = record.composition_plan.missing_capabilities.clone();
+    let mut missing_semantic_outputs = record.semantic_composition_plan.missing_outputs.clone();
+    missing_capabilities.sort();
+    missing_semantic_outputs.sort();
+    let bytes = serde_json::to_vec(&ClusterPayload {
+        missing_capabilities: &missing_capabilities,
+        missing_semantic_outputs: &missing_semantic_outputs,
+    })
+    .map_err(|_| CreatorWorkspaceError::InvalidProposal)?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
 fn capability_proposal_digest(
@@ -770,6 +927,7 @@ mod tests {
             &receipt.proposal_id,
             CapabilityProposalStatus::Accepted,
             "Accepted for platform feasibility analysis.",
+            None,
             1_726_000_000_200,
             "018f0000-0000-7000-8000-000000000036",
         )
@@ -781,6 +939,7 @@ mod tests {
                 &receipt.proposal_id,
                 CapabilityProposalStatus::Rejected,
                 "A terminal review cannot be replaced.",
+                None,
                 1_726_000_000_300,
                 "018f0000-0000-7000-8000-000000000037",
             )
@@ -824,6 +983,7 @@ mod tests {
                     &receipt.proposal_id,
                     CapabilityProposalStatus::Rejected,
                     reason,
+                    None,
                     1_726_000_000_500,
                     "018f0000-0000-7000-8000-000000000039",
                 ),
@@ -838,6 +998,153 @@ mod tests {
             Err(CreatorWorkspaceError::InvalidProposal)
         ));
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn clusters_repeated_gaps_and_binds_duplicates_to_the_canonical_record() {
+        let root = fixture_root();
+        let (gap, _, plan, semantic_plan) = gap_proof_fixture();
+        let canonical = submit_capability_proposal(
+            &root,
+            &gap,
+            &plan,
+            &semantic_plan,
+            "018f0000-0000-7000-8000-000000000040",
+            1_726_000_000_600,
+        )
+        .expect("canonical proposal");
+        let initial_queue = capability_proposal_governance(&root).expect("initial queue");
+        assert_eq!(
+            initial_queue[0].cluster.triage_priority,
+            CapabilityProposalTriagePriority::Normal
+        );
+        let mut retitled_gap = gap.clone();
+        retitled_gap.title = "A different user-facing title".to_owned();
+        let duplicate = submit_capability_proposal(
+            &root,
+            &retitled_gap,
+            &plan,
+            &semantic_plan,
+            "018f0000-0000-7000-8000-000000000041",
+            1_726_000_000_700,
+        )
+        .expect("duplicate proposal");
+
+        let queue = capability_proposal_governance(&root).expect("governance queue");
+        assert_eq!(queue.len(), 2);
+        assert!(queue.iter().all(|item| item.cluster.occurrence_count == 2));
+        assert!(queue.iter().all(|item| {
+            item.cluster.triage_priority == CapabilityProposalTriagePriority::Elevated
+                && item.cluster.canonical_proposal_id == canonical.proposal_id
+        }));
+        assert_eq!(queue[0].record.proposal_id, duplicate.proposal_id);
+
+        for (operation_id, submitted_at_ms) in [
+            ("018f0000-0000-7000-8000-000000000047", 1_726_000_000_710),
+            ("018f0000-0000-7000-8000-000000000048", 1_726_000_000_720),
+        ] {
+            submit_capability_proposal(
+                &root,
+                &gap,
+                &plan,
+                &semantic_plan,
+                operation_id,
+                submitted_at_ms,
+            )
+            .expect("repeated proposal");
+        }
+        let high_priority_queue =
+            capability_proposal_governance(&root).expect("high priority queue");
+        assert!(high_priority_queue.iter().all(|item| {
+            item.cluster.occurrence_count == 4
+                && item.cluster.triage_priority == CapabilityProposalTriagePriority::High
+        }));
+
+        let reviewed = review_capability_proposal(
+            &root,
+            &duplicate.proposal_id,
+            CapabilityProposalStatus::Duplicate,
+            "Same deterministic capability and semantic gap.",
+            Some(&canonical.proposal_id),
+            1_726_000_000_800,
+            "018f0000-0000-7000-8000-000000000042",
+        )
+        .expect("duplicate review");
+        assert_eq!(
+            reviewed
+                .review
+                .expect("review")
+                .duplicate_of_proposal_id
+                .as_deref(),
+            Some(canonical.proposal_id.as_str())
+        );
+        assert_invalid_duplicate_targets(&root, &gap, &plan, &semantic_plan, &canonical);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    fn assert_invalid_duplicate_targets(
+        root: &Path,
+        gap: &CapabilityGap,
+        plan: &CapabilityCompositionPlan,
+        semantic_plan: &SemanticCompositionPlan,
+        canonical: &CapabilityProposalReceipt,
+    ) {
+        assert!(matches!(
+            review_capability_proposal(
+                root,
+                &canonical.proposal_id,
+                CapabilityProposalStatus::Duplicate,
+                "Cannot target itself.",
+                Some(&canonical.proposal_id),
+                1_726_000_000_900,
+                "018f0000-0000-7000-8000-000000000043",
+            ),
+            Err(CreatorWorkspaceError::InvalidProposal)
+        ));
+        let mut unrelated_gap = gap.clone();
+        unrelated_gap.missing_capabilities[0].capability =
+            "perception.microphone.observe".to_owned();
+        let mut unrelated_plan = plan.clone();
+        unrelated_plan.requested_capabilities = vec!["perception.microphone.observe".to_owned()];
+        unrelated_plan.missing_capabilities = vec!["perception.microphone.observe".to_owned()];
+        let unrelated = submit_capability_proposal(
+            root,
+            &unrelated_gap,
+            &unrelated_plan,
+            semantic_plan,
+            "018f0000-0000-7000-8000-000000000044",
+            1_726_000_001_000,
+        )
+        .expect("unrelated proposal");
+        assert!(matches!(
+            review_capability_proposal(
+                root,
+                &canonical.proposal_id,
+                CapabilityProposalStatus::Duplicate,
+                "Different cluster cannot be linked.",
+                Some(&unrelated.proposal_id),
+                1_726_000_001_100,
+                "018f0000-0000-7000-8000-000000000045",
+            ),
+            Err(CreatorWorkspaceError::InvalidProposal)
+        ));
+        assert!(matches!(
+            review_capability_proposal(
+                root,
+                &canonical.proposal_id,
+                CapabilityProposalStatus::Duplicate,
+                "Missing target cannot be linked.",
+                Some("capability-proposal-missing"),
+                1_726_000_001_200,
+                "018f0000-0000-7000-8000-000000000046",
+            ),
+            Err(CreatorWorkspaceError::InvalidProposal)
+        ));
+        fs::remove_file(root.join(&canonical.relative_file)).expect("remove canonical record");
+        assert!(matches!(
+            list_capability_proposals(root),
+            Err(CreatorWorkspaceError::InvalidProposal)
+        ));
     }
 
     #[cfg(unix)]

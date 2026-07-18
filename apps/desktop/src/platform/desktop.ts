@@ -153,8 +153,21 @@ export interface CapabilityProposalRecord {
   gap: NonNullable<CreatorDraftResult["capabilityGap"]>;
   compositionPlan: NonNullable<CreatorDraftResult["compositionPlan"]>;
   semanticCompositionPlan: NonNullable<CreatorDraftResult["semanticCompositionPlan"]>;
-  review: { status: Exclude<CapabilityProposalStatus, "pending-review">; reason: string; reviewedAtMs: number } | null;
+  review: { status: Exclude<CapabilityProposalStatus, "pending-review">; reason: string; reviewedAtMs: number; duplicateOfProposalId: string | null } | null;
   integrityDigest: string;
+}
+
+export type CapabilityProposalTriagePriority = "normal" | "elevated" | "high";
+
+export interface CapabilityProposalGovernanceItem {
+  record: CapabilityProposalRecord;
+  cluster: {
+    clusterKey: string;
+    occurrenceCount: number;
+    canonicalProposalId: string;
+    relatedProposalIds: string[];
+    triagePriority: CapabilityProposalTriagePriority;
+  };
 }
 
 export interface CreatorDraftCheckReport {
@@ -871,8 +884,8 @@ export interface DesktopApi {
   saveCreatorDraft(workspaceRoot: string, kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>, approvalId: string): Promise<CreatorDraftSaveReceipt>;
   saveCapabilityGap(workspaceRoot: string, capabilityGap: NonNullable<CreatorDraftResult["capabilityGap"]>): Promise<CapabilityGapSaveReceipt>;
   submitCapabilityProposal(workspaceRoot: string, capabilityGap: NonNullable<CreatorDraftResult["capabilityGap"]>): Promise<CapabilityProposalReceipt>;
-  capabilityProposalQueue(workspaceRoot: string): Promise<CapabilityProposalRecord[]>;
-  reviewCapabilityProposal(workspaceRoot: string, proposalId: string, status: Exclude<CapabilityProposalStatus, "pending-review">, reason: string): Promise<CapabilityProposalRecord>;
+  capabilityProposalQueue(workspaceRoot: string): Promise<CapabilityProposalGovernanceItem[]>;
+  reviewCapabilityProposal(workspaceRoot: string, proposalId: string, status: Exclude<CapabilityProposalStatus, "pending-review">, reason: string, duplicateOfProposalId?: string): Promise<CapabilityProposalRecord>;
   checkCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>): Promise<CreatorDraftCheckReport>;
   resumeAutoModeTurn(request: ResumeAutoModeTurnRequest): Promise<DesktopAutoModeTurnResult>;
   startAutoModeJob(request: StartAutoModeJobRequest): Promise<DesktopAutoModeJobSnapshot>;
@@ -1372,8 +1385,8 @@ export function createDesktopApi(
     saveCreatorDraft: async (workspaceRoot, kind, requirement, draft, approvalId) => await invokeCommand("save_creator_draft_command", { request: { workspaceRoot, kind, requirement, draft, approvalId } }) as CreatorDraftSaveReceipt,
     saveCapabilityGap: async (workspaceRoot, capabilityGap) => await invokeCommand("save_capability_gap_command", { request: { workspaceRoot, capabilityGap } }) as CapabilityGapSaveReceipt,
     submitCapabilityProposal: async (workspaceRoot, capabilityGap) => await invokeCommand("submit_capability_proposal_command", { request: { workspaceRoot, capabilityGap } }) as CapabilityProposalReceipt,
-    capabilityProposalQueue: async (workspaceRoot) => await invokeCommand("capability_proposal_queue", { request: { workspaceRoot } }) as CapabilityProposalRecord[],
-    reviewCapabilityProposal: async (workspaceRoot, proposalId, status, reason) => await invokeCommand("review_capability_proposal_command", { request: { workspaceRoot, proposalId, status, reason } }) as CapabilityProposalRecord,
+    capabilityProposalQueue: async (workspaceRoot) => await invokeCommand("capability_proposal_queue", { request: { workspaceRoot } }) as CapabilityProposalGovernanceItem[],
+    reviewCapabilityProposal: async (workspaceRoot, proposalId, status, reason, duplicateOfProposalId) => await invokeCommand("review_capability_proposal_command", { request: { workspaceRoot, proposalId, status, reason, duplicateOfProposalId: duplicateOfProposalId ?? null } }) as CapabilityProposalRecord,
     checkCreatorDraft: async (kind, requirement, draft) => await invokeCommand("check_creator_draft", { request: { kind, requirement, draft } }) as CreatorDraftCheckReport,
     resumeAutoModeTurn: async (request) => await invokeCommand("resume_auto_mode_turn", {
       request: {

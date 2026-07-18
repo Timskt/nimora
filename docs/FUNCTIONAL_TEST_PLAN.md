@@ -664,6 +664,10 @@ ID / 标题 / 优先级 / 前置条件
 - Verify Safe/Recovery Mode、Browser Preview 和直接 IPC 调用均不能写入维护者裁决；读取失败不得跳过损坏记录后展示不完整队列。
 - Verify 治理 UI 明确 `accepted` 仅代表进入可行性分析，不创建 Handler、不修改 Registry、不签发 Grant、不执行代码；终态记录不再显示裁决控件。
 - Verify Proposal 的 SHA-256 内容摘要只作为离线一致性检测，不在 UI、日志或文档中描述为身份签名或来源真实性证明。
+- Verify Proposal 聚类键只覆盖排序后的精确缺口 ID 与语义缺失输出；标题、摘要和提交顺序变化不改变同一缺口聚类，任一能力或语义输出变化必须形成不同聚类。
+- Verify 聚类规范提案由最早 `submittedAtMs`、再按 `proposalId` 确定；分诊等级只按 1、2–3、4+ 条同类记录映射为 `normal/elevated/high`，不得宣传为 AI 价值评分或实现优先级。
+- Verify `duplicate` 裁决必须绑定存在、非自身、同聚类的 `duplicateOfProposalId`；接受/拒绝不得携带目标，自指、跨簇、缺失目标和规范记录删除后悬空引用均使整个队列失败关闭。
+- Verify 聚类与分诊是只读宿主投影，不写回 Proposal、不改变内容摘要、不自动裁决记录，也不因聚类数量扩大权限、预算或执行范围。
 - Verify 仅 `platformProposalRequired=true` 的实时复验 Gap 可提交；宿主提交时重建 Catalog 与 Semantic Graph 并重算双计划，前端摘要和旧计划不能成为提案事实。
 - Verify Proposal 使用 `.nimora-proposals/capability-proposal-<uuid>.json` 不可覆盖原子文件，状态固定为 `pending-review`，响应只返回相对路径。
 - Verify Proposal 不含批准凭证、可执行代码、Handler、Grant 或自动 Registry 更新入口；提交按钮与 Draft 审查、批准、安装按钮完全分离。
