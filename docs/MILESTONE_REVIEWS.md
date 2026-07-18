@@ -209,3 +209,10 @@ Actions 分钟：
 - 修正：新增 Tauri-free `asset_selection` Application Module，统一拥有 Character、Theme、Voice 的类型化 Policy、持久契约、损坏回退和原子替换；组合根只消费结果并保留资产专属复验与 Renderer 回滚。
 - 防回退：架构门禁自验证后扫描该模块，拒绝 `tauri::`、`State`、`AppHandle` 和命令宏；不使用空 Trait 或兼容转发层。
 - 证据：Desktop Host 95 项真实文件/错误/回退测试保持通过；后续继续拆 DTO、Agent、Skill 和 Asset Application Service，不能将首轮拆分描述为组合根治理完成。
+
+## M-2026-07-18 Asset Protocol 宿主解耦
+
+- 不足：资产 URL 的 Window、Method、Host、Query、路径解码、活动角色和 Inventory 复验直接依赖 Tauri HTTP 类型，安全规则与原生协议注册无法独立演进。
+- 修正：新增纯数据 `AssetProtocolRequest/Result/Status` 与 Tauri-free `asset_protocol` Application Module；模块自行复验当前 Character 包和唯一 Inventory Entry，不接受调用方注入“已验证”闭包。
+- Adapter：Tauri URI Scheme 仅提取 Method/Host/Path/Query 并映射状态码，不拥有授权或文件读取规则；错误响应保持无路径、无内部原因的固定正文。
+- 证据：路径歧义、编码逃逸、错误窗口/Host/Method、Safe Mode、非活动资产、Manifest/Integrity/非入口文件拒绝及真实 GLB 字节读取继续由 Desktop Host 95 项测试覆盖；架构门禁拒绝 Tauri 类型回流。

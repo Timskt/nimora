@@ -85,7 +85,10 @@ async function checkRustLayers() {
 }
 
 async function checkDesktopApplicationModules() {
-  const modules = ["apps/desktop/src-tauri/src/asset_selection.rs"];
+  const modules = [
+    "apps/desktop/src-tauri/src/asset_protocol.rs",
+    "apps/desktop/src-tauri/src/asset_selection.rs",
+  ];
   for (const relativePath of modules) {
     const source = await readFile(path.join(root, relativePath), "utf8");
     for (const symbol of findForbiddenRustHostSymbols(source)) {
