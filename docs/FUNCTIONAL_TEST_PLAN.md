@@ -526,6 +526,8 @@ ID / 标题 / 优先级 / 前置条件
 - Verify stale Session, Attempt, Checkpoint sequence, request fingerprint, non-indeterminate status, replay, invalid actor, and oversized/control-character reason fail with zero partial writes.
 - Verify resolution audit survives database reopen and list bounds reject zero or more than 100 records.
 - Verify browser preview rejects detail and resolution commands with `desktop-host-required`.
+- Verify desktop platform mapping preserves Session、Attempt、Checkpoint sequence、request fingerprint、decision 与必填 reason，不改名、不丢字段；Pause/Cancel 使用独立 Job ID 命令。
+- Verify 目标控制中心只在 `indeterminate` Attempt 上显示两种互斥决议，提交前展示绑定身份与永久审计提示，空白理由不能提交，Safe/Recovery/Browser Preview 全部只读。
 
 ## Agent control center aggregation
 

@@ -191,6 +191,18 @@ describe("desktop platform adapter", () => {
       sessionId: "018f0000-0000-7000-8000-000000000012",
       workspaceRoot: "/workspace",
     });
+    await api.autoModeControlCenter();
+    await api.autoModeAttemptDetail("018f0000-0000-7000-8000-000000000012");
+    await api.resolveAutoModeAttempt({
+      sessionId: "018f0000-0000-7000-8000-000000000012",
+      attemptId: "018f0000-0000-7000-8000-000000000013",
+      checkpointSequence: 7,
+      requestFingerprint: "sha256:bound-attempt",
+      decision: "confirmed_not_executed",
+      reason: "已核对 Provider 审计记录，确认请求未到达服务端",
+    });
+    await api.pauseAutoModeJob("018f0000-0000-7000-8000-000000000014");
+    await api.cancelAutoModeJob("018f0000-0000-7000-8000-000000000015");
     await api.prepareAgentTool("pet.animation.play", { action: "celebrate" });
     await api.confirmAgentTool("018f0000-0000-7000-8000-000000000004");
     await api.confirmAgentRunTool("018f0000-0000-7000-8000-000000000006");
@@ -315,6 +327,18 @@ describe("desktop platform adapter", () => {
         offline: true,
         maxTurnsPerBatch: 8,
       } }],
+      ["auto_mode_control_center"],
+      ["auto_mode_attempt_detail", { sessionId: "018f0000-0000-7000-8000-000000000012" }],
+      ["resolve_auto_mode_attempt", { request: {
+        sessionId: "018f0000-0000-7000-8000-000000000012",
+        attemptId: "018f0000-0000-7000-8000-000000000013",
+        checkpointSequence: 7,
+        requestFingerprint: "sha256:bound-attempt",
+        decision: "confirmed_not_executed",
+        reason: "已核对 Provider 审计记录，确认请求未到达服务端",
+      } }],
+      ["pause_auto_mode_job", { jobId: "018f0000-0000-7000-8000-000000000014" }],
+      ["cancel_auto_mode_job", { jobId: "018f0000-0000-7000-8000-000000000015" }],
       ["prepare_agent_tool", { request: { toolId: "pet.animation.play", arguments: { action: "celebrate" } } }],
       ["confirm_agent_tool", { request: { invocationId: "018f0000-0000-7000-8000-000000000004" } }],
       ["confirm_agent_run_tool", { request: { invocationId: "018f0000-0000-7000-8000-000000000006" } }],

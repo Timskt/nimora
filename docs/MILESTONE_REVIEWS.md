@@ -296,3 +296,11 @@ Actions 分钟：
 - 鲁棒性：拒绝、过期、重复处理和 Safe Mode 均失败关闭；重启保留未过期 pending、将 executing 标记 interrupted；Engine 异常精确中断 Run Journal，避免遗留 running。
 - 回顾修正：故障测试发现 Catalog 的独立 `enabled` 列没有同步回运行 Definition，导致已启用事件 Automation 被 Engine 当作禁用并跳过；读取边界现以持久启用态覆盖 Definition，且测试证明待批期间停用或升级会使旧批准失败终结，Safe Mode 则在 claim 前拒绝并保留用户决定权。
 - UI：Automation Workspace 显示逐动作有效风险、实际参数和过期时间，明确整次执行尚未开始；Browser Preview 只返回空目录并拒绝伪造批准。
+
+## M-2026-07-18 Auto Mode 未决 Attempt 人工对账收敛
+
+- 回顾：持久决议仓储、桌面详情/决议 IPC 与目标控制中心 UI 已形成同一纵切，不再把人工对账错误列为未实现。
+- UI：仅对 `indeterminate` Attempt 显示两种互斥决议；弹窗展示 Goal、Session、Attempt 和永久审计风险，理由必填，提交后刷新持久事实与不可变历史。
+- 安全：决议精确绑定 Session、Attempt、Checkpoint sequence、请求指纹、Actor、理由、决策和宿主时间；Safe/Recovery Mode 与 Browser Preview 全部只读，失败不自动重试。
+- 证据：真实 SQLite 覆盖两种决议、并发唯一胜者、重放/漂移/损坏拒绝与重启审计；Desktop Host 覆盖空理由前置拒绝，前端平台测试覆盖完整 IPC 参数映射。
+- 剩余：仍需真实桌面跨崩溃场景的交互录像与视觉验收，以及 Goal/Plan 完整编辑和缓存系统密钥保护。
