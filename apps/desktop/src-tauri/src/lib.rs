@@ -3614,6 +3614,7 @@ fn enter_safe_mode(
     apply_window_policy(&app, previous_policy, WindowPolicy::SAFE)?;
     match state.safety.enter(SafeModeReason::Manual) {
         Ok(command) => {
+            quiesce_auto_mode_jobs(&state, AUTO_MODE_SHUTDOWN_TIMEOUT, "safe-mode-timeout")?;
             cancel_all_user_programs(&state)?;
             cancel_all_user_program_event_sessions(&state)?;
             stop_skill_event_sessions(&state)?;
@@ -3662,6 +3663,29 @@ fn cancel_all_pending_agent_tools(state: &DesktopState) -> Result<(), DesktopErr
     );
     for task_id in task_ids {
         cancel_automation_agent_task(state, task_id)?;
+    }
+    Ok(())
+}
+
+fn quiesce_auto_mode_jobs(
+    state: &DesktopState,
+    timeout: Duration,
+    timeout_error_code: &str,
+) -> Result<(), DesktopError> {
+    let now_ms = current_time_ms()?;
+    state
+        .auto_mode_jobs
+        .request_cancel_all(now_ms)
+        .map_err(agent_error)?;
+    if !state
+        .auto_mode_jobs
+        .wait_for_idle(timeout)
+        .map_err(agent_error)?
+    {
+        state
+            .auto_mode_jobs
+            .mark_active_indeterminate(current_time_ms()?, timeout_error_code)
+            .map_err(agent_error)?;
     }
     Ok(())
 }
@@ -7402,20 +7426,7 @@ pub fn run() {
     application.run(|app, event| {
         if matches!(event, RunEvent::ExitRequested { .. }) {
             let state = app.state::<DesktopState>();
-            if let Ok(now_ms) = current_time_ms() {
-                let _ = state.auto_mode_jobs.request_cancel_all(now_ms);
-                if matches!(
-                    state
-                        .auto_mode_jobs
-                        .wait_for_idle(AUTO_MODE_SHUTDOWN_TIMEOUT),
-                    Ok(false)
-                ) {
-                    let isolation_time = current_time_ms().unwrap_or(now_ms);
-                    let _ = state
-                        .auto_mode_jobs
-                        .mark_active_indeterminate(isolation_time, "shutdown-timeout");
-                }
-            }
+            let _ = quiesce_auto_mode_jobs(&state, AUTO_MODE_SHUTDOWN_TIMEOUT, "shutdown-timeout");
         }
     });
 }
@@ -7539,28 +7550,29 @@ fn discover_ollama_worker(app: &AppHandle) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVE_CHARACTER_FILE, ActiveSkillExecution, AssetInstallReceipt, AutomationTestRequest,
-        BUILTIN_CHARACTER_ID, CapabilityBackend, DETERMINISTIC_PROVIDER_ID, DesktopAgentRunStatus,
-        DesktopCapabilityBackend, DesktopError, DesktopState, ExecutionCancellation,
-        LocalAgentRequest, PendingSkillExecution, PetAction, PrepareAgentToolRequest,
-        ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest,
-        ResumeAutoModeTurnRequest, SkillEventSession, StartupMode, TrayAction,
-        UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
-        WindowPolicy, agent_catalog_inner, approve_skill_execution_inner,
-        automation_agent_messages, cancel_agent_task_inner, cancel_all_pending_agent_tools,
-        cancel_automation_run_inner, cancel_skill_execution_inner, confirm_agent_tool_inner,
-        confirm_agent_tool_with_registry, current_time_ms, default_agent_model,
-        default_agent_provider_id, desktop_tool_registry, diagnostic_report,
+        ACTIVE_CHARACTER_FILE, ActiveSkillExecution, AssetInstallReceipt, AutoModeJobStatus,
+        AutomationTestRequest, BUILTIN_CHARACTER_ID, CapabilityBackend, DETERMINISTIC_PROVIDER_ID,
+        DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError, DesktopState,
+        ExecutionCancellation, LocalAgentRequest, PendingSkillExecution, PetAction,
+        PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
+        ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SkillEventSession, StartupMode,
+        TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
+        UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
+        approve_skill_execution_inner, automation_agent_messages, cancel_agent_task_inner,
+        cancel_all_pending_agent_tools, cancel_automation_run_inner, cancel_skill_execution_inner,
+        confirm_agent_tool_inner, confirm_agent_tool_with_registry, current_time_ms,
+        default_agent_model, default_agent_provider_id, desktop_tool_registry, diagnostic_report,
         dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
         parse_user_program_plan, permission_grant, persist_active_character,
-        prepare_agent_tool_inner, reject_agent_tool_inner, resolve_active_character,
-        resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
-        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
-        screen_coordinate, serve_asset_protocol, skill_capability_names, skill_event_types,
-        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
-        validate_model_source, validate_package_source, validate_requested_animation_map,
+        prepare_agent_tool_inner, quiesce_auto_mode_jobs, reject_agent_tool_inner,
+        resolve_active_character, resolve_character_renderer, resume_auto_mode_turn_inner,
+        run_live_automation, run_local_agent_inner, run_skill_agent_task,
+        run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
+        skill_capability_names, skill_event_types, stop_skill_event_sessions, test_automation,
+        user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
+        validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentTask, AgentTaskOrigin, AgentTaskStatus, CancellationFlag,
@@ -8996,6 +9008,29 @@ mod tests {
             )
             .is_err()
         );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn safe_mode_quiescence_isolates_unresponsive_auto_mode_job() {
+        let (root, state) = normal_desktop_state();
+        let session_id = Uuid::now_v7();
+        let (job, control) = state.auto_mode_jobs.start(session_id, 100).expect("job");
+        state
+            .auto_mode_jobs
+            .mark_running(job.job_id, 101)
+            .expect("running");
+
+        quiesce_auto_mode_jobs(&state, Duration::ZERO, "safe-mode-timeout").expect("quiescence");
+
+        assert!(control.cancellation().is_cancelled());
+        let isolated = state.auto_mode_jobs.snapshot(job.job_id).expect("snapshot");
+        assert_eq!(isolated.status, AutoModeJobStatus::Indeterminate);
+        assert_eq!(isolated.error_code.as_deref(), Some("safe-mode-timeout"));
+        state
+            .auto_mode_jobs
+            .start(session_id, 102)
+            .expect("replacement job");
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
