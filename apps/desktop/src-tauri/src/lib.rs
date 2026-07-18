@@ -119,6 +119,8 @@ const MAX_MODEL_BYTES: u64 = 80 * 1024 * 1024;
 const MODEL_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PENDING_AGENT_TOOLS: usize = 32;
 const AGENT_TOOL_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
+const MAX_PENDING_SKILL_EXECUTIONS: usize = 32;
+const SKILL_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
 const AUTOMATION_AGENT_REQUESTER: &str = "automation:desktop";
 
 #[derive(Debug)]
@@ -152,6 +154,7 @@ struct DesktopState {
     active_user_program_workers: Mutex<HashMap<Uuid, ActiveUserProgramWorker>>,
     user_programs: Mutex<HashMap<Uuid, UserProgramSession>>,
     pending_agent_tools: Mutex<HashMap<Uuid, PendingAgentTool>>,
+    pending_skill_executions: Mutex<HashMap<Uuid, PendingSkillExecution>>,
     active_agent_tasks: Mutex<HashMap<Uuid, CancellationFlag>>,
     active_automation_runs: Mutex<HashMap<Uuid, CancellationFlag>>,
     execution_controller: ExecutionController,
@@ -166,6 +169,15 @@ struct PendingAgentTool {
     effective_risk: CommandRisk,
     expires_at_ms: u64,
     context: PendingAgentToolContext,
+}
+
+#[derive(Debug)]
+struct PendingSkillExecution {
+    execution_id: Uuid,
+    skill_id: String,
+    command_allowlist: BTreeSet<String>,
+    output: SkillExecutionOutput,
+    expires_at_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -372,6 +384,7 @@ impl DesktopState {
             active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
             pending_agent_tools: Mutex::new(HashMap::new()),
+            pending_skill_executions: Mutex::new(HashMap::new()),
             active_agent_tasks: Mutex::new(HashMap::new()),
             active_automation_runs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
@@ -439,6 +452,7 @@ impl DesktopState {
             active_user_program_workers: Mutex::new(HashMap::new()),
             user_programs: Mutex::new(HashMap::new()),
             pending_agent_tools: Mutex::new(HashMap::new()),
+            pending_skill_executions: Mutex::new(HashMap::new()),
             active_agent_tasks: Mutex::new(HashMap::new()),
             active_automation_runs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
@@ -697,8 +711,40 @@ struct ExecuteSkillRequest {
 struct SkillExecutionReceipt {
     execution_id: Uuid,
     skill_id: String,
+    status: SkillExecutionStatus,
+    approval: Option<SkillApprovalRequest>,
     command_results: Vec<CapabilityResponse>,
     agent_results: Vec<DesktopAgentRunResult>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum SkillExecutionStatus {
+    Completed,
+    WaitingForApproval,
+    Rejected,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillApprovalRequest {
+    approval_id: Uuid,
+    expires_at_ms: u64,
+    commands: Vec<SkillApprovalCommand>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillApprovalCommand {
+    command_id: String,
+    arguments: serde_json::Value,
+    risk: CommandRisk,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResolveSkillApprovalRequest {
+    approval_id: Uuid,
 }
 
 #[derive(Debug, Serialize)]
@@ -894,8 +940,18 @@ enum DesktopError {
     SkillAuthorizationRequired,
     #[error("installed Skill does not match its persisted exact-version state")]
     SkillStateMismatch,
-    #[error("Skill command is not registered or requires explicit approval: {0}")]
-    SkillCommandNotAutoExecutable(String),
+    #[error("Skill command is not registered: {0}")]
+    SkillCommandNotRegistered(String),
+    #[error("Skill command is not present in the exact manifest allowlist: {0}")]
+    SkillCommandNotAllowed(String),
+    #[error("Skill command batch requires explicit approval")]
+    SkillCommandApprovalRequired,
+    #[error("too many Skill executions are waiting for approval")]
+    SkillApprovalCapacityExceeded,
+    #[error("Skill approval does not exist or was already resolved")]
+    SkillApprovalNotFound,
+    #[error("Skill approval expired before it was resolved")]
+    SkillApprovalExpired,
     #[error(transparent)]
     Automation(#[from] AutomationError),
     #[error("user program execution was not found")]
@@ -3923,18 +3979,77 @@ fn execute_skill_inner(
             worker.wait_recording_failure(&mut host, &request.skill_id, current_time_ms()?)?;
         (terminal_skill_worker_output(response)?, command_allowlist)
     };
-    let command_results =
-        dispatch_skill_commands(state, execution_id, &command_allowlist, output.commands)?;
+    let approval_commands = preflight_skill_commands(&command_allowlist, &output.commands)?;
+    if approval_commands.iter().any(|command| {
+        matches!(
+            command.risk,
+            CommandRisk::Medium | CommandRisk::High | CommandRisk::Critical
+        )
+    }) {
+        let expires_at_ms = current_time_ms()?.saturating_add(SKILL_APPROVAL_TTL_MS);
+        let pending = PendingSkillExecution {
+            execution_id,
+            skill_id: request.skill_id.clone(),
+            command_allowlist,
+            output,
+            expires_at_ms,
+        };
+        let mut pending_executions = state
+            .pending_skill_executions
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?;
+        pending_executions
+            .retain(|_, pending| pending.expires_at_ms > current_time_ms().unwrap_or(0));
+        if pending_executions.len() >= MAX_PENDING_SKILL_EXECUTIONS {
+            return Err(DesktopError::SkillApprovalCapacityExceeded);
+        }
+        pending_executions.insert(execution_id, pending);
+        return Ok(SkillExecutionReceipt {
+            execution_id,
+            skill_id: request.skill_id,
+            status: SkillExecutionStatus::WaitingForApproval,
+            approval: Some(SkillApprovalRequest {
+                approval_id: execution_id,
+                expires_at_ms,
+                commands: approval_commands,
+            }),
+            command_results: Vec::new(),
+            agent_results: Vec::new(),
+        });
+    }
+    complete_skill_execution(
+        state,
+        execution_id,
+        request.skill_id,
+        &command_allowlist,
+        output,
+    )
+}
+
+fn complete_skill_execution(
+    state: &DesktopState,
+    execution_id: Uuid,
+    skill_id: String,
+    command_allowlist: &BTreeSet<String>,
+    output: SkillExecutionOutput,
+) -> Result<SkillExecutionReceipt, DesktopError> {
+    let command_results = dispatch_skill_commands(
+        state,
+        execution_id,
+        command_allowlist,
+        output.commands,
+        true,
+    )?;
     let requester = state
         .skill_host
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?
-        .module_agent_identity(&request.skill_id)?;
+        .module_agent_identity(&skill_id)?;
     let mut agent_results = Vec::with_capacity(output.agent_tasks.len());
     for task in output.agent_tasks {
         agent_results.push(run_skill_agent_task(
             state,
-            &request.skill_id,
+            &skill_id,
             execution_id,
             &requester,
             task,
@@ -3942,10 +4057,98 @@ fn execute_skill_inner(
     }
     Ok(SkillExecutionReceipt {
         execution_id,
-        skill_id: request.skill_id,
+        skill_id,
+        status: SkillExecutionStatus::Completed,
+        approval: None,
         command_results,
         agent_results,
     })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn approve_skill_execution(
+    state: State<'_, DesktopState>,
+    request: ResolveSkillApprovalRequest,
+) -> Result<SkillExecutionReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    approve_skill_execution_inner(&state, &request)
+}
+
+fn approve_skill_execution_inner(
+    state: &DesktopState,
+    request: &ResolveSkillApprovalRequest,
+) -> Result<SkillExecutionReceipt, DesktopError> {
+    let pending = state
+        .pending_skill_executions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .remove(&request.approval_id)
+        .ok_or(DesktopError::SkillApprovalNotFound)?;
+    if pending.expires_at_ms <= current_time_ms()? {
+        return Err(DesktopError::SkillApprovalExpired);
+    }
+    complete_skill_execution(
+        state,
+        pending.execution_id,
+        pending.skill_id,
+        &pending.command_allowlist,
+        pending.output,
+    )
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn reject_skill_execution(
+    state: State<'_, DesktopState>,
+    request: ResolveSkillApprovalRequest,
+) -> Result<SkillExecutionReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    reject_skill_execution_inner(&state, &request)
+}
+
+fn reject_skill_execution_inner(
+    state: &DesktopState,
+    request: &ResolveSkillApprovalRequest,
+) -> Result<SkillExecutionReceipt, DesktopError> {
+    let pending = state
+        .pending_skill_executions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .remove(&request.approval_id)
+        .ok_or(DesktopError::SkillApprovalNotFound)?;
+    Ok(SkillExecutionReceipt {
+        execution_id: pending.execution_id,
+        skill_id: pending.skill_id,
+        status: SkillExecutionStatus::Rejected,
+        approval: None,
+        command_results: Vec::new(),
+        agent_results: Vec::new(),
+    })
+}
+
+fn preflight_skill_commands(
+    allowlist: &BTreeSet<String>,
+    commands: &[nimora_skill_host::SkillCommandRequest],
+) -> Result<Vec<SkillApprovalCommand>, DesktopError> {
+    commands
+        .iter()
+        .map(|command| {
+            let risk = skill_command_risk(&command.command_id).ok_or_else(|| {
+                DesktopError::SkillCommandNotRegistered(command.command_id.clone())
+            })?;
+            if !allowlist.contains(&command.command_id) {
+                return Err(DesktopError::SkillCommandNotAllowed(
+                    command.command_id.clone(),
+                ));
+            }
+            Ok(SkillApprovalCommand {
+                command_id: command.command_id.clone(),
+                arguments: command.arguments.clone(),
+                risk,
+            })
+        })
+        .collect()
 }
 
 fn dispatch_skill_commands(
@@ -3953,18 +4156,18 @@ fn dispatch_skill_commands(
     execution_id: Uuid,
     allowlist: &BTreeSet<String>,
     commands: Vec<nimora_skill_host::SkillCommandRequest>,
+    approved: bool,
 ) -> Result<Vec<CapabilityResponse>, DesktopError> {
-    for command in &commands {
-        let risk = skill_command_risk(&command.command_id).ok_or_else(|| {
-            DesktopError::SkillCommandNotAutoExecutable(command.command_id.clone())
-        })?;
-        if !allowlist.contains(&command.command_id)
-            || !matches!(risk, CommandRisk::Safe | CommandRisk::Low)
-        {
-            return Err(DesktopError::SkillCommandNotAutoExecutable(
-                command.command_id.clone(),
-            ));
-        }
+    let admitted = preflight_skill_commands(allowlist, &commands)?;
+    if !approved
+        && admitted.iter().any(|command| {
+            matches!(
+                command.risk,
+                CommandRisk::Medium | CommandRisk::High | CommandRisk::Critical
+            )
+        })
+    {
+        return Err(DesktopError::SkillCommandApprovalRequired);
     }
     let trace_id = Uuid::now_v7();
     let policy = ModuleGatewayPolicy {
@@ -5968,6 +6171,8 @@ pub fn run() {
             set_skill_enabled,
             rollback_installed_skill,
             execute_skill,
+            approve_skill_execution,
+            reject_skill_execution,
             install_user_program,
             rollback_user_program,
             user_program_permission_status,
@@ -6108,13 +6313,15 @@ mod tests {
     use super::{
         ACTIVE_CHARACTER_FILE, AssetInstallReceipt, AutomationTestRequest, BUILTIN_CHARACTER_ID,
         CapabilityBackend, DETERMINISTIC_PROVIDER_ID, DesktopAgentRunStatus,
-        DesktopCapabilityBackend, DesktopError, DesktopState, LocalAgentRequest, PetAction,
-        PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest, StartupMode, TrayAction,
+        DesktopCapabilityBackend, DesktopError, DesktopState, LocalAgentRequest,
+        PendingSkillExecution, PetAction, PrepareAgentToolRequest, ProfilePolicy,
+        ResolveAgentToolRequest, ResolveSkillApprovalRequest, StartupMode, TrayAction,
         UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
-        WindowPolicy, agent_catalog_inner, automation_agent_messages, cancel_agent_task_inner,
-        cancel_all_pending_agent_tools, cancel_automation_run_inner, confirm_agent_tool_inner,
-        confirm_agent_tool_with_registry, default_agent_model, default_agent_provider_id,
-        diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
+        WindowPolicy, agent_catalog_inner, approve_skill_execution_inner,
+        automation_agent_messages, cancel_agent_task_inner, cancel_all_pending_agent_tools,
+        cancel_automation_run_inner, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
+        current_time_ms, default_agent_model, default_agent_provider_id, diagnostic_report,
+        dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, inspect_asset_catalog, install_gltf_character,
         open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
         permission_grant, persist_active_character, prepare_agent_tool_inner,
@@ -6145,9 +6352,14 @@ mod tests {
         SqliteAutomationJournal, SqliteProgramPermissionRepository,
     };
     use nimora_runtime_core::{Event, EventSource, Position, RuntimeMode};
-    use nimora_skill_host::{SkillAgentTaskRequest, SkillCommandRequest, SkillContextSegment};
+    use nimora_skill_host::{
+        SkillAgentTaskRequest, SkillCommandRequest, SkillContextSegment, SkillExecutionOutput,
+    };
     use nimora_skill_package::install_skill_atomically;
-    use nimora_skill_runtime::{SkillCapability, SkillManifest, SkillStatus};
+    use nimora_skill_runtime::{
+        SkillCapability, SkillContributions, SkillGrant, SkillManifest, SkillStatus,
+        validate_manifest,
+    };
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
     use sha2::{Digest, Sha256};
@@ -8147,6 +8359,7 @@ mod tests {
                 command_id: "safe.pet.animate".to_owned(),
                 arguments: serde_json::json!({"action": "celebrate"}),
             }],
+            false,
         )
         .expect("registered Skill command");
         assert_eq!(results.len(), 1);
@@ -8175,11 +8388,78 @@ mod tests {
                         arguments: serde_json::json!({"profileId": "profile:default"}),
                     },
                 ],
+                false,
             ),
-            Err(DesktopError::SkillCommandNotAutoExecutable(command))
-                if command == "safe.profile.switch"
+            Err(DesktopError::SkillCommandApprovalRequired)
         ));
         assert_eq!(state.runtime.snapshot().expect("pet snapshot"), before);
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn skill_approval_consumes_the_exact_pending_batch_once() {
+        let (root, state) = normal_desktop_state();
+        let execution_id = Uuid::now_v7();
+        let skill_id = "studio.example.approved".to_owned();
+        let manifest = SkillManifest {
+            spec: nimora_skill_runtime::SKILL_SPEC.to_owned(),
+            id: skill_id.clone(),
+            version: "1.0.0".to_owned(),
+            publisher: "studio.example".to_owned(),
+            entrypoint: "main.js".to_owned(),
+            capabilities: BTreeSet::from([SkillCapability::InvokeCommands]),
+            activation_events: BTreeSet::from(["onStartup".to_owned()]),
+            command_allowlist: BTreeSet::from(["safe.profile.switch".to_owned()]),
+            contributions: SkillContributions::default(),
+        };
+        let mut host = state.skill_host.lock().expect("skill host");
+        host.install(validate_manifest(manifest).expect("valid manifest"))
+            .expect("installed skill");
+        host.authorize(SkillGrant {
+            skill_id: skill_id.clone(),
+            version: "1.0.0".to_owned(),
+            capabilities: BTreeSet::from([SkillCapability::InvokeCommands]),
+        })
+        .expect("authorized skill");
+        host.activate(&skill_id).expect("active skill");
+        drop(host);
+        state
+            .pending_skill_executions
+            .lock()
+            .expect("pending approvals")
+            .insert(
+                execution_id,
+                PendingSkillExecution {
+                    execution_id,
+                    skill_id: skill_id.clone(),
+                    command_allowlist: BTreeSet::from(["safe.profile.switch".to_owned()]),
+                    output: SkillExecutionOutput {
+                        commands: vec![SkillCommandRequest {
+                            command_id: "safe.profile.switch".to_owned(),
+                            arguments: serde_json::json!({"profileId": "profile:default"}),
+                        }],
+                        agent_tasks: Vec::new(),
+                    },
+                    expires_at_ms: current_time_ms().expect("clock") + 60_000,
+                },
+            );
+        let error = approve_skill_execution_inner(
+            &state,
+            &ResolveSkillApprovalRequest {
+                approval_id: execution_id,
+            },
+        )
+        .expect_err("headless profile switch must fail closed");
+        assert!(matches!(error, DesktopError::UserCodeGateway(_)));
+        assert!(matches!(
+            approve_skill_execution_inner(
+                &state,
+                &ResolveSkillApprovalRequest {
+                    approval_id: execution_id,
+                },
+            ),
+            Err(DesktopError::SkillApprovalNotFound)
+        ));
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
