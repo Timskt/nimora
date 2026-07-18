@@ -1,5 +1,13 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 真实桌面启动迁移与 macOS Keychain 演练
+
+- 使用现存真实应用数据库启动 Tauri 时发现 `user_version=1` 数据库缺少后续加入的 `automation_run_journal`，导致 setup hook 崩溃；根因是同一数据库版本内的幂等 Schema Extension 漏项，而不是数据库损坏。
+- 持久层现会为既有版本 1 数据库幂等补建 Automation Run Journal 及索引，并新增最小旧 Schema 回归测试；不删除、不重建、不覆盖现有用户表，也不会把可迁移数据库误送入 Recovery Mode。
+- 修复后使用同一数据库重新启动真实 Tauri 进程成功，进程持续运行且无 setup panic；验证结束后通过开发进程中断正常退出。
+- `secret-store` 新增默认忽略、必须显式设置 `NIMORA_RUN_SYSTEM_SECRET_STORE_TEST=1` 的系统凭据生命周期门禁，使用唯一合成凭据验证 Missing → Put → Present → Resolve → Delete → Missing → Idempotent Delete，并在成功或失败路径末尾再次清理。
+- 本机 macOS Keychain 真机测试 1/1 通过，合成凭据已撤销；普通 Secret Store 测试 3/3、持久层迁移回归和相关 Clippy `-D warnings` 通过。未签名开发窗口未被 Computer Use 枚举，因此本轮不宣称完成 Provider 表单的原生 UI 自动化。
+
 ## 2026-07-19 — 通用 Agent Provider Worker 能力清单
 
 - 将旧的 Ollama 单 Provider 清单升级为唯一的 `nimora.provider-worker-manifest/1`，同一受信 Worker 显式声明 Ollama loopback 与 OpenAI-compatible 两项协议能力。

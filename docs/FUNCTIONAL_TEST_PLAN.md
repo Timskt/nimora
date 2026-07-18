@@ -1,5 +1,12 @@
 # Nimora 功能测试计划
 
+## 桌面启动迁移与系统密钥真机门禁
+
+- 使用 `PRAGMA user_version = 1` 且缺少后续扩展表的最小旧数据库打开任一共享仓储，必须幂等创建 `automation_run_journal` 与索引，保留版本号和既有数据。
+- 使用真实应用数据目录启动 Tauri，Schema Extension 可迁移时不得 setup panic、清库或进入 Recovery Mode；不可迁移或完整性失败时才允许隔离恢复。
+- 系统密钥测试默认忽略且必须显式设置门禁环境变量；只写入唯一合成引用和值，验证写入、存在性、解析、撤销、缺失和幂等删除，并在任何中间失败后再次清理。
+- macOS、Windows、Linux 发布任务分别执行原生 Keychain、Credential Manager、Secret Service 门禁；任一平台证据不得外推替代其它平台。
+
 ## Creator 权限 Diff 与一次性批准
 
 - 同一结构化草案重复审查产生相同 `sha256:` 摘要；任意源码、Manifest、权限或自动化动作变化均改变摘要。

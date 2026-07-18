@@ -212,6 +212,7 @@ fn map_keyring_error(error: &keyring::Error) -> SecretStoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn reference_is_namespaced_and_bounded() {
@@ -261,5 +262,43 @@ mod tests {
                 Err(SecretStoreError::InvalidSecret)
             );
         }
+    }
+
+    #[test]
+    #[ignore = "requires explicit system credential-store access"]
+    fn system_store_round_trip_is_present_resolvable_and_revocable() {
+        assert_eq!(
+            std::env::var("NIMORA_RUN_SYSTEM_SECRET_STORE_TEST").as_deref(),
+            Ok("1"),
+            "set NIMORA_RUN_SYSTEM_SECRET_STORE_TEST=1 to run this destructive-cleanup test"
+        );
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let reference = SecretReference::parse(format!(
+            "secret:test:system-store-{}-{nonce}",
+            std::process::id()
+        ))
+        .expect("unique reference");
+        let store = SystemSecretStore;
+        let result = (|| {
+            assert_eq!(store.presence(&reference)?, SecretPresence::Missing);
+            store.put(
+                &reference,
+                Zeroizing::new(format!("nimora-synthetic-test-{nonce}")),
+            )?;
+            assert_eq!(store.presence(&reference)?, SecretPresence::Present);
+            assert_eq!(
+                store.resolve(&reference)?.as_str(),
+                format!("nimora-synthetic-test-{nonce}")
+            );
+            store.delete(&reference)?;
+            assert_eq!(store.presence(&reference)?, SecretPresence::Missing);
+            store.delete(&reference)
+        })();
+        let cleanup = store.delete(&reference);
+        assert_eq!(cleanup, Ok(()), "system credential cleanup failed");
+        assert_eq!(result, Ok(()), "system credential lifecycle failed");
     }
 }

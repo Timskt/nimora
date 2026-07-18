@@ -1131,6 +1131,7 @@ fn prepare_connection(connection: &mut Connection) -> Result<(), SqlitePersisten
 }
 
 fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), SqlitePersistenceError> {
+    ensure_automation_run_journal_schema(connection)?;
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS automation_agent_journal (
             task_id TEXT PRIMARY KEY,
@@ -1144,8 +1145,7 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
             payload TEXT NOT NULL,
             UNIQUE (run_id, idempotency_key)
         );
-        CREATE INDEX IF NOT EXISTS automation_agent_journal_updated_idx
-            ON automation_agent_journal(updated_at_ms DESC, task_id DESC);
+        CREATE INDEX IF NOT EXISTS automation_agent_journal_updated_idx ON automation_agent_journal(updated_at_ms DESC, task_id DESC);
         CREATE TABLE IF NOT EXISTS skill_approval_journal (
             approval_id TEXT PRIMARY KEY,
             execution_id TEXT NOT NULL UNIQUE,
@@ -1230,6 +1230,28 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
     ensure_auto_mode_attempt_resolution_schema(connection)?;
     ensure_workspace_snapshot_schema(connection)?;
     ensure_context_cache_schema(connection)?;
+    Ok(())
+}
+
+fn ensure_automation_run_journal_schema(
+    connection: &Connection,
+) -> Result<(), SqlitePersistenceError> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS automation_run_journal (
+            run_id TEXT PRIMARY KEY,
+            automation_id TEXT NOT NULL,
+            trace_id TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'interrupted')),
+            started_at_ms INTEGER NOT NULL CHECK (started_at_ms >= 0),
+            updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= started_at_ms),
+            schema_version INTEGER NOT NULL,
+            payload TEXT,
+            interruption_reason TEXT
+        );
+        CREATE INDEX IF NOT EXISTS automation_run_journal_updated_idx
+            ON automation_run_journal(updated_at_ms DESC, run_id DESC);",
+    )?;
     Ok(())
 }
 
@@ -2081,6 +2103,36 @@ mod tests {
             SqlitePetRepository::from_connection(connection),
             Err(SqlitePersistenceError::UnsupportedDatabaseVersion(2))
         ));
+    }
+
+    #[test]
+    fn upgrades_version_one_database_missing_automation_run_journal() {
+        let mut connection = Connection::open_in_memory().expect("database");
+        connection
+            .execute_batch(
+                "CREATE TABLE pet_snapshot (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    schema_version INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                PRAGMA user_version = 1;",
+            )
+            .expect("legacy schema");
+
+        prepare_connection(&mut connection).expect("upgrade legacy schema");
+
+        let present = connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table' AND name = 'automation_run_journal'
+                )",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .expect("query upgraded schema");
+        assert!(present);
     }
 
     fn enqueue_outbox(repository: &SqliteOutboxRepository, event: &Event) {
