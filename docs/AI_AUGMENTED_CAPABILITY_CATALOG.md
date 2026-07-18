@@ -21,10 +21,18 @@
 | Connector | 日历、Home Assistant、IDE、Git、Webhook、硬件和企业服务 | Connector；Secret 引用、网络域、速率和数据出口 |
 | Agent | 角色 Agent、Subagent、Goal、规划器和交接协议 | Agent Profile / Team Graph；Tool、预算、递归和停止条件 |
 | CLI | 命令、参数、交互向导、机器输出和 Shell 补全 | CLI Contribution；Schema、无 TTY、退出码契约 |
+| 工作台与微应用 | 表单、看板、时间线、仪表盘、编辑器、浮窗工具与多步骤向导 | Workspace App / Widget；声明式 UI、状态 Schema、无障碍与渲染预算 |
+| 数据处理 | 解析、清洗、转换、分类、摘要、脱敏、导入导出与可视化 | Data Recipe / Pipeline；类型契约、样本预览、血缘、可逆写入 |
 | 知识与数据 | 本地摄取、索引、RAG、同步和删除传播 | Knowledge Pipeline；来源、去敏、离线降级 |
+| 通信与协作 | 邮件、消息、日程、工单、审批、团队通知和人机交接 | Connector + Workflow；收件人预览、草稿优先、幂等发送与撤销策略 |
+| 设备与环境 | 智能家居、串口、蓝牙、MIDI、Stream Deck、传感器和机器人 | Device Adapter；设备租约、指令白名单、速率、急停与仿真模式 |
+| 开发工程 | 仓库理解、代码补丁、重构、Issue、Release、CI 优化和开发环境操作 | Dev Skill / Agent Project；Workspace 边界、Patch 审查、测试证据与 Git 策略 |
+| 教育与创作 | 教程、练习、互动故事、直播辅助、素材流水线和创作反馈 | Content Project；来源、版权、年龄分级、事实与生成内容标识 |
+| 可访问性 | 字幕、朗读、替代文本、简化交互、输入适配和个性化辅助 | Accessibility Profile；用户控制、可逆覆盖、隐私与 WCAG 门禁 |
 | 运维诊断 | 日志解释、诊断查询、修复、备份和恢复演练 | Runbook / Repair Patch；只读优先、证据、回滚 |
 | 测试质量 | 契约、属性、故障、UI、无障碍和性能测试 | Test Pack；AI 测试不替代人工安全不变量 |
 | 迁移现代化 | SDK、Manifest、Provider、模型和资产格式升级 | Migration Patch；兼容矩阵、备份、双读、回滚 |
+| 生态发布 | 包装、文档、示例、翻译、兼容检查、签名请求和商店发布草案 | Release Candidate；来源、SBOM、许可证、信誉与人工签名 |
 
 ## 3. 扩展“扩展系统本身”
 
@@ -34,6 +42,20 @@
 - 为新模型协议生成 Provider Adapter 与能力探测器；密钥、网络和进程仍由宿主管理。
 - 为新资产格式生成 Import Profile、转换流水线和 Renderer Contribution；解析保持进程隔离。
 - 依据本地遥测与崩溃证据提出缓存、性能、降级和修复 Patch，不直接修改生产版本。
+- 从自然语言需求生成新的 Skill、Automation、Program、Connector、Widget 和 CLI Contribution；若现有能力足够，优先组合而不是复制实现。
+- 读取公开且版本化的 Registry Schema，生成跨模块编排；模块暴露的能力必须经过 Tool Registry 或 AgentTaskGateway，AI 不接触实现对象。
+- 为能力创建评测集、回归样本、Mock、故障注入方案和运行健康规则，使生成物具备可持续维护证据。
+- 生成发布材料、迁移指南、兼容声明和本地化包，但签名、信任等级与商店上线必须由宿主和用户决定。
+
+### 3.1 用户外接 AI 的五种参与深度
+
+1. **顾问**：解释、诊断和提出方案，不产生可执行副作用。
+2. **搭建者**：生成声明式配置、Automation、主题、角色映射和数据 Recipe。
+3. **开发者**：在受控 Workspace 生成 Program、Skill、Connector、Widget、CLI 和测试 Patch。
+4. **操作者**：在明确 Goal、预算和授权策略下调用已注册能力；每次调用仍经过运行期门禁。
+5. **维护者**：依据版本、遥测和故障证据升级、迁移、修复、回滚并提交发布候选。
+
+参与深度不是权限等级。即使处于 Auto Mode，AI 也不能自行签发 Capability、读取 Secret、扩大数据范围、关闭安全策略或绕过不可自动批准的风险类别。
 
 ## 4. 组合项目
 

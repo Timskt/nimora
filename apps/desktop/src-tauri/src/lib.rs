@@ -231,6 +231,7 @@ struct PendingAgentTool {
 #[derive(Debug)]
 struct PendingCreatorApproval {
     draft_digest: String,
+    review_digest: String,
     expires_at_ms: u64,
 }
 
@@ -1248,6 +1249,9 @@ struct CreatorDraftCheckReport {
     status: &'static str,
     draft_digest: String,
     highest_risk: CommandRisk,
+    installed_version: Option<String>,
+    proposed_version: Option<String>,
+    requires_reauthorization: bool,
     permission_diff: Vec<CreatorPermissionDiff>,
     checks: Vec<CreatorDraftCheck>,
 }
@@ -1259,6 +1263,12 @@ struct CreatorPermissionDiff {
     change: &'static str,
     risk: CommandRisk,
     reason: String,
+}
+
+struct CreatorPermissionReview {
+    diff: Vec<CreatorPermissionDiff>,
+    installed_version: Option<String>,
+    proposed_version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2335,13 +2345,13 @@ fn save_creator_draft_command(
     }
     let draft_request = CreatorDraftRequest::new(request.kind, request.requirement)?;
     validate_creator_draft(&draft_request, &request.draft)?;
-    let report = check_creator_draft_inner(&app, &request.draft)?;
+    let report = check_creator_draft_inner(&app, &state, &request.draft)?;
     if report.status != "passed" {
         return Err(DesktopError::Agent(
             "creator draft failed isolated validation".to_owned(),
         ));
     }
-    consume_creator_approval(&state, request.approval_id, &report.draft_digest)?;
+    consume_creator_approval(&state, request.approval_id, &report)?;
     save_creator_draft(
         &request.workspace_root,
         &request.draft,
@@ -2363,7 +2373,7 @@ fn approve_creator_draft(
     }
     let draft_request = CreatorDraftRequest::new(request.kind, request.requirement)?;
     validate_creator_draft(&draft_request, &request.draft)?;
-    let report = check_creator_draft_inner(&app, &request.draft)?;
+    let report = check_creator_draft_inner(&app, &state, &request.draft)?;
     if report.status != "passed" || report.draft_digest != request.draft_digest {
         return Err(DesktopError::Agent(
             "creator review changed before approval".to_owned(),
@@ -2386,6 +2396,7 @@ fn approve_creator_draft(
         approval_id,
         PendingCreatorApproval {
             draft_digest: report.draft_digest.clone(),
+            review_digest: creator_review_digest(&report)?,
             expires_at_ms,
         },
     );
@@ -2410,13 +2421,13 @@ fn install_creator_draft(
     }
     let draft_request = CreatorDraftRequest::new(request.kind, request.requirement)?;
     validate_creator_draft(&draft_request, &request.draft)?;
-    let report = check_creator_draft_inner(&app, &request.draft)?;
+    let report = check_creator_draft_inner(&app, &state, &request.draft)?;
     if report.status != "passed" {
         return Err(DesktopError::Agent(
             "creator draft failed isolated validation".to_owned(),
         ));
     }
-    consume_creator_approval(&state, request.approval_id, &report.draft_digest)?;
+    consume_creator_approval(&state, request.approval_id, &report)?;
 
     match request.draft.artifact {
         nimora_creator_draft::CreatorArtifact::UserProgram { manifest, files } => {
@@ -2524,12 +2535,13 @@ fn write_creator_package_file(
 fn consume_creator_approval(
     state: &DesktopState,
     approval_id: Uuid,
-    draft_digest: &str,
+    report: &CreatorDraftCheckReport,
 ) -> Result<(), DesktopError> {
     consume_creator_approval_from(
         &state.pending_creator_approvals,
         approval_id,
-        draft_digest,
+        &report.draft_digest,
+        &creator_review_digest(report)?,
         current_time_ms()?,
     )
 }
@@ -2538,6 +2550,7 @@ fn consume_creator_approval_from(
     pending: &Mutex<HashMap<Uuid, PendingCreatorApproval>>,
     approval_id: Uuid,
     draft_digest: &str,
+    review_digest: &str,
     now_ms: u64,
 ) -> Result<(), DesktopError> {
     let approval = pending
@@ -2545,12 +2558,22 @@ fn consume_creator_approval_from(
         .map_err(|_| DesktopError::StatePoisoned)?
         .remove(&approval_id)
         .ok_or_else(|| DesktopError::Agent("creator approval is unavailable".to_owned()))?;
-    if approval.expires_at_ms <= now_ms || approval.draft_digest != draft_digest {
+    if approval.expires_at_ms <= now_ms
+        || approval.draft_digest != draft_digest
+        || approval.review_digest != review_digest
+    {
         return Err(DesktopError::Agent(
             "creator approval is expired or does not match the draft".to_owned(),
         ));
     }
     Ok(())
+}
+
+fn creator_review_digest(report: &CreatorDraftCheckReport) -> Result<String, DesktopError> {
+    use sha2::{Digest, Sha256};
+
+    let bytes = serde_json::to_vec(report)?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
 #[tauri::command]
@@ -2566,11 +2589,12 @@ fn check_creator_draft(
     }
     let draft_request = CreatorDraftRequest::new(request.kind, request.requirement)?;
     validate_creator_draft(&draft_request, &request.draft)?;
-    check_creator_draft_inner(&app, &request.draft)
+    check_creator_draft_inner(&app, &state, &request.draft)
 }
 
 fn check_creator_draft_inner(
     app: &AppHandle,
+    state: &DesktopState,
     draft: &CreatorDraft,
 ) -> Result<CreatorDraftCheckReport, DesktopError> {
     let mut checks = vec![CreatorDraftCheck {
@@ -2595,7 +2619,10 @@ fn check_creator_draft_inner(
     } else {
         "failed"
     };
-    let permission_diff = creator_permission_diff(draft);
+    let permission_review = creator_permission_diff(state, draft)?;
+    let permission_diff = permission_review.diff;
+    let installed_version = permission_review.installed_version;
+    let proposed_version = permission_review.proposed_version;
     let highest_risk = permission_diff
         .iter()
         .map(|item| item.risk)
@@ -2606,6 +2633,9 @@ fn check_creator_draft_inner(
         status,
         draft_digest: creator_draft_digest(draft)?,
         highest_risk,
+        requires_reauthorization: installed_version.is_some(),
+        installed_version,
+        proposed_version,
         permission_diff,
         checks,
     })
@@ -2619,28 +2649,163 @@ fn creator_draft_digest(draft: &CreatorDraft) -> Result<String, DesktopError> {
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
-fn creator_permission_diff(draft: &CreatorDraft) -> Vec<CreatorPermissionDiff> {
+fn creator_permission_diff(
+    state: &DesktopState,
+    draft: &CreatorDraft,
+) -> Result<CreatorPermissionReview, DesktopError> {
     match &draft.artifact {
-        nimora_creator_draft::CreatorArtifact::Automation { definition } => definition
-            .actions
-            .iter()
-            .map(|action| CreatorPermissionDiff {
-                capability: action.command.clone(),
-                change: "added",
-                risk: action.risk,
-                reason: format!("自动化动作 {} 将请求该命令", action.id),
+        nimora_creator_draft::CreatorArtifact::Automation { definition } => {
+            Ok(CreatorPermissionReview {
+                diff: definition
+                    .actions
+                    .iter()
+                    .map(|action| CreatorPermissionDiff {
+                        capability: action.command.clone(),
+                        change: "added",
+                        risk: action.risk,
+                        reason: format!("自动化动作 {} 将请求该命令", action.id),
+                    })
+                    .collect(),
+                installed_version: None,
+                proposed_version: None,
             })
-            .collect(),
-        _ => draft
-            .permission_explanations
-            .iter()
-            .map(|item| CreatorPermissionDiff {
-                capability: item.capability.clone(),
-                change: "added",
-                risk: creator_capability_risk(&item.capability),
-                reason: item.reason.clone(),
+        }
+        nimora_creator_draft::CreatorArtifact::UserProgram { manifest, .. } => {
+            let installed = match load_installed_program(&state.program_store, &manifest.id) {
+                Ok(installed) => Some(installed.manifest),
+                Err(ProgramPackageError::InstalledProgramUnavailable) => None,
+                Err(error) => return Err(error.into()),
+            };
+            let previous_capabilities = installed.as_ref().map_or_else(BTreeSet::new, |item| {
+                serialized_capability_set(&item.capabilities)
+            });
+            let proposed_capabilities = serialized_capability_set(&manifest.capabilities);
+            let mut diff = capability_set_diff(&previous_capabilities, &proposed_capabilities);
+            if let Some(previous) = &installed {
+                append_program_scope_diff(&mut diff, previous, manifest);
+            }
+            Ok(CreatorPermissionReview {
+                diff,
+                installed_version: installed.as_ref().map(|item| item.version.clone()),
+                proposed_version: Some(manifest.version.clone()),
             })
-            .collect(),
+        }
+        nimora_creator_draft::CreatorArtifact::Skill { manifest, .. } => {
+            let installed = match load_installed_skill(&state.skill_store, &manifest.id) {
+                Ok(installed) => Some(installed.manifest.into_manifest()),
+                Err(SkillPackageError::InstalledSkillUnavailable) => None,
+                Err(error) => return Err(error.into()),
+            };
+            let previous_capabilities = installed.as_ref().map_or_else(BTreeSet::new, |item| {
+                serialized_capability_set(&item.capabilities)
+            });
+            let proposed_capabilities = serialized_capability_set(&manifest.capabilities);
+            let mut diff = capability_set_diff(&previous_capabilities, &proposed_capabilities);
+            if let Some(previous) = &installed {
+                append_skill_scope_diff(&mut diff, previous, manifest);
+            }
+            Ok(CreatorPermissionReview {
+                diff,
+                installed_version: installed.as_ref().map(|item| item.version.clone()),
+                proposed_version: Some(manifest.version.clone()),
+            })
+        }
+    }
+}
+
+fn serialized_capability_set<T: Serialize>(
+    capabilities: impl IntoIterator<Item = T>,
+) -> BTreeSet<String> {
+    capabilities
+        .into_iter()
+        .filter_map(|capability| {
+            serde_json::to_value(capability)
+                .ok()?
+                .as_str()
+                .map(ToOwned::to_owned)
+        })
+        .collect()
+}
+
+fn capability_set_diff(
+    previous: &BTreeSet<String>,
+    proposed: &BTreeSet<String>,
+) -> Vec<CreatorPermissionDiff> {
+    let mut diff = proposed
+        .difference(previous)
+        .map(|capability| CreatorPermissionDiff {
+            capability: capability.clone(),
+            change: "added",
+            risk: creator_capability_risk(capability),
+            reason: "新版本请求新增能力".to_owned(),
+        })
+        .chain(
+            previous
+                .difference(proposed)
+                .map(|capability| CreatorPermissionDiff {
+                    capability: capability.clone(),
+                    change: "removed",
+                    risk: creator_capability_risk(capability),
+                    reason: "新版本不再请求该能力".to_owned(),
+                }),
+        )
+        .collect::<Vec<_>>();
+    diff.sort_unstable_by(|left, right| left.capability.cmp(&right.capability));
+    diff
+}
+
+fn append_program_scope_diff(
+    diff: &mut Vec<CreatorPermissionDiff>,
+    previous: &ProgramManifest,
+    proposed: &ProgramManifest,
+) {
+    if previous.subscriptions.iter().collect::<BTreeSet<_>>()
+        != proposed.subscriptions.iter().collect::<BTreeSet<_>>()
+    {
+        diff.push(scope_changed("subscribe-events", "事件订阅范围已变化"));
+    }
+    if previous.commands.iter().collect::<BTreeSet<_>>()
+        != proposed.commands.iter().collect::<BTreeSet<_>>()
+    {
+        diff.push(scope_changed(
+            "invoke-safe-commands",
+            "命令白名单范围已变化",
+        ));
+    }
+    if previous.timeout_ms != proposed.timeout_ms
+        || previous.memory_bytes != proposed.memory_bytes
+        || previous.event_concurrency != proposed.event_concurrency
+        || previous.event_queue_capacity != proposed.event_queue_capacity
+    {
+        diff.push(scope_changed("runtime-budget", "运行预算或并发策略已变化"));
+    }
+}
+
+fn append_skill_scope_diff(
+    diff: &mut Vec<CreatorPermissionDiff>,
+    previous: &SkillManifest,
+    proposed: &SkillManifest,
+) {
+    if previous.activation_events != proposed.activation_events {
+        diff.push(scope_changed("subscribe-events", "激活事件范围已变化"));
+    }
+    if previous.command_allowlist != proposed.command_allowlist {
+        diff.push(scope_changed("invoke-commands", "命令白名单范围已变化"));
+    }
+    if previous.contributions != proposed.contributions {
+        diff.push(scope_changed(
+            "contributions",
+            "命令、Agent Tool 或任务贡献已变化",
+        ));
+    }
+}
+
+fn scope_changed(capability: &str, reason: &str) -> CreatorPermissionDiff {
+    CreatorPermissionDiff {
+        capability: capability.to_owned(),
+        change: "scope-changed",
+        risk: creator_capability_risk(capability),
+        reason: reason.to_owned(),
     }
 }
 
@@ -8487,12 +8652,13 @@ mod tests {
         ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SkillEventSession, StartupMode,
         THEME_SELECTION, TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
         UserProgramRollbackReceipt, VOICE_SELECTION, WindowPolicy, agent_catalog_inner,
-        approve_skill_execution_inner, auto_mode_control_center_inner, automation_agent_messages,
-        cancel_agent_task_inner, cancel_all_pending_agent_tools, cancel_auto_mode_job_inner,
-        cancel_automation_run_inner, cancel_skill_execution_inner, confirm_agent_tool_inner,
-        confirm_agent_tool_with_registry, consume_creator_approval_from, creator_capability_risk,
-        current_time_ms, default_agent_model, default_agent_provider_id, desktop_tool_registry,
-        diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
+        append_program_scope_diff, approve_skill_execution_inner, auto_mode_control_center_inner,
+        automation_agent_messages, cancel_agent_task_inner, cancel_all_pending_agent_tools,
+        cancel_auto_mode_job_inner, cancel_automation_run_inner, cancel_skill_execution_inner,
+        capability_set_diff, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
+        consume_creator_approval_from, creator_capability_risk, current_time_ms,
+        default_agent_model, default_agent_provider_id, desktop_tool_registry, diagnostic_report,
+        dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
         parse_user_program_plan, pause_auto_mode_job_inner, permission_grant,
@@ -11709,13 +11875,27 @@ mod tests {
             approval_id,
             PendingCreatorApproval {
                 draft_digest: "sha256:expected".to_owned(),
+                review_digest: "sha256:review".to_owned(),
                 expires_at_ms: 200,
             },
         )]));
-        consume_creator_approval_from(&pending, approval_id, "sha256:expected", 100)
-            .expect("matching approval");
+        consume_creator_approval_from(
+            &pending,
+            approval_id,
+            "sha256:expected",
+            "sha256:review",
+            100,
+        )
+        .expect("matching approval");
         assert!(
-            consume_creator_approval_from(&pending, approval_id, "sha256:expected", 100).is_err()
+            consume_creator_approval_from(
+                &pending,
+                approval_id,
+                "sha256:expected",
+                "sha256:review",
+                100,
+            )
+            .is_err()
         );
 
         let mismatched_id = Uuid::now_v7();
@@ -11723,11 +11903,19 @@ mod tests {
             mismatched_id,
             PendingCreatorApproval {
                 draft_digest: "sha256:expected".to_owned(),
+                review_digest: "sha256:review".to_owned(),
                 expires_at_ms: 200,
             },
         );
         assert!(
-            consume_creator_approval_from(&pending, mismatched_id, "sha256:changed", 100).is_err()
+            consume_creator_approval_from(
+                &pending,
+                mismatched_id,
+                "sha256:changed",
+                "sha256:review",
+                100,
+            )
+            .is_err()
         );
         assert!(
             !pending
@@ -11738,16 +11926,61 @@ mod tests {
     }
 
     #[test]
+    fn creator_approval_is_bound_to_review_baseline() {
+        let approval_id = Uuid::now_v7();
+        let pending = Mutex::new(HashMap::from([(
+            approval_id,
+            PendingCreatorApproval {
+                draft_digest: "sha256:same-draft".to_owned(),
+                review_digest: "sha256:installed-v1-review".to_owned(),
+                expires_at_ms: 200,
+            },
+        )]));
+
+        assert!(
+            consume_creator_approval_from(
+                &pending,
+                approval_id,
+                "sha256:same-draft",
+                "sha256:installed-v2-review",
+                100,
+            )
+            .is_err()
+        );
+        assert!(pending.lock().expect("pending lock").is_empty());
+        assert!(
+            consume_creator_approval_from(
+                &pending,
+                approval_id,
+                "sha256:same-draft",
+                "sha256:installed-v1-review",
+                100,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn creator_approval_expires_fail_closed() {
         let approval_id = Uuid::now_v7();
         let pending = Mutex::new(HashMap::from([(
             approval_id,
             PendingCreatorApproval {
                 draft_digest: "sha256:draft".to_owned(),
+                review_digest: "sha256:review".to_owned(),
                 expires_at_ms: 100,
             },
         )]));
-        assert!(consume_creator_approval_from(&pending, approval_id, "sha256:draft", 100).is_err());
+        assert!(
+            consume_creator_approval_from(
+                &pending,
+                approval_id,
+                "sha256:draft",
+                "sha256:review",
+                100,
+            )
+            .is_err()
+        );
         assert!(pending.lock().expect("pending lock").is_empty());
     }
 
@@ -11783,5 +12016,48 @@ mod tests {
         )
         .expect("install staged package");
         assert_eq!(installed.program_id, "studio.example.creator-install");
+    }
+
+    #[test]
+    fn creator_upgrade_diff_reports_added_removed_and_scope_changes() {
+        let previous = BTreeSet::from(["read-pet-state".to_owned(), "subscribe-events".to_owned()]);
+        let proposed = BTreeSet::from([
+            "invoke-agent-tasks".to_owned(),
+            "subscribe-events".to_owned(),
+        ]);
+        let mut diff = capability_set_diff(&previous, &proposed);
+        assert!(
+            diff.iter()
+                .any(|item| { item.capability == "invoke-agent-tasks" && item.change == "added" })
+        );
+        assert!(
+            diff.iter()
+                .any(|item| { item.capability == "read-pet-state" && item.change == "removed" })
+        );
+
+        let previous_manifest = ProgramManifest {
+            id: "studio.example.diff".to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities: vec![Capability::SubscribeEvents],
+            subscriptions: vec!["focus.started".to_owned()],
+            event_concurrency: EventConcurrencyPolicy::Serial,
+            event_queue_capacity: 8,
+            commands: vec![],
+            timeout_ms: 5_000,
+            memory_bytes: 8 * 1024 * 1024,
+        };
+        let mut proposed_manifest = previous_manifest.clone();
+        proposed_manifest.version = "2.0.0".to_owned();
+        proposed_manifest.subscriptions = vec!["focus.completed".to_owned()];
+        proposed_manifest.timeout_ms = 10_000;
+        append_program_scope_diff(&mut diff, &previous_manifest, &proposed_manifest);
+        assert!(diff.iter().any(|item| {
+            item.capability == "subscribe-events" && item.change == "scope-changed"
+        }));
+        assert!(
+            diff.iter().any(|item| {
+                item.capability == "runtime-budget" && item.change == "scope-changed"
+            })
+        );
     }
 }

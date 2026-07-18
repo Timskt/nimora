@@ -10,6 +10,9 @@
 - Browser Preview 的生成、批准和保存接口统一返回 `desktop-host-required`，不得伪造安全凭证。
 - User Program/Skill 安装由宿主临时包生成 `manifest.json` 和 SHA-256 inventory，复用生产安装器；成功后必须未授权、未启用，失败不得留下半安装目录。
 - 同一批准凭证只能选择保存或安装其中一次；安装失败、摘要变化或重放都必须重新审查和批准。
+- 升级审查必须从完整性复验后的当前安装 Manifest 计算 `added`、`removed` 和 `scope-changed`；损坏安装包失败关闭，不得按未安装基线处理。
+- User Program 比较事件、命令、并发及运行预算；Skill 比较激活事件、命令白名单与 Contributions。升级后旧授权不得继续生效。
+- 批准凭证必须同时绑定草案摘要与完整审查摘要；在批准后改变当前安装版本，即使草案完全相同也必须拒绝安装、原子消费旧凭证且不可重放。
 
 ## VRM 1.0 纵切增量
 

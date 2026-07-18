@@ -103,7 +103,10 @@ export interface CreatorDraftCheckReport {
   status: "passed" | "failed";
   draftDigest: string;
   highestRisk: CommandRisk;
-  permissionDiff: Array<{ capability: string; change: "added"; risk: CommandRisk; reason: string }>;
+  installedVersion: string | null;
+  proposedVersion: string | null;
+  requiresReauthorization: boolean;
+  permissionDiff: Array<{ capability: string; change: "added" | "removed" | "scope-changed"; risk: CommandRisk; reason: string }>;
   checks: Array<{ id: string; status: "passed" | "failed"; file: string | null; message: string }>;
 }
 
