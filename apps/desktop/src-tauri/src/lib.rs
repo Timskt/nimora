@@ -42,7 +42,7 @@ use nimora_agent_auto_host::{
 use nimora_agent_provider_worker::{
     OllamaEndpoint, OllamaModel, OpenAiCompatibleEndpoint, ProviderCredentialResolver,
     WorkerOllamaProvider, WorkerOpenAiCompatibleProvider, WorkerSecret, probe_ollama_worker,
-    probe_openai_worker, verify_provider_sidecar,
+    probe_openai_worker, verify_provider_worker,
 };
 use nimora_agent_runtime::{
     AgentAutonomy, AgentBudget, AgentCoordinator, AgentTask, AgentTaskGateway,
@@ -251,7 +251,7 @@ struct DesktopState {
     active_automation_runs: Mutex<HashMap<Uuid, CancellationFlag>>,
     auto_mode_jobs: AutoModeJobSupervisor,
     execution_controller: ExecutionController,
-    ollama_worker: Option<PathBuf>,
+    agent_provider_worker: Option<PathBuf>,
     startup: StartupStatus,
 }
 
@@ -571,7 +571,7 @@ impl DesktopState {
         program_store: PathBuf,
         backups: BackupCoordinator,
         mut diagnostic_journal: PersistentDiagnosticJournal,
-        ollama_worker: Option<PathBuf>,
+        agent_provider_worker: Option<PathBuf>,
     ) -> Result<Self, DesktopError> {
         let events = RuntimeEventBus::default();
         let runtime = RuntimeService::initialize_with_event_bus(
@@ -652,7 +652,7 @@ impl DesktopState {
             active_automation_runs: Mutex::new(HashMap::new()),
             auto_mode_jobs,
             execution_controller: ExecutionController::default(),
-            ollama_worker,
+            agent_provider_worker,
             startup: StartupStatus {
                 mode: StartupMode::Normal,
                 reason: None,
@@ -667,7 +667,7 @@ impl DesktopState {
         backups: BackupCoordinator,
         mut diagnostic_journal: PersistentDiagnosticJournal,
         reason: &'static str,
-        ollama_worker: Option<PathBuf>,
+        agent_provider_worker: Option<PathBuf>,
     ) -> Result<Self, DesktopError> {
         let events = RuntimeEventBus::default();
         let runtime = RuntimeService::initialize_with_event_bus(
@@ -732,7 +732,7 @@ impl DesktopState {
             active_automation_runs: Mutex::new(HashMap::new()),
             auto_mode_jobs: AutoModeJobSupervisor::default(),
             execution_controller: ExecutionController::default(),
-            ollama_worker,
+            agent_provider_worker,
             startup: StartupStatus {
                 mode: StartupMode::Recovery,
                 reason: Some(reason),
@@ -3030,7 +3030,7 @@ fn agent_provider_status_inner(
             message: "内置离线 Provider 可用",
         });
     }
-    let Some(executable) = &state.ollama_worker else {
+    let Some(executable) = &state.agent_provider_worker else {
         return Err(DesktopError::Agent("Provider is not registered".to_owned()));
     };
     if state.startup.mode == StartupMode::Recovery
@@ -3120,7 +3120,11 @@ fn openai_provider_status(
         Ok(probe) => Ok(AgentProviderStatus {
             spec: "nimora.desktop-agent-provider-status/1",
             provider_id,
-            state: if probe.models.is_empty() { "unavailable" } else { "ready" },
+            state: if probe.models.is_empty() {
+                "unavailable"
+            } else {
+                "ready"
+            },
             worker_verified: true,
             service_reachable: true,
             locality: "network",
@@ -5737,7 +5741,7 @@ fn desktop_provider_registry(state: &DesktopState) -> Result<ProviderRegistry, D
     providers
         .register(DeterministicLocalProvider::new().map_err(agent_error)?)
         .map_err(agent_error)?;
-    if let Some(executable) = &state.ollama_worker {
+    if let Some(executable) = &state.agent_provider_worker {
         let endpoint = OllamaEndpoint::new(
             "127.0.0.1".parse().expect("constant loopback address"),
             11_434,
@@ -10284,7 +10288,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
         &data_directory.join("diagnostics/events"),
         current_time_ms()?,
     );
-    let ollama_worker = discover_ollama_worker(app.handle());
+    let agent_provider_worker = discover_agent_provider_worker(app.handle());
     let startup_result = apply_pending_restore(&database_path, &backup_directory).and_then(|_| {
         if database_path.exists() {
             verify_database_file(&database_path)?;
@@ -10299,7 +10303,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
             program_store,
             backups,
             diagnostic_journal,
-            ollama_worker,
+            agent_provider_worker,
         )?,
         Err(_) => DesktopState::open_recovery(
             Some(app.handle().clone()),
@@ -10308,7 +10312,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
             backups,
             diagnostic_journal,
             "database-unavailable",
-            ollama_worker,
+            agent_provider_worker,
         )?,
     };
     let schedule_backups = state.startup.mode == StartupMode::Normal;
@@ -10351,9 +10355,9 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-fn discover_ollama_worker(app: &AppHandle) -> Option<PathBuf> {
-    let trusted_digest = option_env!("NIMORA_OLLAMA_MANIFEST_SHA256")?;
-    let configured_roots = std::env::var_os("NIMORA_OLLAMA_SIDECAR_ROOT")
+fn discover_agent_provider_worker(app: &AppHandle) -> Option<PathBuf> {
+    let trusted_digest = option_env!("NIMORA_PROVIDER_WORKER_MANIFEST_SHA256")?;
+    let configured_roots = std::env::var_os("NIMORA_PROVIDER_WORKER_ROOT")
         .map(PathBuf::from)
         .into_iter();
     let resource_roots = app
@@ -10371,7 +10375,7 @@ fn discover_ollama_worker(app: &AppHandle) -> Option<PathBuf> {
         .chain(executable_roots)
         .chain(development_roots)
         .find_map(|root| {
-            verify_provider_sidecar(&root, "ollama-provider.json", trusted_digest)
+            verify_provider_worker(&root, "agent-provider-worker.json", trusted_digest)
                 .ok()
                 .map(|verified| verified.executable_path)
         })
@@ -10381,43 +10385,40 @@ fn discover_ollama_worker(app: &AppHandle) -> Option<PathBuf> {
 mod tests {
     use super::{
         ACTIVE_CHARACTER_FILE, ACTIVE_THEME_FILE, ACTIVE_VOICE_FILE, ActiveAgentTask,
-        ActiveSkillExecution,
-        AssetInstallReceipt, AutoModeJobStatus, AutomationEventMetrics, AutomationRun,
-        AutomationRunOrigin, AutomationTestRequest, BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID,
-        BUILTIN_VOICE_ID, CHARACTER_SELECTION, CapabilityBackend, DETERMINISTIC_PROVIDER_ID,
-        DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
-        DesktopProviderCredentialResolver, DesktopResolveAutoModeAttemptRequest,
-        DesktopSecretStore, DesktopState, ExecutionCancellation, LocalAgentRequest,
-        PendingCreatorApproval, PendingSkillExecution, PetAction, PrepareAgentToolRequest,
-        ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest,
-        ResumeAutoModeTurnRequest, SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
-        UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
-        VOICE_SELECTION, WindowPolicy, agent_catalog_inner, append_program_scope_diff,
-        approve_automation_run_inner, approve_skill_execution_inner,
-        auto_mode_control_center_inner, automation_agent_messages,
+        ActiveSkillExecution, AgentProviderStatusRequest, AssetInstallReceipt, AutoModeJobStatus,
+        AutomationEventMetrics, AutomationRun, AutomationRunOrigin, AutomationTestRequest,
+        BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID, BUILTIN_VOICE_ID, CHARACTER_SELECTION,
+        CapabilityBackend, DETERMINISTIC_PROVIDER_ID, DeleteProviderRequest, DesktopAgentRunStatus,
+        DesktopCapabilityBackend, DesktopError, DesktopProviderCredentialResolver,
+        DesktopResolveAutoModeAttemptRequest, DesktopSecretStore, DesktopState,
+        ExecutionCancellation, LocalAgentRequest, PendingCreatorApproval, PendingSkillExecution,
+        PetAction, PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
+        ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SkillEventSession, StartupMode,
+        THEME_SELECTION, TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
+        UserProgramRollbackReceipt, VOICE_SELECTION, WindowPolicy, agent_catalog_inner,
+        agent_provider_status_inner, append_program_scope_diff, approve_automation_run_inner,
+        approve_skill_execution_inner, auto_mode_control_center_inner, automation_agent_messages,
         automation_governance_catalog_inner, cancel_agent_task_inner,
         cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
         cancel_skill_execution_inner, capability_set_diff, confirm_agent_tool_inner,
         confirm_agent_tool_with_registry, consume_creator_approval_from,
         creator_capability_catalog, creator_capability_risk, creator_composition_graph,
-        current_time_ms, default_agent_model, default_agent_provider_id, desktop_provider_registry,
-        delete_openai_provider_inner, desktop_tool_registry, diagnostic_report,
-        dispatch_skill_commands, ensure_normal_mode,
-        ensure_program_permissions, ensure_user_program_agent_capability,
-        finish_skill_event_session, inspect_asset_catalog, install_generated_theme,
-        install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
-        parse_user_program_plan, pause_auto_mode_job_inner, permission_grant,
-        persist_asset_selection, prepare_agent_tool_inner, quiesce_auto_mode_jobs,
-        reject_agent_tool_inner, reject_automation_run_inner, resolve_active_character,
-        resolve_active_theme, resolve_active_voice, resolve_asset_selection,
-        resolve_auto_mode_attempt_inner, resolve_character_renderer, resume_auto_mode_turn_inner,
-        run_live_automation, run_live_automation_event, run_local_agent_inner,
-        run_skill_agent_task, run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
-        skill_capability_names, skill_event_types, stage_creator_package,
-        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
-        validate_model_source, validate_package_source, validate_requested_animation_map,
-        verify_capability_gap, AgentProviderStatusRequest, DeleteProviderRequest,
-        agent_provider_status_inner,
+        current_time_ms, default_agent_model, default_agent_provider_id,
+        delete_openai_provider_inner, desktop_provider_registry, desktop_tool_registry,
+        diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
+        ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
+        install_generated_theme, install_gltf_character, open_diagnostic_journal,
+        parse_asset_protocol_path, parse_user_program_plan, pause_auto_mode_job_inner,
+        permission_grant, persist_asset_selection, prepare_agent_tool_inner,
+        quiesce_auto_mode_jobs, reject_agent_tool_inner, reject_automation_run_inner,
+        resolve_active_character, resolve_active_theme, resolve_active_voice,
+        resolve_asset_selection, resolve_auto_mode_attempt_inner, resolve_character_renderer,
+        resume_auto_mode_turn_inner, run_live_automation, run_live_automation_event,
+        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
+        screen_coordinate, serve_asset_protocol, skill_capability_names, skill_event_types,
+        stage_creator_package, stop_skill_event_sessions, test_automation, user_program_input,
+        valid_asset_identifier, validate_model_source, validate_package_source,
+        validate_requested_animation_map, verify_capability_gap,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -10944,7 +10945,7 @@ mod tests {
         let (root, mut state) = normal_desktop_state();
         state.secret_store =
             DesktopSecretStore(Arc::new(nimora_secret_store::MemorySecretStore::default()));
-        state.ollama_worker = Some(root.join("provider-worker"));
+        state.agent_provider_worker = Some(root.join("provider-worker"));
         let config = nimora_persistence_sqlite::ProviderConfig::new(
             "provider:openai-compatible:test",
             "Test Provider",
@@ -11003,7 +11004,7 @@ mod tests {
         let (root, mut state) = normal_desktop_state();
         state.secret_store =
             DesktopSecretStore(Arc::new(nimora_secret_store::MemorySecretStore::default()));
-        state.ollama_worker = Some(root.join("worker-that-must-not-start"));
+        state.agent_provider_worker = Some(root.join("worker-that-must-not-start"));
         let config = nimora_persistence_sqlite::ProviderConfig::new(
             "provider:openai-compatible:no-secret",
             "No Secret",
@@ -11067,7 +11068,13 @@ mod tests {
             &state,
         );
         assert!(result.is_err());
-        assert!(state.provider_configs.get(&config.id).expect("load config").is_some());
+        assert!(
+            state
+                .provider_configs
+                .get(&config.id)
+                .expect("load config")
+                .is_some()
+        );
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
@@ -12039,7 +12046,7 @@ mod tests {
     #[test]
     fn desktop_agent_catalog_adds_configured_ollama_worker() {
         let (root, mut state) = normal_desktop_state();
-        state.ollama_worker = Some(std::env::current_exe().expect("test executable"));
+        state.agent_provider_worker = Some(std::env::current_exe().expect("test executable"));
         let catalog = agent_catalog_inner(&state).expect("agent catalog");
         assert_eq!(catalog.providers.len(), 2);
         assert_eq!(catalog.providers[1].id, "provider:ollama-loopback");
@@ -12573,12 +12580,9 @@ mod tests {
         )
         .expect("task");
         let task_id = task.id;
-        let cancellation = super::provider_agent_cancellation(
-            &state,
-            task_id,
-            "provider:blocking-test",
-        )
-        .expect("register cancellation");
+        let cancellation =
+            super::provider_agent_cancellation(&state, task_id, "provider:blocking-test")
+                .expect("register cancellation");
 
         std::thread::scope(|scope| {
             let execution = scope.spawn(|| {

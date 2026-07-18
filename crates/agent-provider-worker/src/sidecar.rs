@@ -12,18 +12,18 @@ const MAX_EXECUTABLE_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProviderSidecarManifest {
+pub struct ProviderWorkerManifest {
     pub spec: String,
-    pub provider_id: String,
-    pub protocol_version: u16,
+    pub worker_protocol_version: u16,
+    pub capabilities: Vec<String>,
     pub executable: String,
     pub executable_bytes: u64,
     pub executable_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifiedProviderSidecar {
-    pub manifest: ProviderSidecarManifest,
+pub struct VerifiedProviderWorker {
+    pub manifest: ProviderWorkerManifest,
     pub executable_path: PathBuf,
 }
 
@@ -55,11 +55,11 @@ pub enum SidecarVerificationError {
 ///
 /// Returns a stable verification error for path traversal, symbolic links, malformed manifests,
 /// size violations, missing files, or digest mismatches.
-pub fn verify_provider_sidecar(
+pub fn verify_provider_worker(
     root: &Path,
     manifest_name: &str,
     trusted_manifest_sha256: &str,
-) -> Result<VerifiedProviderSidecar, SidecarVerificationError> {
+) -> Result<VerifiedProviderWorker, SidecarVerificationError> {
     if !single_component(manifest_name) || !valid_digest(trusted_manifest_sha256) {
         return Err(SidecarVerificationError::InvalidManifestPath);
     }
@@ -81,7 +81,7 @@ pub fn verify_provider_sidecar(
     if sha256(&manifest_bytes) != trusted_manifest_sha256 {
         return Err(SidecarVerificationError::ManifestDigestMismatch);
     }
-    let manifest: ProviderSidecarManifest = serde_json::from_slice(&manifest_bytes)
+    let manifest: ProviderWorkerManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|_| SidecarVerificationError::InvalidManifest)?;
     validate_manifest(&manifest)?;
     let executable_path = canonical_root.join(&manifest.executable);
@@ -109,16 +109,23 @@ pub fn verify_provider_sidecar(
     if sha256(&executable_bytes) != manifest.executable_sha256 {
         return Err(SidecarVerificationError::ExecutableDigestMismatch);
     }
-    Ok(VerifiedProviderSidecar {
+    Ok(VerifiedProviderWorker {
         manifest,
         executable_path: canonical_executable,
     })
 }
 
-fn validate_manifest(manifest: &ProviderSidecarManifest) -> Result<(), SidecarVerificationError> {
-    if manifest.spec != "nimora.provider-sidecar/1"
-        || manifest.provider_id != "provider:ollama-loopback"
-        || manifest.protocol_version != 1
+fn validate_manifest(manifest: &ProviderWorkerManifest) -> Result<(), SidecarVerificationError> {
+    const REQUIRED_CAPABILITIES: [&str; 2] =
+        ["provider:ollama-loopback/1", "provider:openai-compatible/1"];
+    if manifest.spec != "nimora.provider-worker-manifest/1"
+        || manifest.worker_protocol_version != 1
+        || manifest
+            .capabilities
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            != REQUIRED_CAPABILITIES
         || !single_component(&manifest.executable)
         || manifest.executable_bytes == 0
         || manifest.executable_bytes > MAX_EXECUTABLE_BYTES

@@ -16,7 +16,7 @@ const sidecars = [
   {
     packageName: "nimora-agent-provider-worker",
     binaryName: "nimora-agent-provider-worker",
-    providerId: "provider:ollama-loopback",
+    providerWorker: true,
   },
 ];
 
@@ -25,7 +25,7 @@ for (const sidecar of sidecars) {
   await prepareSidecar(sidecar);
 }
 
-async function prepareSidecar({ packageName, binaryName, providerId }) {
+async function prepareSidecar({ packageName, binaryName, providerWorker }) {
   await execFileAsync("cargo", ["build", "-p", packageName, "--release"], { cwd: root });
   const executableSuffix = process.platform === "win32" ? ".exe" : "";
   const source = join(root, "target/release", `${binaryName}${executableSuffix}`);
@@ -33,27 +33,27 @@ async function prepareSidecar({ packageName, binaryName, providerId }) {
   await rm(destination, { force: true });
   await cp(source, destination);
   if (process.platform !== "win32") await chmod(destination, 0o755);
-  if (providerId) await writeProviderManifest(destination, providerId);
+  if (providerWorker) await writeProviderManifest(destination);
   console.log(`Prepared ${binaryName} for ${target}`);
 }
 
-async function writeProviderManifest(executablePath, providerId) {
+async function writeProviderManifest(executablePath) {
   const executable = basename(executablePath);
   const bytes = await readFile(executablePath);
   const manifest = {
-    spec: "nimora.provider-sidecar/1",
-    providerId,
-    protocolVersion: 1,
+    spec: "nimora.provider-worker-manifest/1",
+    workerProtocolVersion: 1,
+    capabilities: ["provider:ollama-loopback/1", "provider:openai-compatible/1"],
     executable,
     executableBytes: bytes.byteLength,
     executableSha256: createHash("sha256").update(bytes).digest("hex"),
   };
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
-  const manifestPath = join(outputDirectory, "ollama-provider.json");
+  const manifestPath = join(outputDirectory, "agent-provider-worker.json");
   await writeFile(manifestPath, manifestBytes);
   await writeFile(
     `${manifestPath}.sha256`,
-    `${createHash("sha256").update(manifestBytes).digest("hex")}  ollama-provider.json\n`,
+    `${createHash("sha256").update(manifestBytes).digest("hex")}  agent-provider-worker.json\n`,
   );
 }
 

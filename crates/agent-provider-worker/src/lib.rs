@@ -22,8 +22,8 @@ pub use host::{
 };
 pub use openai_compatible::{OpenAiCompatibleEndpoint, OpenAiModel, OpenAiProbe};
 pub use sidecar::{
-    ProviderSidecarManifest, SidecarVerificationError, VerifiedProviderSidecar,
-    verify_provider_sidecar,
+    ProviderWorkerManifest, SidecarVerificationError, VerifiedProviderWorker,
+    verify_provider_worker,
 };
 
 const MAX_PROTOCOL_BYTES: usize = 1024 * 1024;

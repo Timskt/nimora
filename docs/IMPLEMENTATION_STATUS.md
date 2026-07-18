@@ -1,5 +1,13 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 通用 Agent Provider Worker 能力清单
+
+- 将旧的 Ollama 单 Provider 清单升级为唯一的 `nimora.provider-worker-manifest/1`，同一受信 Worker 显式声明 Ollama loopback 与 OpenAI-compatible 两项协议能力。
+- 构建脚本、Tauri 资源、编译期信任摘要、运行时发现函数和环境变量全部使用通用 Agent Provider Worker 命名，不再从 Ollama 文件名或固定 Provider ID 推断能力。
+- 清单严格拒绝未知字段、缺失能力、重复或乱序能力、协议版本偏差、路径穿越、符号链接以及 Manifest/Executable 摘要或大小不一致。
+- `.sha256` 仍只作为发布流水线产物；桌面宿主信任编译期注入的 Manifest 摘要，不会信任 Worker 同目录的可写摘要文件。
+- 验证：清单契约测试 5/5、CLI 集成测试 15/15、Desktop Host 测试 142/142 通过；Worker、CLI 与 Desktop 全目标 Clippy `-D warnings`、Rustfmt、脚本语法和双层发布摘要核验全部通过。
+
 ## 2026-07-19 — 桌面 OpenAI-compatible Provider 管理纵切
 
 - 桌面运行时已将 SQLite Provider 配置仓储和 System Secret Store 接入正常启动路径；恢复模式使用隔离的内存配置与密钥实现，不接触主数据库或系统凭据。

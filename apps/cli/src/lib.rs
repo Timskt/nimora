@@ -1,4 +1,4 @@
-use nimora_agent_provider_worker::{OllamaEndpoint, WorkerOllamaProvider, verify_provider_sidecar};
+use nimora_agent_provider_worker::{OllamaEndpoint, WorkerOllamaProvider, verify_provider_worker};
 use nimora_agent_runtime::{
     AgentAutonomy, AgentBudget, AgentCoordinator, AgentGoal, AgentGoalStatus, AgentPlan,
     AgentPlanStep, AgentPlanStepStatus, AgentTask, AgentTaskGateway, AgentTaskGatewayPolicy,
@@ -938,15 +938,15 @@ fn registry(
         .register(DeterministicLocalProvider::new().map_err(runtime_error)?)
         .map_err(runtime_error)?;
     if let Some(config) = sidecar {
-        let verified = verify_provider_sidecar(
+        let verified = verify_provider_worker(
             Path::new(config.root),
-            "ollama-provider.json",
+            "agent-provider-worker.json",
             config.manifest_sha256,
         )
         .map_err(|_| {
             CliError::new(
                 "sidecar-integrity",
-                "Ollama provider sidecar integrity verification failed",
+                "Agent provider worker integrity verification failed",
                 4,
             )
         })?;

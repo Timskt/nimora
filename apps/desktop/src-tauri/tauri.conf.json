@@ -30,7 +30,7 @@
   "bundle": {
     "active": true,
     "resources": [
-      "binaries/ollama-provider.json",
+      "binaries/agent-provider-worker.json",
       "binaries/nimora-agent-provider-worker-*"
     ],
     "targets": "all",

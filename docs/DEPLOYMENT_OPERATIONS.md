@@ -35,7 +35,7 @@ format/lint
 
 桌面构建前必须运行 `pnpm build:sidecars`，按 `TAURI_ENV_TARGET_TRIPLE` 为当前目标编译并放置 `nimora-user-code-worker`、`nimora-skill-worker`、`nimora-model-importer-worker` 与 `nimora-agent-provider-worker`。每个平台发布任务必须验证四个 external binary 均存在、架构匹配、可启动并被最终安装包包含；本机产物不能代替 Windows、macOS Intel 或其它目标的 CI 验证。
 
-Agent Worker 构建同时生成 `ollama-provider.json` 与 `ollama-provider.json.sha256`。发布流水线必须把 Manifest 摘要写入经过代码签名保护的宿主资源、签名元数据或等价不可由普通用户写入的信任锚，再由宿主传给验证器；禁止运行时从 Worker 同一可写目录读取 `.sha256` 并直接信任。当前 SHA-256 完整性链不等价于发布者数字签名，桌面自动发现必须在信任锚接线完成后启用。
+Agent Worker 构建同时生成唯一的 `agent-provider-worker.json` 与 `agent-provider-worker.json.sha256`。清单使用 `nimora.provider-worker-manifest/1`，声明 Worker 协议版本和排序去重的能力集合；当前同一隔离进程必须同时声明 `provider:ollama-loopback/1` 与 `provider:openai-compatible/1`，宿主不得从文件名或某个 Provider 配置反推 Worker 能力。发布流水线必须把 Manifest 摘要写入经过代码签名保护的宿主资源、签名元数据或等价不可由普通用户写入的信任锚，再由宿主传给验证器；禁止运行时从 Worker 同一可写目录读取 `.sha256` 并直接信任。当前 SHA-256 完整性链不等价于发布者数字签名，桌面自动发现必须在信任锚接线完成后启用。
 
 ## 4. Windows 交付
 
