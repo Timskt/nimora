@@ -50,7 +50,7 @@ pub use backup::{
     apply_pending_restore,
 };
 pub use context_cache_store::{
-    ContextCachePolicy, SqliteContextCacheRepository, StoredContextCacheEntry,
+    ContextCacheKey, ContextCachePolicy, SqliteContextCacheRepository, StoredContextCacheEntry,
 };
 pub use provider_config_store::{ProviderConfig, SqliteProviderConfigRepository};
 pub use skill_approval_journal::{
@@ -1609,6 +1609,8 @@ pub enum SqlitePersistenceError {
     InvalidContextCache,
     #[error("Context cache schema version {0} is unsupported")]
     UnsupportedContextCacheVersion(u32),
+    #[error("Context cache encryption failed closed")]
+    ContextCacheEncryption,
     #[error("Provider configuration is invalid")]
     InvalidProviderConfig,
     #[error("Provider configuration changed by another writer")]

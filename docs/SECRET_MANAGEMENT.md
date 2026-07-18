@@ -49,4 +49,4 @@ NIMORA_RUN_SYSTEM_SECRET_STORE_TEST=1 cargo test -p nimora-secret-store system_s
 
 ## 7. 当前实现边界
 
-`nimora-secret-store` 已实现严格引用、系统后端、零化读取、内存测试后端和显式真机门禁。桌面 Provider 配置仓储、凭据设置与撤销 UI、OpenAI-compatible 隔离 Worker、动态 Registry 和逐请求联网确认均已接线；API Key 不进入 SQLite、IPC 响应、命令行、环境变量或日志。仍未完成的是 Auto Mode Context Cache 的系统密钥加密、授权签名材料接线，以及 Windows Credential Manager、Linux Secret Service 和签名桌面包的发布机验收。
+`nimora-secret-store` 已实现严格引用、系统后端、零化读取、内存测试后端和显式真机门禁。桌面 Provider 配置仓储、凭据设置与撤销 UI、OpenAI-compatible 隔离 Worker、动态 Registry 和逐请求联网确认均已接线；API Key 不进入 SQLite、IPC 响应、命令行、环境变量或日志。Auto Mode Context Cache 使用固定非敏感引用 `secret:cache:auto-mode-context-v1` 管理独立 256-bit 系统密钥；每条记录采用随机 nonce 的 XChaCha20-Poly1305 信封，并以 Cache Key、Provider、模型、Workspace fingerprint、Plan revision、数据等级和时间边界作为 AAD。旧明文版本直接失效删除，错误密钥或元数据篡改 fail-closed，系统密钥不可用时不会降级写入明文。仍未完成的是授权签名材料接线，以及 Windows Credential Manager、Linux Secret Service 和签名桌面包的发布机验收。

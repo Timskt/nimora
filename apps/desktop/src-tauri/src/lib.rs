@@ -104,8 +104,8 @@ use nimora_persistence_sqlite::{
     AutoModeTurnAttempt, AutoModeTurnAttemptStatus, AutomationAgentJournalEntry,
     AutomationAgentJournalStatus, AutomationApprovalEntry, AutomationApprovalStatus,
     AutomationCostReservation, AutomationJournalEntry, AutomationRunAdmission, AutomationRunStart,
-    BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, ContextCachePolicy,
-    DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant, ProviderConfig,
+    BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, ContextCacheKey,
+    ContextCachePolicy, DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant, ProviderConfig,
     ResolveAutoModeAttemptRequest, SkillApprovalJournalEntry, SkillApprovalJournalStatus,
     SkillExecutionHistoryRecord, SkillExecutionHistoryStatus, SkillStateRecord,
     SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
@@ -161,7 +161,7 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
@@ -183,6 +183,7 @@ const CHARACTER_RENDERER_CHANGED_EVENT: &str = "nimora://character-renderer-chan
 const ASSET_PROTOCOL: &str = "nimora-asset";
 const DETERMINISTIC_PROVIDER_ID: &str = "provider:deterministic-local";
 const DEFAULT_AGENT_MODEL: &str = "model:echo-v1";
+const AUTO_MODE_CONTEXT_CACHE_SECRET: &str = "secret:cache:auto-mode-context-v1";
 const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
 const MAX_USER_PROGRAM_OPERATIONS: usize = 32;
@@ -4783,6 +4784,7 @@ fn resume_auto_mode_turn_inner(
             retain_recent_units: 32,
         },
         24 * 60 * 60 * 1_000,
+        context_cache_key(state)?,
     )
     .map_err(agent_error)?;
     let result = service
@@ -5791,6 +5793,24 @@ pub(crate) fn provider_credential_reference(
         .find(|config| config.id == provider_id)
         .filter(|config| config.enabled)
         .map(|config| config.credential_reference))
+}
+
+pub(crate) fn context_cache_key(state: &DesktopState) -> Result<ContextCacheKey, DesktopError> {
+    static KEY_CREATION: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = KEY_CREATION
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| DesktopError::Agent("Context cache key lock is unavailable".to_owned()))?;
+    let reference = SecretReference::parse(AUTO_MODE_CONTEXT_CACHE_SECRET)?;
+    match state.secret_store.0.resolve(&reference) {
+        Ok(value) => ContextCacheKey::from_hex(&value).map_err(Into::into),
+        Err(SecretStoreError::Missing) => {
+            let key = ContextCacheKey::generate()?;
+            state.secret_store.0.put(&reference, key.to_hex())?;
+            Ok(key)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn register_openai_provider(

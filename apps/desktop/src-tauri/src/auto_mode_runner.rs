@@ -3,8 +3,8 @@ use super::{
     AutoModeHostControlService, AutoModeJobControl, AutoModeJobStatus, AutoModeLoopRequest,
     AutoModeLoopService, AutoModeLoopStop, AutoModePauseReason, ContextCachePolicy,
     ContextCompactionPolicy, DataClassification, DesktopState, Duration, ProviderExecutionContext,
-    StartAutoModeJobRequest, Uuid, WorkspaceScanPolicy, auto_mode_jobs, current_time_ms,
-    desktop_provider_registry, desktop_tool_backend, desktop_tool_registry,
+    StartAutoModeJobRequest, Uuid, WorkspaceScanPolicy, auto_mode_jobs, context_cache_key,
+    current_time_ms, desktop_provider_registry, desktop_tool_backend, desktop_tool_registry,
     provider_credential_reference,
 };
 use nimora_agent_auto_host::{AutoModeRecoveryService, RecoveredAutoModeTurn};
@@ -67,6 +67,7 @@ fn run_inner(
         context_cache_policy()?,
         context_compaction_policy(),
         24 * 60 * 60 * 1_000,
+        context_cache_key(state).map_err(|error| (AutoModeJobStatus::Failed, error.to_string()))?,
     )
     .map_err(|error| (AutoModeJobStatus::Failed, error.to_string()))?;
     let loop_service = AutoModeLoopService::new(execution);

@@ -11,10 +11,11 @@ use nimora_agent_runtime::{
 };
 use nimora_agent_workspace_host::{WorkspaceHostError, WorkspaceScanPolicy, WorkspaceScanner};
 use nimora_persistence_sqlite::{
-    AutoModeTurnAttempt, AutoModeTurnAttemptStatus, ContextCachePolicy, SqliteAgentGoalRepository,
-    SqliteAutoModeCheckpointRepository, SqliteAutoModeCommitRepository, SqliteAutoModeRepository,
-    SqliteAutoModeTurnAttemptRepository, SqliteContextCacheRepository, SqlitePersistenceError,
-    SqliteWorkspaceSnapshotRepository, StoredContextCacheEntry, StoredWorkspaceSnapshot,
+    AutoModeTurnAttempt, AutoModeTurnAttemptStatus, ContextCacheKey, ContextCachePolicy,
+    SqliteAgentGoalRepository, SqliteAutoModeCheckpointRepository, SqliteAutoModeCommitRepository,
+    SqliteAutoModeRepository, SqliteAutoModeTurnAttemptRepository, SqliteContextCacheRepository,
+    SqlitePersistenceError, SqliteWorkspaceSnapshotRepository, StoredContextCacheEntry,
+    StoredWorkspaceSnapshot,
 };
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -32,6 +33,7 @@ pub struct AutoModeContextService {
     cache_policy: ContextCachePolicy,
     compaction_policy: ContextCompactionPolicy,
     ttl_ms: u64,
+    cache_key: ContextCacheKey,
 }
 
 impl AutoModeContextService {
@@ -45,6 +47,7 @@ impl AutoModeContextService {
         cache_policy: ContextCachePolicy,
         compaction_policy: ContextCompactionPolicy,
         ttl_ms: u64,
+        cache_key: ContextCacheKey,
     ) -> Result<Self, AutoModeContextError> {
         if ttl_ms == 0 {
             return Err(AutoModeContextError::InvalidTtl);
@@ -54,6 +57,7 @@ impl AutoModeContextService {
             cache_policy,
             compaction_policy,
             ttl_ms,
+            cache_key,
         })
     }
 
@@ -85,8 +89,11 @@ impl AutoModeContextService {
             self.compaction_policy,
             now_ms,
         )?;
-        let repository =
-            SqliteContextCacheRepository::open(&self.database_path, self.cache_policy)?;
+        let repository = SqliteContextCacheRepository::open(
+            &self.database_path,
+            self.cache_policy,
+            self.cache_key.clone(),
+        )?;
         if let Some(context) = repository.get(
             &candidate.cache_key,
             &anchor.workspace_fingerprint,
@@ -168,6 +175,7 @@ impl AutoModeExecutionService {
         cache_policy: ContextCachePolicy,
         compaction_policy: ContextCompactionPolicy,
         ttl_ms: u64,
+        cache_key: ContextCacheKey,
     ) -> Result<Self, AutoModeExecutionError> {
         let database_path = database_path.into();
         Ok(Self {
@@ -176,6 +184,7 @@ impl AutoModeExecutionService {
                 cache_policy,
                 compaction_policy,
                 ttl_ms,
+                cache_key,
             )?,
             recovery: AutoModeRecoveryService::new(&database_path, workspace_policy),
             commit: AutoModeTurnCommitService::new(database_path),
@@ -1252,6 +1261,7 @@ mod tests {
                 retain_recent_units: 8,
             },
             60_000,
+            ContextCacheKey::generate().expect("cache key"),
         )
         .expect("execution service")
     }
@@ -1700,6 +1710,7 @@ mod tests {
                 retain_recent_units: 16,
             },
             60_000,
+            ContextCacheKey::generate().expect("cache key"),
         )
         .expect("context service");
         let anchor = ContextAnchor {
