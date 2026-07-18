@@ -218,18 +218,13 @@ struct PhysicalArea {
     height: u32,
 }
 
-fn plan_wander_target(
-    current: tauri::PhysicalPosition<i32>,
+fn safe_position_bounds(
     window_size: tauri::PhysicalSize<u32>,
     monitor: PhysicalArea,
-    sequence: u64,
-) -> tauri::PhysicalPosition<i32> {
+) -> (i64, i64, i64, i64) {
     const HORIZONTAL_MARGIN: i64 = 16;
     const TOP_MARGIN: i64 = 24;
     const BOTTOM_MARGIN: i64 = 48;
-    const HORIZONTAL_STEP: i64 = 140;
-    const VERTICAL_STEP: i64 = 32;
-
     let minimum_x = i64::from(monitor.x).saturating_add(HORIZONTAL_MARGIN);
     let minimum_y = i64::from(monitor.y).saturating_add(TOP_MARGIN);
     let maximum_x = i64::from(monitor.x)
@@ -242,6 +237,53 @@ fn plan_wander_target(
         .saturating_sub(i64::from(window_size.height))
         .saturating_sub(BOTTOM_MARGIN)
         .max(minimum_y);
+    (minimum_x, minimum_y, maximum_x, maximum_y)
+}
+
+fn recover_visible_position(
+    current: tauri::PhysicalPosition<i32>,
+    window_size: tauri::PhysicalSize<u32>,
+    monitors: &[PhysicalArea],
+) -> Option<tauri::PhysicalPosition<i32>> {
+    let window_left = i64::from(current.x);
+    let window_top = i64::from(current.y);
+    let window_right = window_left.saturating_add(i64::from(window_size.width));
+    let window_bottom = window_top.saturating_add(i64::from(window_size.height));
+    let overlap = |monitor: &&PhysicalArea| {
+        let left = window_left.max(i64::from(monitor.x));
+        let top = window_top.max(i64::from(monitor.y));
+        let right = window_right.min(i64::from(monitor.x).saturating_add(i64::from(monitor.width)));
+        let bottom =
+            window_bottom.min(i64::from(monitor.y).saturating_add(i64::from(monitor.height)));
+        right
+            .saturating_sub(left)
+            .max(0)
+            .saturating_mul(bottom.saturating_sub(top).max(0))
+    };
+    let selected = monitors.iter().max_by_key(overlap)?;
+    let selected = if overlap(&selected) == 0 {
+        monitors.first()?
+    } else {
+        selected
+    };
+    let (minimum_x, minimum_y, maximum_x, maximum_y) = safe_position_bounds(window_size, *selected);
+    let x = window_left.clamp(minimum_x, maximum_x);
+    let y = window_top.clamp(minimum_y, maximum_y);
+    Some(tauri::PhysicalPosition::new(
+        i32::try_from(x).unwrap_or(current.x),
+        i32::try_from(y).unwrap_or(current.y),
+    ))
+}
+
+fn plan_wander_target(
+    current: tauri::PhysicalPosition<i32>,
+    window_size: tauri::PhysicalSize<u32>,
+    monitor: PhysicalArea,
+    sequence: u64,
+) -> tauri::PhysicalPosition<i32> {
+    const HORIZONTAL_STEP: i64 = 140;
+    const VERTICAL_STEP: i64 = 32;
+    let (minimum_x, minimum_y, maximum_x, maximum_y) = safe_position_bounds(window_size, monitor);
     let direction = if sequence.is_multiple_of(2) { 1 } else { -1 };
     let vertical_direction = if (sequence / 2).is_multiple_of(2) {
         1
@@ -10657,6 +10699,9 @@ fn start_pet_autonomy(app: AppHandle) {
                 .safety
                 .snapshot()
                 .is_ok_and(|snapshot| snapshot.mode == RuntimeMode::Normal);
+            if normal && !state.dragging.load(Ordering::Acquire) {
+                let _ = ensure_pet_window_visible(&app);
+            }
             let before = state.runtime.snapshot().ok();
             if normal
                 && let Ok(now_ms) = current_time_ms()
@@ -10680,6 +10725,41 @@ fn start_pet_autonomy(app: AppHandle) {
             std::thread::sleep(Duration::from_secs(1));
         }
     });
+}
+
+fn ensure_pet_window_visible(app: &AppHandle) -> Result<(), DesktopError> {
+    let window = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
+    let current = window.outer_position()?;
+    let window_size = window.outer_size()?;
+    let mut monitors = Vec::new();
+    if let Some(primary) = window.primary_monitor()? {
+        monitors.push(PhysicalArea {
+            x: primary.position().x,
+            y: primary.position().y,
+            width: primary.size().width,
+            height: primary.size().height,
+        });
+    }
+    monitors.extend(
+        window
+            .available_monitors()?
+            .into_iter()
+            .map(|monitor| PhysicalArea {
+                x: monitor.position().x,
+                y: monitor.position().y,
+                width: monitor.size().width,
+                height: monitor.size().height,
+            }),
+    );
+    let Some(target) = recover_visible_position(current, window_size, &monitors) else {
+        return Ok(());
+    };
+    if target != current {
+        window.set_position(tauri::Position::Physical(target))?;
+    }
+    Ok(())
 }
 
 fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
@@ -10787,15 +10867,16 @@ mod tests {
         install_generated_theme, install_gltf_character, open_diagnostic_journal,
         parse_asset_protocol_path, parse_user_program_plan, pause_auto_mode_job_inner,
         permission_grant, persist_asset_selection, plan_wander_target, prepare_agent_tool_inner,
-        quiesce_auto_mode_jobs, reject_agent_tool_inner, reject_automation_run_inner,
-        resolve_active_character, resolve_active_theme, resolve_active_voice,
-        resolve_asset_selection, resolve_auto_mode_attempt_inner, resolve_character_renderer,
-        resume_auto_mode_turn_inner, run_live_automation, run_live_automation_event,
-        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
-        screen_coordinate, serve_asset_protocol, skill_capability_names, skill_event_types,
-        stage_creator_package, stop_skill_event_sessions, test_automation, user_program_input,
-        valid_asset_identifier, validate_model_source, validate_package_source,
-        validate_requested_animation_map, verify_capability_gap,
+        quiesce_auto_mode_jobs, recover_visible_position, reject_agent_tool_inner,
+        reject_automation_run_inner, resolve_active_character, resolve_active_theme,
+        resolve_active_voice, resolve_asset_selection, resolve_auto_mode_attempt_inner,
+        resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
+        run_live_automation_event, run_local_agent_inner, run_skill_agent_task,
+        run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
+        skill_capability_names, skill_event_types, stage_creator_package,
+        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
+        validate_model_source, validate_package_source, validate_requested_animation_map,
+        verify_capability_gap,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -13210,6 +13291,78 @@ mod tests {
             3,
         );
         assert_eq!(left, tauri::PhysicalPosition::new(16, 24));
+    }
+
+    #[test]
+    fn visibility_recovery_returns_fully_offscreen_pet_to_primary_monitor() {
+        let monitors = [
+            PhysicalArea {
+                x: 0,
+                y: 0,
+                width: 1200,
+                height: 900,
+            },
+            PhysicalArea {
+                x: -1920,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+        ];
+        let recovered = recover_visible_position(
+            tauri::PhysicalPosition::new(5_000, -500),
+            tauri::PhysicalSize::new(260, 300),
+            &monitors,
+        );
+        assert_eq!(recovered, Some(tauri::PhysicalPosition::new(924, 24)));
+    }
+
+    #[test]
+    fn visibility_recovery_keeps_pet_on_monitor_with_largest_overlap() {
+        let monitors = [
+            PhysicalArea {
+                x: 0,
+                y: 0,
+                width: 1200,
+                height: 900,
+            },
+            PhysicalArea {
+                x: 1200,
+                y: 0,
+                width: 1600,
+                height: 900,
+            },
+        ];
+        let recovered = recover_visible_position(
+            tauri::PhysicalPosition::new(1180, 200),
+            tauri::PhysicalSize::new(260, 300),
+            &monitors,
+        );
+        assert_eq!(recovered, Some(tauri::PhysicalPosition::new(1216, 200)));
+    }
+
+    #[test]
+    fn visibility_recovery_handles_resolution_shrink_and_missing_monitors() {
+        let monitor = [PhysicalArea {
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 600,
+        }];
+        let recovered = recover_visible_position(
+            tauri::PhysicalPosition::new(900, 700),
+            tauri::PhysicalSize::new(260, 300),
+            &monitor,
+        );
+        assert_eq!(recovered, Some(tauri::PhysicalPosition::new(524, 252)));
+        assert_eq!(
+            recover_visible_position(
+                tauri::PhysicalPosition::new(10, 10),
+                tauri::PhysicalSize::new(260, 300),
+                &[],
+            ),
+            None
+        );
     }
 
     #[test]
