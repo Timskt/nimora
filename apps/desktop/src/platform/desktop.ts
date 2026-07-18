@@ -1389,7 +1389,20 @@ export function createDesktopApi(
       async enterSafeMode() { return null; },
       async exitSafeMode() { return null; },
       async movePet() { return null; },
-      async playAction() { return null; },
+      async playAction(action) {
+        const presentation = action === "sleep"
+          ? { state: "sleeping" as const, emotion: "sleepy" as const }
+          : action === "work"
+            ? { state: "working" as const, emotion: "focused" as const }
+            : action === "walk"
+              ? { state: "walking" as const, emotion: "happy" as const }
+              : action === "celebrate"
+                ? { state: "interacting" as const, emotion: "happy" as const }
+                : { state: "idle" as const, emotion: "neutral" as const };
+        previewSnapshot.pet.state = presentation.state;
+        previewSnapshot.pet.emotion = presentation.emotion;
+        return null;
+      },
       async carePet(action) {
         const gains = action === "feed"
           ? { energy: 20, mood: 2, satiety: 25, cleanliness: 0, affinity: 1 }

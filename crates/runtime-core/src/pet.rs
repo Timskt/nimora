@@ -186,6 +186,8 @@ const fn default_need_level() -> u8 {
 
 impl Pet {
     const LOW_VITAL_THRESHOLD: u8 = 25;
+    const AUTONOMY_REST_ENERGY_GAIN: u8 = 8;
+    const SLEEP_ENERGY_GAIN_PER_INTERVAL: u64 = 2;
     pub const MAX_BOND_POINTS: u64 = 9_007_199_254_740_991;
 
     fn idle_emotion(&self) -> Emotion {
@@ -411,12 +413,21 @@ impl Pet {
         if intervals == 0 {
             return;
         }
-        let energy_loss = u8::try_from(intervals.min(u64::from(u8::MAX))).unwrap_or(u8::MAX);
+        let energy_delta = if self.state == PetState::Sleeping {
+            intervals.saturating_mul(Self::SLEEP_ENERGY_GAIN_PER_INTERVAL)
+        } else {
+            intervals
+        };
+        let energy_delta = u8::try_from(energy_delta.min(u64::from(u8::MAX))).unwrap_or(u8::MAX);
         let mood_loss = u8::try_from((intervals / 3).min(u64::from(u8::MAX))).unwrap_or(u8::MAX);
         let satiety_loss = u8::try_from((intervals / 2).min(u64::from(u8::MAX))).unwrap_or(u8::MAX);
         let cleanliness_loss =
             u8::try_from((intervals / 4).min(u64::from(u8::MAX))).unwrap_or(u8::MAX);
-        self.energy = self.energy.saturating_sub(energy_loss);
+        self.energy = if self.state == PetState::Sleeping {
+            self.energy.saturating_add(energy_delta).min(100)
+        } else {
+            self.energy.saturating_sub(energy_delta)
+        };
         self.mood = self.mood.saturating_sub(mood_loss);
         self.satiety = self.satiety.saturating_sub(satiety_loss);
         self.cleanliness = self.cleanliness.saturating_sub(cleanliness_loss);
@@ -556,6 +567,12 @@ impl Pet {
                 self.autonomy.sequence = self.autonomy.sequence.saturating_add(1);
             }
             PetAutonomyDecision::Finish => {
+                if self.autonomy.active_intent == Some(PetIntent::Rest) {
+                    self.energy = self
+                        .energy
+                        .saturating_add(Self::AUTONOMY_REST_ENERGY_GAIN)
+                        .min(100);
+                }
                 self.apply_action(PetAction::Idle);
                 self.autonomy.active_intent = None;
                 self.autonomy.active_until_ms = None;
@@ -736,6 +753,51 @@ mod tests {
         assert_eq!(pet.satiety, 97);
         assert_eq!(pet.cleanliness, 99);
         assert_eq!(pet.last_vitals_update_ms, 11_000);
+    }
+
+    #[test]
+    fn manual_sleep_restores_energy_while_other_needs_keep_evolving() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.energy = 40;
+        pet.update_vitals(1_000, 100, 6);
+        pet.apply_action(PetAction::Sleep);
+        pet.update_vitals(11_000, 100, 6);
+        assert_eq!(pet.energy, 52);
+        assert_eq!((pet.mood, pet.satiety, pet.cleanliness), (68, 97, 99));
+
+        pet.energy = 99;
+        pet.update_vitals(21_000, 100, 6);
+        assert_eq!(pet.energy, 100);
+    }
+
+    #[test]
+    fn completed_autonomous_rest_has_a_bounded_domain_effect() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.energy = 20;
+        let policy = PetAutonomyPolicy::default();
+        pet.apply_autonomy_decision(
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Rest,
+                action: PetAction::Sleep,
+            },
+            policy,
+            100,
+        );
+        pet.apply_autonomy_decision(PetAutonomyDecision::Finish, policy, 200);
+        assert_eq!(pet.energy, 28);
+        assert_eq!(pet.state, PetState::Idle);
+
+        pet.energy = 98;
+        pet.apply_autonomy_decision(
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Rest,
+                action: PetAction::Sleep,
+            },
+            policy,
+            300,
+        );
+        pet.apply_autonomy_decision(PetAutonomyDecision::Finish, policy, 400);
+        assert_eq!(pet.energy, 100);
     }
 
     #[test]

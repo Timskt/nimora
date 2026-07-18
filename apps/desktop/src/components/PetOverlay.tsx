@@ -125,7 +125,7 @@ export function PetOverlay() {
   }, []);
 
   async function play(action: PetAction) {
-    setMessage(action === "celebrate" ? "今天也很棒！" : "收到");
+    setMessage(action === "celebrate" ? "今天也很棒！" : action === "sleep" ? "晚安，我会慢慢恢复体力" : "收到");
     await desktopApi.playAction(action);
     const next = await desktopApi.snapshot();
     setSnapshot(next);

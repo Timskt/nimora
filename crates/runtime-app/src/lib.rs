@@ -519,6 +519,8 @@ impl<R: PetRepository> RuntimeService<R> {
                     "decision": format!("{decision:?}"),
                     "beforeState": before.state,
                     "afterState": after.state,
+                    "beforeEnergy": before.energy,
+                    "afterEnergy": after.energy,
                     "intent": after.autonomy.active_intent,
                     "nextDueMs": after.autonomy.next_due_ms,
                 })
@@ -1197,6 +1199,34 @@ mod tests {
         assert_eq!(events[1].event_type, "pet.vitals.changed");
         assert_eq!(events[1].data["after"]["satiety"], 97);
         assert_eq!(events[1].data["after"]["cleanliness"], 99);
+    }
+
+    #[test]
+    fn sleeping_vitals_recovery_is_persisted_with_standard_event() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        service
+            .tick_vitals(1_000, 100, 6)
+            .expect("baseline")
+            .expect("command");
+        service.play_action(PetAction::Sleep).expect("manual sleep");
+        service.snapshot().expect("snapshot");
+        let command = service
+            .tick_vitals(11_000, 100, 6)
+            .expect("sleep recovery")
+            .expect("command");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.energy, 100);
+        let event = service
+            .drain_events()
+            .expect("events")
+            .into_iter()
+            .find(|event| event.trace_id == command.trace_id)
+            .expect("vitals event");
+        assert_eq!(event.event_type, "pet.vitals.changed");
+        assert_eq!(event.data["before"]["energy"], 100);
+        assert_eq!(event.data["after"]["energy"], 100);
+        assert_eq!(event.data["after"]["satiety"], 97);
     }
 
     #[test]
