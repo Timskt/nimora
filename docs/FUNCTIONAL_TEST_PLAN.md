@@ -176,6 +176,8 @@ ID / 标题 / 优先级 / 前置条件
 | EXT-030 | Skill Command 整批准入 | Worker 计划必须逐项命中精确 `commandAllowlist` 与宿主风险注册；Safe/Low 直接经 Module Gateway 执行，Medium/High 返回完整参数与风险并进入五分钟一次性整批批准；未知、未声明、拒绝、过期或重复批准在任何副作用与 Agent Task 前失败 | P0 |
 | EXT-031 | Skill Command Manifest 授权 | `commandAllowlist` 只接受有界 `safe.*` 标识并要求 `invoke-commands`；升级变更 allowlist 后安装状态回到未授权、停用 | P0 |
 | EXT-032 | Skill Command 因果回执 | 同次执行共享宿主生成 Trace，每条命令获得稳定幂等键与结构化 Gateway 回执，不能由 Worker 覆盖执行身份或 Trace | P0 |
+| EXT-033 | Skill 批准持久恢复 | pending 计划重启后仍可通过列表 IPC 查询和决策；遗留 executing 必须变为 interrupted，过期项不可批准 | P0 |
+| EXT-034 | Skill 批准并发终态 | 同一批准仅一个调用能原子 claim；拒绝、完成、失败、过期和中断均为不可逆终态，不得产生重复模块副作用 | P0 |
 | SCRIPT-001 | 用户脚本调用已授权 Command | 正常执行并产生 Run、Trace 和审计记录 | P0 |
 | SCRIPT-002 | 脚本访问未授权文件、网络、进程 | Host 拒绝，不能绕过 Capability Broker | P0 |
 | SCRIPT-003 | 死循环、内存泄漏、事件递归 | 对应实例被限流或终止，Core 继续运行 | P0 |

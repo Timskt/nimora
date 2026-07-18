@@ -3,6 +3,7 @@
 mod automation_agent_journal;
 mod automation_journal;
 mod backup;
+mod skill_approval_journal;
 
 pub use automation_agent_journal::{
     AutomationAgentJournalEntry, AutomationAgentJournalStatus, SqliteAutomationAgentJournal,
@@ -13,6 +14,9 @@ pub use automation_journal::{
 pub use backup::{
     BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, PendingRestore,
     apply_pending_restore,
+};
+pub use skill_approval_journal::{
+    SkillApprovalJournalEntry, SkillApprovalJournalStatus, SqliteSkillApprovalJournal,
 };
 
 use nimora_agent_runtime::{AgentTask, ProviderFinishReason, ProviderUsage};
@@ -1097,6 +1101,20 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
         );
         CREATE INDEX IF NOT EXISTS automation_agent_journal_updated_idx
             ON automation_agent_journal(updated_at_ms DESC, task_id DESC);
+        CREATE TABLE IF NOT EXISTS skill_approval_journal (
+            approval_id TEXT PRIMARY KEY,
+            execution_id TEXT NOT NULL UNIQUE,
+            skill_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('pending', 'executing', 'completed',
+                'rejected', 'expired', 'failed', 'interrupted')),
+            created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+            updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
+            expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms > created_at_ms),
+            schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS skill_approval_journal_status_idx
+            ON skill_approval_journal(status, expires_at_ms, approval_id);
         CREATE TABLE IF NOT EXISTS skill_state (
             skill_id TEXT PRIMARY KEY,
             skill_version TEXT NOT NULL,
@@ -1332,10 +1350,18 @@ pub enum SqlitePersistenceError {
     InvalidAutomationJournal,
     #[error("Automation Agent journal record or state transition is invalid")]
     InvalidAutomationAgentJournal,
+    #[error("Skill approval journal record or state transition is invalid")]
+    InvalidSkillApprovalJournal,
+    #[error("Skill approval is missing, claimed, expired, or already resolved")]
+    SkillApprovalNotPending,
+    #[error("Skill approval expired")]
+    SkillApprovalExpired,
     #[error("Automation journal version {0} is unsupported")]
     UnsupportedAutomationJournalVersion(u32),
     #[error("Automation Agent journal version {0} is unsupported")]
     UnsupportedAutomationAgentJournalVersion(u32),
+    #[error("Skill approval journal version {0} is unsupported")]
+    UnsupportedSkillApprovalJournalVersion(u32),
     #[error("Agent history version {0} is unsupported")]
     UnsupportedAgentHistoryVersion(u32),
     #[error("outbox lease is not owned by this consumer")]
