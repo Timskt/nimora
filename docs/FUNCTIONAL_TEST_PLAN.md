@@ -608,6 +608,9 @@ ID / 标题 / 优先级 / 前置条件
 - Verify Provider 错误、崩溃或重启造成费用不确定时状态为 `indeterminate`，完整预留继续计入当日预算且不能自动重试。
 - Verify 两个并发 Agent 费用预留只有不超过当日预算的组合成功；任务 ID 重放不重复预留，身份或金额漂移失败关闭。
 - Verify `dailyCostBudgetMicrounits = 0` 只允许最大费用同为零的任务，Safe/Recovery/Browser Preview 不修改治理账本。
+- Verify Governance Catalog 按 Automation 隔离聚合活跃租约和当日 reserved/settled/indeterminate 费用；不得返回任务内容、事件正文、Provider 请求或 Secret。
+- Verify 桌面 UI 分别展示预留与实际费用，未知费用显著标记并说明预算不会自动释放；预算为零显示“仅零费用任务”，不能误报为无限预算。
+- Verify 并发、冷却与每日预算拒绝给出不同的本地化用户原因，同时保持拒绝前零 Backend/Provider 副作用。
 
 ## 外接 AI 能力开发平台
 

@@ -38,8 +38,8 @@ pub use automation_catalog::{
     AutomationCatalogEntry, AutomationInstallReceipt, SqliteAutomationCatalog,
 };
 pub use automation_governance::{
-    AutomationCostEntry, AutomationCostReservation, AutomationCostStatus, AutomationRunAdmission,
-    SqliteAutomationGovernance,
+    AutomationCostEntry, AutomationCostReservation, AutomationCostStatus,
+    AutomationGovernanceSnapshot, AutomationRunAdmission, SqliteAutomationGovernance,
 };
 pub use automation_journal::{
     AutomationJournalEntry, AutomationJournalStatus, AutomationRunStart, SqliteAutomationJournal,

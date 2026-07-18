@@ -42,6 +42,16 @@ pub struct AutomationCostEntry {
     pub status: AutomationCostStatus,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutomationGovernanceSnapshot {
+    pub active_runs: u64,
+    pub last_started_at_ms: Option<u64>,
+    pub reserved_cost_microunits: u64,
+    pub settled_cost_microunits: u64,
+    pub indeterminate_cost_microunits: u64,
+    pub indeterminate_cost_count: u64,
+}
+
 #[derive(Debug)]
 pub struct SqliteAutomationGovernance {
     connection: Mutex<Connection>,
@@ -352,6 +362,69 @@ impl SqliteAutomationGovernance {
             .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
         load_cost_entry(&connection, task_id)
     }
+
+    /// Loads a privacy-safe runtime and daily cost aggregate for an Automation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid Automation identifier or timestamp,
+    /// malformed persisted data, poisoned state, or `SQLite` failure.
+    pub fn snapshot(
+        &self,
+        automation_id: &str,
+        now_ms: u64,
+    ) -> Result<AutomationGovernanceSnapshot, SqlitePersistenceError> {
+        validate_automation_id(automation_id)?;
+        let now_ms_i64 = to_i64(now_ms)?;
+        let day_bucket = to_i64(now_ms / DAY_MS)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?;
+        let active_runs = connection.query_row(
+            "SELECT COUNT(*) FROM automation_run_lease
+             WHERE automation_id = ?1 AND expires_at_ms > ?2",
+            params![automation_id, now_ms_i64],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let last_started_at_ms = connection
+            .query_row(
+                "SELECT last_started_at_ms FROM automation_governance_state
+                 WHERE automation_id = ?1",
+                [automation_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        let costs = connection.query_row(
+            "SELECT
+                COALESCE(SUM(CASE WHEN status = 'reserved'
+                    THEN reserved_cost_microunits ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'settled'
+                    THEN actual_cost_microunits ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'indeterminate'
+                    THEN reserved_cost_microunits ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'indeterminate' THEN 1 ELSE 0 END), 0)
+             FROM automation_cost_ledger
+             WHERE automation_id = ?1 AND day_bucket = ?2",
+            params![automation_id, day_bucket],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )?;
+        Ok(AutomationGovernanceSnapshot {
+            active_runs: from_i64(active_runs)?,
+            last_started_at_ms: last_started_at_ms.map(from_i64).transpose()?,
+            reserved_cost_microunits: from_i64(costs.0)?,
+            settled_cost_microunits: from_i64(costs.1)?,
+            indeterminate_cost_microunits: from_i64(costs.2)?,
+            indeterminate_cost_count: from_i64(costs.3)?,
+        })
+    }
 }
 
 pub(crate) fn ensure_automation_governance_schema(
@@ -404,6 +477,20 @@ fn validate_run_admission(
         return Err(SqlitePersistenceError::InvalidAutomationGovernance);
     }
     Ok(())
+}
+
+fn validate_automation_id(automation_id: &str) -> Result<(), SqlitePersistenceError> {
+    if automation_id.is_empty()
+        || automation_id.len() > 128
+        || automation_id.chars().any(char::is_control)
+    {
+        return Err(SqlitePersistenceError::InvalidAutomationGovernance);
+    }
+    Ok(())
+}
+
+fn from_i64(value: i64) -> Result<u64, SqlitePersistenceError> {
+    u64::try_from(value).map_err(|_| SqlitePersistenceError::InvalidAutomationGovernance)
 }
 
 fn validate_cost_reservation(
@@ -523,6 +610,71 @@ mod tests {
         let entry = store.get_cost(task_id).expect("load").expect("entry");
         assert_eq!(entry.status, AutomationCostStatus::Settled);
         assert_eq!(entry.actual_cost_microunits, Some(30));
+    }
+
+    #[test]
+    fn snapshot_separates_active_reserved_settled_and_indeterminate_costs() {
+        let store = SqliteAutomationGovernance::in_memory().expect("store");
+        let run_id = Uuid::now_v7();
+        store.admit_run(&admission(run_id, 100)).expect("run");
+        let settled_task = Uuid::now_v7();
+        store
+            .reserve_agent_cost(AutomationCostReservation {
+                task_id: settled_task,
+                run_id,
+                reserved_cost_microunits: 40,
+                now_ms: 101,
+            })
+            .expect("reserve settled");
+        store
+            .settle_agent_cost(settled_task, 15, 102)
+            .expect("settle");
+        let unknown_task = Uuid::now_v7();
+        store
+            .reserve_agent_cost(AutomationCostReservation {
+                task_id: unknown_task,
+                run_id,
+                reserved_cost_microunits: 30,
+                now_ms: 103,
+            })
+            .expect("reserve unknown");
+        store
+            .mark_agent_cost_indeterminate(unknown_task, 104)
+            .expect("unknown");
+        let reserved_task = Uuid::now_v7();
+        store
+            .reserve_agent_cost(AutomationCostReservation {
+                task_id: reserved_task,
+                run_id,
+                reserved_cost_microunits: 20,
+                now_ms: 105,
+            })
+            .expect("reserve active");
+
+        assert_eq!(
+            store.snapshot("automation.focus", 106).expect("snapshot"),
+            AutomationGovernanceSnapshot {
+                active_runs: 1,
+                last_started_at_ms: Some(100),
+                reserved_cost_microunits: 20,
+                settled_cost_microunits: 15,
+                indeterminate_cost_microunits: 30,
+                indeterminate_cost_count: 1,
+            }
+        );
+        assert_eq!(
+            store
+                .snapshot("automation.focus", DAY_MS)
+                .expect("next day"),
+            AutomationGovernanceSnapshot {
+                active_runs: 0,
+                last_started_at_ms: Some(100),
+                reserved_cost_microunits: 0,
+                settled_cost_microunits: 0,
+                indeterminate_cost_microunits: 0,
+                indeterminate_cost_count: 0,
+            }
+        );
     }
 
     #[test]

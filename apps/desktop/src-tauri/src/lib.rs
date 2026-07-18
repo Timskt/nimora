@@ -424,6 +424,31 @@ struct AutomationEventHealthSnapshot {
     sessions: Vec<AutomationEventHealthSession>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationGovernanceEntry {
+    automation_id: String,
+    active_runs: u64,
+    max_concurrent_runs: u16,
+    last_started_at_ms: Option<u64>,
+    cooldown_ms: u64,
+    cooldown_remaining_ms: u64,
+    daily_cost_budget_microunits: u64,
+    reserved_cost_microunits: u64,
+    settled_cost_microunits: u64,
+    indeterminate_cost_microunits: u64,
+    indeterminate_cost_count: u64,
+    available_cost_microunits: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationGovernanceCatalog {
+    spec: &'static str,
+    generated_at_ms: u64,
+    entries: Vec<AutomationGovernanceEntry>,
+}
+
 struct ActiveSkillExecutionGuard<'a> {
     executions: &'a Mutex<HashMap<Uuid, ActiveSkillExecution>>,
     execution_id: Uuid,
@@ -2284,6 +2309,66 @@ fn automation_event_health(
     Ok(AutomationEventHealthSnapshot {
         spec: "nimora.automation-event-health/1",
         sessions,
+    })
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri managed state command arguments are owned extractors"
+)]
+fn automation_governance_catalog(
+    state: State<'_, DesktopState>,
+) -> Result<AutomationGovernanceCatalog, DesktopError> {
+    automation_governance_catalog_inner(&state, current_time_ms()?)
+}
+
+fn automation_governance_catalog_inner(
+    state: &DesktopState,
+    now_ms: u64,
+) -> Result<AutomationGovernanceCatalog, DesktopError> {
+    let mut entries = state
+        .automation_catalog
+        .list()?
+        .into_iter()
+        .map(|catalog_entry| {
+            let definition = catalog_entry.definition;
+            let snapshot = state
+                .automation_governance
+                .snapshot(&definition.id, now_ms)?;
+            let cooldown_remaining_ms = snapshot
+                .last_started_at_ms
+                .and_then(|started_at_ms| started_at_ms.checked_add(definition.policy.cooldown_ms))
+                .unwrap_or(0)
+                .saturating_sub(now_ms);
+            let committed_cost = snapshot
+                .reserved_cost_microunits
+                .saturating_add(snapshot.settled_cost_microunits)
+                .saturating_add(snapshot.indeterminate_cost_microunits);
+            Ok(AutomationGovernanceEntry {
+                automation_id: definition.id,
+                active_runs: snapshot.active_runs,
+                max_concurrent_runs: definition.policy.max_concurrent_runs,
+                last_started_at_ms: snapshot.last_started_at_ms,
+                cooldown_ms: definition.policy.cooldown_ms,
+                cooldown_remaining_ms,
+                daily_cost_budget_microunits: definition.policy.daily_cost_budget_microunits,
+                reserved_cost_microunits: snapshot.reserved_cost_microunits,
+                settled_cost_microunits: snapshot.settled_cost_microunits,
+                indeterminate_cost_microunits: snapshot.indeterminate_cost_microunits,
+                indeterminate_cost_count: snapshot.indeterminate_cost_count,
+                available_cost_microunits: definition
+                    .policy
+                    .daily_cost_budget_microunits
+                    .saturating_sub(committed_cost),
+            })
+        })
+        .collect::<Result<Vec<_>, DesktopError>>()?;
+    entries.sort_by(|left, right| left.automation_id.cmp(&right.automation_id));
+    Ok(AutomationGovernanceCatalog {
+        spec: "nimora.automation-governance-catalog/1",
+        generated_at_ms: now_ms,
+        entries,
     })
 }
 
@@ -9382,6 +9467,7 @@ pub fn run() {
             automation_run_status,
             automation_run_history,
             automation_event_health,
+            automation_governance_catalog,
             automation_pending_approval_count,
             pending_automation_approvals,
             approve_automation_run,
@@ -9613,7 +9699,8 @@ mod tests {
         THEME_SELECTION, TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
         UserProgramRollbackReceipt, VOICE_SELECTION, WindowPolicy, agent_catalog_inner,
         append_program_scope_diff, approve_automation_run_inner, approve_skill_execution_inner,
-        auto_mode_control_center_inner, automation_agent_messages, cancel_agent_task_inner,
+        auto_mode_control_center_inner, automation_agent_messages,
+        automation_governance_catalog_inner, cancel_agent_task_inner,
         cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
         cancel_skill_execution_inner, capability_set_diff, confirm_agent_tool_inner,
         confirm_agent_tool_with_registry, consume_creator_approval_from, creator_capability_risk,
@@ -9650,10 +9737,11 @@ mod tests {
     };
     use nimora_persistence_sqlite::{
         AutoModeAttemptResolutionDecision, AutomationAgentJournalEntry,
-        AutomationAgentJournalStatus, AutomationApprovalStatus, AutomationJournalStatus,
-        AutomationRunStart, BackupCoordinator, BackupPolicy, SkillApprovalJournalEntry,
-        SkillExecutionHistoryStatus, SkillStateRecord, SqliteAgentGoalRepository,
-        SqliteAutoModeRepository, SqliteAutomationJournal, SqliteProgramPermissionRepository,
+        AutomationAgentJournalStatus, AutomationApprovalStatus, AutomationCostReservation,
+        AutomationJournalStatus, AutomationRunAdmission, AutomationRunStart, BackupCoordinator,
+        BackupPolicy, SkillApprovalJournalEntry, SkillExecutionHistoryStatus, SkillStateRecord,
+        SqliteAgentGoalRepository, SqliteAutoModeRepository, SqliteAutomationJournal,
+        SqliteProgramPermissionRepository,
     };
     use nimora_runtime_core::{CommandRisk, Event, EventSource, Position, RuntimeMode};
     use nimora_skill_host::{
@@ -10179,6 +10267,56 @@ mod tests {
         assert_eq!(run.steps.len(), 1);
         assert_eq!(run.steps[0].command, "pet.animation.play");
         assert_eq!(run.steps[0].attempts, 0);
+    }
+
+    #[test]
+    fn automation_governance_catalog_combines_policy_and_persisted_usage() {
+        let (root, state) = normal_desktop_state();
+        let definition = live_move_request("pet.position.move", "low").definition;
+        let mut definition = definition;
+        definition.policy.max_concurrent_runs = 2;
+        definition.policy.cooldown_ms = 1_000;
+        definition.policy.daily_cost_budget_microunits = 100;
+        state
+            .automation_catalog
+            .install(&definition, 100)
+            .expect("install");
+        let run_id = Uuid::now_v7();
+        state
+            .automation_governance
+            .admit_run(&AutomationRunAdmission {
+                run_id,
+                automation_id: definition.id.clone(),
+                max_concurrent_runs: 2,
+                cooldown_ms: 1_000,
+                daily_cost_budget_microunits: 100,
+                now_ms: 200,
+                lease_expires_at_ms: 5_000,
+            })
+            .expect("admit");
+        state
+            .automation_governance
+            .reserve_agent_cost(AutomationCostReservation {
+                task_id: Uuid::now_v7(),
+                run_id,
+                reserved_cost_microunits: 35,
+                now_ms: 201,
+            })
+            .expect("reserve");
+
+        let catalog = automation_governance_catalog_inner(&state, 500).expect("catalog");
+        assert_eq!(catalog.spec, "nimora.automation-governance-catalog/1");
+        assert_eq!(catalog.generated_at_ms, 500);
+        assert_eq!(catalog.entries.len(), 1);
+        let entry = &catalog.entries[0];
+        assert_eq!(entry.automation_id, definition.id);
+        assert_eq!(entry.active_runs, 1);
+        assert_eq!(entry.max_concurrent_runs, 2);
+        assert_eq!(entry.cooldown_remaining_ms, 700);
+        assert_eq!(entry.reserved_cost_microunits, 35);
+        assert_eq!(entry.available_cost_microunits, 65);
+        assert_eq!(entry.indeterminate_cost_count, 0);
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]

@@ -1,5 +1,13 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-18 — Automation 资源与 AI 费用治理可观测纵切
+
+- SQLite Governance 新增按 Automation 和 UTC 日桶聚合的隐私安全快照，只返回活跃租约、最近启动时间及 reserved/settled/indeterminate 费用，不暴露任务内容、事件正文或 Provider 数据。
+- 桌面只读 IPC 将当前 Catalog 策略与持久治理事实合并，确定性计算冷却剩余、并发占用和当日可用预算；Browser Preview 返回带真实 Schema 的空态，不伪造本机账本。
+- Automation Workspace 新增资源治理卡片，分别展示并发、冷却、已结算、执行中预留、未知费用占用和可用预算；未知费用以显著警告说明不会自动按零释放。
+- 用户可看到并发、冷却和预算拒绝的本地化原因，运行历史优先显示生产 Engine 的终态原因；SQLite 9 项治理测试、Desktop 125 项宿主测试和前端 40 项测试通过。
+- 当前仍缺少未知费用的人工对账操作和不可变决议审计，不得把只读健康展示误报为完整费用争议处理。
+
 ## 2026-07-18 — Automation 持久并发、冷却与 AI 费用治理
 
 - Automation 策略新增 `maxConcurrentRuns`、`cooldownMs` 与 `dailyCostBudgetMicrounits`，生产校验和 Creator/桌面契约使用同一硬上限。

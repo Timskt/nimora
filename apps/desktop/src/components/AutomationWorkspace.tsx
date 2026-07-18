@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AutomationApprovalCatalog, AutomationCatalogEntry, AutomationDefinition, AutomationEventHealthSnapshot, AutomationJournalEntry, AutomationRun } from "../platform/desktop";
+import type { AutomationApprovalCatalog, AutomationCatalogEntry, AutomationDefinition, AutomationEventHealthSnapshot, AutomationGovernanceCatalog, AutomationJournalEntry, AutomationRun } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const sampleDefinition: AutomationDefinition = {
@@ -40,6 +40,7 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
   const [history, setHistory] = useState<AutomationJournalEntry[]>([]);
   const [historyExhausted, setHistoryExhausted] = useState(false);
   const [eventHealth, setEventHealth] = useState<AutomationEventHealthSnapshot["sessions"]>([]);
+  const [governance, setGovernance] = useState<AutomationGovernanceCatalog["entries"]>([]);
   const [approvals, setApprovals] = useState<AutomationApprovalCatalog["approvals"]>([]);
   const definition = useMemo(() => sampleDefinition, []);
 
@@ -70,6 +71,14 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
     }
   }
 
+  async function refreshGovernance() {
+    try {
+      setGovernance((await desktopApi.automationGovernanceCatalog()).entries);
+    } catch {
+      setGovernance([]);
+    }
+  }
+
   async function refreshApprovals() {
     try {
       setApprovals((await desktopApi.pendingAutomationApprovals()).approvals);
@@ -78,7 +87,7 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
     }
   }
 
-  useEffect(() => { void Promise.all([refreshCatalog(), refreshHistory(), refreshEventHealth(), refreshApprovals()]); }, []);
+  useEffect(() => { void Promise.all([refreshCatalog(), refreshHistory(), refreshEventHealth(), refreshGovernance(), refreshApprovals()]); }, []);
 
   async function resolveApproval(approvalId: string, approve: boolean) {
     setBusy(true);
@@ -91,10 +100,10 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
         await desktopApi.rejectAutomationRun(approvalId);
         onNotice("自动化运行已拒绝，未产生任何副作用");
       }
-      await Promise.all([refreshApprovals(), refreshHistory(), refreshEventHealth()]);
-    } catch {
+      await Promise.all([refreshApprovals(), refreshHistory(), refreshEventHealth(), refreshGovernance()]);
+    } catch (error) {
       await refreshApprovals();
-      onNotice("审批已过期、被处理或计划发生变化，未执行自动化");
+      onNotice(automationFailureNotice(error));
     } finally {
       setBusy(false);
     }
@@ -117,7 +126,7 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
     setBusy(true);
     try {
       await desktopApi.setAutomationEnabled(entry.definition.id, !entry.enabled);
-      await Promise.all([refreshCatalog(), refreshEventHealth()]);
+      await Promise.all([refreshCatalog(), refreshEventHealth(), refreshGovernance()]);
       onNotice(!entry.enabled ? "自动化已显式启用" : "自动化已停用");
     } catch {
       onNotice("自动化状态更新失败，未改变目录状态");
@@ -184,10 +193,28 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
           <button disabled={disabled || busy || !entry.previousVersion} onClick={() => void rollbackAutomation(entry)} type="button">回滚</button>
         </article>)}
       </section>
+      <section className="automation-catalog automation-governance" aria-label="自动化资源与费用治理">
+        <div className="section-heading"><div><p className="card-label">RESOURCE GOVERNANCE</p><h3>资源与 AI 费用</h3></div><button disabled={busy} onClick={() => void refreshGovernance()} type="button">刷新</button></div>
+        {governance.length === 0 ? <p>尚无可展示的已安装 Automation 治理状态；浏览器预览不会伪造本机账本。</p> : governance.map((entry) => {
+          const hasUnknownCost = entry.indeterminateCostCount > 0;
+          return <article className="automation-governance-card" data-alert={hasUnknownCost} key={entry.automationId}>
+            <div className="automation-governance-heading"><div><strong>{entry.automationId}</strong><small>{entry.activeRuns} / {entry.maxConcurrentRuns} 个运行租约</small></div><span className={hasUnknownCost ? "automation-governance-alert" : "automation-enabled"}>{hasUnknownCost ? `${entry.indeterminateCostCount} 项待对账` : entry.cooldownRemainingMs > 0 ? "冷却中" : "准入正常"}</span></div>
+            <dl className="automation-governance-metrics">
+              <div><dt>并发</dt><dd>{entry.activeRuns} / {entry.maxConcurrentRuns}</dd></div>
+              <div><dt>冷却剩余</dt><dd>{formatDuration(entry.cooldownRemainingMs)}</dd></div>
+              <div><dt>今日已结算</dt><dd>{formatMicrounits(entry.settledCostMicrounits)}</dd></div>
+              <div><dt>执行中预留</dt><dd>{formatMicrounits(entry.reservedCostMicrounits)}</dd></div>
+              <div><dt>未知费用占用</dt><dd>{formatMicrounits(entry.indeterminateCostMicrounits)}</dd></div>
+              <div><dt>今日可用</dt><dd>{entry.dailyCostBudgetMicrounits === 0 ? "仅零费用任务" : formatMicrounits(entry.availableCostMicrounits)}</dd></div>
+            </dl>
+            {hasUnknownCost && <div className="automation-governance-warning"><strong>费用状态未知，预算不会自动释放</strong><p>Provider 或宿主未能证明最终费用。系统保持失败关闭，避免按零费用重复执行。</p></div>}
+          </article>;
+        })}
+      </section>
       <section className="automation-catalog" aria-label="自动化运行历史">
         <div className="section-heading"><div><p className="card-label">RUN HISTORY</p><h3>最近运行</h3></div><button disabled={disabled || busy || history.length === 0} onClick={() => void deleteHistory()} type="button">清空终态记录</button></div>
         {history.length === 0 ? <p>暂无真实运行记录。测试运行不会写入这里。</p> : history.map((entry) => <article className="automation-catalog-entry" key={entry.runId}>
-          <div><strong>{entry.automationId}</strong><code>{entry.result?.status ?? entry.status}</code><small>{new Date(entry.startedAtMs).toLocaleString()} · Event {entry.eventId}</small></div>
+          <div><strong>{entry.automationId}</strong><code>{entry.result?.status ?? entry.status}</code><small>{entry.result?.reason ?? `${new Date(entry.startedAtMs).toLocaleString()} · Event ${entry.eventId}`}</small></div>
           <span className={entry.status === "running" ? "automation-enabled" : "automation-disabled"}>{entry.status === "running" ? "运行中" : entry.status === "interrupted" ? "已中断" : "已完成"}</span>
           <button disabled={disabled || busy || entry.status === "running"} onClick={() => void deleteHistory(entry.runId)} type="button">删除</button>
         </article>)}
@@ -246,4 +273,22 @@ function statusLabel(status: AutomationRun["status"]): string {
   if (status === "compensation_failed") return "动作与补偿均失败";
   if (status === "failed") return "运行失败";
   return "运行未完成";
+}
+
+function formatMicrounits(value: number): string {
+  return `${value.toLocaleString("zh-CN")} μu`;
+}
+
+function formatDuration(value: number): string {
+  if (value === 0) return "无";
+  if (value < 1_000) return `${value} ms`;
+  return `${Math.ceil(value / 1_000)} 秒`;
+}
+
+function automationFailureNotice(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("concurrent run limit")) return "并发运行名额已满，未开始新的自动化";
+  if (message.includes("cooldown is active")) return "自动化仍在冷却期，未开始执行";
+  if (message.includes("cost budget is exhausted")) return "今日 AI 费用预算不足，Provider 未被调用";
+  return "审批已过期、被处理、计划发生变化或资源准入失败，未执行自动化";
 }

@@ -713,6 +713,25 @@ export interface AutomationEventHealthSnapshot {
   }>;
 }
 
+export interface AutomationGovernanceCatalog {
+  spec: "nimora.automation-governance-catalog/1";
+  generatedAtMs: number;
+  entries: Array<{
+    automationId: string;
+    activeRuns: number;
+    maxConcurrentRuns: number;
+    lastStartedAtMs: number | null;
+    cooldownMs: number;
+    cooldownRemainingMs: number;
+    dailyCostBudgetMicrounits: number;
+    reservedCostMicrounits: number;
+    settledCostMicrounits: number;
+    indeterminateCostMicrounits: number;
+    indeterminateCostCount: number;
+    availableCostMicrounits: number;
+  }>;
+}
+
 export interface AutomationApprovalRisk {
   actionId: string;
   command: string;
@@ -769,6 +788,7 @@ export interface DesktopApi {
   automationRunStatus(runId: string): Promise<AutomationJournalEntry | null>;
   automationRunHistory(limit?: number, before?: { startedAtMs: number; runId: string }): Promise<AutomationRunHistoryPage>;
   automationEventHealth(): Promise<AutomationEventHealthSnapshot>;
+  automationGovernanceCatalog(): Promise<AutomationGovernanceCatalog>;
   automationPendingApprovalCount(): Promise<number>;
   pendingAutomationApprovals(): Promise<AutomationApprovalCatalog>;
   approveAutomationRun(approvalId: string): Promise<AutomationRun>;
@@ -972,6 +992,7 @@ export function createDesktopApi(
       async automationRunStatus() { return null; },
       async automationRunHistory() { return { spec: "nimora.desktop-automation-run-history/1", records: [] }; },
       async automationEventHealth() { return { spec: "nimora.automation-event-health/1", sessions: [] }; },
+      async automationGovernanceCatalog() { return { spec: "nimora.automation-governance-catalog/1", generatedAtMs: Date.now(), entries: [] }; },
       async automationPendingApprovalCount() { return 0; },
       async pendingAutomationApprovals() { return { spec: "nimora.automation-approval-catalog/1", approvals: [] }; },
       async approveAutomationRun() { throw new Error("Automation approval requires the Nimora desktop runtime."); },
@@ -1252,6 +1273,7 @@ export function createDesktopApi(
     automationRunStatus: async (runId) => await invokeCommand("automation_run_status", { runId }) as AutomationJournalEntry | null,
     automationRunHistory: async (limit = 20, before) => await invokeCommand("automation_run_history", { request: { beforeStartedAtMs: before?.startedAtMs ?? null, beforeRunId: before?.runId ?? null, limit } }) as AutomationRunHistoryPage,
     automationEventHealth: async () => await invokeCommand("automation_event_health") as AutomationEventHealthSnapshot,
+    automationGovernanceCatalog: async () => await invokeCommand("automation_governance_catalog") as AutomationGovernanceCatalog,
     automationPendingApprovalCount: async () => await invokeCommand("automation_pending_approval_count") as number,
     pendingAutomationApprovals: async () => await invokeCommand("pending_automation_approvals") as AutomationApprovalCatalog,
     approveAutomationRun: async (approvalId) => await invokeCommand("approve_automation_run", { request: { approvalId } }) as AutomationRun,

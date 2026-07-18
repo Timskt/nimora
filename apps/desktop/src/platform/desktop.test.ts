@@ -21,6 +21,7 @@ describe("desktop platform adapter", () => {
     expect((await api.agentCatalog()).providers).toHaveLength(2);
     await expect(api.automationPendingApprovalCount()).resolves.toBe(0);
     await expect(api.pendingAutomationApprovals()).resolves.toEqual({ spec: "nimora.automation-approval-catalog/1", approvals: [] });
+    await expect(api.automationGovernanceCatalog()).resolves.toMatchObject({ spec: "nimora.automation-governance-catalog/1", entries: [] });
     await expect(api.approveAutomationRun("018f0000-0000-7000-8000-000000000021")).rejects.toThrow("desktop runtime");
     await expect(api.rejectAutomationRun("018f0000-0000-7000-8000-000000000021")).rejects.toThrow("desktop runtime");
     const result = await api.runLocalAgent("离线检查");
@@ -177,6 +178,7 @@ describe("desktop platform adapter", () => {
       : null);
     const startDragging = vi.fn(async () => undefined);
     const api = createDesktopApi(true, invoke, startDragging);
+    await api.automationGovernanceCatalog();
     await api.automationPendingApprovalCount();
     await api.pendingAutomationApprovals();
     await api.approveAutomationRun("018f0000-0000-7000-8000-000000000021");
@@ -306,6 +308,7 @@ describe("desktop platform adapter", () => {
     });
     await api.stopUserProgram(envelope.executionId);
     expect(invoke.mock.calls).toEqual([
+      ["automation_governance_catalog"],
       ["automation_pending_approval_count"],
       ["pending_automation_approvals"],
       ["approve_automation_run", { request: { approvalId: "018f0000-0000-7000-8000-000000000021" } }],
