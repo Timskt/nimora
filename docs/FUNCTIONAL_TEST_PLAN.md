@@ -659,6 +659,11 @@ ID / 标题 / 优先级 / 前置条件
 - Verify 所有 Builder Tool 使用版本化 Schema、Task/Trace ID、截止时间、取消、幂等键、稳定错误码和脱敏审计；Provider 不能覆盖宿主身份。
 - Verify AI 生成的测试报告、自评结论和聊天同意不能推进 `validated`、`approved`、`installed` 或 `activated` 状态。
 - Verify Capability Proposal 只能进入评审队列，不能动态修改当前 Registry、风险等级、安全策略或 Capability Grant。
+- Verify Proposal Queue 只接受与 `proposalId` 文件名一致的普通 JSON 文件，拒绝符号链接、未知字段、超过 1 MiB、非法状态、损坏双计划和内容摘要漂移。
+- Verify `pending-review` 只能一次性转为 `accepted`、`rejected` 或 `duplicate`，理由必须非空、无首尾空白、无控制字符且不超过 1024 bytes；任何终态重写均失败关闭。
+- Verify Safe/Recovery Mode、Browser Preview 和直接 IPC 调用均不能写入维护者裁决；读取失败不得跳过损坏记录后展示不完整队列。
+- Verify 治理 UI 明确 `accepted` 仅代表进入可行性分析，不创建 Handler、不修改 Registry、不签发 Grant、不执行代码；终态记录不再显示裁决控件。
+- Verify Proposal 的 SHA-256 内容摘要只作为离线一致性检测，不在 UI、日志或文档中描述为身份签名或来源真实性证明。
 - Verify 仅 `platformProposalRequired=true` 的实时复验 Gap 可提交；宿主提交时重建 Catalog 与 Semantic Graph 并重算双计划，前端摘要和旧计划不能成为提案事实。
 - Verify Proposal 使用 `.nimora-proposals/capability-proposal-<uuid>.json` 不可覆盖原子文件，状态固定为 `pending-review`，响应只返回相对路径。
 - Verify Proposal 不含批准凭证、可执行代码、Handler、Grant 或自动 Registry 更新入口；提交按钮与 Draft 审查、批准、安装按钮完全分离。

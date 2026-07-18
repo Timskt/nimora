@@ -143,6 +143,20 @@ export interface CapabilityProposalReceipt {
   status: "pending-review";
 }
 
+export type CapabilityProposalStatus = "pending-review" | "accepted" | "rejected" | "duplicate";
+
+export interface CapabilityProposalRecord {
+  spec: "nimora.capability-proposal/1";
+  proposalId: string;
+  status: CapabilityProposalStatus;
+  submittedAtMs: number;
+  gap: NonNullable<CreatorDraftResult["capabilityGap"]>;
+  compositionPlan: NonNullable<CreatorDraftResult["compositionPlan"]>;
+  semanticCompositionPlan: NonNullable<CreatorDraftResult["semanticCompositionPlan"]>;
+  review: { status: Exclude<CapabilityProposalStatus, "pending-review">; reason: string; reviewedAtMs: number } | null;
+  integrityDigest: string;
+}
+
 export interface CreatorDraftCheckReport {
   spec: "nimora.creator-draft-check/1";
   status: "passed" | "failed";
@@ -857,6 +871,8 @@ export interface DesktopApi {
   saveCreatorDraft(workspaceRoot: string, kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>, approvalId: string): Promise<CreatorDraftSaveReceipt>;
   saveCapabilityGap(workspaceRoot: string, capabilityGap: NonNullable<CreatorDraftResult["capabilityGap"]>): Promise<CapabilityGapSaveReceipt>;
   submitCapabilityProposal(workspaceRoot: string, capabilityGap: NonNullable<CreatorDraftResult["capabilityGap"]>): Promise<CapabilityProposalReceipt>;
+  capabilityProposalQueue(workspaceRoot: string): Promise<CapabilityProposalRecord[]>;
+  reviewCapabilityProposal(workspaceRoot: string, proposalId: string, status: Exclude<CapabilityProposalStatus, "pending-review">, reason: string): Promise<CapabilityProposalRecord>;
   checkCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>): Promise<CreatorDraftCheckReport>;
   resumeAutoModeTurn(request: ResumeAutoModeTurnRequest): Promise<DesktopAutoModeTurnResult>;
   startAutoModeJob(request: StartAutoModeJobRequest): Promise<DesktopAutoModeJobSnapshot>;
@@ -1135,6 +1151,12 @@ export function createDesktopApi(
       async submitCapabilityProposal() {
         throw new Error("desktop-host-required");
       },
+      async capabilityProposalQueue() {
+        throw new Error("desktop-host-required");
+      },
+      async reviewCapabilityProposal() {
+        throw new Error("desktop-host-required");
+      },
       async approveCreatorDraft() {
         throw new Error("desktop-host-required");
       },
@@ -1350,6 +1372,8 @@ export function createDesktopApi(
     saveCreatorDraft: async (workspaceRoot, kind, requirement, draft, approvalId) => await invokeCommand("save_creator_draft_command", { request: { workspaceRoot, kind, requirement, draft, approvalId } }) as CreatorDraftSaveReceipt,
     saveCapabilityGap: async (workspaceRoot, capabilityGap) => await invokeCommand("save_capability_gap_command", { request: { workspaceRoot, capabilityGap } }) as CapabilityGapSaveReceipt,
     submitCapabilityProposal: async (workspaceRoot, capabilityGap) => await invokeCommand("submit_capability_proposal_command", { request: { workspaceRoot, capabilityGap } }) as CapabilityProposalReceipt,
+    capabilityProposalQueue: async (workspaceRoot) => await invokeCommand("capability_proposal_queue", { request: { workspaceRoot } }) as CapabilityProposalRecord[],
+    reviewCapabilityProposal: async (workspaceRoot, proposalId, status, reason) => await invokeCommand("review_capability_proposal_command", { request: { workspaceRoot, proposalId, status, reason } }) as CapabilityProposalRecord,
     checkCreatorDraft: async (kind, requirement, draft) => await invokeCommand("check_creator_draft", { request: { kind, requirement, draft } }) as CreatorDraftCheckReport,
     resumeAutoModeTurn: async (request) => await invokeCommand("resume_auto_mode_turn", {
       request: {

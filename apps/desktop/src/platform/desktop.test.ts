@@ -219,6 +219,17 @@ describe("desktop platform adapter", () => {
     expect(invoke).toHaveBeenCalledWith("submit_capability_proposal_command", { request: { workspaceRoot: "/workspace", capabilityGap } });
   });
 
+  it("maps proposal governance through dedicated desktop commands", async () => {
+    const invoke = vi.fn(async (command: string) => command === "capability_proposal_queue" ? [] : { proposalId: "capability-proposal-1", status: "rejected" });
+    const api = createDesktopApi(true, invoke);
+
+    await api.capabilityProposalQueue("/workspace");
+    await api.reviewCapabilityProposal("/workspace", "capability-proposal-1", "rejected", "Not feasible within the safety boundary.");
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "capability_proposal_queue", { request: { workspaceRoot: "/workspace" } });
+    expect(invoke).toHaveBeenNthCalledWith(2, "review_capability_proposal_command", { request: { workspaceRoot: "/workspace", proposalId: "capability-proposal-1", status: "rejected", reason: "Not feasible within the safety boundary." } });
+  });
+
   it("maps typed calls to the Tauri command contract", async () => {
     const invoke = vi.fn(async (command: string) => command === "delete_agent_history"
       ? { spec: "nimora.desktop-agent-history-delete/1", deleted: 1 }

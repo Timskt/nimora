@@ -20,8 +20,10 @@ use asset_selection::{
 };
 use backup_service::BackupService;
 use creator_workspace::{
-    CapabilityGapSaveReceipt, CapabilityProposalReceipt, CreatorDraftSaveReceipt,
-    CreatorWorkspaceError, save_capability_gap, save_creator_draft, submit_capability_proposal,
+    CapabilityGapSaveReceipt, CapabilityProposalReceipt, CapabilityProposalRecord,
+    CapabilityProposalStatus, CreatorDraftSaveReceipt, CreatorWorkspaceError,
+    list_capability_proposals, review_capability_proposal, save_capability_gap, save_creator_draft,
+    submit_capability_proposal,
 };
 use diagnostic_report::{
     DiagnosticReportFacts, DiagnosticSafetyMode, DiagnosticStartupMode, build_diagnostic_report,
@@ -1369,6 +1371,21 @@ struct SaveCreatorDraftRequest {
 struct SaveCapabilityGapRequest {
     workspace_root: PathBuf,
     capability_gap: CapabilityGap,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CapabilityProposalQueueRequest {
+    workspace_root: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReviewCapabilityProposalRequest {
+    workspace_root: PathBuf,
+    proposal_id: String,
+    status: CapabilityProposalStatus,
+    reason: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3312,6 +3329,35 @@ fn submit_capability_proposal_command(
         &verification.semantic_plan,
         &Uuid::now_v7().to_string(),
         current_time_ms()?,
+    )
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn capability_proposal_queue(
+    request: CapabilityProposalQueueRequest,
+) -> Result<Vec<CapabilityProposalRecord>, DesktopError> {
+    list_capability_proposals(&request.workspace_root).map_err(Into::into)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn review_capability_proposal_command(
+    request: ReviewCapabilityProposalRequest,
+    state: State<'_, DesktopState>,
+) -> Result<CapabilityProposalRecord, DesktopError> {
+    ensure_normal_mode(&state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    review_capability_proposal(
+        &request.workspace_root,
+        &request.proposal_id,
+        request.status,
+        &request.reason,
+        current_time_ms()?,
+        &Uuid::now_v7().to_string(),
     )
     .map_err(Into::into)
 }
@@ -9664,6 +9710,8 @@ pub fn run() {
             save_creator_draft_command,
             save_capability_gap_command,
             submit_capability_proposal_command,
+            capability_proposal_queue,
+            review_capability_proposal_command,
             check_creator_draft,
             approve_creator_draft,
             install_creator_draft,

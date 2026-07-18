@@ -10,7 +10,8 @@ use nimora_creator_draft::{
     CapabilityGap, CreatorArtifact, CreatorDraft, CreatorDraftError, CreatorDraftFile,
     validate_capability_gap,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 const DRAFTS_DIRECTORY: &str = ".nimora-drafts";
@@ -51,16 +52,48 @@ struct PersistedCapabilityGapReport<'a> {
     semantic_composition_plan: &'a SemanticCompositionPlan,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CapabilityProposalStatus {
+    PendingReview,
+    Accepted,
+    Rejected,
+    Duplicate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CapabilityProposalReview {
+    pub status: CapabilityProposalStatus,
+    pub reason: String,
+    pub reviewed_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CapabilityProposalRecord {
+    pub spec: String,
+    pub proposal_id: String,
+    pub status: CapabilityProposalStatus,
+    pub submitted_at_ms: u64,
+    pub gap: CapabilityGap,
+    pub composition_plan: CapabilityCompositionPlan,
+    pub semantic_composition_plan: SemanticCompositionPlan,
+    pub review: Option<CapabilityProposalReview>,
+    pub integrity_digest: String,
+}
+
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PersistedCapabilityProposal<'a> {
-    spec: &'static str,
+struct CapabilityProposalIntegrityPayload<'a> {
+    spec: &'a str,
     proposal_id: &'a str,
-    status: &'static str,
+    status: CapabilityProposalStatus,
     submitted_at_ms: u64,
     gap: &'a CapabilityGap,
     composition_plan: &'a CapabilityCompositionPlan,
     semantic_composition_plan: &'a SemanticCompositionPlan,
+    review: &'a Option<CapabilityProposalReview>,
 }
 
 #[derive(Debug, Error)]
@@ -77,6 +110,8 @@ pub enum CreatorWorkspaceError {
     Io,
     #[error("creator capability gap proof is invalid")]
     InvalidGapProof,
+    #[error("creator capability proposal is invalid")]
+    InvalidProposal,
     #[error(transparent)]
     Draft(#[from] CreatorDraftError),
 }
@@ -170,16 +205,19 @@ pub fn submit_capability_proposal(
     create_or_verify_directory(&proposals_root)?;
     let proposal_id = format!("capability-proposal-{operation_id}");
     let file_name = format!("{proposal_id}.json");
-    let bytes = serde_json::to_vec_pretty(&PersistedCapabilityProposal {
-        spec: "nimora.capability-proposal/1",
-        proposal_id: &proposal_id,
-        status: "pending-review",
+    let mut record = CapabilityProposalRecord {
+        spec: "nimora.capability-proposal/1".to_owned(),
+        proposal_id: proposal_id.clone(),
+        status: CapabilityProposalStatus::PendingReview,
         submitted_at_ms,
-        gap,
-        composition_plan,
-        semantic_composition_plan,
-    })
-    .map_err(|_| CreatorWorkspaceError::Io)?;
+        gap: gap.clone(),
+        composition_plan: composition_plan.clone(),
+        semantic_composition_plan: semantic_composition_plan.clone(),
+        review: None,
+        integrity_digest: String::new(),
+    };
+    record.integrity_digest = capability_proposal_digest(&record)?;
+    let bytes = serde_json::to_vec_pretty(&record).map_err(|_| CreatorWorkspaceError::Io)?;
     write_new(&proposals_root.join(&file_name), &bytes)?;
     Ok(CapabilityProposalReceipt {
         spec: "nimora.capability-proposal-receipt/1",
@@ -187,6 +225,149 @@ pub fn submit_capability_proposal(
         relative_file: format!("{PROPOSALS_DIRECTORY}/{file_name}"),
         status: "pending-review",
     })
+}
+
+pub fn list_capability_proposals(
+    workspace_root: &Path,
+) -> Result<Vec<CapabilityProposalRecord>, CreatorWorkspaceError> {
+    let root = validated_workspace_root(workspace_root)?;
+    let proposals_root = root.join(PROPOSALS_DIRECTORY);
+    if !proposals_root.exists() {
+        return Ok(Vec::new());
+    }
+    create_or_verify_directory(&proposals_root)?;
+    let mut records = Vec::new();
+    for entry in fs::read_dir(&proposals_root).map_err(|_| CreatorWorkspaceError::Io)? {
+        if records.len() >= 256 {
+            return Err(CreatorWorkspaceError::InvalidProposal);
+        }
+        let entry = entry.map_err(|_| CreatorWorkspaceError::Io)?;
+        let metadata = entry.metadata().map_err(|_| CreatorWorkspaceError::Io)?;
+        if !metadata.is_file()
+            || entry
+                .file_type()
+                .map_err(|_| CreatorWorkspaceError::Io)?
+                .is_symlink()
+        {
+            return Err(CreatorWorkspaceError::InvalidProposal);
+        }
+        let record = read_capability_proposal(&entry.path())?;
+        let expected_file_name = format!("{}.json", record.proposal_id);
+        if entry.file_name().to_str() != Some(expected_file_name.as_str()) {
+            return Err(CreatorWorkspaceError::InvalidProposal);
+        }
+        records.push(record);
+    }
+    records.sort_by(|left, right| {
+        right
+            .submitted_at_ms
+            .cmp(&left.submitted_at_ms)
+            .then_with(|| left.proposal_id.cmp(&right.proposal_id))
+    });
+    Ok(records)
+}
+
+pub fn review_capability_proposal(
+    workspace_root: &Path,
+    proposal_id: &str,
+    status: CapabilityProposalStatus,
+    reason: &str,
+    reviewed_at_ms: u64,
+    operation_id: &str,
+) -> Result<CapabilityProposalRecord, CreatorWorkspaceError> {
+    validate_segment(proposal_id)?;
+    validate_segment(operation_id)?;
+    if status == CapabilityProposalStatus::PendingReview
+        || reason.trim() != reason
+        || reason.is_empty()
+        || reason.len() > 1_024
+        || reason.chars().any(char::is_control)
+    {
+        return Err(CreatorWorkspaceError::InvalidProposal);
+    }
+    let root = validated_workspace_root(workspace_root)?;
+    let proposals_root = root.join(PROPOSALS_DIRECTORY);
+    create_or_verify_directory(&proposals_root)?;
+    let destination = proposals_root.join(format!("{proposal_id}.json"));
+    let mut record = read_capability_proposal(&destination)?;
+    if record.proposal_id != proposal_id || record.status != CapabilityProposalStatus::PendingReview
+    {
+        return Err(CreatorWorkspaceError::InvalidProposal);
+    }
+    record.status = status;
+    record.review = Some(CapabilityProposalReview {
+        status,
+        reason: reason.to_owned(),
+        reviewed_at_ms,
+    });
+    record.integrity_digest = capability_proposal_digest(&record)?;
+    let bytes = serde_json::to_vec_pretty(&record).map_err(|_| CreatorWorkspaceError::Io)?;
+    write_replace(&destination, &bytes, operation_id)?;
+    Ok(record)
+}
+
+fn read_capability_proposal(
+    path: &Path,
+) -> Result<CapabilityProposalRecord, CreatorWorkspaceError> {
+    let bytes = fs::read(path).map_err(|_| CreatorWorkspaceError::InvalidProposal)?;
+    if bytes.len() > 1024 * 1024 {
+        return Err(CreatorWorkspaceError::InvalidProposal);
+    }
+    let record: CapabilityProposalRecord =
+        serde_json::from_slice(&bytes).map_err(|_| CreatorWorkspaceError::InvalidProposal)?;
+    validate_capability_proposal(&record)?;
+    Ok(record)
+}
+
+fn validate_capability_proposal(
+    record: &CapabilityProposalRecord,
+) -> Result<(), CreatorWorkspaceError> {
+    if record.integrity_digest != capability_proposal_digest(record)? {
+        return Err(CreatorWorkspaceError::InvalidProposal);
+    }
+    validate_segment(&record.proposal_id)?;
+    validate_gap_proof(
+        &record.gap,
+        &record.composition_plan,
+        &record.semantic_composition_plan,
+    )?;
+    let review_matches = match (&record.status, &record.review) {
+        (CapabilityProposalStatus::PendingReview, None) => true,
+        (status, Some(review)) => {
+            *status == review.status
+                && *status != CapabilityProposalStatus::PendingReview
+                && !review.reason.is_empty()
+                && review.reason.len() <= 1_024
+                && review.reason.trim() == review.reason
+                && !review.reason.chars().any(char::is_control)
+        }
+        _ => false,
+    };
+    if record.spec != "nimora.capability-proposal/1"
+        || !record.proposal_id.starts_with("capability-proposal-")
+        || !record.gap.platform_proposal_required
+        || !review_matches
+    {
+        return Err(CreatorWorkspaceError::InvalidProposal);
+    }
+    Ok(())
+}
+
+fn capability_proposal_digest(
+    record: &CapabilityProposalRecord,
+) -> Result<String, CreatorWorkspaceError> {
+    let payload = CapabilityProposalIntegrityPayload {
+        spec: &record.spec,
+        proposal_id: &record.proposal_id,
+        status: record.status,
+        submitted_at_ms: record.submitted_at_ms,
+        gap: &record.gap,
+        composition_plan: &record.composition_plan,
+        semantic_composition_plan: &record.semantic_composition_plan,
+        review: &record.review,
+    };
+    let bytes = serde_json::to_vec(&payload).map_err(|_| CreatorWorkspaceError::InvalidProposal)?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
 fn validate_gap_proof(
@@ -316,6 +497,25 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), CreatorWorkspaceError> {
     file.write_all(bytes)
         .and_then(|()| file.sync_all())
         .map_err(|_| CreatorWorkspaceError::Io)
+}
+
+fn write_replace(
+    destination: &Path,
+    bytes: &[u8],
+    operation_id: &str,
+) -> Result<(), CreatorWorkspaceError> {
+    let metadata =
+        fs::symlink_metadata(destination).map_err(|_| CreatorWorkspaceError::InvalidProposal)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(CreatorWorkspaceError::InvalidProposal);
+    }
+    let parent = destination.parent().ok_or(CreatorWorkspaceError::Io)?;
+    let staging = parent.join(format!(".{operation_id}.review.staging"));
+    write_new(&staging, bytes)?;
+    fs::rename(&staging, destination).map_err(|_| {
+        let _ = fs::remove_file(&staging);
+        CreatorWorkspaceError::Io
+    })
 }
 
 fn create_or_verify_directory(path: &Path) -> Result<(), CreatorWorkspaceError> {
@@ -519,6 +719,11 @@ mod tests {
         .expect("proposal JSON");
         assert_eq!(proposal_report["spec"], "nimora.capability-proposal/1");
         assert_eq!(proposal_report["status"], "pending-review");
+        assert!(
+            proposal_report["integrityDigest"]
+                .as_str()
+                .is_some_and(|digest| digest.starts_with("sha256:"))
+        );
         assert!(proposal_report.get("approvalId").is_none());
         assert!(proposal_report.get("executable").is_none());
         let mut no_proposal_gap = gap.clone();
@@ -537,6 +742,126 @@ mod tests {
             CreatorWorkspaceError::InvalidGapProof.to_string()
         );
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn reviews_proposals_once_and_rejects_tampered_queue_records() {
+        let root = fixture_root();
+        let (gap, _, plan, semantic_plan) = gap_proof_fixture();
+        assert!(
+            list_capability_proposals(&root)
+                .expect("empty queue")
+                .is_empty()
+        );
+        let receipt = submit_capability_proposal(
+            &root,
+            &gap,
+            &plan,
+            &semantic_plan,
+            "018f0000-0000-7000-8000-000000000035",
+            1_726_000_000_100,
+        )
+        .expect("proposal");
+        let queue = list_capability_proposals(&root).expect("queue");
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].status, CapabilityProposalStatus::PendingReview);
+        let reviewed = review_capability_proposal(
+            &root,
+            &receipt.proposal_id,
+            CapabilityProposalStatus::Accepted,
+            "Accepted for platform feasibility analysis.",
+            1_726_000_000_200,
+            "018f0000-0000-7000-8000-000000000036",
+        )
+        .expect("review");
+        assert_eq!(reviewed.status, CapabilityProposalStatus::Accepted);
+        assert_eq!(
+            review_capability_proposal(
+                &root,
+                &receipt.proposal_id,
+                CapabilityProposalStatus::Rejected,
+                "A terminal review cannot be replaced.",
+                1_726_000_000_300,
+                "018f0000-0000-7000-8000-000000000037",
+            )
+            .unwrap_err()
+            .to_string(),
+            CreatorWorkspaceError::InvalidProposal.to_string()
+        );
+        let path = root.join(&receipt.relative_file);
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("record")).expect("record JSON");
+        value["compositionPlan"]["catalogDigest"] = json!(format!("sha256:{}", "0".repeat(64)));
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&value).expect("tampered JSON"),
+        )
+        .expect("tamper");
+        assert_eq!(
+            list_capability_proposals(&root).unwrap_err().to_string(),
+            CreatorWorkspaceError::InvalidProposal.to_string()
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rejects_invalid_review_reasons_and_renamed_queue_records() {
+        let root = fixture_root();
+        let (gap, _, plan, semantic_plan) = gap_proof_fixture();
+        let receipt = submit_capability_proposal(
+            &root,
+            &gap,
+            &plan,
+            &semantic_plan,
+            "018f0000-0000-7000-8000-000000000038",
+            1_726_000_000_400,
+        )
+        .expect("proposal");
+        for reason in ["", " padded ", "contains\ncontrol"] {
+            assert!(matches!(
+                review_capability_proposal(
+                    &root,
+                    &receipt.proposal_id,
+                    CapabilityProposalStatus::Rejected,
+                    reason,
+                    1_726_000_000_500,
+                    "018f0000-0000-7000-8000-000000000039",
+                ),
+                Err(CreatorWorkspaceError::InvalidProposal)
+            ));
+        }
+        let original = root.join(&receipt.relative_file);
+        let renamed = original.with_file_name("capability-proposal-renamed.json");
+        fs::rename(original, renamed).expect("rename record");
+        assert!(matches!(
+            list_capability_proposals(&root),
+            Err(CreatorWorkspaceError::InvalidProposal)
+        ));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symbolic_links_inside_the_proposal_queue() {
+        use std::os::unix::fs::symlink;
+
+        let root = fixture_root();
+        let outside = fixture_root();
+        fs::create_dir(root.join(PROPOSALS_DIRECTORY)).expect("proposal directory");
+        let outside_record = outside.join("record.json");
+        fs::write(&outside_record, b"{}").expect("outside record");
+        symlink(
+            outside_record,
+            root.join(PROPOSALS_DIRECTORY)
+                .join("capability-proposal-link.json"),
+        )
+        .expect("symlink");
+        assert!(matches!(
+            list_capability_proposals(&root),
+            Err(CreatorWorkspaceError::InvalidProposal)
+        ));
+        fs::remove_dir_all(root).expect("cleanup root");
+        fs::remove_dir_all(outside).expect("cleanup outside");
     }
 
     #[cfg(unix)]

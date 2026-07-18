@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { CapabilityGapPreview } from "./AiCreatorWorkspace";
+import { CapabilityProposalGovernance } from "./CapabilityProposalGovernance";
 import type { CreatorDraftResult } from "../platform/desktop";
 
 describe("CapabilityGapPreview", () => {
@@ -58,5 +59,17 @@ describe("CapabilityGapPreview", () => {
     expect(markup).not.toContain("原子安装");
     expect(markup).toContain("保存缺口报告");
     expect(markup).not.toContain("保存到 Workspace");
+  });
+});
+
+describe("CapabilityProposalGovernance", () => {
+  it("renders the inert review boundary before a workspace is selected", () => {
+    const markup = renderToStaticMarkup(<CapabilityProposalGovernance disabled={false} />);
+
+    expect(markup).toContain("平台能力提案治理");
+    expect(markup).toContain("打开提案 Workspace");
+    expect(markup).toContain("不会创建 Handler");
+    expect(markup).toContain("不代表能力已实现");
+    expect(markup).not.toContain("维护者裁决理由");
   });
 });
