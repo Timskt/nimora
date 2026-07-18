@@ -1,0 +1,19 @@
+import { describe, expect, it } from "vitest";
+import { reasonLabels } from "./PresenceSettings";
+
+describe("PresenceSettings", () => {
+  it("presents every stable desktop-presence reason", () => {
+    expect(Object.keys(reasonLabels).sort()).toEqual([
+      "base_policy",
+      "do_not_disturb",
+      "fullscreen",
+      "game",
+      "safe_mode_recovery",
+      "screen_share_privacy",
+      "user_forced_hidden",
+      "user_forced_visible",
+    ]);
+    expect(reasonLabels.screen_share_privacy).toBe("屏幕共享隐私");
+    expect(reasonLabels.safe_mode_recovery).toBe("安全恢复");
+  });
+});

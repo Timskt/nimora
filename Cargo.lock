@@ -2536,6 +2536,7 @@ dependencies = [
  "nimora-skill-host",
  "nimora-skill-package",
  "nimora-skill-runtime",
+ "nimora-system-context",
  "nimora-user-code-gateway",
  "nimora-user-code-host",
  "nimora-user-code-package",

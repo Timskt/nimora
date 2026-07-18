@@ -1,5 +1,13 @@
 # Nimora 里程碑回顾
 
+## 2026-07-19 — Desktop Presence Coordinator
+
+- 结果：Desktop Host 已将活动 Profile、系统情境、用户覆盖与 Safe Mode 合并为唯一 `PresenceDecision`，并通过既有可逆窗口事务应用；控制中心提供三档可访问呈现设置。
+- 安全：命令仅允许控制中心调用；Safe Mode 强制恢复，托盘恢复不再直接操作窗口，屏幕共享隐私仍高于普通“始终显示”。
+- 稳定性：Profile 切换与退出 Safe Mode 都重新求值，避免恢复陈旧快照；原生应用或提交失败保持窗口和领域状态一致回滚。
+- 证据：前端测试、生产构建、Rust 151 项宿主测试、Clippy、格式与架构边界通过；Browser Preview 已验证三档 radiogroup、状态原因和窄屏单列布局。
+- 诚实状态：macOS/Windows Sensor 尚未实现，当前完成的是协调器和用户覆盖，不宣称自动检测全屏、游戏、共享或免打扰。
+
 ## M-2026-07-19 系统情境策略领域基础
 
 - 结果：新增宿主无关 `nimora-system-context`，统一全屏、屏幕共享、游戏与免打扰四类有界事实，提供 30 秒租约、倒序拒绝、过期恢复、用户覆盖和 Safe Mode 决策。

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { ProfileManager } from "./components/ProfileManager";
+import { PresenceSettings } from "./components/PresenceSettings";
 import { LazyWorkspace } from "./components/LazyWorkspace";
 import { petItemPresentation } from "./components/petItems";
 import type { PetRelationshipStage } from "@nimora/schemas";
@@ -397,6 +398,7 @@ export function App() {
             </div>
           </section>
 
+          {desktopSnapshot && <PresenceSettings snapshot={desktopSnapshot} disabled={safeMode || recoveryMode} onChanged={setDesktopSnapshot} onNotice={updateNotice} />}
           <ProfileManager safeMode={safeMode} onNotice={updateNotice} />
         </div>}
       </section>

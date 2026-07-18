@@ -143,6 +143,7 @@ use nimora_skill_runtime::{
     SkillAgentToolEffect, SkillCapability, SkillError, SkillGrant, SkillHost, SkillManifest,
     SkillStatus,
 };
+use nimora_system_context::{PresenceDecision, PresenceOverride, SystemContextPolicy};
 use nimora_user_code_gateway::{
     CapabilityBackend, CapabilityGateway, CapabilityRequest, CapabilityResponse, GatewayEnvelope,
     GatewayError, ModuleGatewayPolicy,
@@ -359,6 +360,9 @@ struct DesktopState {
     safety: SafetyService,
     events: RuntimeEventBus,
     window_policy: Mutex<WindowPolicy>,
+    system_context: Mutex<SystemContextPolicy>,
+    presence_override: Mutex<PresenceOverride>,
+    presence_decision: Mutex<PresenceDecision>,
     policy_before_safe_mode: Mutex<Option<WindowPolicy>>,
     position_revision: AtomicU64,
     dragging: AtomicBool,
@@ -783,6 +787,14 @@ impl DesktopState {
             events.clone(),
         )?;
         let window_policy = active_window_policy(&profiles.snapshot()?)?;
+        let system_context = SystemContextPolicy::default();
+        let presence_override = PresenceOverride::Automatic;
+        let presence_decision = system_context.decide(
+            window_policy.visible,
+            presence_override,
+            false,
+            current_time_ms()?,
+        );
         let program_data_store =
             ProgramDataStore::new(program_store.with_file_name("program-data"));
         let skill_store = program_store.with_file_name("skills");
@@ -813,6 +825,9 @@ impl DesktopState {
             safety: SafetyService::new(events.clone()),
             events,
             window_policy: Mutex::new(window_policy),
+            system_context: Mutex::new(system_context),
+            presence_override: Mutex::new(presence_override),
+            presence_decision: Mutex::new(presence_decision),
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
@@ -878,6 +893,14 @@ impl DesktopState {
         let profiles =
             ProfileService::initialize(SqliteProfileRepository::in_memory()?, events.clone())?;
         let window_policy = active_window_policy(&profiles.snapshot()?)?;
+        let system_context = SystemContextPolicy::default();
+        let presence_override = PresenceOverride::Automatic;
+        let presence_decision = system_context.decide(
+            window_policy.visible,
+            presence_override,
+            true,
+            current_time_ms()?,
+        );
         let program_data_store =
             ProgramDataStore::new(program_store.with_file_name("program-data-recovery"));
         let skill_store = program_store.with_file_name("skills-recovery");
@@ -894,6 +917,9 @@ impl DesktopState {
             safety: SafetyService::new(events.clone()),
             events,
             window_policy: Mutex::new(window_policy),
+            system_context: Mutex::new(system_context),
+            presence_override: Mutex::new(presence_override),
+            presence_decision: Mutex::new(presence_decision),
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
@@ -999,6 +1025,8 @@ struct DesktopSnapshot {
     pet: Pet,
     pet_relationship: nimora_runtime_core::PetRelationshipSnapshot,
     window_policy: WindowPolicy,
+    presence_override: PresenceOverride,
+    presence_decision: PresenceDecision,
     safety: SafetySnapshot,
     startup: StartupStatus,
 }
@@ -3296,10 +3324,20 @@ fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, D
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?;
     let safety = state.safety.snapshot()?;
+    let presence_override = *state
+        .presence_override
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    let presence_decision = *state
+        .presence_decision
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
     Ok(DesktopSnapshot {
         pet,
         pet_relationship,
         window_policy,
+        presence_override,
+        presence_decision,
         safety,
         startup: state.startup.clone(),
     })
@@ -6501,13 +6539,96 @@ fn switch_profile_inner(
         .iter()
         .find(|profile| profile.id == profile_id)
         .ok_or(ProfileServiceError::ProfileNotFound)?;
-    let next_policy = WindowPolicy::from_profile(&target.policy);
+    let base_policy = WindowPolicy::from_profile(&target.policy);
+    let decision = decide_presence(state, base_policy.visible, false, current_time_ms()?)?;
+    let next_policy = WindowPolicy {
+        visible: decision.visible,
+        ..base_policy
+    };
     let previous_policy = current_window_policy(state)?;
     let command = run_window_policy_transition(app, previous_policy, next_policy, || {
         state.profiles.switch_active(profile_id)
     })?;
     set_current_window_policy(state, next_policy)?;
+    set_presence_decision(state, decision)?;
     Ok(command)
+}
+
+fn decide_presence(
+    state: &DesktopState,
+    base_visible: bool,
+    safe_mode: bool,
+    now_ms: u64,
+) -> Result<PresenceDecision, DesktopError> {
+    let presence_override = *state
+        .presence_override
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    Ok(state
+        .system_context
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .decide(base_visible, presence_override, safe_mode, now_ms))
+}
+
+fn set_presence_decision(
+    state: &DesktopState,
+    decision: PresenceDecision,
+) -> Result<(), DesktopError> {
+    *state
+        .presence_decision
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)? = decision;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SetPresenceOverrideRequest {
+    presence_override: PresenceOverride,
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn set_presence_override(
+    request: SetPresenceOverrideRequest,
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<PresenceDecision, DesktopError> {
+    if window.label() != CONTROL_CENTER_LABEL {
+        return Err(DesktopError::WindowForbidden);
+    }
+    ensure_normal_mode(&state)?;
+    let base_policy = active_window_policy(&state.profiles.snapshot()?)?;
+    let decision = state
+        .system_context
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .decide(
+            base_policy.visible,
+            request.presence_override,
+            false,
+            current_time_ms()?,
+        );
+    let previous_policy = current_window_policy(&state)?;
+    let target_policy = WindowPolicy {
+        visible: decision.visible,
+        ..previous_policy
+    };
+    run_window_policy_transition(&app, previous_policy, target_policy, || {
+        *state
+            .presence_override
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)? = request.presence_override;
+        *state
+            .presence_decision
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)? = decision;
+        Ok::<_, DesktopError>(())
+    })?;
+    set_current_window_policy(&state, target_policy)?;
+    Ok(decision)
 }
 
 #[tauri::command]
@@ -6526,10 +6647,18 @@ fn enter_safe_mode(
         previous_policy,
     };
     if let Err(failure) = converge_safe_mode(&mut operations) {
+        set_presence_decision(
+            &state,
+            decide_presence(&state, true, true, current_time_ms()?)?,
+        )?;
         return Err(DesktopError::SafeModeConvergence {
             failed_steps: failure.failed_step_codes().collect::<Vec<_>>().join(","),
         });
     }
+    set_presence_decision(
+        &state,
+        decide_presence(&state, true, true, current_time_ms()?)?,
+    )?;
     Ok(command)
 }
 
@@ -6657,11 +6786,12 @@ fn quiesce_auto_mode_jobs(
 #[allow(clippy::needless_pass_by_value)]
 fn exit_safe_mode(app: AppHandle, state: State<'_, DesktopState>) -> Result<Command, DesktopError> {
     let previous_policy = current_window_policy(&state)?;
-    let target_policy = state
-        .policy_before_safe_mode
-        .lock()
-        .map_err(|_| DesktopError::StatePoisoned)?
-        .unwrap_or(active_window_policy(&state.profiles.snapshot()?)?);
+    let base_policy = active_window_policy(&state.profiles.snapshot()?)?;
+    let decision = decide_presence(&state, base_policy.visible, false, current_time_ms()?)?;
+    let target_policy = WindowPolicy {
+        visible: decision.visible,
+        ..base_policy
+    };
     let command =
         run_window_policy_transition(&app, previous_policy, target_policy, || state.safety.exit())?;
     *state
@@ -6669,6 +6799,7 @@ fn exit_safe_mode(app: AppHandle, state: State<'_, DesktopState>) -> Result<Comm
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)? = None;
     set_current_window_policy(&state, target_policy)?;
+    set_presence_decision(&state, decision)?;
     sync_skill_event_sessions(&state)?;
     sync_automation_event_sessions(&state)?;
     app.emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
@@ -10605,18 +10736,35 @@ fn open_control_center(
 fn restore_pet_interaction(app: &AppHandle) -> Result<Command, DesktopError> {
     let state = app.state::<DesktopState>();
     let previous = current_window_policy(&state)?;
-    let window = app
-        .get_webview_window(PET_WINDOW_LABEL)
-        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
-    window.show()?;
-    window.unminimize()?;
-    window.set_ignore_cursor_events(false)?;
-    let next = WindowPolicy {
+    let base_policy = active_window_policy(&state.profiles.snapshot()?)?;
+    let decision = state
+        .system_context
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .decide(
+            base_policy.visible,
+            PresenceOverride::ForceVisible,
+            false,
+            current_time_ms()?,
+        );
+    let next_policy = WindowPolicy {
         click_through: false,
-        visible: true,
+        visible: decision.visible,
         ..previous
     };
-    set_current_window_policy(&state, next)?;
+    run_window_policy_transition(app, previous, next_policy, || {
+        *state
+            .presence_override
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)? = PresenceOverride::ForceVisible;
+        set_presence_decision(&state, decision)
+    })?;
+    set_current_window_policy(&state, next_policy)?;
+    if decision.visible {
+        app.get_webview_window(PET_WINDOW_LABEL)
+            .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?
+            .unminimize()?;
+    }
     publish_desktop_action(
         &state,
         "pet.window.interaction.restore",
@@ -10625,7 +10773,8 @@ fn restore_pet_interaction(app: &AppHandle) -> Result<Command, DesktopError> {
             "previousClickThrough": previous.click_through,
             "clickThrough": false,
             "previousVisible": previous.visible,
-            "visible": true,
+            "visible": decision.visible,
+            "presenceReason": decision.reason,
             "source": "tray",
         }),
     )
@@ -10858,6 +11007,7 @@ pub fn run() {
             profile_snapshot,
             create_profile,
             switch_profile,
+            set_presence_override,
             enter_safe_mode,
             exit_safe_mode,
             move_pet,

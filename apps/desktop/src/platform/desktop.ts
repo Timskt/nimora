@@ -52,11 +52,22 @@ export interface DesktopSnapshot {
     alwaysOnTop: boolean;
     clickThrough: boolean;
   };
+  presenceOverride: PresenceOverride;
+  presenceDecision: PresenceDecision;
   safety: SafetySnapshot;
   startup: {
     mode: "normal" | "recovery";
     reason: string | null;
   };
+}
+export type PresenceOverride = "automatic" | "force_visible" | "force_hidden";
+export type PresenceDecisionReason = "base_policy" | "user_forced_visible" | "user_forced_hidden" | "safe_mode_recovery" | "do_not_disturb" | "fullscreen" | "game" | "screen_share_privacy";
+export interface PresenceDecision {
+  spec: "nimora.system-context-decision/1";
+  visible: boolean;
+  suppressAutonomy: boolean;
+  reason: PresenceDecisionReason;
+  decidedAtMs: number;
 }
 
 export interface OutboxSnapshot {
@@ -1043,6 +1054,7 @@ export interface DesktopApi {
   profiles(): Promise<ProfileSnapshot>;
   createProfile(name: string, policy: ProfilePolicy): Promise<NimoraCommand | null>;
   switchProfile(profileId: string): Promise<NimoraCommand | null>;
+  setPresenceOverride(presenceOverride: PresenceOverride): Promise<PresenceDecision>;
   enterSafeMode(): Promise<NimoraCommand | null>;
   exitSafeMode(): Promise<NimoraCommand | null>;
   movePet(x: number, y: number): Promise<NimoraCommand | null>;
@@ -1118,6 +1130,8 @@ const previewSnapshot: DesktopSnapshot = {
   },
   petRelationship: { bondPoints: 84, affinity: 84, level: 2, levelProgress: 34, pointsPerLevel: 50, stage: "familiar", nextStage: "trusted", nextStageAt: 100 },
   windowPolicy: { visible: true, alwaysOnTop: true, clickThrough: false },
+  presenceOverride: "automatic",
+  presenceDecision: { spec: "nimora.system-context-decision/1", visible: true, suppressAutonomy: false, reason: "base_policy", decidedAtMs: Date.now() },
   safety: { mode: "normal", reason: null },
   startup: previewRecoveryMode
     ? { mode: "recovery", reason: "database-unavailable" }
@@ -1472,6 +1486,18 @@ export function createDesktopApi(
       async profiles() { return structuredClone(previewProfiles); },
       async createProfile() { return null; },
       async switchProfile() { return null; },
+      async setPresenceOverride(presenceOverride) {
+        previewSnapshot.presenceOverride = presenceOverride;
+        previewSnapshot.presenceDecision = {
+          spec: "nimora.system-context-decision/1",
+          visible: presenceOverride !== "force_hidden",
+          suppressAutonomy: presenceOverride === "force_hidden",
+          reason: presenceOverride === "automatic" ? "base_policy" : presenceOverride === "force_visible" ? "user_forced_visible" : "user_forced_hidden",
+          decidedAtMs: Date.now(),
+        };
+        previewSnapshot.windowPolicy.visible = previewSnapshot.presenceDecision.visible;
+        return structuredClone(previewSnapshot.presenceDecision);
+      },
       async enterSafeMode() { return null; },
       async exitSafeMode() { return null; },
       async movePet(x, y) {
@@ -1733,6 +1759,7 @@ export function createDesktopApi(
     profiles: async () => await invokeCommand("profile_snapshot") as ProfileSnapshot,
     createProfile: async (name, policy) => await invokeCommand("create_profile", { name, policy }) as NimoraCommand,
     switchProfile: async (profileId) => await invokeCommand("switch_profile", { profileId }) as NimoraCommand,
+    setPresenceOverride: async (presenceOverride) => await invokeCommand("set_presence_override", { request: { presenceOverride } }) as PresenceDecision,
     enterSafeMode: async () => await invokeCommand("enter_safe_mode") as NimoraCommand,
     exitSafeMode: async () => await invokeCommand("exit_safe_mode") as NimoraCommand,
     movePet: async (x, y) => await invokeCommand("move_pet", { request: { x, y } }) as NimoraCommand,
