@@ -105,6 +105,7 @@ pub enum DiagnosticEventCode {
     ScheduledBackupCompleted,
     ScheduledBackupFailed,
     ContextAdmissionRejected,
+    SafeModeConvergenceFailed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -718,6 +719,15 @@ mod tests {
             code: DiagnosticEventCode::ApplicationStarted,
             context_admission: None,
         }
+    }
+
+    #[test]
+    fn safe_mode_convergence_event_has_a_stable_public_code() {
+        assert_eq!(
+            serde_json::to_string(&DiagnosticEventCode::SafeModeConvergenceFailed)
+                .expect("serialize event code"),
+            "\"safe-mode-convergence-failed\""
+        );
     }
 
     #[test]

@@ -250,4 +250,12 @@ Actions 分钟：
 - 修正：新增泛型 Tauri-free `run_reversible_transition`，宿主 Adapter 只绑定 `WindowPolicy` 与 `apply_window_policy`；三条入口共享完全相同的事务状态机。
 - 鲁棒性：原生预应用失败绝不调用领域提交；领域提交失败必尝试逆向原生变更；回滚失败同时保留 primary 与 rollback 原因；成功路径不会误触发回滚。
 - 防回退：架构门禁禁止协调器依赖 Tauri、`State` 或 `AppHandle`；四项纯测试覆盖每条状态路径，Desktop Host 总测试增至 106 项。
-- 剩余边界：Safe Mode 领域提交后的 Auto Mode、用户程序、Skill、Agent 静默过程仍是多步骤收敛，任一步失败时需要持久化补偿/indeterminate 设计，当前可逆事务不能被夸大为完整分布式事务。
+- 剩余边界：原生策略事务只覆盖窗口预应用与领域提交；后续子系统收敛由独立 fail-closed 协调器负责，不能把两者合称为完整分布式事务。
+
+## M-2026-07-18 Safe Mode 提交后 Fail-Closed 收敛
+
+- 不足：Safety 已提交 Safe 后，Auto Mode、用户程序、事件会话、Skill、Agent、策略缓存与 Renderer 使用连续 `?`；首个故障会跳过全部后续隔离，产生“界面安全但后台能力仍运行”的严重不一致。
+- 修正：新增 Tauri-free `SafeModeConvergenceOperations` 与固定顺序协调器；宿主 Adapter 实现八项隔离/投影步骤，任何失败均继续尝试后续步骤，最后尽力写入 `safe-mode-convergence-failed` Security 诊断。
+- 隐私与稳定性：失败结果只保留九个固定步骤码，不保存底层错误、路径或 Secret；诊断写入自身失败也作为固定步骤记录，Safe Mode 领域状态不回滚。
+- 证据：纯故障注入覆盖全成功、首项失败后继续、多项失败稳定顺序和底层错误不泄漏；架构门禁拒绝协调器依赖 Tauri，Desktop Host 与 Diagnostics Bundle 测试共同验证接线和稳定事件码。
+- 剩余边界：退出 Safe Mode 在领域状态切回 Normal 后仍存在多步恢复失败窗口；必须引入显式 `RecoveryPending/Degraded` 和可重试补偿，不能复用“保持 Safe”的进入语义草率处理。

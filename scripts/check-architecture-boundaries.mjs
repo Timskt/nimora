@@ -90,6 +90,7 @@ async function checkDesktopApplicationModules() {
     "apps/desktop/src-tauri/src/asset_selection.rs",
     "apps/desktop/src-tauri/src/backup_service.rs",
     "apps/desktop/src-tauri/src/diagnostic_report.rs",
+    "apps/desktop/src-tauri/src/fail_closed_convergence.rs",
     "apps/desktop/src-tauri/src/reversible_transition.rs",
   ];
   for (const relativePath of modules) {

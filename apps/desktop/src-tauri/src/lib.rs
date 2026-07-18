@@ -4,6 +4,7 @@ pub mod auto_mode_jobs;
 mod auto_mode_runner;
 mod backup_service;
 mod diagnostic_report;
+mod fail_closed_convergence;
 mod reversible_transition;
 
 #[cfg(test)]
@@ -20,6 +21,7 @@ use backup_service::BackupService;
 use diagnostic_report::{
     DiagnosticReportFacts, DiagnosticSafetyMode, DiagnosticStartupMode, build_diagnostic_report,
 };
+use fail_closed_convergence::{SafeModeConvergenceOperations, converge_safe_mode};
 use reversible_transition::{ReversibleTransitionError, run_reversible_transition};
 
 use auto_mode_jobs::{
@@ -1075,6 +1077,8 @@ enum DesktopError {
     StatePoisoned,
     #[error("operation is unavailable while safe mode is active")]
     SafeModeActive,
+    #[error("safe mode entered but isolation did not fully converge: {failed_steps}")]
+    SafeModeConvergence { failed_steps: String },
     #[error("operation is unavailable while database recovery mode is active")]
     RecoveryModeActive,
     #[error("desktop window is unavailable: {0}")]
@@ -3646,18 +3650,75 @@ fn enter_safe_mode(
     let command = run_window_policy_transition(&app, previous_policy, WindowPolicy::SAFE, || {
         state.safety.enter(SafeModeReason::Manual)
     })?;
-    quiesce_auto_mode_jobs(&state, AUTO_MODE_SHUTDOWN_TIMEOUT, "safe-mode-timeout")?;
-    cancel_all_user_programs(&state)?;
-    cancel_all_user_program_event_sessions(&state)?;
-    stop_skill_event_sessions(&state)?;
-    cancel_all_pending_agent_tools(&state)?;
-    *state
-        .policy_before_safe_mode
-        .lock()
-        .map_err(|_| DesktopError::StatePoisoned)? = Some(previous_policy);
-    set_current_window_policy(&state, WindowPolicy::SAFE)?;
-    app.emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
+    let mut operations = DesktopSafeModeConvergence {
+        app: &app,
+        state: &state,
+        previous_policy,
+    };
+    if let Err(failure) = converge_safe_mode(&mut operations) {
+        return Err(DesktopError::SafeModeConvergence {
+            failed_steps: failure.failed_step_codes().collect::<Vec<_>>().join(","),
+        });
+    }
     Ok(command)
+}
+
+struct DesktopSafeModeConvergence<'a> {
+    app: &'a AppHandle,
+    state: &'a DesktopState,
+    previous_policy: WindowPolicy,
+}
+
+impl SafeModeConvergenceOperations for DesktopSafeModeConvergence<'_> {
+    type Error = DesktopError;
+
+    fn quiesce_auto_mode(&mut self) -> Result<(), Self::Error> {
+        quiesce_auto_mode_jobs(self.state, AUTO_MODE_SHUTDOWN_TIMEOUT, "safe-mode-timeout")
+    }
+
+    fn cancel_user_programs(&mut self) -> Result<(), Self::Error> {
+        cancel_all_user_programs(self.state)
+    }
+
+    fn cancel_user_program_events(&mut self) -> Result<(), Self::Error> {
+        cancel_all_user_program_event_sessions(self.state)
+    }
+
+    fn stop_skill_events(&mut self) -> Result<(), Self::Error> {
+        stop_skill_event_sessions(self.state)
+    }
+
+    fn cancel_agent_tools(&mut self) -> Result<(), Self::Error> {
+        cancel_all_pending_agent_tools(self.state)
+    }
+
+    fn remember_window_policy(&mut self) -> Result<(), Self::Error> {
+        *self
+            .state
+            .policy_before_safe_mode
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)? = Some(self.previous_policy);
+        Ok(())
+    }
+
+    fn cache_safe_window_policy(&mut self) -> Result<(), Self::Error> {
+        set_current_window_policy(self.state, WindowPolicy::SAFE)
+    }
+
+    fn notify_renderer(&mut self) -> Result<(), Self::Error> {
+        self.app
+            .emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
+        Ok(())
+    }
+
+    fn record_convergence_failure(&mut self) -> Result<(), Self::Error> {
+        record_diagnostic_event(
+            self.state,
+            DiagnosticSeverity::Error,
+            DiagnosticComponent::Security,
+            DiagnosticEventCode::SafeModeConvergenceFailed,
+        )
+    }
 }
 
 fn cancel_all_pending_agent_tools(state: &DesktopState) -> Result<(), DesktopError> {

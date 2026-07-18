@@ -363,6 +363,7 @@ ID / 标题 / 优先级 / 前置条件
 | TRU-004 | 安全模式 | 2 秒内关闭 Gateway、Connector、Agent 和第三方 Host | P0 |
 | TRU-005 | 安全模式恢复 | 用户逐项恢复，不自动恢复高危能力 | P0 |
 | TRU-006 | 审计脱敏 | 导出文件不包含 Token、Key 和默认受限正文 | P0 |
+| TRU-007 | Safe Mode 提交后隔离收敛 | 任一早期隔离、策略缓存或 Renderer 通知失败时仍按固定顺序尝试所有后续步骤；Safety 保持 Safe，返回值只含固定步骤码，并尽力记录 `safe-mode-convergence-failed` Security 事件 | P0 |
 
 ## 15. Profile、备份与迁移
 
