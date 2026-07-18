@@ -309,6 +309,9 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-078 | Auto Mode CLI 控制面 | `goal auto start|status|pause|resume|cancel` 使用显式数据库和有界 JSON；跨进程保持状态，绑定变化时 stdout 为空且 stderr 为稳定 JSON 错误 | P0 |
 | AGT-079 | Auto Mode 整轮工具预检 | Provider Turn 的全部 Tool 在首个 Backend 调用前完成 allowlist、数据、风险、副作用和预算预检；任一调用需确认时整轮零 Tool 副作用，全部安全只读时才按原顺序执行并生成严格关联 continuation | P0 |
 | AGT-080 | Auto Mode Checkpoint CAS | Checkpoint 只保存有界 Task、Provider continuation 和 Goal/Plan/Workspace/Policy 绑定，不含 Approval 或宿主对象；SQLite 每 Session 仅保留最新序号，跳号、陈旧替换、未知版本和索引/Payload 不一致均 fail-closed | P0 |
+| AGT-081 | 上下文压缩协议完整性 | 压缩必须保留全部可信 System 消息与结构化 Goal/约束/待办/证据 Anchor；Assistant Tool Call 与对应 Tool Result 作为原子单元保留或整体移除，预算不足时拒绝而非截断 | P0 |
+| AGT-082 | Context Cache 隔离与治理 | Cache Key 绑定 Provider、模型、Plan revision、Workspace fingerprint 与压缩消息；TTL 到期不可命中，容量超限按 LRU 淘汰，不允许跨资源版本复用 | P0 |
+| AGT-083 | Workspace 文件版本链 | Snapshot 拒绝绝对路径、逃逸、反斜杠、重复路径、超限文件和篡改指纹；后继 revision 必须绑定父指纹，并稳定输出 Added/Modified/Deleted 和可执行位变化 | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |

@@ -9,11 +9,13 @@ use uuid::Uuid;
 mod auto_execution;
 mod auto_mode;
 mod checkpoint;
+mod context_management;
 mod coordinator;
 mod deterministic;
 mod goal;
 mod provider;
 mod task_gateway;
+mod workspace;
 
 pub use auto_execution::{AutoModeTurnError, AutoModeTurnOutcome, AutoModeTurnSupervisor};
 pub use auto_mode::{
@@ -21,6 +23,10 @@ pub use auto_mode::{
     AutoModeStepDecision, AutoModeStepRequest, AutoModeUsage,
 };
 pub use checkpoint::{AutoModeCheckpoint, AutoModeCheckpointError};
+pub use context_management::{
+    CompactedContext, ContextAnchor, ContextCache, ContextCompactionPolicy, ContextCompactor,
+    ContextManagementError,
+};
 pub use coordinator::{
     AgentCoordinator, CoordinatorError, PlannedToolCall, ProviderStepInput, ProviderStepOutcome,
     ProviderToolTurn, ToolStepOutcome,
@@ -39,6 +45,10 @@ pub use provider::{
 pub use task_gateway::{
     AgentAutonomy, AgentTaskAdmission, AgentTaskGateway, AgentTaskGatewayPolicy, AgentTaskParent,
     AgentTaskRequest,
+};
+pub use workspace::{
+    TrackedWorkspaceFile, WorkspaceChangeSet, WorkspaceFileChange, WorkspaceSnapshot,
+    WorkspaceTrackingError,
 };
 
 const MAX_TOOLS: usize = 512;
