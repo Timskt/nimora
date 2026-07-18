@@ -1,4 +1,7 @@
-use crate::{OllamaEndpoint, OllamaProbe, ProviderWorkerRequest, ProviderWorkerResponse};
+use crate::{
+    OllamaEndpoint, OllamaProbe, OpenAiCompatibleEndpoint, OpenAiProbe, ProviderWorkerRequest,
+    ProviderWorkerResponse, WorkerSecret,
+};
 use nimora_agent_runtime::{
     ProviderAdapter, ProviderCapabilities, ProviderCapability, ProviderDescriptor, ProviderError,
     ProviderErrorKind, ProviderExecutionContext, ProviderLocality, ProviderRequest,
@@ -6,15 +9,144 @@ use nimora_agent_runtime::{
 };
 use std::{
     collections::BTreeSet,
+    fmt,
     io::{Read, Write},
     process::{Child, Command, Stdio},
+    sync::Arc,
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+use zeroize::Zeroize;
 
 const MAX_WORKER_OUTPUT_BYTES: u64 = 1024 * 1024;
 
 type OutputReader = JoinHandle<Result<Vec<u8>, ProviderError>>;
+
+pub trait ProviderCredentialResolver: Send + Sync {
+    /// Resolves one exact secret reference without exposing storage internals to the Worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable error when the reference is absent or the secret store is unavailable.
+    fn resolve(&self, reference: &str) -> Result<WorkerSecret, ProviderError>;
+}
+
+pub struct WorkerOpenAiCompatibleProvider {
+    descriptor: ProviderDescriptor,
+    executable: std::path::PathBuf,
+    endpoint: OpenAiCompatibleEndpoint,
+    credential_reference: String,
+    credential_resolver: Arc<dyn ProviderCredentialResolver>,
+}
+
+impl fmt::Debug for WorkerOpenAiCompatibleProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkerOpenAiCompatibleProvider")
+            .field("descriptor", &self.descriptor)
+            .field("executable", &self.executable)
+            .field("endpoint", &self.endpoint)
+            .field("credential_reference", &self.credential_reference)
+            .field("credential_resolver", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl WorkerOpenAiCompatibleProvider {
+    /// Creates a network Provider backed by the isolated Worker protocol.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid identity, limits, executable, or credential binding.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: impl Into<String>,
+        display_name: impl Into<String>,
+        executable: impl Into<std::path::PathBuf>,
+        endpoint: OpenAiCompatibleEndpoint,
+        credential_reference: impl Into<String>,
+        context_window_tokens: u64,
+        max_output_tokens: u64,
+        credential_resolver: Arc<dyn ProviderCredentialResolver>,
+    ) -> Result<Self, ProviderError> {
+        let executable = executable.into();
+        let credential_reference = credential_reference.into();
+        if executable.as_os_str().is_empty()
+            || credential_reference.is_empty()
+            || credential_reference.len() > 160
+        {
+            return Err(stable_error(
+                ProviderErrorKind::InvalidRequest,
+                "provider configuration is invalid",
+            ));
+        }
+        Ok(Self {
+            descriptor: ProviderDescriptor::new(
+                id,
+                display_name,
+                ProviderLocality::Network,
+                context_window_tokens,
+                max_output_tokens,
+                ProviderCapabilities {
+                    supported: BTreeSet::from([
+                        ProviderCapability::StructuredToolCalls,
+                        ProviderCapability::Cancellation,
+                        ProviderCapability::UsageReporting,
+                    ]),
+                },
+            )?,
+            executable,
+            endpoint,
+            credential_reference,
+            credential_resolver,
+        })
+    }
+}
+
+impl ProviderAdapter for WorkerOpenAiCompatibleProvider {
+    fn descriptor(&self) -> &ProviderDescriptor {
+        &self.descriptor
+    }
+
+    fn complete(
+        &self,
+        request: &ProviderRequest,
+        context: &ProviderExecutionContext,
+    ) -> Result<ProviderResponse, ProviderError> {
+        validate_openai_context(context, &self.credential_reference)?;
+        let credential = self
+            .credential_resolver
+            .resolve(&self.credential_reference)?;
+        let timeout_ms = u64::try_from(context.timeout.as_millis()).unwrap_or(u64::MAX);
+        let mut payload = serde_json::to_vec(&ProviderWorkerRequest::OpenAiComplete {
+            request: request.clone(),
+            endpoint: self.endpoint.clone(),
+            credential,
+            timeout_ms,
+        })
+        .map_err(|_| {
+            stable_error(
+                ProviderErrorKind::InvalidRequest,
+                "provider worker request serialization failed",
+            )
+        })?;
+        let spawned = spawn_worker(&self.executable, &payload);
+        payload.zeroize();
+        let (mut child, reader) = spawned?;
+        match supervise_worker(&mut child, reader, context.timeout, || {
+            context.cancellation.is_cancelled()
+        })? {
+            ProviderWorkerResponse::Completed { response } => Ok(response),
+            ProviderWorkerResponse::Error { error } => Err(error),
+            ProviderWorkerResponse::Probed { .. } | ProviderWorkerResponse::OpenAiProbed { .. } => {
+                Err(stable_error(
+                    ProviderErrorKind::MalformedResponse,
+                    "provider worker returned an unexpected response",
+                ))
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct WorkerOllamaProvider {
@@ -90,10 +222,12 @@ impl ProviderAdapter for WorkerOllamaProvider {
         })? {
             ProviderWorkerResponse::Completed { response } => Ok(response),
             ProviderWorkerResponse::Error { error } => Err(error),
-            ProviderWorkerResponse::Probed { .. } => Err(stable_error(
-                ProviderErrorKind::MalformedResponse,
-                "provider worker returned an unexpected response",
-            )),
+            ProviderWorkerResponse::Probed { .. } | ProviderWorkerResponse::OpenAiProbed { .. } => {
+                Err(stable_error(
+                    ProviderErrorKind::MalformedResponse,
+                    "provider worker returned an unexpected response",
+                ))
+            }
         }
     }
 }
@@ -123,10 +257,50 @@ pub fn probe_ollama_worker(
     match supervise_worker(&mut child, reader, timeout, || false)? {
         ProviderWorkerResponse::Probed { probe } => Ok(probe),
         ProviderWorkerResponse::Error { error } => Err(error),
-        ProviderWorkerResponse::Completed { .. } => Err(stable_error(
-            ProviderErrorKind::MalformedResponse,
-            "provider worker returned an unexpected response",
-        )),
+        ProviderWorkerResponse::Completed { .. } | ProviderWorkerResponse::OpenAiProbed { .. } => {
+            Err(stable_error(
+                ProviderErrorKind::MalformedResponse,
+                "provider worker returned an unexpected response",
+            ))
+        }
+    }
+}
+
+/// Probes an OpenAI-compatible service through the isolated Provider Worker.
+///
+/// # Errors
+///
+/// Returns a stable Provider error without exposing the endpoint, credential, or response body.
+pub fn probe_openai_worker(
+    executable: &std::path::Path,
+    endpoint: OpenAiCompatibleEndpoint,
+    credential: WorkerSecret,
+    timeout: Duration,
+) -> Result<OpenAiProbe, ProviderError> {
+    let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+    let mut payload = serde_json::to_vec(&ProviderWorkerRequest::OpenAiProbe {
+        endpoint,
+        credential,
+        timeout_ms,
+    })
+    .map_err(|_| {
+        stable_error(
+            ProviderErrorKind::InvalidRequest,
+            "provider worker request serialization failed",
+        )
+    })?;
+    let spawned = spawn_worker(executable, &payload);
+    payload.zeroize();
+    let (mut child, reader) = spawned?;
+    match supervise_worker(&mut child, reader, timeout, || false)? {
+        ProviderWorkerResponse::OpenAiProbed { probe } => Ok(probe),
+        ProviderWorkerResponse::Error { error } => Err(error),
+        ProviderWorkerResponse::Completed { .. } | ProviderWorkerResponse::Probed { .. } => {
+            Err(stable_error(
+                ProviderErrorKind::MalformedResponse,
+                "provider worker returned an unexpected response",
+            ))
+        }
     }
 }
 
@@ -135,6 +309,25 @@ fn validate_context(context: &ProviderExecutionContext) -> Result<(), ProviderEr
         return Err(stable_error(
             ProviderErrorKind::InvalidRequest,
             "Ollama loopback Provider does not accept credentials",
+        ));
+    }
+    if context.cancellation.is_cancelled() {
+        return Err(stable_error(
+            ProviderErrorKind::Cancelled,
+            "provider request was cancelled",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_openai_context(
+    context: &ProviderExecutionContext,
+    expected_reference: &str,
+) -> Result<(), ProviderError> {
+    if context.credential_reference.as_deref() != Some(expected_reference) {
+        return Err(stable_error(
+            ProviderErrorKind::InvalidRequest,
+            "provider credential binding is invalid",
         ));
     }
     if context.cancellation.is_cancelled() {

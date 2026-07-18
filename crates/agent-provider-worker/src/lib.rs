@@ -12,9 +12,14 @@ use std::{
 };
 
 mod host;
+mod openai_compatible;
 mod sidecar;
 
-pub use host::{WorkerOllamaProvider, probe_ollama_worker};
+pub use host::{
+    ProviderCredentialResolver, WorkerOllamaProvider, WorkerOpenAiCompatibleProvider,
+    probe_ollama_worker, probe_openai_worker,
+};
+pub use openai_compatible::{OpenAiCompatibleEndpoint, OpenAiModel, OpenAiProbe};
 pub use sidecar::{
     ProviderSidecarManifest, SidecarVerificationError, VerifiedProviderSidecar,
     verify_provider_sidecar,
@@ -38,6 +43,17 @@ pub enum ProviderWorkerRequest {
         endpoint: OllamaEndpoint,
         timeout_ms: u64,
     },
+    OpenAiComplete {
+        request: ProviderRequest,
+        endpoint: OpenAiCompatibleEndpoint,
+        credential: WorkerSecret,
+        timeout_ms: u64,
+    },
+    OpenAiProbe {
+        endpoint: OpenAiCompatibleEndpoint,
+        credential: WorkerSecret,
+        timeout_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,7 +61,46 @@ pub enum ProviderWorkerRequest {
 pub enum ProviderWorkerResponse {
     Completed { response: ProviderResponse },
     Probed { probe: OllamaProbe },
+    OpenAiProbed { probe: OpenAiProbe },
     Error { error: ProviderError },
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WorkerSecret(String);
+
+impl WorkerSecret {
+    /// Creates a bounded, non-empty Worker-only secret payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the credential is empty, oversized, or contains NUL.
+    pub fn new(value: impl Into<String>) -> Result<Self, ProviderError> {
+        let value = value.into();
+        if value.is_empty() || value.len() > 64 * 1024 || value.contains('\0') {
+            return Err(stable_error(
+                ProviderErrorKind::InvalidRequest,
+                "provider credential is invalid",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    pub(crate) fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for WorkerSecret {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("WorkerSecret([REDACTED])")
+    }
+}
+
+impl Drop for WorkerSecret {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.0);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +174,23 @@ pub fn execute(request: ProviderWorkerRequest) -> ProviderWorkerResponse {
             timeout_ms,
         } => match probe_ollama(endpoint, timeout_ms) {
             Ok(probe) => ProviderWorkerResponse::Probed { probe },
+            Err(error) => ProviderWorkerResponse::Error { error },
+        },
+        ProviderWorkerRequest::OpenAiComplete {
+            request,
+            endpoint,
+            credential,
+            timeout_ms,
+        } => match openai_compatible::complete(&request, &endpoint, &credential, timeout_ms) {
+            Ok(response) => ProviderWorkerResponse::Completed { response },
+            Err(error) => ProviderWorkerResponse::Error { error },
+        },
+        ProviderWorkerRequest::OpenAiProbe {
+            endpoint,
+            credential,
+            timeout_ms,
+        } => match openai_compatible::probe(&endpoint, &credential, timeout_ms) {
+            Ok(probe) => ProviderWorkerResponse::OpenAiProbed { probe },
             Err(error) => ProviderWorkerResponse::Error { error },
         },
     }

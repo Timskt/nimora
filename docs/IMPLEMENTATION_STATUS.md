@@ -1,5 +1,14 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — OpenAI-compatible 隔离 Worker 子纵切
+
+- `agent-provider-worker` 新增独立 OpenAI-compatible HTTPS 传输模块；公网端点只接受 HTTPS，本地开发服务只接受 literal loopback/localhost HTTP，并拒绝 userinfo、路径、查询和 fragment。
+- 单次 Worker 协议支持 `/v1/models` 与 `/v1/chat/completions`，禁用重定向，限制超时、响应体、模型数、名称和 Tool Call 数；解析文本、Usage、停止原因和 JSON 字符串函数参数，并保留宿主 Request ID。
+- API Key 使用脱敏、Drop 清零的 Worker-only payload；不进入命令行和环境变量。宿主 Adapter 要求任务 Credential Reference 与配置精确绑定，通过受限 Resolver 解析，并在写入 Worker stdin 后清零序列化缓冲区。
+- 非成功响应不读取或回传正文、Endpoint 与 Header；认证、限流、超时和不可用映射为稳定错误。真实独立 Worker 进程测试证明 Bearer Header、模型排序去重、Tool Call/Usage 映射、重定向拒绝和错误脱敏。
+- 本子纵切尚未构成用户可用 Provider：SQLite 配置仓储、System Secret Store 桌面接线、Sidecar capability Manifest、Provider 管理 UI 与 Safe/Recovery Mode 命令门禁仍需继续实现。
+- 验证：Workspace Clippy `-D warnings` 通过；完整串行 Workspace 测试除 Provider/Skill 两个真实进程监督目标在统一构建中出现一次既有 sidecar 争用外其余通过，随后两个目标分别串行复跑 3/3 与 6/6 通过。
+
 ## 2026-07-18 — Semantic Contract 与有界 Composition Graph 纵切
 
 - 新增纯基础 crate `capability-contract`，定义严格 `nimora.capability-semantic-contract/1`：精确 capability ID、排序去重的 `requires/produces/preconditions`、数据等级、副作用、成本单位和离线可用性；未知字段、空输出、非法命名、非规范顺序和越界成本失败关闭。

@@ -1,5 +1,12 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-19 OpenAI-compatible Provider Worker 边界复盘
+
+- 结果：外部 Provider 的网络和凭据使用已进入独立进程，复用现有有界 stdin/stdout、超时、取消强杀和稳定错误边界，没有把 HTTPS Client 放入 Desktop、Runtime、Skill 或用户代码。
+- 安全裁决：Secret Reference 由任务携带但必须与 Provider 配置精确匹配；明文只由宿主受限 Resolver 解析后单次传给 Worker，命令行、环境变量、响应、错误和日志均无明文通道。
+- 兼容裁决：目标是 OpenAI-compatible Chat Completions 当前契约，不宣称支持 Responses API、流式输出或任意 Provider 私有扩展；新增能力必须通过版本化 Worker 协议和契约测试演进。
+- 未完成边界：当前没有配置持久化、系统密钥 UI、运行时注册和生产 Sidecar 发现，因此不得在产品状态中显示可用。下一纵切必须完成配置、密钥、状态探测和 Desktop 管理闭环。
+
 ## M-2026-07-18 AI 核心场景 Profile Creator 完整纵切
 
 - 结果：Creator Studio 新增第五类真实产物 `profile`，外接 AI 可生成既有场景模式及窗口、穿透、声音和主动频率覆盖，并走严格解析、独立审查、一次性批准、Workspace 保存和事务化创建完整链路。
