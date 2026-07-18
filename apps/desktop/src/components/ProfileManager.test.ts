@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { careNeedsModeLabel, normalizedProfileName, proactiveFrequencyLabel } from "./ProfileManager";
+import { careNeedsModeLabel, normalizedProfileName, proactiveFrequencyLabel, profileModeGuidance } from "./ProfileManager";
 
 describe("normalizedProfileName", () => {
   it("trims valid names at the UI boundary", () => {
@@ -24,5 +24,13 @@ describe("careNeedsModeLabel", () => {
     expect(careNeedsModeLabel(undefined)).toBe("低压力完整照料");
     expect(careNeedsModeLabel("simple")).toBe("简化照料");
     expect(careNeedsModeLabel("off")).toBe("生命衰减关闭");
+  });
+});
+
+describe("profileModeGuidance", () => {
+  it("distinguishes focus quieting from presentation hiding", () => {
+    expect(profileModeGuidance("focus")).toContain("手动互动仍然可用");
+    expect(profileModeGuidance("presentation")).toContain("桌宠会自动隐藏");
+    expect(profileModeGuidance("companion")).toBeNull();
   });
 });

@@ -34,6 +34,12 @@ export function careNeedsModeLabel(mode: CareNeedsMode | undefined): string {
   return ({ full: "低压力完整照料", simple: "简化照料", off: "生命衰减关闭" } as const)[mode ?? "full"];
 }
 
+export function profileModeGuidance(mode: ProfileMode): string | null {
+  if (mode === "presentation") return "切换后桌宠会自动隐藏并暂停自主互动，可从系统托盘恢复。";
+  if (mode === "focus") return "此场景会暂停自主互动，手动互动仍然可用。";
+  return null;
+}
+
 export function normalizedProfileName(value: string): string | null {
   const name = value.trim();
   return name.length > 0 && name.length <= 64 ? name : null;
@@ -117,6 +123,7 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
                   {profile.policy.alwaysOnTop === false ? " · 普通窗口" : " · 保持置顶"}
                   {profile.policy.soundEnabled === false ? " · 静音" : " · 声音开启"}
                   {profile.policy.edgeSnap === false ? " · 自由摆放" : " · 桌边吸附"}
+                  {profile.policy.mode === "presentation" ? " · 桌宠隐藏" : ""}
                   {` · ${proactiveFrequencyLabel(profile.policy.proactiveFrequency ?? 25)}`}
                   {` · ${careNeedsModeLabel(profile.policy.careNeedsMode)}`}
                 </p>
@@ -190,9 +197,7 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
               value={policy.proactiveFrequency ?? 25}
               onChange={(event) => setPolicy({ ...policy, proactiveFrequency: Number(event.target.value) })}
             />
-            {(policy.mode === "focus" || policy.mode === "presentation") && (
-              <small>此场景会暂停自主互动，手动互动仍然可用。</small>
-            )}
+            {profileModeGuidance(policy.mode) && <small>{profileModeGuidance(policy.mode)}</small>}
           </label>
           <label className="profile-name">
             <span>照料强度</span>

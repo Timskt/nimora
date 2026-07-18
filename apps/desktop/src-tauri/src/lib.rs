@@ -741,12 +741,14 @@ impl Drop for ActiveUserProgramWorkerGuard<'_> {
 struct WindowPolicy {
     always_on_top: bool,
     click_through: bool,
+    visible: bool,
 }
 
 impl WindowPolicy {
     const SAFE: Self = Self {
         always_on_top: true,
         click_through: false,
+        visible: true,
     };
 
     fn from_profile(policy: &ProfilePolicy) -> Self {
@@ -754,6 +756,7 @@ impl WindowPolicy {
         Self {
             always_on_top: resolved.always_on_top.unwrap_or(true),
             click_through: resolved.click_through.unwrap_or(false),
+            visible: resolved.mode != ProfileMode::Presentation,
         }
     }
 }
@@ -10495,6 +10498,21 @@ fn apply_window_policy(
         let _ = window.set_ignore_cursor_events(previous.click_through);
         return Err(error.into());
     }
+    let visibility_result = if next.visible {
+        window.show()
+    } else {
+        window.hide()
+    };
+    if let Err(error) = visibility_result {
+        let _ = if previous.visible {
+            window.show()
+        } else {
+            window.hide()
+        };
+        let _ = window.set_ignore_cursor_events(previous.click_through);
+        let _ = window.set_always_on_top(previous.always_on_top);
+        return Err(error.into());
+    }
     Ok(())
 }
 
@@ -10558,6 +10576,7 @@ fn restore_pet_interaction(app: &AppHandle) -> Result<Command, DesktopError> {
     window.set_ignore_cursor_events(false)?;
     let next = WindowPolicy {
         click_through: false,
+        visible: true,
         ..previous
     };
     set_current_window_policy(&state, next)?;
@@ -10568,6 +10587,8 @@ fn restore_pet_interaction(app: &AppHandle) -> Result<Command, DesktopError> {
         serde_json::json!({
             "previousClickThrough": previous.click_through,
             "clickThrough": false,
+            "previousVisible": previous.visible,
+            "visible": true,
             "source": "tray",
         }),
     )
@@ -10623,6 +10644,7 @@ fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
             .decorations(false)
             .transparent(true)
             .always_on_top(policy.always_on_top)
+            .visible(policy.visible)
             .skip_taskbar(true)
             .shadow(false)
             .build()?;
@@ -10967,7 +10989,8 @@ fn start_pet_autonomy(app: AppHandle) {
                 .safety
                 .snapshot()
                 .is_ok_and(|snapshot| snapshot.mode == RuntimeMode::Normal);
-            if normal && !state.dragging.load(Ordering::Acquire) {
+            let visible = current_window_policy(&state).is_ok_and(|policy| policy.visible);
+            if normal && visible && !state.dragging.load(Ordering::Acquire) {
                 let _ = ensure_pet_window_visible(&app);
             }
             let before = state.runtime.snapshot().ok();
@@ -15229,6 +15252,7 @@ mod tests {
             WindowPolicy {
                 always_on_top: false,
                 click_through: false,
+                visible: true,
             }
         );
         assert_eq!(
@@ -15236,6 +15260,17 @@ mod tests {
             WindowPolicy {
                 always_on_top: true,
                 click_through: false,
+                visible: true,
+            }
+        );
+        let mut presentation = policy;
+        presentation.mode = ProfileMode::Presentation;
+        assert_eq!(
+            WindowPolicy::from_profile(&presentation),
+            WindowPolicy {
+                always_on_top: false,
+                click_through: false,
+                visible: false,
             }
         );
     }
