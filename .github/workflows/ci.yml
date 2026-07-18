@@ -9,15 +9,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  web:
-    name: TypeScript
+  quality:
+    name: Ubuntu quality gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.2
@@ -26,22 +28,7 @@ jobs:
         with:
           node-version: 22.22.0
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm build
-
-  rust:
-    name: Rust
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
       - name: Install Linux desktop dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
@@ -49,16 +36,6 @@ jobs:
             librsvg2-dev \
             libwebkit2gtk-4.1-dev \
             patchelf
-      - run: rustup show
-      - run: cargo fmt --all --check
-      - run: cargo test --workspace
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-
-  repository-policy:
-    name: Repository policy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
       - name: Reject unsupported package manager files
         shell: bash
         run: |
@@ -68,3 +45,10 @@ jobs:
           fi
       - name: Check whitespace errors
         run: git diff --check HEAD^ HEAD || git diff --check
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: cargo fmt --all --check
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings

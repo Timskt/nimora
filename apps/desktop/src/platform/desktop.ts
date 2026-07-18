@@ -691,6 +691,11 @@ export function createDesktopApi(
           : [];
         return previousCount - previewAgentHistory.length;
       },
+      async skillExecutionHistory() {
+        return { spec: "nimora.desktop-skill-execution-history/1", records: [] };
+      },
+      async deleteSkillExecutionHistory() { return 0; },
+      async cancelSkillExecution() { return false; },
       async agentProviderStatus(providerId) {
         const scripted = providerId === "provider:preview-scripted";
         return {

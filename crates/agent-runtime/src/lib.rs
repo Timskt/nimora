@@ -6,6 +6,7 @@ use std::{collections::BTreeMap, fmt, str::FromStr, time::Duration};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod authorization;
 mod auto_execution;
 mod auto_mode;
 mod checkpoint;
@@ -14,9 +15,14 @@ mod coordinator;
 mod deterministic;
 mod goal;
 mod provider;
+mod reasoning;
 mod task_gateway;
 mod workspace;
 
+pub use authorization::{
+    ApprovalPolicy, AuthorizationDecision, AuthorizationError, AuthorizationGrant,
+    AuthorizationRequest, GrantLifetime, NetworkPolicy, SandboxScope,
+};
 pub use auto_execution::{AutoModeTurnError, AutoModeTurnOutcome, AutoModeTurnSupervisor};
 pub use auto_mode::{
     AutoModeError, AutoModePauseReason, AutoModePolicy, AutoModeSession, AutoModeStatus,
@@ -41,6 +47,10 @@ pub use provider::{
     ProviderExecutionContext, ProviderFinishReason, ProviderLocality, ProviderMessage,
     ProviderMessageRole, ProviderRegistry, ProviderRequest, ProviderResponse, ProviderToolCall,
     ProviderUsage,
+};
+pub use reasoning::{
+    ModelReasoningPolicy, ReasoningEffort, ReasoningMapping, ReasoningPolicyError,
+    ReasoningStrategy,
 };
 pub use task_gateway::{
     AgentAutonomy, AgentTaskAdmission, AgentTaskGateway, AgentTaskGatewayPolicy, AgentTaskParent,
