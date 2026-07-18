@@ -2685,6 +2685,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nimora-system-context-sensor"
+version = "0.1.0"
+dependencies = [
+ "nimora-system-context",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "nimora-user-code-gateway"
 version = "0.1.0"
 dependencies = [

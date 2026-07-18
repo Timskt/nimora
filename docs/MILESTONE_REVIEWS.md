@@ -1,5 +1,13 @@
 # Nimora 里程碑回顾
 
+## 2026-07-19 — System Context Sensor Host Contract
+
+- 结果：新增宿主无关 `nimora-system-context-sensor`，统一采样间隔、单次超时、15 秒续租、最高 30 秒指数退避、停止语义和可序列化健康快照。
+- 架构裁决：平台 Adapter 只返回布尔事实；调度器不依赖 Tauri 或平台 API，不能操作窗口，后续 macOS/Windows Adapter 必须复用同一控制器。
+- 鲁棒性：无成功记录时失败保持 unavailable，有历史成功时降级为 degraded；成功清零失败并续租，停止后不再产生调度。
+- 证据：四项纯测试覆盖续租与恢复、退避上限、终止调度和非法租约；Clippy 与 Workspace Format 作为提交门禁。
+- 诚实状态：此里程碑完成 Sensor Host 契约，不代表任何平台原生采样已经完成。
+
 ## 2026-07-19 — Desktop Presence Coordinator
 
 - 结果：Desktop Host 已将活动 Profile、系统情境、用户覆盖与 Safe Mode 合并为唯一 `PresenceDecision`，并通过既有可逆窗口事务应用；控制中心提供三档可访问呈现设置。
