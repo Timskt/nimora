@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { desktopApi, type AgentCatalog, type AgentHistoryPage, type AgentProviderStatus, type AgentToolResult, type ConcreteReasoningEffort, type DesktopAutoModeControlCenter, type LocalAgentResult, type ModelReasoningPolicy } from "../platform/desktop";
+import { createAgentCompanionSignal } from "./agentCompanion";
 
 const ProviderSettings = lazy(async () => {
   const module = await import("./ProviderSettings");
@@ -161,6 +162,10 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
     if (!prompt.trim() || busy) return;
     setBusy(true);
     setTurnCancelled(false);
+    await desktopApi.publishAgentCompanionSignal(createAgentCompanionSignal("thinking")).catch(() => undefined);
+    const runningSignal = window.setTimeout(() => {
+      void desktopApi.publishAgentCompanionSignal(createAgentCompanionSignal("running")).catch(() => undefined);
+    }, 450);
     try {
       const next = await desktopApi.runLocalAgent(
         prompt.trim(),
@@ -170,11 +175,17 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
         reasoningCapabilities ? reasoningPolicyForChoice(reasoningChoice) : null,
       );
       setResult(next);
+      await desktopApi.publishAgentCompanionSignal(createAgentCompanionSignal(
+        next.status === "completed" ? "completed" : "waiting_for_confirmation",
+        next.task.id,
+      )).catch(() => undefined);
       if (next.status === "completed") await refreshHistory();
       onNotice(allowNetwork ? "网络 Agent 任务已完成" : "离线 Agent 任务已完成");
     } catch {
+      await desktopApi.publishAgentCompanionSignal(createAgentCompanionSignal("failed")).catch(() => undefined);
       onNotice("Agent 任务失败，未执行任何模块操作");
     } finally {
+      window.clearTimeout(runningSignal);
       setBusy(false);
     }
   }
@@ -182,21 +193,28 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
   async function resolveAgentTurnTool(invocationId: string, approved: boolean) {
     if (!result || busy || safeMode || recoveryMode) return;
     setBusy(true);
+    await desktopApi.publishAgentCompanionSignal(createAgentCompanionSignal("running", result.task.id)).catch(() => undefined);
     try {
       if (approved) {
         const next = await desktopApi.confirmAgentRunTool(invocationId);
         setResult(next);
+        await desktopApi.publishAgentCompanionSignal(createAgentCompanionSignal(
+          next.status === "completed" ? "completed" : "waiting_for_confirmation",
+          next.task.id,
+        )).catch(() => undefined);
         if (next.status === "completed") await refreshHistory();
         onNotice(next.status === "completed" ? "模块结果已返回 Provider，任务已完成" : "批准已记录，整轮工具仍等待确认");
       } else {
         await desktopApi.rejectAgentTool(invocationId);
         setResult(null);
         setTurnCancelled(true);
+        await desktopApi.publishAgentCompanionSignal(createAgentCompanionSignal("cancelled", result.task.id)).catch(() => undefined);
         onNotice("已拒绝本轮模块操作，整组调用均未执行");
       }
     } catch {
       setResult(null);
       setTurnCancelled(true);
+      await desktopApi.publishAgentCompanionSignal(createAgentCompanionSignal("failed", result.task.id)).catch(() => undefined);
       onNotice("Agent 确认已失效，整轮调用未自动重试");
     } finally {
       setBusy(false);

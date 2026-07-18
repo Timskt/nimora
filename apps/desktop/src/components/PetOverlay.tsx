@@ -15,6 +15,7 @@ import {
 import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
 import { petInventoryQuantity, petItemPresentation } from "./petItems";
 import { nextMenuItemIndex } from "./petMenu";
+import { agentCompanionPresentation } from "./agentCompanion";
 
 const GltfRenderer = lazy(async () => {
   const module = await import("./GltfRenderer");
@@ -37,6 +38,8 @@ export function PetOverlay() {
   const petButton = useRef<HTMLButtonElement | null>(null);
   const menu = useRef<HTMLDivElement | null>(null);
   const [stroking, setStroking] = useState(false);
+  const [companionAction, setCompanionAction] = useState<PetAction | null>(null);
+  const companionResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshRenderer = useCallback(async () => {
     const descriptor = await desktopApi.activeCharacterRenderer();
@@ -99,9 +102,29 @@ export function PetOverlay() {
         if (!disposed) setMessage("生命状态更新监听不可用");
       });
     }
+    void desktopApi.onAgentCompanionSignal((signal) => {
+      if (disposed) return;
+      const presentation = agentCompanionPresentation(signal.status);
+      if (companionResetTimer.current) clearTimeout(companionResetTimer.current);
+      setCompanionAction(presentation.action);
+      setMessage(presentation.message);
+      if (!presentation.persistent) {
+        companionResetTimer.current = setTimeout(() => {
+          if (disposed) return;
+          setCompanionAction(null);
+          void desktopApi.snapshot().then((value) => {
+            if (!disposed) setMessage(petStatusMessage(value.pet));
+          });
+        }, 4200);
+      }
+    }).then((disposeListener) => {
+      if (disposed) disposeListener();
+      else listeners.push(disposeListener);
+    }).catch(() => undefined);
     return () => {
       disposed = true;
       listeners.forEach((unlisten) => unlisten());
+      if (companionResetTimer.current) clearTimeout(companionResetTimer.current);
     };
   }, [refreshRenderer]);
 
@@ -347,7 +370,7 @@ export function PetOverlay() {
   }
 
   return (
-    <main className="pet-overlay" aria-label="Nimora 桌面宠物">
+    <main className={`pet-overlay${companionAction ? " companion-active" : ""}`} aria-label="Nimora 桌面宠物">
       <button
         ref={petButton}
         className={`overlay-drag-region${stroking ? " is-stroking" : ""}`}
@@ -372,18 +395,18 @@ export function PetOverlay() {
           ["gltf", "vrm"].includes(renderer.backend) ? (
             <RendererErrorBoundary resetKey={renderer.assetId} onFailure={handleRendererFailure}>
               <Suspense fallback={<GltfLoadingPlaceholder descriptor={renderer} />}>
-                <GltfRenderer descriptor={renderer} action={petStateAction(snapshot?.pet.state ?? "idle")} onFailure={handleRendererFailure} />
+                <GltfRenderer descriptor={renderer} action={companionAction ?? petStateAction(snapshot?.pet.state ?? "idle")} onFailure={handleRendererFailure} />
               </Suspense>
             </RendererErrorBoundary>
           ) : (
             <SpriteRenderer
               descriptor={renderer}
-              action={petStateAction(snapshot?.pet.state ?? "idle")}
+              action={companionAction ?? petStateAction(snapshot?.pet.state ?? "idle")}
               onFailure={handleRendererFailure}
             />
           )
         ) : (
-          <span className={`overlay-pet ${snapshot?.pet.state ?? "idle"} emotion-${snapshot?.pet.emotion ?? "neutral"}`} aria-hidden="true">
+          <span className={`overlay-pet ${companionAction ?? snapshot?.pet.state ?? "idle"} emotion-${snapshot?.pet.emotion ?? "neutral"}`} aria-hidden="true">
             <i className="overlay-ear left" /><i className="overlay-ear right" />
             <i className="overlay-star">✦</i>
             <i className="overlay-eye left" /><i className="overlay-eye right" />

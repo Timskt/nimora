@@ -10,7 +10,7 @@ import type {
   SpriteClips,
 } from "@nimora/schemas";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
@@ -21,6 +21,27 @@ export type PetCareAction = (typeof petCareActions)[number];
 export const petItemIds = ["berry_bite", "star_ball", "bubble_soap"] as const;
 export type PetItemId = (typeof petItemIds)[number];
 export type ControlCenterDestination = "agent_chat" | "agent_task" | "settings";
+export type AgentCompanionStatus = "thinking" | "running" | "waiting_for_confirmation" | "completed" | "failed" | "cancelled";
+export interface AgentCompanionSignal {
+  spec: "nimora.agent-companion-signal/1";
+  status: AgentCompanionStatus;
+  taskId: string | null;
+  updatedAtMs: number;
+}
+const agentCompanionStatuses = new Set<AgentCompanionStatus>(["thinking", "running", "waiting_for_confirmation", "completed", "failed", "cancelled"]);
+
+export function isAgentCompanionSignal(value: unknown): value is AgentCompanionSignal {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return Object.keys(candidate).length === 4
+    && candidate.spec === "nimora.agent-companion-signal/1"
+    && typeof candidate.status === "string"
+    && agentCompanionStatuses.has(candidate.status as AgentCompanionStatus)
+    && (candidate.taskId === null || typeof candidate.taskId === "string")
+    && typeof candidate.updatedAtMs === "number"
+    && Number.isSafeInteger(candidate.updatedAtMs)
+    && candidate.updatedAtMs >= 0;
+}
 export type CommandRisk = "safe" | "low" | "medium" | "high" | "critical";
 
 export interface DesktopSnapshot {
@@ -950,6 +971,8 @@ export interface DesktopApi {
   onPetAutonomyChanged(handler: () => void): Promise<() => void>;
   onPetVitalsChanged(handler: () => void): Promise<() => void>;
   onControlCenterNavigate(handler: (destination: ControlCenterDestination) => void): Promise<() => void>;
+  onAgentCompanionSignal(handler: (signal: AgentCompanionSignal) => void): Promise<() => void>;
+  publishAgentCompanionSignal(signal: AgentCompanionSignal): Promise<void>;
   openControlCenter(destination: ControlCenterDestination): Promise<void>;
   snapshot(): Promise<DesktopSnapshot>;
   drainEvents(): Promise<NimoraEvent[]>;
@@ -1192,6 +1215,17 @@ export function createDesktopApi(
       async onPetAutonomyChanged() { return () => undefined; },
       async onPetVitalsChanged() { return () => undefined; },
       async onControlCenterNavigate() { return () => undefined; },
+      async onAgentCompanionSignal(handler) {
+        const listener = (event: Event) => {
+          const signal = (event as CustomEvent<unknown>).detail;
+          if (isAgentCompanionSignal(signal)) handler(signal);
+        };
+        window.addEventListener("nimora:agent-companion-signal", listener);
+        return () => window.removeEventListener("nimora:agent-companion-signal", listener);
+      },
+      async publishAgentCompanionSignal(signal) {
+        window.dispatchEvent(new CustomEvent("nimora:agent-companion-signal", { detail: signal }));
+      },
       async openControlCenter(destination) {
         const section = destination === "settings" ? "设置" : "Agent";
         window.location.assign(`/?section=${encodeURIComponent(section)}&intent=${destination}`);
@@ -1604,6 +1638,14 @@ export function createDesktopApi(
     },
     async onControlCenterNavigate(handler) {
       return await listen<ControlCenterDestination>("nimora://control-center-navigate", (event) => handler(event.payload));
+    },
+    async onAgentCompanionSignal(handler) {
+      return await listen<unknown>("nimora://agent-companion-signal", (event) => {
+        if (isAgentCompanionSignal(event.payload)) handler(event.payload);
+      });
+    },
+    async publishAgentCompanionSignal(signal) {
+      await emit("nimora://agent-companion-signal", signal);
     },
     openControlCenter: async (destination) => { await invokeCommand("open_control_center", { request: { destination } }); },
     snapshot: async () => await invokeCommand("desktop_snapshot") as DesktopSnapshot,
