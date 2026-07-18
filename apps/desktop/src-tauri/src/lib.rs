@@ -24,11 +24,12 @@ use nimora_agent_runtime::{
 use nimora_agent_tools::{GatewayToolBackend, production_tool_registry};
 use nimora_agent_workspace_host::WorkspaceScanPolicy;
 use nimora_asset_installer::{
-    AssetPackageSummary, AssetPreviewReport, AssetRendererDescriptor, GltfCharacterMetadata,
-    InstallError, InstallFile, ModelAnimationBinding, RenderAnchor, RenderCanvas, SpriteClips,
-    ThemeCornerStyle, ThemeDescriptor, ThemeMode, ThemeMotion, export_asset_package,
-    inspect_asset_package, inspect_asset_renderer, inspect_asset_source_preview,
-    inspect_asset_theme, install_asset_source, install_gltf_character, read_verified_asset_image,
+    AssetPackageSummary, AssetPreviewAudio, AssetPreviewReport, AssetRendererDescriptor,
+    GltfCharacterMetadata, InstallError, InstallFile, ModelAnimationBinding, RenderAnchor,
+    RenderCanvas, SpriteClips, ThemeCornerStyle, ThemeDescriptor, ThemeMode, ThemeMotion,
+    VoiceDescriptor, export_asset_package, inspect_asset_package, inspect_asset_renderer,
+    inspect_asset_source_preview, inspect_asset_theme, inspect_asset_voice, install_asset_source,
+    install_gltf_character, read_asset_voice_clip, read_verified_asset_image,
     read_verified_asset_model, rollback_latest,
 };
 use nimora_automation_agent_bridge::{
@@ -131,6 +132,9 @@ const ACTIVE_CHARACTER_FILE: &str = ".active-character.json";
 const BUILTIN_THEME_ID: &str = "builtin.nimora";
 const ACTIVE_THEME_SPEC: &str = "nimora.active-theme/1";
 const ACTIVE_THEME_FILE: &str = ".active-theme.json";
+const BUILTIN_VOICE_ID: &str = "builtin.silent";
+const ACTIVE_VOICE_SPEC: &str = "nimora.active-voice/1";
+const ACTIVE_VOICE_FILE: &str = ".active-voice.json";
 const PET_WINDOW_LABEL: &str = "pet";
 const CHARACTER_RENDERER_CHANGED_EVENT: &str = "nimora://character-renderer-changed";
 const ASSET_PROTOCOL: &str = "nimora-asset";
@@ -740,6 +744,13 @@ struct StoredActiveTheme {
     asset_id: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredActiveVoice {
+    spec: String,
+    asset_id: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ActiveThemeSnapshot {
@@ -747,6 +758,16 @@ struct ActiveThemeSnapshot {
     asset_id: String,
     source: ActiveCharacterSource,
     theme: ThemeDescriptor,
+    fallback_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActiveVoiceSnapshot {
+    spec: &'static str,
+    asset_id: String,
+    source: ActiveCharacterSource,
+    voice: Option<VoiceDescriptor>,
     fallback_reason: Option<String>,
 }
 
@@ -4234,6 +4255,120 @@ fn persist_active_theme(asset_store: &Path, asset_id: &str) -> Result<(), Deskto
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn active_voice(state: State<'_, DesktopState>) -> Result<ActiveVoiceSnapshot, DesktopError> {
+    Ok(resolve_active_voice(
+        &state.asset_store,
+        state.safety.snapshot()?.mode,
+    ))
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn activate_voice(
+    state: State<'_, DesktopState>,
+    asset_id: String,
+) -> Result<ActiveVoiceSnapshot, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let _write_guard = state
+        .active_asset_selection_write
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    if asset_id != BUILTIN_VOICE_ID && !valid_asset_identifier(&asset_id) {
+        return Err(DesktopError::InvalidAssetIdentifier);
+    }
+    if asset_id != BUILTIN_VOICE_ID {
+        let root = state.asset_store.join(&asset_id);
+        let summary = inspect_asset_package(&root)?;
+        if summary.id != asset_id || summary.asset_type != "voice" {
+            return Err(DesktopError::InvalidPackageSource);
+        }
+        inspect_asset_voice(&root)?;
+    }
+    persist_active_voice(&state.asset_store, &asset_id)?;
+    Ok(resolve_active_voice(
+        &state.asset_store,
+        RuntimeMode::Normal,
+    ))
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn active_voice_clip(
+    state: State<'_, DesktopState>,
+    cue: String,
+) -> Result<Option<AssetPreviewAudio>, DesktopError> {
+    let active = resolve_active_voice(&state.asset_store, state.safety.snapshot()?.mode);
+    if active.asset_id == BUILTIN_VOICE_ID {
+        return Ok(None);
+    }
+    read_asset_voice_clip(&state.asset_store.join(active.asset_id), &cue)
+        .map(Some)
+        .map_err(Into::into)
+}
+
+fn resolve_active_voice(asset_store: &Path, runtime_mode: RuntimeMode) -> ActiveVoiceSnapshot {
+    if runtime_mode == RuntimeMode::Safe {
+        return builtin_voice(Some("safe mode uses the silent built-in voice".to_owned()));
+    }
+    let stored = fs::read(asset_store.join(ACTIVE_VOICE_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<StoredActiveVoice>(&bytes).ok())
+        .filter(|stored| stored.spec == ACTIVE_VOICE_SPEC);
+    let Some(stored) = stored else {
+        return builtin_voice(None);
+    };
+    if stored.asset_id == BUILTIN_VOICE_ID {
+        return builtin_voice(None);
+    }
+    if !valid_asset_identifier(&stored.asset_id) {
+        return builtin_voice(Some("selected voice identifier is invalid".to_owned()));
+    }
+    let root = asset_store.join(&stored.asset_id);
+    let valid_type = inspect_asset_package(&root)
+        .is_ok_and(|summary| summary.id == stored.asset_id && summary.asset_type == "voice");
+    if !valid_type {
+        return builtin_voice(Some("selected voice package is invalid".to_owned()));
+    }
+    match inspect_asset_voice(&root) {
+        Ok(voice) => ActiveVoiceSnapshot {
+            spec: ACTIVE_VOICE_SPEC,
+            asset_id: stored.asset_id,
+            source: ActiveCharacterSource::Installed,
+            voice: Some(voice),
+            fallback_reason: None,
+        },
+        Err(error) => builtin_voice(Some(format!("selected voice failed verification: {error}"))),
+    }
+}
+
+fn builtin_voice(fallback_reason: Option<String>) -> ActiveVoiceSnapshot {
+    ActiveVoiceSnapshot {
+        spec: ACTIVE_VOICE_SPEC,
+        asset_id: BUILTIN_VOICE_ID.to_owned(),
+        source: ActiveCharacterSource::BuiltIn,
+        voice: None,
+        fallback_reason,
+    }
+}
+
+fn persist_active_voice(asset_store: &Path, asset_id: &str) -> Result<(), DesktopError> {
+    fs::create_dir_all(asset_store)?;
+    let destination = asset_store.join(ACTIVE_VOICE_FILE);
+    let temporary = asset_store.join(format!("{ACTIVE_VOICE_FILE}.{}.tmp", Uuid::now_v7()));
+    let payload = serde_json::to_vec(&StoredActiveVoice {
+        spec: ACTIVE_VOICE_SPEC.to_owned(),
+        asset_id: asset_id.to_owned(),
+    })?;
+    fs::write(&temporary, payload)?;
+    if let Err(error) = fs::rename(&temporary, &destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn activate_character(
     app: AppHandle,
     state: State<'_, DesktopState>,
@@ -7542,6 +7677,9 @@ pub fn run() {
             activate_character,
             active_theme,
             activate_theme,
+            active_voice,
+            activate_voice,
+            active_voice_clip,
             preview_asset,
             inspect_model,
             import_model,
@@ -7707,29 +7845,30 @@ fn discover_ollama_worker(app: &AppHandle) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVE_CHARACTER_FILE, ACTIVE_THEME_FILE, ActiveSkillExecution, AssetInstallReceipt,
-        AutoModeJobStatus, AutomationTestRequest, BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID,
-        CapabilityBackend, DETERMINISTIC_PROVIDER_ID, DesktopAgentRunStatus,
-        DesktopCapabilityBackend, DesktopError, DesktopResolveAutoModeAttemptRequest, DesktopState,
-        ExecutionCancellation, LocalAgentRequest, PendingSkillExecution, PetAction,
-        PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
-        ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SkillEventSession, StartupMode,
-        TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
-        UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
-        approve_skill_execution_inner, auto_mode_control_center_inner, automation_agent_messages,
-        cancel_agent_task_inner, cancel_all_pending_agent_tools, cancel_auto_mode_job_inner,
-        cancel_automation_run_inner, cancel_skill_execution_inner, confirm_agent_tool_inner,
-        confirm_agent_tool_with_registry, current_time_ms, default_agent_model,
-        default_agent_provider_id, desktop_tool_registry, diagnostic_report,
-        dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
+        ACTIVE_CHARACTER_FILE, ACTIVE_THEME_FILE, ACTIVE_VOICE_FILE, ActiveSkillExecution,
+        AssetInstallReceipt, AutoModeJobStatus, AutomationTestRequest, BUILTIN_CHARACTER_ID,
+        BUILTIN_THEME_ID, BUILTIN_VOICE_ID, CapabilityBackend, DETERMINISTIC_PROVIDER_ID,
+        DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
+        DesktopResolveAutoModeAttemptRequest, DesktopState, ExecutionCancellation,
+        LocalAgentRequest, PendingSkillExecution, PetAction, PrepareAgentToolRequest,
+        ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest,
+        ResumeAutoModeTurnRequest, SkillEventSession, StartupMode, TrayAction,
+        UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
+        WindowPolicy, agent_catalog_inner, approve_skill_execution_inner,
+        auto_mode_control_center_inner, automation_agent_messages, cancel_agent_task_inner,
+        cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
+        cancel_skill_execution_inner, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
+        current_time_ms, default_agent_model, default_agent_provider_id, desktop_tool_registry,
+        diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
         parse_user_program_plan, pause_auto_mode_job_inner, permission_grant,
-        persist_active_character, persist_active_theme, prepare_agent_tool_inner,
-        quiesce_auto_mode_jobs, reject_agent_tool_inner, resolve_active_character,
-        resolve_active_theme, resolve_auto_mode_attempt_inner, resolve_character_renderer,
-        resume_auto_mode_turn_inner, run_live_automation, run_local_agent_inner,
-        run_skill_agent_task, run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
+        persist_active_character, persist_active_theme, persist_active_voice,
+        prepare_agent_tool_inner, quiesce_auto_mode_jobs, reject_agent_tool_inner,
+        resolve_active_character, resolve_active_theme, resolve_active_voice,
+        resolve_auto_mode_attempt_inner, resolve_character_renderer, resume_auto_mode_turn_inner,
+        run_live_automation, run_local_agent_inner, run_skill_agent_task,
+        run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
         skill_capability_names, skill_event_types, stop_skill_event_sessions, test_automation,
         user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
         validate_requested_animation_map,
@@ -9782,6 +9921,26 @@ mod tests {
         assert_eq!(corrupt.asset_id, BUILTIN_THEME_ID);
         let safe = resolve_active_theme(&root, RuntimeMode::Safe);
         assert_eq!(safe.asset_id, BUILTIN_THEME_ID);
+        assert!(safe.fallback_reason.is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn active_voice_defaults_persists_and_falls_back_to_silence() {
+        let root = std::env::temp_dir().join("nimora-active-voice-fallback");
+        let _ = std::fs::remove_dir_all(&root);
+        let initial = resolve_active_voice(&root, RuntimeMode::Normal);
+        assert_eq!(initial.asset_id, BUILTIN_VOICE_ID);
+        assert!(initial.voice.is_none());
+        persist_active_voice(&root, BUILTIN_VOICE_ID).unwrap();
+        let restored = resolve_active_voice(&root, RuntimeMode::Normal);
+        assert_eq!(restored.asset_id, BUILTIN_VOICE_ID);
+        std::fs::write(root.join(ACTIVE_VOICE_FILE), b"not-json").unwrap();
+        let corrupt = resolve_active_voice(&root, RuntimeMode::Normal);
+        assert_eq!(corrupt.asset_id, BUILTIN_VOICE_ID);
+        assert!(corrupt.voice.is_none());
+        let safe = resolve_active_voice(&root, RuntimeMode::Safe);
+        assert_eq!(safe.asset_id, BUILTIN_VOICE_ID);
         assert!(safe.fallback_reason.is_some());
         std::fs::remove_dir_all(root).unwrap();
     }

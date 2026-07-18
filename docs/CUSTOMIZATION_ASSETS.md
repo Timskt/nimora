@@ -270,3 +270,13 @@ nimora asset sign character.example.mochi.nimora
 - 激活选择使用原子文件替换；每次读取重新验证已安装包。选择损坏、包缺失或 Safe Mode 启动时立即回退内置主题并返回原因。
 - Theme 只能改变视觉呈现，不能改变权限、危险、错误、离线和恢复模式语义，也不能获得宿主对象或能力网关。
 - 安装器必须在合成透明色后验证最低对比度：正文与 Surface 至少 `4.5:1`，弱文本、强调色、成功和危险色作为 UI 语义至少 `3:1`；低对比度包不得进入预览或安装阶段。
+
+## 16. Voice Asset 运行契约
+
+- `nimora.voice/1` 是纯数据资产，只允许 `audio/wav` 与 `audio/ogg`；每个 Clip 不超过 2 MiB，单包最多 32 个 Clip。
+- v1 Cue 使用平台维护的宠物动作白名单：`pet.click`、`pet.celebrate`、`pet.work`、`pet.idle`、`pet.wake`、`pet.sleep`。权限、危险、错误和恢复提示不属于可替换 Cue。
+- 每个 Clip 必须提供 1–16 条合法 Locale 字幕，每条最多 160 字符；`gainDb` 必须是 `-24..=6` 内的有限数。
+- Manifest、Descriptor、音频文件、媒体类型、扩展名、文件头、哈希和预算在预览、安装、激活及每次读取时完整复验。
+- 宿主只返回 Descriptor 或有界音频字节，不返回文件路径。Voice 包不能声明 URL、脚本、字体、TTS Provider、网络或宿主能力。
+- 默认声音为 `builtin.silent`；Safe Mode、损坏选择和复验失败全部静音回退。Quiet Mode 在最终播放适配器阻断读取和播放。
+- 静态声音播放失败不得回滚或改变已经成功的宠物动作；在线 TTS 使用独立 Provider Capability，不扩展 Voice Descriptor。

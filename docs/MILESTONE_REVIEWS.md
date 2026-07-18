@@ -179,3 +179,12 @@ Actions 分钟：
 - 修正：安装器对 RGBA 合成结果执行正文 `4.5:1`、弱文本与语义色 `3:1` 门禁；Creator Studio 提供显式恢复内置主题，安全模式切换后重新读取宿主主题事实。
 - 证据：新增低对比度正文与危险色拒绝测试，Installer 测试增至 31 项；前端构建和全量 Workspace 门禁随本里程碑验证。
 - 边界：最低数学门槛不等于完整无障碍验收，色觉差异、200% 缩放、真实桌面深色截图和读屏仍保留为发布门禁。
+
+## M-2026-07-18 安全字幕声音资产纵切
+
+- 不足：通用 Inventory 媒体扩展校验错误携带 Sprite 语义；仅校验 Cue 格式也无法阻止第三方伪装平台权限声音。
+- 修正：媒体校验改为资产无关边界；新增 `nimora.voice/1`、WAV/OGG Header、2 MiB/32 Clip 预算、字幕与增益门禁，以及固定宠物 Cue 注册表。
+- 宿主：新增原子活动声音选择、`builtin.silent`、Safe Mode 静音回退和逐次重开复验；WebView 只获得无路径 Descriptor 与有界字节。
+- UI：Creator Studio 支持安装前本地音频预览、声音激活和恢复静音；动作成功后才异步播放，Quiet Mode 在 Clip 请求前阻断，播放失败不影响动作。
+- 证据：Asset Installer 36 项、Desktop Host 91 项、前端 32 项、TypeScript 生产构建与 Bundle Budget 已通过专项验证。
+- 后续收敛：角色、主题、声音已证明共享选择生命周期，应提取类型化 `AssetSelectionPolicy`，但不能用无类型 JSON 牺牲各资产契约。

@@ -40,6 +40,14 @@ const MAX_PREVIEW_IMAGE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PREVIEW_IMAGE_EDGE: u32 = 4096;
 const MAX_ARCHIVE_COMPRESSION_RATIO: u64 = 200;
 const MANIFEST_FILE: &str = "manifest.json";
+const VOICE_V1_CUES: &[&str] = &[
+    "pet.celebrate",
+    "pet.click",
+    "pet.idle",
+    "pet.sleep",
+    "pet.wake",
+    "pet.work",
+];
 
 #[derive(Debug, Error)]
 pub enum InstallError {
@@ -92,7 +100,7 @@ pub struct AssetPackageInstallResult {
     pub install: InstallResult,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetPackageSummary {
     pub id: String,
@@ -115,12 +123,24 @@ pub struct AssetPreviewImage {
     pub height: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetPreviewReport {
     pub summary: AssetPackageSummary,
     pub poster: Option<AssetPreviewImage>,
     pub theme: Option<ThemeDescriptor>,
+    pub voice: Option<VoiceDescriptor>,
+    pub voice_preview: Option<AssetPreviewAudio>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetPreviewAudio {
+    pub cue: String,
+    pub media_type: String,
+    pub bytes: Vec<u8>,
+    pub captions: BTreeMap<String, String>,
+    pub gain_db: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,6 +175,21 @@ pub enum ThemeMotion {
     Reduced,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoiceDescriptor {
+    pub spec: String,
+    pub clips: BTreeMap<String, VoiceClipDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoiceClipDescriptor {
+    pub file: PathBuf,
+    pub captions: BTreeMap<String, String>,
+    pub gain_db: f64,
+}
+
 #[derive(Debug)]
 struct PreparedAssetSource {
     root: PathBuf,
@@ -177,6 +212,7 @@ struct ValidatedAssetPackage {
     media_types: BTreeMap<PathBuf, String>,
     preview_poster: Option<PathBuf>,
     theme: Option<ThemeDescriptor>,
+    voice: Option<VoiceDescriptor>,
     integrity_path: PathBuf,
     integrity_bytes: Vec<u8>,
 }
@@ -225,6 +261,7 @@ struct AssetEntrypoints {
     hitboxes: Option<PathBuf>,
     preview_poster: Option<PathBuf>,
     theme: Option<PathBuf>,
+    voice: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -589,11 +626,51 @@ pub fn inspect_asset_source_preview(source: &Path) -> Result<AssetPreviewReport,
         .as_deref()
         .map(|path| read_preview_image(&prepared.root, path, &package.media_types))
         .transpose()?;
+    let voice_preview = package
+        .voice
+        .as_ref()
+        .and_then(|voice| voice.clips.first_key_value())
+        .map(|(cue, clip)| read_voice_audio(&prepared.root, cue, clip, &package.media_types))
+        .transpose()?;
     Ok(AssetPreviewReport {
         summary: package.summary,
         poster,
         theme: package.theme,
+        voice: package.voice,
+        voice_preview,
     })
+}
+
+/// Reopens and verifies an installed voice package before returning one bounded clip.
+///
+/// # Errors
+///
+/// Returns an error when the package, cue, inventory, media header, or clip budget is invalid.
+pub fn read_asset_voice_clip(
+    source_root: &Path,
+    cue: &str,
+) -> Result<AssetPreviewAudio, InstallError> {
+    let package = load_asset_package(source_root)?;
+    let voice = package
+        .voice
+        .as_ref()
+        .ok_or_else(|| InstallError::InvalidMetadata("asset is not a voice package".to_owned()))?;
+    let clip = voice
+        .clips
+        .get(cue)
+        .ok_or_else(|| InstallError::InvalidMetadata("voice cue is not declared".to_owned()))?;
+    read_voice_audio(source_root, cue, clip, &package.media_types)
+}
+
+/// Reopens and verifies a voice package before returning its path-free descriptor.
+///
+/// # Errors
+///
+/// Returns an error when the package is not a valid Voice asset.
+pub fn inspect_asset_voice(source_root: &Path) -> Result<VoiceDescriptor, InstallError> {
+    load_asset_package(source_root)?
+        .voice
+        .ok_or_else(|| InstallError::InvalidMetadata("asset is not a voice package".to_owned()))
 }
 
 /// Verifies an expanded package directory and writes a deterministic `.nimora`
@@ -860,7 +937,7 @@ pub fn read_verified_asset_image(
     if !["image/png", "image/webp", "image/jpeg", "image/gif"].contains(&media_type.as_str()) {
         return Err(invalid_sprite("resource is not an allowed image"));
     }
-    require_image_extension(relative_path, media_type)?;
+    require_media_extension(relative_path, media_type)?;
     let root = source_root.canonicalize()?;
     let path = root.join(relative_path);
     let metadata = fs::symlink_metadata(&path)?;
@@ -933,7 +1010,7 @@ fn read_preview_image(
             "preview poster must be PNG or WebP".to_owned(),
         ));
     }
-    require_image_extension(relative_path, media_type)?;
+    require_media_extension(relative_path, media_type)?;
     let bytes = fs::read(source_root.join(relative_path))?;
     if bytes.len() as u64 > MAX_PREVIEW_IMAGE_BYTES {
         return Err(InstallError::BudgetExceeded);
@@ -1010,6 +1087,7 @@ fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, Insta
         .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
     let renderer = load_asset_renderer(source_root, &manifest, &integrity.files)?;
     let theme = load_theme_descriptor(source_root, &manifest, &integrity.files)?;
+    let voice = load_voice_descriptor(source_root, &manifest, &integrity.files)?;
     let preview_poster = manifest
         .entrypoints
         .as_ref()
@@ -1062,6 +1140,7 @@ fn load_asset_package(source_root: &Path) -> Result<ValidatedAssetPackage, Insta
         media_types,
         preview_poster,
         theme,
+        voice,
         integrity_path: integrity_path.to_path_buf(),
         integrity_bytes,
     })
@@ -1295,6 +1374,107 @@ fn validate_theme_descriptor(theme: &ThemeDescriptor) -> Result<(), InstallError
     Ok(())
 }
 
+fn load_voice_descriptor(
+    source_root: &Path,
+    manifest: &AssetManifestHeader,
+    inventory: &[AssetIntegrityFile],
+) -> Result<Option<VoiceDescriptor>, InstallError> {
+    let path = manifest
+        .entrypoints
+        .as_ref()
+        .and_then(|entrypoints| entrypoints.voice.as_ref());
+    if manifest.asset_type != "voice" {
+        if path.is_some() {
+            return Err(InstallError::InvalidMetadata(
+                "only voice assets may declare a voice entrypoint".to_owned(),
+            ));
+        }
+        return Ok(None);
+    }
+    let path = safe_relative_path(path.ok_or_else(|| {
+        InstallError::InvalidMetadata("voice asset requires entrypoints.voice".to_owned())
+    })?)?;
+    require_inventory_media(inventory, path, &["application/json"])?;
+    let descriptor: VoiceDescriptor = serde_json::from_slice(&read_metadata(source_root, path)?)
+        .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    validate_voice_descriptor(&descriptor, inventory)?;
+    Ok(Some(descriptor))
+}
+
+fn validate_voice_descriptor(
+    voice: &VoiceDescriptor,
+    inventory: &[AssetIntegrityFile],
+) -> Result<(), InstallError> {
+    if voice.spec != "nimora.voice/1" || voice.clips.is_empty() || voice.clips.len() > 32 {
+        return Err(InstallError::InvalidMetadata(
+            "voice descriptor violates nimora.voice/1".to_owned(),
+        ));
+    }
+    for (cue, clip) in &voice.clips {
+        if !valid_action_id(cue)
+            || !VOICE_V1_CUES.contains(&cue.as_str())
+            || !clip.gain_db.is_finite()
+            || !(-24.0..=6.0).contains(&clip.gain_db)
+            || clip.captions.is_empty()
+            || clip.captions.len() > 16
+            || clip.captions.iter().any(|(locale, caption)| {
+                !valid_locale(locale)
+                    || caption.trim().is_empty()
+                    || caption.chars().count() > 160
+                    || caption.chars().any(char::is_control)
+            })
+        {
+            return Err(InstallError::InvalidMetadata(
+                "voice clip metadata is invalid".to_owned(),
+            ));
+        }
+        let path = safe_relative_path(&clip.file)?;
+        require_inventory_media(inventory, path, &["audio/wav", "audio/ogg"])?;
+        let file = inventory
+            .iter()
+            .find(|file| file.path == path)
+            .ok_or_else(|| {
+                InstallError::InvalidMetadata("voice clip is absent from inventory".to_owned())
+            })?;
+        if file.bytes == 0 || file.bytes > 2 * 1_024 * 1_024 {
+            return Err(InstallError::InvalidMetadata(
+                "voice clip exceeds the 2 MiB budget".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn read_voice_audio(
+    source_root: &Path,
+    cue: &str,
+    clip: &VoiceClipDescriptor,
+    media_types: &BTreeMap<PathBuf, String>,
+) -> Result<AssetPreviewAudio, InstallError> {
+    let path = safe_relative_path(&clip.file)?;
+    let media_type = media_types.get(path).ok_or_else(|| {
+        InstallError::InvalidMetadata("voice clip is absent from inventory".to_owned())
+    })?;
+    let bytes = fs::read(source_root.join(path))?;
+    let valid_header = match media_type.as_str() {
+        "audio/wav" => bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WAVE",
+        "audio/ogg" => bytes.len() >= 4 && &bytes[..4] == b"OggS",
+        _ => false,
+    };
+    if !valid_header || bytes.len() > 2 * 1_024 * 1_024 {
+        return Err(InstallError::InvalidMetadata(
+            "voice clip header or budget is invalid".to_owned(),
+        ));
+    }
+    Ok(AssetPreviewAudio {
+        cue: cue.to_owned(),
+        media_type: media_type.clone(),
+        bytes,
+        captions: clip.captions.clone(),
+        gain_db: clip.gain_db,
+    })
+}
+
 fn validate_theme_contrast(theme: &ThemeDescriptor) -> Result<(), InstallError> {
     let backdrop = match theme.mode {
         ThemeMode::Light => [1.0, 1.0, 1.0],
@@ -1461,14 +1641,20 @@ fn require_inventory_media(
     let file = inventory
         .iter()
         .find(|file| file.path == path)
-        .ok_or_else(|| invalid_sprite("renderer references a file outside the inventory"))?;
+        .ok_or_else(|| {
+            InstallError::InvalidMetadata(
+                "asset resource is outside the verified inventory".to_owned(),
+            )
+        })?;
     if !allowed.contains(&file.media_type.as_str()) {
-        return Err(invalid_sprite("renderer file has a disallowed media type"));
+        return Err(InstallError::InvalidMetadata(
+            "asset resource has a disallowed media type".to_owned(),
+        ));
     }
-    require_image_extension(path, &file.media_type)
+    require_media_extension(path, &file.media_type)
 }
 
-fn require_image_extension(path: &Path, media_type: &str) -> Result<(), InstallError> {
+fn require_media_extension(path: &Path, media_type: &str) -> Result<(), InstallError> {
     let expected_extension = match media_type {
         "application/json" => &["json"][..],
         "image/png" => &["png"][..],
@@ -1476,12 +1662,14 @@ fn require_image_extension(path: &Path, media_type: &str) -> Result<(), InstallE
         "image/jpeg" => &["jpg", "jpeg"][..],
         "image/gif" => &["gif"][..],
         "model/gltf-binary" => &["glb"][..],
+        "audio/wav" => &["wav"][..],
+        "audio/ogg" => &["ogg"][..],
         _ => &[][..],
     };
     let extension = path.extension().and_then(std::ffi::OsStr::to_str);
     if extension.is_none_or(|extension| !expected_extension.contains(&extension)) {
-        return Err(invalid_sprite(
-            "renderer file extension does not match its media type",
+        return Err(InstallError::InvalidMetadata(
+            "asset resource extension does not match its media type".to_owned(),
         ));
     }
     Ok(())
@@ -1557,6 +1745,8 @@ fn validate_manifest_header(manifest: &AssetManifestHeader) -> Result<(), Instal
             entrypoints.model.as_ref(),
             entrypoints.hitboxes.as_ref(),
             entrypoints.preview_poster.as_ref(),
+            entrypoints.theme.as_ref(),
+            entrypoints.voice.as_ref(),
         ]
         .into_iter()
         .flatten()
@@ -1908,6 +2098,69 @@ mod tests {
         0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
     ];
 
+    const SILENT_WAV: &[u8] = b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x80\x3e\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00";
+
+    fn valid_voice_descriptor() -> VoiceDescriptor {
+        VoiceDescriptor {
+            spec: "nimora.voice/1".to_owned(),
+            clips: BTreeMap::from([(
+                "pet.click".to_owned(),
+                VoiceClipDescriptor {
+                    file: "audio/click.wav".into(),
+                    captions: BTreeMap::from([
+                        ("zh-CN".to_owned(), "轻快的点击声".to_owned()),
+                        ("en".to_owned(), "A light click".to_owned()),
+                    ]),
+                    gain_db: -3.0,
+                },
+            )]),
+        }
+    }
+
+    fn valid_voice_inventory(bytes: u64) -> Vec<AssetIntegrityFile> {
+        vec![AssetIntegrityFile {
+            path: "audio/click.wav".into(),
+            sha256: "0".repeat(64),
+            bytes,
+            media_type: "audio/wav".to_owned(),
+        }]
+    }
+
+    fn write_voice_package(root: &Path, audio: &[u8], media_type: &str) {
+        fs::create_dir_all(root.join("audio")).unwrap();
+        fs::create_dir_all(root.join("voices")).unwrap();
+        let voice = serde_json::to_vec(&serde_json::json!({
+            "spec": "nimora.voice/1",
+            "clips": {
+                "pet.click": {
+                    "file": "audio/click.wav",
+                    "captions": { "zh-CN": "轻快的点击声", "en": "A light click" },
+                    "gainDb": -3.0
+                }
+            }
+        }))
+        .unwrap();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "spec": "nimora.asset/1", "id": "voice.example.chime", "type": "voice",
+            "version": "1.0.0", "name": { "en": "Chime" }, "publisher": "publisher.example",
+            "license": "MIT", "engines": { "nimora": ">=0.1.0" },
+            "entrypoints": { "voice": "voices/voice.json" }, "capabilities": [], "fallbacks": {},
+            "locales": ["zh-CN", "en"], "integrity": { "algorithm": "sha256", "files": "integrity.json" }
+        })).unwrap();
+        fs::write(root.join(MANIFEST_FILE), &manifest).unwrap();
+        fs::write(root.join("voices/voice.json"), &voice).unwrap();
+        fs::write(root.join("audio/click.wav"), audio).unwrap();
+        let integrity = serde_json::to_vec(&serde_json::json!({
+            "files": [
+                { "path": MANIFEST_FILE, "sha256": sha256(&manifest), "bytes": manifest.len(), "mediaType": "application/json" },
+                { "path": "voices/voice.json", "sha256": sha256(&voice), "bytes": voice.len(), "mediaType": "application/json" },
+                { "path": "audio/click.wav", "sha256": sha256(audio), "bytes": audio.len(), "mediaType": media_type }
+            ],
+            "totalBytes": manifest.len() + voice.len() + audio.len()
+        })).unwrap();
+        fs::write(root.join("integrity.json"), integrity).unwrap();
+    }
+
     fn write_preview_package(root: &Path, poster: &[u8]) {
         fs::create_dir_all(root.join("preview")).unwrap();
         fs::create_dir_all(root.join("themes")).unwrap();
@@ -2147,6 +2400,127 @@ mod tests {
         colors.insert("danger".to_owned(), "#fdfdfd".to_owned());
         let semantic_failure = ThemeDescriptor { colors, ..theme };
         assert!(validate_theme_descriptor(&semantic_failure).is_err());
+    }
+
+    #[test]
+    fn previews_and_reopens_a_verified_captioned_voice_clip() {
+        let root = std::env::temp_dir().join("nimora-voice-preview");
+        let _ = fs::remove_dir_all(&root);
+        write_voice_package(&root, SILENT_WAV, "audio/wav");
+        let report = inspect_asset_source_preview(&root).unwrap();
+        let voice = report.voice.unwrap();
+        assert_eq!(voice.spec, "nimora.voice/1");
+        assert!((voice.clips["pet.click"].gain_db + 3.0).abs() < f64::EPSILON);
+        let preview = report.voice_preview.unwrap();
+        assert_eq!(preview.cue, "pet.click");
+        assert_eq!(preview.media_type, "audio/wav");
+        assert_eq!(preview.captions["zh-CN"], "轻快的点击声");
+        assert_eq!(
+            read_asset_voice_clip(&root, "pet.click").unwrap().bytes,
+            SILENT_WAV
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_voice_spoofed_media_headers_and_invalid_metadata() {
+        let root = std::env::temp_dir().join("nimora-voice-invalid-header");
+        let _ = fs::remove_dir_all(&root);
+        write_voice_package(&root, b"not-wave", "audio/wav");
+        assert!(inspect_asset_source_preview(&root).is_err());
+        fs::remove_dir_all(&root).unwrap();
+
+        write_voice_package(&root, SILENT_WAV, "application/octet-stream");
+        assert!(inspect_asset_source_preview(&root).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_voice_descriptor_contract_boundaries() {
+        let inventory = valid_voice_inventory(SILENT_WAV.len() as u64);
+
+        let mut voice = valid_voice_descriptor();
+        voice.spec = "nimora.voice/2".to_owned();
+        assert!(validate_voice_descriptor(&voice, &inventory).is_err());
+
+        let mut voice = valid_voice_descriptor();
+        voice.clips.clear();
+        assert!(validate_voice_descriptor(&voice, &inventory).is_err());
+
+        let mut voice = valid_voice_descriptor();
+        voice.clips.get_mut("pet.click").unwrap().gain_db = f64::NAN;
+        assert!(validate_voice_descriptor(&voice, &inventory).is_err());
+
+        let mut voice = valid_voice_descriptor();
+        voice.clips.get_mut("pet.click").unwrap().gain_db = 6.1;
+        assert!(validate_voice_descriptor(&voice, &inventory).is_err());
+
+        let mut voice = valid_voice_descriptor();
+        voice.clips.get_mut("pet.click").unwrap().captions.clear();
+        assert!(validate_voice_descriptor(&voice, &inventory).is_err());
+
+        let mut voice = valid_voice_descriptor();
+        voice
+            .clips
+            .get_mut("pet.click")
+            .unwrap()
+            .captions
+            .insert("bad locale!".to_owned(), "caption".to_owned());
+        assert!(validate_voice_descriptor(&voice, &inventory).is_err());
+
+        let mut voice = valid_voice_descriptor();
+        voice.clips.get_mut("pet.click").unwrap().captions =
+            BTreeMap::from([("en".to_owned(), "x".repeat(161))]);
+        assert!(validate_voice_descriptor(&voice, &inventory).is_err());
+
+        let mut voice = valid_voice_descriptor();
+        let clip = voice.clips.remove("pet.click").unwrap();
+        voice.clips.insert("platform.permission".to_owned(), clip);
+        assert!(validate_voice_descriptor(&voice, &inventory).is_err());
+
+        assert!(
+            validate_voice_descriptor(
+                &valid_voice_descriptor(),
+                &valid_voice_inventory(2 * 1_024 * 1_024 + 1),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_voice_extension_mismatch_and_undeclared_cues() {
+        let mut voice = valid_voice_descriptor();
+        voice.clips.get_mut("pet.click").unwrap().file = "audio/click.ogg".into();
+        let mut inventory = valid_voice_inventory(SILENT_WAV.len() as u64);
+        inventory[0].path = "audio/click.ogg".into();
+        assert!(validate_voice_descriptor(&voice, &inventory).is_err());
+
+        let root = std::env::temp_dir().join("nimora-voice-undeclared-cue");
+        let _ = fs::remove_dir_all(&root);
+        write_voice_package(&root, SILENT_WAV, "audio/wav");
+        assert!(read_asset_voice_clip(&root, "pet.missing").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn voice_archive_round_trip_preserves_verified_preview() {
+        let root = std::env::temp_dir().join("nimora-voice-archive-round-trip");
+        let source = root.join("source");
+        let archive = root.join("voice.nimora");
+        let store = root.join("store");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        write_voice_package(&source, SILENT_WAV, "audio/wav");
+
+        export_asset_package(&source, &archive).unwrap();
+        let preview = inspect_asset_source_preview(&archive).unwrap();
+        assert_eq!(preview.voice.unwrap().spec, "nimora.voice/1");
+        assert_eq!(preview.voice_preview.unwrap().bytes, SILENT_WAV);
+
+        let installed = install_asset_source(&archive, &store).unwrap();
+        let reopened = read_asset_voice_clip(&installed.install.active_path, "pet.click").unwrap();
+        assert_eq!(reopened.bytes, SILENT_WAV);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

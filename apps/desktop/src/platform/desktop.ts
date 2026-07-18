@@ -334,6 +334,27 @@ export interface AssetPreviewReport {
   summary: AssetPackageSummary;
   poster: AssetPreviewImage | null;
   theme: ThemeDescriptor | null;
+  voice: VoiceDescriptor | null;
+  voicePreview: AssetPreviewAudio | null;
+}
+
+export interface VoiceDescriptor {
+  spec: "nimora.voice/1";
+  clips: Record<string, VoiceClipDescriptor>;
+}
+
+export interface VoiceClipDescriptor {
+  file: string;
+  captions: Record<string, string>;
+  gainDb: number;
+}
+
+export interface AssetPreviewAudio {
+  cue: string;
+  mediaType: "audio/wav" | "audio/ogg";
+  bytes: number[];
+  captions: Record<string, string>;
+  gainDb: number;
 }
 
 export interface ThemeDescriptor {
@@ -359,6 +380,14 @@ export interface ActiveThemeSnapshot {
   assetId: string;
   source: "built-in" | "installed";
   theme: ThemeDescriptor;
+  fallbackReason: string | null;
+}
+
+export interface ActiveVoiceSnapshot {
+  spec: "nimora.active-voice/1";
+  assetId: string;
+  source: "built-in" | "installed";
+  voice: VoiceDescriptor | null;
   fallbackReason: string | null;
 }
 
@@ -653,6 +682,9 @@ export interface DesktopApi {
   activateCharacter(assetId: string): Promise<ActiveCharacterSnapshot>;
   activeTheme(): Promise<ActiveThemeSnapshot>;
   activateTheme(assetId: string): Promise<ActiveThemeSnapshot>;
+  activeVoice(): Promise<ActiveVoiceSnapshot>;
+  activateVoice(assetId: string): Promise<ActiveVoiceSnapshot>;
+  activeVoiceClip(cue: string): Promise<AssetPreviewAudio | null>;
   previewAsset(request: InstallAssetRequest): Promise<AssetPreviewReport | null>;
   exportAsset(request: ExportAssetRequest): Promise<AssetPackageSummary | null>;
   inspectModel(request: InspectModelRequest): Promise<ModelProbeReport | null>;
@@ -980,6 +1012,9 @@ export function createDesktopApi(
       async activateCharacter(assetId) { return { assetId, source: assetId === "builtin.aster" ? "built-in" : "installed", fallbackReason: null }; },
       async activeTheme() { return builtInThemeSnapshot(); },
       async activateTheme() { return builtInThemeSnapshot(); },
+      async activeVoice() { return { spec: "nimora.active-voice/1", assetId: "builtin.silent", source: "built-in", voice: null, fallbackReason: null }; },
+      async activateVoice() { return { spec: "nimora.active-voice/1", assetId: "builtin.silent", source: "built-in", voice: null, fallbackReason: null }; },
+      async activeVoiceClip() { return null; },
       async previewAsset() { return null; },
       async exportAsset() { return null; },
       async inspectModel() { return null; },
@@ -1088,6 +1123,9 @@ export function createDesktopApi(
     activateCharacter: async (assetId) => await invokeCommand("activate_character", { assetId }) as ActiveCharacterSnapshot,
     activeTheme: async () => await invokeCommand("active_theme") as ActiveThemeSnapshot,
     activateTheme: async (assetId) => await invokeCommand("activate_theme", { assetId }) as ActiveThemeSnapshot,
+    activeVoice: async () => await invokeCommand("active_voice") as ActiveVoiceSnapshot,
+    activateVoice: async (assetId) => await invokeCommand("activate_voice", { assetId }) as ActiveVoiceSnapshot,
+    activeVoiceClip: async (cue) => await invokeCommand("active_voice_clip", { cue }) as AssetPreviewAudio | null,
     previewAsset: async (request) => await invokeCommand("preview_asset", { request }) as AssetPreviewReport,
     exportAsset: async (request) => await invokeCommand("export_asset", { request }) as AssetPackageSummary,
     inspectModel: async (request) => await invokeCommand("inspect_model", { request }) as ModelProbeReport,

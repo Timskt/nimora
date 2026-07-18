@@ -523,3 +523,13 @@ ID / 标题 / 优先级 / 前置条件
 - Verify 浅色、深色、高对比度和减少动画在 720px、宽屏、200% 缩放和键盘路径下可辨识，危险态不被主题弱化。
 - Verify RGBA 先按主题模式与 Surface 正确合成再计算 WCAG 相对亮度；正文低于 `4.5:1` 或强调/成功/危险低于 `3:1` 时包整体拒绝。
 - Verify 已安装主题可显式恢复内置主题；进入 Safe Mode 时 UI 立即同步宿主内置主题，退出后重新读取原选择，不保留陈旧视觉状态。
+
+## Voice Asset 安全、播放与降级
+
+- Verify Voice 缺少入口、非 Voice 声明入口、未知字段、空/超量 Clip、非法或保留 Cue、非法字幕/Locale、NaN/越界增益在安装前拒绝。
+- Verify WAV/OGG 媒体类型、扩展名与 Header 必须一致，单 Clip 超过 2 MiB、未声明 Cue 和 Inventory 外路径拒绝。
+- Verify `.nimora` 导出、预览、安装和重开保持 Descriptor、字幕与已验证字节一致，篡改后不返回音频。
+- Verify 激活选择原子持久化，重启复验；损坏选择、缺失包和 Safe Mode 返回 `builtin.silent`，不暴露文件路径。
+- Verify Creator Studio 不自动播放，展示 Cue、字幕、格式、大小和增益；取消预览释放 Blob URL 且不改变活动声音。
+- Verify Quiet Mode 在 Clip IPC 前阻断；动作成功后音频读取或播放失败不改变动作结果与用户通知。
+- Verify 平台权限、危险、错误和恢复提示 Cue 永远不查询第三方 Voice 包。

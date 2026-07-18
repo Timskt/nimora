@@ -83,3 +83,11 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - Added a generated Vite Manifest and an executable build budget gate instead of hiding the previous warning without evidence.
 - Current raw production sizes are 285,916 bytes for the desktop entry and 615,183 bytes for the lazy GLTF renderer, under hard budgets of 350,000 and 650,000 bytes.
 - The existing Suspense placeholder and built-in renderer fallback remain active for module loading, WebGL initialization, asset loading, and context-loss failures.
+
+## 2026-07-18 — Voice asset architecture audit (in progress)
+
+- Added the strict `nimora.voice/1` static asset contract with bounded WAV/OGG clips, safe cue identifiers, required localized captions, finite gain limits, verified preview bytes, and reopen-before-read behavior.
+- Corrected a cross-layer defect where inventory media extension validation carried Sprite-specific assumptions and errors; media extension validation is now asset-neutral while each asset subtype keeps its own allowlist and header checks.
+- Voice now has desktop activation, Safe Mode silent fallback, per-read package verification, Creator Studio preview/activation, archive round-trip coverage, and Quiet Mode enforcement before clip retrieval. Full workspace validation and real Tauri audio/UI verification remain required before release completion.
+- Architecture review identified duplicated active-asset selection lifecycles in the desktop host. A typed shared policy is required immediately after the Voice vertical slice instead of copying per-type persistence and fallback logic indefinitely.
+- Final local gate passed with 36 Asset Installer tests, 91 Desktop Host tests, 32 frontend tests, production TypeScript/Vite build and bundle budgets, workspace Clippy with warnings denied, and the complete Rust workspace test/doc-test suite. Real Tauri audio output and cross-platform visual inspection remain release-level evidence, not unit-test claims.

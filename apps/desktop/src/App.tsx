@@ -4,13 +4,38 @@ import { CreatorStudio } from "./components/CreatorStudio";
 import { DataProtection } from "./components/DataProtection";
 import { AgentWorkspace } from "./components/AgentWorkspace";
 import { AutomationWorkspace } from "./components/AutomationWorkspace";
-import type { ActiveThemeSnapshot, OutboxSnapshot, ThemeDescriptor } from "./platform/desktop";
+import type { ActiveThemeSnapshot, AssetPreviewAudio, OutboxSnapshot, ThemeDescriptor } from "./platform/desktop";
 import { desktopApi } from "./platform/desktop";
 
 export const navigation = ["概览", "角色", "Agent", "自动化", "扩展", "活动", "设置"] as const;
 
 export function navItemClassName(isActive: boolean): string {
   return isActive ? "nav-item active" : "nav-item";
+}
+
+export function voiceGain(gainDb: number): number {
+  return Math.min(1, Math.max(0, 10 ** (gainDb / 20)));
+}
+
+async function playVoiceCue(cue: "pet.celebrate" | "pet.work", quiet: boolean): Promise<void> {
+  if (quiet) return;
+  const clip = await desktopApi.activeVoiceClip(cue);
+  if (!clip) return;
+  await playVerifiedAudio(clip);
+}
+
+async function playVerifiedAudio(clip: AssetPreviewAudio): Promise<void> {
+  const url = URL.createObjectURL(new Blob([new Uint8Array(clip.bytes)], { type: clip.mediaType }));
+  const audio = new Audio(url);
+  audio.volume = voiceGain(clip.gainDb);
+  const release = () => URL.revokeObjectURL(url);
+  audio.addEventListener("ended", release, { once: true });
+  audio.addEventListener("error", release, { once: true });
+  try {
+    await audio.play();
+  } catch {
+    release();
+  }
 }
 
 export function App() {
@@ -46,6 +71,7 @@ export function App() {
       return;
     }
     await desktopApi.playAction(action);
+    void playVoiceCue(action === "celebrate" ? "pet.celebrate" : "pet.work", quiet).catch(() => undefined);
     setNotice(action === "celebrate" ? "Aster 正在回应你" : "专注场景已启动");
   }
 

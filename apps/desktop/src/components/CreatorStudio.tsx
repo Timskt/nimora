@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { ActiveCharacterSnapshot, ActiveThemeSnapshot, AssetCatalogSnapshot, AssetPackageSummary, AssetPreviewReport, ModelAnimationBinding, ModelProbeReport, ThemeDescriptor } from "../platform/desktop";
+import type { ActiveCharacterSnapshot, ActiveThemeSnapshot, ActiveVoiceSnapshot, AssetCatalogSnapshot, AssetPackageSummary, AssetPreviewReport, ModelAnimationBinding, ModelProbeReport, ThemeDescriptor } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const backends = ["Sprite Atlas", "Live2D Cubism", "VRM", "glTF"] as const;
@@ -42,10 +42,12 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
   const [catalogError, setCatalogError] = useState(false);
   const [activeCharacter, setActiveCharacter] = useState<ActiveCharacterSnapshot | null>(null);
   const [activeTheme, setActiveTheme] = useState<ActiveThemeSnapshot | null>(null);
+  const [activeVoice, setActiveVoice] = useState<ActiveVoiceSnapshot | null>(null);
   const [activationError, setActivationError] = useState<string | null>(null);
   const [activating, setActivating] = useState<string | null>(null);
   const [pendingImport, setPendingImport] = useState<{ sourcePath: string; report: AssetPreviewReport } | null>(null);
   const [previewPosterUrl, setPreviewPosterUrl] = useState<string | null>(null);
+  const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
@@ -63,11 +65,12 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
   const completion = useMemo(() => checks.filter((check) => check.status === "通过").length, []);
 
   useEffect(() => {
-    void Promise.all([desktopApi.assetCatalog(), desktopApi.activeCharacter(), desktopApi.activeTheme()])
-      .then(([nextCatalog, nextActiveCharacter, nextActiveTheme]) => {
+    void Promise.all([desktopApi.assetCatalog(), desktopApi.activeCharacter(), desktopApi.activeTheme(), desktopApi.activeVoice()])
+      .then(([nextCatalog, nextActiveCharacter, nextActiveTheme, nextActiveVoice]) => {
         setCatalog(nextCatalog);
         setActiveCharacter(nextActiveCharacter);
         setActiveTheme(nextActiveTheme);
+        setActiveVoice(nextActiveVoice);
       })
       .catch(() => setCatalogError(true));
   }, []);
@@ -80,6 +83,17 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
     }
     const url = URL.createObjectURL(new Blob([new Uint8Array(poster.bytes)], { type: poster.mediaType }));
     setPreviewPosterUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [pendingImport]);
+
+  useEffect(() => {
+    const preview = pendingImport?.report.voicePreview;
+    if (!preview) {
+      setPreviewAudioUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([new Uint8Array(preview.bytes)], { type: preview.mediaType }));
+    setPreviewAudioUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [pendingImport]);
 
@@ -104,6 +118,18 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
       onThemeChange(nextTheme);
     } catch (error) {
       setActivationError(error instanceof Error ? error.message : "主题激活失败");
+    } finally {
+      setActivating(null);
+    }
+  }
+
+  async function activateVoice(assetId: string) {
+    setActivating(assetId);
+    setActivationError(null);
+    try {
+      setActiveVoice(await desktopApi.activateVoice(assetId));
+    } catch (error) {
+      setActivationError(error instanceof Error ? error.message : "声音激活失败");
     } finally {
       setActivating(null);
     }
@@ -291,8 +317,14 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
             <div><dt>包内容</dt><dd>{pendingImport.report.summary.fileCount} 个文件 · {formatBytes(pendingImport.report.summary.totalBytes)}</dd></div>
           </dl>
           {pendingImport.report.theme ? <ThemePreview theme={pendingImport.report.theme} /> : null}
+          {pendingImport.report.voicePreview && previewAudioUrl ? <div className="voice-preview">
+            <div><strong>{pendingImport.report.voicePreview.cue}</strong><span>{pendingImport.report.voicePreview.mediaType} · {formatBytes(pendingImport.report.voicePreview.bytes.length)} · {pendingImport.report.voicePreview.gainDb} dB</span></div>
+            <p>{pendingImport.report.voicePreview.captions["zh-CN"] ?? pendingImport.report.voicePreview.captions.en ?? Object.values(pendingImport.report.voicePreview.captions)[0]}</p>
+            <audio controls preload="metadata" src={previewAudioUrl}>当前环境不支持音频预览。</audio>
+          </div> : null}
           {!pendingImport.report.poster ? <p className="asset-preview-warning">资源包未声明静态预览海报；元数据已验证，但安装前无法展示包内视觉内容。</p> : null}
           {pendingImport.report.theme ? <p className="asset-preview-warning">主题预览只作用于此卡片；主题包不能注入 CSS、脚本、字体或网络资源，也不能改变权限和危险状态语义。</p> : null}
+          {pendingImport.report.voice ? <p className="asset-preview-warning">声音预览来自完整性验证后的本地字节，不执行代码、不访问网络；平台权限、危险、错误与恢复提示音不可被第三方声音替换。</p> : null}
           {pendingImport.report.summary.rendererBackend && !["sprite-sequence", "sprite-atlas"].includes(pendingImport.report.summary.rendererBackend) ? <p className="asset-preview-warning">该后端当前只能验证和安装，Pet Overlay 尚不能真实渲染，将使用内置角色。</p> : null}
           <div className="asset-preview-actions"><button className="text-button" type="button" disabled={importing} onClick={() => setPendingImport(null)}>取消</button><button className="primary-button" type="button" disabled={importing} onClick={() => void confirmInstall()}>{importing ? "正在复验…" : "确认并安装"}</button></div>
         </div> : null}
@@ -343,7 +375,7 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
       <section className="asset-catalog" aria-labelledby="asset-catalog-heading">
         <div className="section-heading">
           <div><p className="card-label">INSTALLED ASSETS</p><h3 id="asset-catalog-heading">本机资源目录</h3></div>
-          <div className="asset-catalog-actions"><strong>{catalog?.assets.length ?? 0} 个可用</strong>{activeTheme?.source === "installed" ? <button className="text-button" type="button" disabled={activating !== null} onClick={() => void activateTheme("builtin.nimora")}>恢复内置主题</button> : null}</div>
+          <div className="asset-catalog-actions"><strong>{catalog?.assets.length ?? 0} 个可用</strong>{activeTheme?.source === "installed" ? <button className="text-button" type="button" disabled={activating !== null} onClick={() => void activateTheme("builtin.nimora")}>恢复内置主题</button> : null}{activeVoice?.source === "installed" ? <button className="text-button" type="button" disabled={activating !== null} onClick={() => void activateVoice("builtin.silent")}>恢复静音声音</button> : null}</div>
         </div>
         {catalogError ? <p className="catalog-empty error">资源目录暂时不可读取，当前角色不受影响。</p> : null}
         {!catalogError && catalog === null ? <p className="catalog-empty">正在验证已安装资源…</p> : null}
@@ -351,7 +383,7 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
         {activeCharacter?.fallbackReason ? <p className="catalog-empty error">已安全回退默认角色：{activeCharacter.fallbackReason}</p> : null}
         {activationError ? <p className="catalog-empty error">{activationError}</p> : null}
         {catalog && catalog.assets.length > 0 ? <ul className="asset-list">
-          {catalog.assets.map((asset) => <AssetCatalogItem asset={asset} active={asset.assetType === "theme" ? activeTheme?.assetId === asset.id : activeCharacter?.assetId === asset.id} activating={activating === asset.id} key={asset.id} onActivateCharacter={activate} onActivateTheme={activateTheme} />)}
+          {catalog.assets.map((asset) => <AssetCatalogItem asset={asset} active={asset.assetType === "theme" ? activeTheme?.assetId === asset.id : asset.assetType === "voice" ? activeVoice?.assetId === asset.id : activeCharacter?.assetId === asset.id} activating={activating === asset.id} key={asset.id} onActivateCharacter={activate} onActivateTheme={activateTheme} onActivateVoice={activateVoice} />)}
         </ul> : null}
         {catalog && catalog.rejected.length > 0 ? <details className="rejected-assets">
           <summary>{catalog.rejected.length} 个资源未通过健康检查</summary>
@@ -392,12 +424,12 @@ function themePreviewStyle(theme: ThemeDescriptor): CSSProperties {
   return { "--preview-surface": theme.colors.surfaceElevated, "--preview-text": theme.colors.text, "--preview-muted": theme.colors.textMuted, "--preview-border": theme.colors.border, "--preview-accent": theme.colors.accent, "--preview-accent-soft": theme.colors.accentSoft } as CSSProperties;
 }
 
-function AssetCatalogItem({ asset, active, activating, onActivateCharacter, onActivateTheme }: { asset: AssetPackageSummary; active: boolean; activating: boolean; onActivateCharacter(assetId: string): Promise<void>; onActivateTheme(assetId: string): Promise<void> }) {
+function AssetCatalogItem({ asset, active, activating, onActivateCharacter, onActivateTheme, onActivateVoice }: { asset: AssetPackageSummary; active: boolean; activating: boolean; onActivateCharacter(assetId: string): Promise<void>; onActivateTheme(assetId: string): Promise<void>; onActivateVoice(assetId: string): Promise<void> }) {
   const displayName = assetDisplayName(asset);
   return <li>
     <span className="asset-kind">{asset.assetType.slice(0, 1).toUpperCase()}</span>
     <div><strong>{displayName}</strong><p>{asset.id} · {asset.version}</p></div>
-    {asset.assetType === "character" ? <button className="text-button" type="button" disabled={active || activating} onClick={() => void onActivateCharacter(asset.id)}>{active ? "当前角色" : activating ? "验证中…" : "设为角色"}</button> : asset.assetType === "theme" ? <button className="text-button" type="button" disabled={active || activating} onClick={() => void onActivateTheme(asset.id)}>{active ? "当前主题" : activating ? "验证中…" : "设为主题"}</button> : <span className="asset-backend">{asset.rendererBackend ?? "无渲染后端"}</span>}
+    {asset.assetType === "character" ? <button className="text-button" type="button" disabled={active || activating} onClick={() => void onActivateCharacter(asset.id)}>{active ? "当前角色" : activating ? "验证中…" : "设为角色"}</button> : asset.assetType === "theme" ? <button className="text-button" type="button" disabled={active || activating} onClick={() => void onActivateTheme(asset.id)}>{active ? "当前主题" : activating ? "验证中…" : "设为主题"}</button> : asset.assetType === "voice" ? <button className="text-button" type="button" disabled={active || activating} onClick={() => void onActivateVoice(asset.id)}>{active ? "当前声音" : activating ? "验证中…" : "设为声音"}</button> : <span className="asset-backend">{asset.rendererBackend ?? "无渲染后端"}</span>}
   </li>;
 }
 

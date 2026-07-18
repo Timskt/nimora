@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { navigation, navItemClassName, runtimeActivities } from "./App";
+import { navigation, navItemClassName, runtimeActivities, voiceGain } from "./App";
 
 describe("navItemClassName", () => {
   it("adds the active state only to the selected destination", () => {
@@ -12,6 +12,14 @@ describe("navigation", () => {
   it("exposes the local Agent workspace as a first-class destination", () => {
     expect(navigation).toContain("Agent");
     expect(navigation).toContain("自动化");
+  });
+});
+
+describe("voiceGain", () => {
+  it("converts bounded decibels to a safe browser volume", () => {
+    expect(voiceGain(0)).toBe(1);
+    expect(voiceGain(-6)).toBeCloseTo(0.501, 3);
+    expect(voiceGain(6)).toBe(1);
   });
 });
 
