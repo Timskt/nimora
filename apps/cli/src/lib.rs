@@ -12,7 +12,7 @@ use nimora_agent_workspace_host::{
 };
 use nimora_persistence_sqlite::{
     AgentHistoryRecord, SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
-    SqliteAutoModeRepository,
+    SqliteAutoModeRepository, SqliteWorkspaceSnapshotRepository, StoredWorkspaceSnapshot,
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -144,7 +144,7 @@ fn help() -> Value {
             "nimora ai goal auto start --database <path> --goal-id <uuid> --input <path|->",
             "nimora ai goal auto status --database <path> --session-id <uuid>",
             "nimora ai goal auto pause --database <path> --session-id <uuid>",
-            "nimora ai goal auto resume --database <path> --session-id <uuid> --workspace-revision <revision>",
+            "nimora ai goal auto resume --database <path> --session-id <uuid> --workspace-root <path>",
             "nimora ai goal auto cancel --database <path> --session-id <uuid>"
         ]
     })
@@ -382,7 +382,7 @@ struct AutoModeStartInput {
     budget: AgentBudget,
     maximum_data_classification: DataClassification,
     tool_allowlist: Vec<String>,
-    workspace_revision: String,
+    workspace_root: String,
 }
 
 fn goal_repository(path: &str) -> Result<SqliteAgentGoalRepository, CliError> {
@@ -544,13 +544,21 @@ fn goal_auto_start(arguments: &[&str]) -> Result<Value, CliError> {
         .get(goal_id)
         .map_err(goal_storage_error)?
         .ok_or_else(|| CliError::new("goal-not-found", "Agent Goal was not found", 5))?;
+    let scanner = WorkspaceScanner::open(
+        Path::new(&input.workspace_root),
+        WorkspaceScanPolicy::default(),
+    )
+    .map_err(workspace_auto_error)?;
+    let workspace = scanner
+        .scan(1, None, current_time_ms()?)
+        .map_err(workspace_auto_error)?;
     let policy = AutoModePolicy::new(
         input.max_cycles,
         input.max_concurrency,
         input.budget,
         input.maximum_data_classification,
         input.tool_allowlist,
-        input.workspace_revision,
+        workspace.fingerprint.clone(),
     )
     .map_err(auto_input_error)?;
     let session = AutoModeSession::start(
@@ -560,10 +568,20 @@ fn goal_auto_start(arguments: &[&str]) -> Result<Value, CliError> {
         current_time_ms()?.max(snapshot.goal.updated_at_ms),
     )
     .map_err(auto_input_error)?;
+    let stored =
+        StoredWorkspaceSnapshot::new(session.id, scanner.root_fingerprint(), workspace.clone())
+            .map_err(auto_storage_error)?;
+    workspace_repository(database)?
+        .create(&stored)
+        .map_err(auto_storage_error)?;
     auto_repository(database)?
         .create(&session)
         .map_err(auto_storage_error)?;
-    Ok(json!({"spec": "nimora.ai-auto-mode-session/1", "session": session}))
+    Ok(json!({
+        "spec": "nimora.ai-auto-mode-session/1",
+        "session": session,
+        "workspace": workspace
+    }))
 }
 
 fn goal_auto_status(arguments: &[&str]) -> Result<Value, CliError> {
@@ -590,7 +608,7 @@ fn goal_auto_pause(arguments: &[&str]) -> Result<Value, CliError> {
 }
 
 fn goal_auto_resume(arguments: &[&str]) -> Result<Value, CliError> {
-    let (database, session_id, workspace_revision) = parse_auto_resume(arguments)?;
+    let (database, session_id, workspace_root) = parse_auto_resume(arguments)?;
     let repository = auto_repository(database)?;
     let mut session = load_auto_session_from(&repository, session_id)?;
     let snapshot = goal_repository(database)?
@@ -599,11 +617,56 @@ fn goal_auto_resume(arguments: &[&str]) -> Result<Value, CliError> {
         .ok_or_else(|| CliError::new("goal-not-found", "Agent Goal was not found", 5))?;
     let previous = session.updated_at_ms;
     let fingerprint = session.policy_fingerprint.clone();
+    let workspace_repository = workspace_repository(database)?;
+    let stored = workspace_repository
+        .latest(session_id)
+        .map_err(auto_storage_error)?
+        .ok_or_else(|| CliError::new("workspace", "Auto Mode workspace snapshot is missing", 4))?;
+    let scanner = WorkspaceScanner::open(Path::new(workspace_root), WorkspaceScanPolicy::default())
+        .map_err(workspace_auto_error)?;
+    if scanner.root_fingerprint() != stored.root_fingerprint {
+        return Err(CliError::new(
+            "workspace-changed",
+            "Auto Mode workspace root changed",
+            3,
+        ));
+    }
+    let candidate = scanner
+        .scan(
+            stored.snapshot.revision,
+            stored.snapshot.parent_fingerprint.clone(),
+            current_time_ms()?,
+        )
+        .map_err(workspace_auto_error)?;
+    if candidate.fingerprint != stored.snapshot.fingerprint {
+        let successor = scanner
+            .scan(
+                stored.snapshot.revision.saturating_add(1),
+                Some(stored.snapshot.fingerprint.clone()),
+                current_time_ms()?,
+            )
+            .map_err(workspace_auto_error)?;
+        let successor =
+            StoredWorkspaceSnapshot::new(session_id, stored.root_fingerprint, successor)
+                .map_err(auto_storage_error)?;
+        workspace_repository
+            .append(
+                &successor,
+                stored.snapshot.revision,
+                &stored.snapshot.fingerprint,
+            )
+            .map_err(auto_storage_error)?;
+        return Err(CliError::new(
+            "workspace-changed",
+            "Auto Mode workspace contents changed",
+            3,
+        ));
+    }
     session
         .resume(
             &snapshot.goal,
             &snapshot.current_plan,
-            workspace_revision,
+            &candidate.fingerprint,
             &fingerprint,
             current_time_ms()?.max(previous),
         )
@@ -676,7 +739,7 @@ fn parse_auto_resume<'a>(
 ) -> Result<(&'a str, uuid::Uuid, &'a str), CliError> {
     let mut database = None;
     let mut session_id = None;
-    let mut workspace_revision = None;
+    let mut workspace_root = None;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index] {
@@ -688,8 +751,8 @@ fn parse_auto_resume<'a>(
                 session_id = Some(parse_session_id(arguments[index + 1])?);
                 index += 2;
             }
-            "--workspace-revision" if index + 1 < arguments.len() => {
-                workspace_revision = Some(arguments[index + 1]);
+            "--workspace-root" if index + 1 < arguments.len() => {
+                workspace_root = Some(arguments[index + 1]);
                 index += 2;
             }
             _ => return Err(auto_usage_error()),
@@ -698,7 +761,7 @@ fn parse_auto_resume<'a>(
     Ok((
         database.ok_or_else(auto_usage_error)?,
         session_id.ok_or_else(auto_usage_error)?,
-        workspace_revision.ok_or_else(auto_usage_error)?,
+        workspace_root.ok_or_else(auto_usage_error)?,
     ))
 }
 
@@ -721,6 +784,14 @@ fn auto_storage_error(_: impl std::fmt::Display) -> CliError {
         "Auto Mode storage operation failed",
         10,
     )
+}
+
+fn workspace_repository(path: &str) -> Result<SqliteWorkspaceSnapshotRepository, CliError> {
+    SqliteWorkspaceSnapshotRepository::open(Path::new(path)).map_err(auto_storage_error)
+}
+
+fn workspace_auto_error(_: impl std::fmt::Display) -> CliError {
+    CliError::new("workspace", "Auto Mode workspace scan failed closed", 4)
 }
 
 fn parse_goal_database_input<'a>(arguments: &'a [&'a str]) -> Result<(&'a str, &'a str), CliError> {

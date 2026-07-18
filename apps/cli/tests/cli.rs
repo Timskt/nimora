@@ -2,7 +2,7 @@ use serde_json::Value;
 use std::{
     fs,
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -41,7 +41,9 @@ fn nimora_with_stdin(arguments: &[&str], input: &[u8]) -> Output {
     child.wait_with_output().expect("wait for nimora")
 }
 
-fn create_auto_mode_session(database_path: &str) -> (String, String) {
+fn create_auto_mode_session(database_path: &str) -> (String, String, PathBuf) {
+    let workspace = temporary_directory("auto-mode-workspace");
+    fs::write(workspace.join("task.txt"), b"initial").expect("workspace file");
     let created = nimora_with_stdin(
         &[
             "ai",
@@ -70,7 +72,22 @@ fn create_auto_mode_session(database_path: &str) -> (String, String) {
             "--input",
             "-",
         ],
-        br#"{"maxCycles":4,"maxConcurrency":1,"budget":{"maxSteps":4,"maxToolCalls":2,"maxElapsedMs":10000,"maxInputTokens":1000,"maxOutputTokens":500,"maxCostMicrounits":0},"maximumDataClassification":"personal","toolAllowlist":["pet.state.read"],"workspaceRevision":"git:abc"}"#,
+        &serde_json::to_vec(&serde_json::json!({
+            "maxCycles": 4,
+            "maxConcurrency": 1,
+            "budget": {
+                "maxSteps": 4,
+                "maxToolCalls": 2,
+                "maxElapsedMs": 10000,
+                "maxInputTokens": 1000,
+                "maxOutputTokens": 500,
+                "maxCostMicrounits": 0
+            },
+            "maximumDataClassification": "personal",
+            "toolAllowlist": ["pet.state.read"],
+            "workspaceRoot": workspace.to_str().expect("workspace path")
+        }))
+        .expect("start input"),
     );
     assert!(started.status.success());
     let started: Value = serde_json::from_slice(&started.stdout).expect("start output");
@@ -81,7 +98,26 @@ fn create_auto_mode_session(database_path: &str) -> (String, String) {
             .as_str()
             .expect("session ID")
             .to_owned(),
+        workspace,
     )
+}
+
+fn resume_auto_mode(database_path: &str, session_id: &str, workspace: &Path) -> Output {
+    nimora()
+        .args([
+            "ai",
+            "goal",
+            "auto",
+            "resume",
+            "--database",
+            database_path,
+            "--session-id",
+            session_id,
+            "--workspace-root",
+            workspace.to_str().expect("workspace root"),
+        ])
+        .output()
+        .expect("resume session")
 }
 
 #[test]
@@ -623,7 +659,7 @@ fn goal_cli_persists_revises_and_requires_completion_evidence() {
 fn auto_mode_cli_persists_and_revalidates_resume_bindings() {
     let database = temporary_database("auto-mode");
     let database_path = database.to_str().expect("database path");
-    let (_, session_id) = create_auto_mode_session(database_path);
+    let (_, session_id, workspace) = create_auto_mode_session(database_path);
 
     let paused = nimora()
         .args([
@@ -650,34 +686,40 @@ fn auto_mode_cli_persists_and_revalidates_resume_bindings() {
             database_path,
             "--session-id",
             &session_id,
-            "--workspace-revision",
-            "git:changed",
+            "--workspace-root",
+            std::env::temp_dir().to_str().expect("temporary root"),
         ])
         .output()
         .expect("reject changed workspace");
     assert_eq!(rejected.status.code(), Some(3));
     assert!(rejected.stdout.is_empty());
     let error: Value = serde_json::from_slice(&rejected.stderr).expect("JSON error");
-    assert_eq!(error["error"], "auto-mode-input");
+    assert_eq!(error["error"], "workspace-changed");
 
-    let resumed = nimora()
+    let resumed = resume_auto_mode(database_path, &session_id, &workspace);
+    assert!(resumed.status.success());
+    let resumed: Value = serde_json::from_slice(&resumed.stdout).expect("resume output");
+    assert_eq!(resumed["session"]["status"], "running");
+
+    let paused_again = nimora()
         .args([
             "ai",
             "goal",
             "auto",
-            "resume",
+            "pause",
             "--database",
             database_path,
             "--session-id",
             &session_id,
-            "--workspace-revision",
-            "git:abc",
         ])
         .output()
-        .expect("resume session");
-    assert!(resumed.status.success());
-    let resumed: Value = serde_json::from_slice(&resumed.stdout).expect("resume output");
-    assert_eq!(resumed["session"]["status"], "running");
+        .expect("pause session again");
+    assert!(paused_again.status.success());
+    fs::write(workspace.join("task.txt"), b"changed").expect("change workspace");
+    let drifted = resume_auto_mode(database_path, &session_id, &workspace);
+    assert_eq!(drifted.status.code(), Some(3));
+    let drift_error: Value = serde_json::from_slice(&drifted.stderr).expect("drift error");
+    assert_eq!(drift_error["error"], "workspace-changed");
 
     let cancelled = nimora()
         .args([
@@ -696,4 +738,5 @@ fn auto_mode_cli_persists_and_revalidates_resume_bindings() {
     let cancelled: Value = serde_json::from_slice(&cancelled.stdout).expect("cancel output");
     assert_eq!(cancelled["session"]["status"], "cancelled");
     let _ = fs::remove_file(database);
+    fs::remove_dir_all(workspace).expect("remove workspace");
 }

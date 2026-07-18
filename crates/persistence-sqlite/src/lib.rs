@@ -8,6 +8,7 @@ mod automation_journal;
 mod backup;
 mod skill_approval_journal;
 mod skill_execution_history;
+mod workspace_snapshot_store;
 
 pub use agent_goal_store::{AgentGoalSnapshot, SqliteAgentGoalRepository};
 pub use auto_mode_checkpoint_store::SqliteAutoModeCheckpointRepository;
@@ -28,6 +29,7 @@ pub use skill_approval_journal::{
 pub use skill_execution_history::{
     SkillExecutionHistoryRecord, SkillExecutionHistoryStatus, SqliteSkillExecutionHistory,
 };
+pub use workspace_snapshot_store::{SqliteWorkspaceSnapshotRepository, StoredWorkspaceSnapshot};
 
 use nimora_agent_runtime::{AgentTask, ProviderFinishReason, ProviderUsage};
 use nimora_runtime_app::{
@@ -1191,6 +1193,25 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
         CREATE INDEX IF NOT EXISTS auto_mode_checkpoint_goal_idx
             ON auto_mode_checkpoint(goal_id, updated_at_ms DESC, session_id DESC);",
     )?;
+    ensure_workspace_snapshot_schema(connection)?;
+    Ok(())
+}
+
+fn ensure_workspace_snapshot_schema(connection: &Connection) -> Result<(), SqlitePersistenceError> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS agent_workspace_snapshot (
+            session_id TEXT NOT NULL,
+            revision INTEGER NOT NULL CHECK (revision > 0),
+            root_fingerprint TEXT NOT NULL,
+            snapshot_fingerprint TEXT NOT NULL UNIQUE,
+            created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+            schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (session_id, revision)
+        );
+        CREATE INDEX IF NOT EXISTS agent_workspace_snapshot_latest_idx
+            ON agent_workspace_snapshot(session_id, revision DESC);",
+    )?;
     Ok(())
 }
 
@@ -1429,6 +1450,10 @@ pub enum SqlitePersistenceError {
     InvalidAutoModeCheckpoint,
     #[error("Auto Mode checkpoint was changed by another writer")]
     AutoModeCheckpointConflict,
+    #[error("Workspace snapshot record or request is invalid")]
+    InvalidWorkspaceSnapshot,
+    #[error("Workspace snapshot was changed by another writer")]
+    WorkspaceSnapshotConflict,
     #[error("Automation journal record or state transition is invalid")]
     InvalidAutomationJournal,
     #[error("Automation Agent journal record or state transition is invalid")]
@@ -1457,6 +1482,8 @@ pub enum SqlitePersistenceError {
     UnsupportedAutoModeSessionVersion(u32),
     #[error("Auto Mode checkpoint version {0} is unsupported")]
     UnsupportedAutoModeCheckpointVersion(u32),
+    #[error("Workspace snapshot version {0} is unsupported")]
+    UnsupportedWorkspaceSnapshotVersion(u32),
     #[error("outbox lease is not owned by this consumer")]
     OutboxLeaseNotOwned,
     #[error("backup or restore request is invalid")]
