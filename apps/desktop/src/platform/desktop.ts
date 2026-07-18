@@ -86,6 +86,20 @@ export interface DesktopAutoModeTurnResult {
   requestFingerprint: string | null;
 }
 
+export interface DesktopAutoModeJobSnapshot {
+  spec: "nimora.desktop-auto-mode-job/1";
+  jobId: string;
+  sessionId: string;
+  status: "starting" | "running" | "pausing" | "cancelling" | "paused" | "completed" | "cancelled" | "failed" | "indeterminate";
+  turnsExecuted: number;
+  cacheHits: number;
+  checkpointSequence: number;
+  pauseReason: string | null;
+  errorCode: string | null;
+  startedAtMs: number;
+  updatedAtMs: number;
+}
+
 export interface AgentHistoryRecord {
   spec: "nimora.agent-history/1";
   task: { id: string; createdAtMs: number; providerId: string; status: string };
@@ -494,6 +508,9 @@ export interface DesktopApi {
   cancelSkillExecution(executionId: string): Promise<boolean>;
   runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
   resumeAutoModeTurn(request: ResumeAutoModeTurnRequest): Promise<DesktopAutoModeTurnResult>;
+  autoModeJobStatus(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
+  pauseAutoModeJob(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
+  cancelAutoModeJob(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
   prepareAgentTool(toolId: string, argumentsValue: Record<string, unknown>): Promise<AgentToolResult>;
   confirmAgentTool(invocationId: string): Promise<AgentToolResult>;
   confirmAgentRunTool(invocationId: string): Promise<LocalAgentResult>;
@@ -738,6 +755,15 @@ export function createDesktopApi(
           requestFingerprint: null,
         };
       },
+      async autoModeJobStatus() {
+        throw new Error("desktop-host-required");
+      },
+      async pauseAutoModeJob() {
+        throw new Error("desktop-host-required");
+      },
+      async cancelAutoModeJob() {
+        throw new Error("desktop-host-required");
+      },
       async prepareAgentTool(toolId, argumentsValue) {
         const invocationId = crypto.randomUUID();
         const requiresConfirmation = toolId === "pet.animation.play" || toolId === "pet.position.move";
@@ -864,6 +890,9 @@ export function createDesktopApi(
         offline: request.offline ?? true,
       },
     }) as DesktopAutoModeTurnResult,
+    autoModeJobStatus: async (jobId) => await invokeCommand("auto_mode_job_status", { jobId }) as DesktopAutoModeJobSnapshot,
+    pauseAutoModeJob: async (jobId) => await invokeCommand("pause_auto_mode_job", { jobId }) as DesktopAutoModeJobSnapshot,
+    cancelAutoModeJob: async (jobId) => await invokeCommand("cancel_auto_mode_job", { jobId }) as DesktopAutoModeJobSnapshot,
     prepareAgentTool: async (toolId, argumentsValue) => await invokeCommand("prepare_agent_tool", { request: { toolId, arguments: argumentsValue } }) as AgentToolResult,
     confirmAgentTool: async (invocationId) => await invokeCommand("confirm_agent_tool", { request: { invocationId } }) as AgentToolResult,
     confirmAgentRunTool: async (invocationId) => await invokeCommand("confirm_agent_run_tool", { request: { invocationId } }) as LocalAgentResult,

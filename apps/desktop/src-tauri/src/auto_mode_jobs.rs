@@ -1,3 +1,4 @@
+use nimora_agent_runtime::CancellationFlag;
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -78,17 +79,26 @@ pub enum AutoModeJobControl {
 }
 
 #[derive(Debug, Clone)]
-pub struct AutoModeJobControlHandle(Arc<AtomicU8>);
+pub struct AutoModeJobControlHandle {
+    control: Arc<AtomicU8>,
+    cancellation: CancellationFlag,
+}
 
 impl AutoModeJobControlHandle {
     /// Returns the strongest control request currently visible to the runner.
     #[must_use]
     pub fn requested(&self) -> AutoModeJobControl {
-        match self.0.load(Ordering::Acquire) {
+        match self.control.load(Ordering::Acquire) {
             CONTROL_PAUSE => AutoModeJobControl::Pause,
             CONTROL_CANCEL => AutoModeJobControl::Cancel,
             _ => AutoModeJobControl::Continue,
         }
+    }
+
+    /// Returns the cancellation flag shared with the active Provider and Tool turn.
+    #[must_use]
+    pub fn cancellation(&self) -> CancellationFlag {
+        self.cancellation.clone()
     }
 }
 
@@ -96,6 +106,7 @@ impl AutoModeJobControlHandle {
 struct AutoModeJobRecord {
     snapshot: AutoModeJobSnapshot,
     control: Arc<AtomicU8>,
+    cancellation: CancellationFlag,
 }
 
 #[derive(Debug, Default)]
@@ -110,6 +121,23 @@ pub struct AutoModeJobSupervisor {
 }
 
 impl AutoModeJobSupervisor {
+    /// Returns retained snapshots for all currently active jobs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry is unavailable.
+    pub fn active_snapshots(&self) -> Result<Vec<AutoModeJobSnapshot>, AutoModeJobError> {
+        let state = self.state.lock().map_err(|_| AutoModeJobError::Poisoned)?;
+        let mut snapshots = state
+            .active_sessions
+            .values()
+            .filter_map(|job_id| state.jobs.get(job_id))
+            .map(|record| record.snapshot.clone())
+            .collect::<Vec<_>>();
+        snapshots.sort_unstable_by_key(|snapshot| snapshot.started_at_ms);
+        Ok(snapshots)
+    }
+
     /// Atomically reserves a new job for one persistent Auto Mode session.
     ///
     /// # Errors
@@ -127,15 +155,23 @@ impl AutoModeJobSupervisor {
         let job_id = Uuid::now_v7();
         let snapshot = AutoModeJobSnapshot::starting(job_id, session_id, now_ms);
         let control = Arc::new(AtomicU8::new(CONTROL_CONTINUE));
+        let cancellation = CancellationFlag::default();
         state.active_sessions.insert(session_id, job_id);
         state.jobs.insert(
             job_id,
             AutoModeJobRecord {
                 snapshot: snapshot.clone(),
                 control: Arc::clone(&control),
+                cancellation: cancellation.clone(),
             },
         );
-        Ok((snapshot, AutoModeJobControlHandle(control)))
+        Ok((
+            snapshot,
+            AutoModeJobControlHandle {
+                control,
+                cancellation,
+            },
+        ))
     }
 
     /// Returns the latest immutable snapshot retained for a job.
@@ -229,6 +265,36 @@ impl AutoModeJobSupervisor {
         )
     }
 
+    /// Cooperatively cancels every active job without holding the registry during runner work.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry is unavailable or time moves backwards.
+    pub fn request_cancel_all(
+        &self,
+        now_ms: u64,
+    ) -> Result<Vec<AutoModeJobSnapshot>, AutoModeJobError> {
+        let mut state = self.state.lock().map_err(|_| AutoModeJobError::Poisoned)?;
+        let active_job_ids = state.active_sessions.values().copied().collect::<Vec<_>>();
+        let mut snapshots = Vec::with_capacity(active_job_ids.len());
+        for job_id in active_job_ids {
+            let record = state
+                .jobs
+                .get_mut(&job_id)
+                .ok_or(AutoModeJobError::RegistryCorrupt)?;
+            if now_ms < record.snapshot.updated_at_ms {
+                return Err(AutoModeJobError::TimeMovedBackwards);
+            }
+            record.control.store(CONTROL_CANCEL, Ordering::Release);
+            record.cancellation.cancel();
+            record.snapshot.status = AutoModeJobStatus::Cancelling;
+            record.snapshot.updated_at_ms = now_ms;
+            snapshots.push(record.snapshot.clone());
+        }
+        snapshots.sort_unstable_by_key(|snapshot| snapshot.started_at_ms);
+        Ok(snapshots)
+    }
+
     /// Records a terminal outcome and releases the session for a later job.
     ///
     /// # Errors
@@ -254,6 +320,9 @@ impl AutoModeJobSupervisor {
                 .ok_or(AutoModeJobError::NotFound)?;
             if record.snapshot.status.is_terminal() {
                 return Err(AutoModeJobError::InvalidTransition);
+            }
+            if now_ms < record.snapshot.updated_at_ms {
+                return Err(AutoModeJobError::TimeMovedBackwards);
             }
             record.snapshot.status = status;
             record.snapshot.pause_reason = pause_reason;
@@ -283,7 +352,11 @@ impl AutoModeJobSupervisor {
         ) {
             return Err(AutoModeJobError::InvalidTransition);
         }
+        if now_ms < record.snapshot.updated_at_ms {
+            return Err(AutoModeJobError::TimeMovedBackwards);
+        }
         record.control.store(control, Ordering::Release);
+        record.cancellation.cancel();
         record.snapshot.status = status;
         record.snapshot.updated_at_ms = now_ms;
         Ok(record.snapshot.clone())
@@ -300,6 +373,9 @@ impl AutoModeJobSupervisor {
             .jobs
             .get_mut(&job_id)
             .ok_or(AutoModeJobError::NotFound)?;
+        if now_ms < record.snapshot.updated_at_ms {
+            return Err(AutoModeJobError::TimeMovedBackwards);
+        }
         update(&mut record.snapshot)?;
         record.snapshot.updated_at_ms = now_ms;
         Ok(record.snapshot.clone())
@@ -314,6 +390,10 @@ pub enum AutoModeJobError {
     NotFound,
     #[error("Auto Mode desktop job transition is invalid")]
     InvalidTransition,
+    #[error("Auto Mode desktop job time moved backwards")]
+    TimeMovedBackwards,
+    #[error("Auto Mode desktop job registry is inconsistent")]
+    RegistryCorrupt,
     #[error("Auto Mode desktop job registry is unavailable")]
     Poisoned,
 }
@@ -339,9 +419,11 @@ mod tests {
     fn publishes_pause_and_cancel_to_runner() {
         let supervisor = AutoModeJobSupervisor::default();
         let (job, control) = supervisor.start(Uuid::now_v7(), 100).expect("job");
+        let cancellation = control.cancellation();
         supervisor.mark_running(job.job_id, 101).expect("running");
         supervisor.request_pause(job.job_id, 102).expect("pause");
         assert_eq!(control.requested(), AutoModeJobControl::Pause);
+        assert!(cancellation.is_cancelled());
         supervisor.request_cancel(job.job_id, 103).expect("cancel");
         assert_eq!(control.requested(), AutoModeJobControl::Cancel);
     }
@@ -367,5 +449,46 @@ mod tests {
             completed
         );
         supervisor.start(session_id, 104).expect("replacement job");
+    }
+
+    #[test]
+    fn cancels_all_active_jobs_without_touching_history() {
+        let supervisor = AutoModeJobSupervisor::default();
+        let (first, first_control) = supervisor.start(Uuid::now_v7(), 100).expect("first");
+        let (second, second_control) = supervisor.start(Uuid::now_v7(), 101).expect("second");
+        supervisor.mark_running(first.job_id, 102).expect("running");
+        supervisor
+            .finish(second.job_id, AutoModeJobStatus::Completed, None, None, 102)
+            .expect("completed");
+        let (third, third_control) = supervisor.start(Uuid::now_v7(), 103).expect("third");
+
+        let cancelled = supervisor.request_cancel_all(104).expect("cancel all");
+
+        assert_eq!(cancelled.len(), 2);
+        assert!(
+            cancelled
+                .iter()
+                .all(|job| job.status == AutoModeJobStatus::Cancelling)
+        );
+        assert_eq!(first_control.requested(), AutoModeJobControl::Cancel);
+        assert_eq!(third_control.requested(), AutoModeJobControl::Cancel);
+        assert_eq!(second_control.requested(), AutoModeJobControl::Continue);
+        assert_eq!(
+            supervisor.snapshot(second.job_id).expect("history").status,
+            AutoModeJobStatus::Completed
+        );
+        assert_eq!(supervisor.active_snapshots().expect("active").len(), 2);
+        assert_eq!(third.job_id, cancelled[1].job_id);
+    }
+
+    #[test]
+    fn rejects_time_regression() {
+        let supervisor = AutoModeJobSupervisor::default();
+        let (job, _) = supervisor.start(Uuid::now_v7(), 100).expect("job");
+
+        assert_eq!(
+            supervisor.mark_running(job.job_id, 99),
+            Err(AutoModeJobError::TimeMovedBackwards)
+        );
     }
 }

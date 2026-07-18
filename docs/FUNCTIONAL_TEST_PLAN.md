@@ -486,3 +486,5 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-110 | Job Pause/Cancel 控制 | Pause 与 Cancel 使用独立控制信号；Cancel 可覆盖未收敛 Pause，终态后任何控制稳定拒绝 | P0 |
 | AGT-111 | Job 退出收敛 | Safe/Recovery Mode、应用退出与宿主崩溃均收敛持久 Session/Task/Attempt；超时结果进入 `indeterminate` | P0 |
 | AGT-112 | Job 版本化快照 | Desktop、TypeScript 与 UI 使用 `nimora.desktop-auto-mode-job/1`，浏览器预览不得伪造宿主执行 | P0 |
+| AGT-113 | Job 全量取消隔离 | 应用退出只向活跃 Job 发布共享取消信号，已完成历史不改变；控制广播不持有锁等待 Runner，时间倒退整体拒绝 | P0 |
+| AGT-114 | 在途取消确定性 | Provider/Tool 在途收到 Pause/Cancel 后，只有可证明未产生副作用或已原子提交的结果可写确定终态；其余 Attempt 与 Job 标记 `indeterminate`，不得自动重放 | P0 |

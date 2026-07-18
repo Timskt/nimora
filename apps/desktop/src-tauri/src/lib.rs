@@ -1,5 +1,6 @@
 pub mod auto_mode_jobs;
 
+use auto_mode_jobs::{AutoModeJobSnapshot, AutoModeJobSupervisor};
 use nimora_agent_auto_host::{
     AutoModeExecutionRequest, AutoModeExecutionResult, AutoModeExecutionService,
     AutoModeRecoveryService, CommittedAutoModeTurn,
@@ -106,7 +107,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
-    AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
     WindowEvent,
     menu::{Menu, MenuItem},
     tray::{TrayIconBuilder, TrayIconEvent},
@@ -175,6 +176,7 @@ struct DesktopState {
     skill_event_sessions: Mutex<HashMap<String, SkillEventSession>>,
     active_agent_tasks: Mutex<HashMap<Uuid, CancellationFlag>>,
     active_automation_runs: Mutex<HashMap<Uuid, CancellationFlag>>,
+    auto_mode_jobs: AutoModeJobSupervisor,
     execution_controller: ExecutionController,
     ollama_worker: Option<PathBuf>,
     startup: StartupStatus,
@@ -443,6 +445,7 @@ impl DesktopState {
             skill_event_sessions: Mutex::new(HashMap::new()),
             active_agent_tasks: Mutex::new(HashMap::new()),
             active_automation_runs: Mutex::new(HashMap::new()),
+            auto_mode_jobs: AutoModeJobSupervisor::default(),
             execution_controller: ExecutionController::default(),
             ollama_worker,
             startup: StartupStatus {
@@ -515,6 +518,7 @@ impl DesktopState {
             skill_event_sessions: Mutex::new(HashMap::new()),
             active_agent_tasks: Mutex::new(HashMap::new()),
             active_automation_runs: Mutex::new(HashMap::new()),
+            auto_mode_jobs: AutoModeJobSupervisor::default(),
             execution_controller: ExecutionController::default(),
             ollama_worker,
             startup: StartupStatus {
@@ -1935,6 +1939,39 @@ fn resume_auto_mode_turn(
     state: State<'_, DesktopState>,
 ) -> Result<DesktopAutoModeTurnResult, DesktopError> {
     resume_auto_mode_turn_inner(request, &state)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn auto_mode_job_status(
+    job_id: Uuid,
+    state: State<'_, DesktopState>,
+) -> Result<AutoModeJobSnapshot, DesktopError> {
+    state.auto_mode_jobs.snapshot(job_id).map_err(agent_error)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn pause_auto_mode_job(
+    job_id: Uuid,
+    state: State<'_, DesktopState>,
+) -> Result<AutoModeJobSnapshot, DesktopError> {
+    state
+        .auto_mode_jobs
+        .request_pause(job_id, current_time_ms()?)
+        .map_err(agent_error)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn cancel_auto_mode_job(
+    job_id: Uuid,
+    state: State<'_, DesktopState>,
+) -> Result<AutoModeJobSnapshot, DesktopError> {
+    state
+        .auto_mode_jobs
+        .request_cancel(job_id, current_time_ms()?)
+        .map_err(agent_error)
 }
 
 fn resume_auto_mode_turn_inner(
@@ -6931,7 +6968,7 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
     reason = "desktop bootstrap enumerates the complete audited Tauri command surface"
 )]
 pub fn run() {
-    tauri::Builder::default()
+    let application = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol(ASSET_PROTOCOL, |context, request| {
             let state = context.app_handle().state::<DesktopState>();
@@ -6983,6 +7020,9 @@ pub fn run() {
             delete_agent_history,
             run_local_agent,
             resume_auto_mode_turn,
+            auto_mode_job_status,
+            pause_auto_mode_job,
+            cancel_auto_mode_job,
             prepare_agent_tool,
             confirm_agent_tool,
             confirm_agent_run_tool,
@@ -7045,8 +7085,16 @@ pub fn run() {
             invoke_user_program_capability,
             stop_user_program
         ])
-        .run(tauri::generate_context!())
-        .expect("Nimora desktop runtime failed");
+        .build(tauri::generate_context!())
+        .expect("Nimora desktop runtime failed during bootstrap");
+    application.run(|app, event| {
+        if matches!(event, RunEvent::ExitRequested { .. }) {
+            let state = app.state::<DesktopState>();
+            if let Ok(now_ms) = current_time_ms() {
+                let _ = state.auto_mode_jobs.request_cancel_all(now_ms);
+            }
+        }
+    });
 }
 
 fn open_diagnostic_journal(directory: &Path, now_ms: u64) -> PersistentDiagnosticJournal {
