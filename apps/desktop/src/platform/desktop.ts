@@ -71,9 +71,17 @@ export interface OpenAiProviderConfig {
   defaultModel: string | null;
   contextWindowTokens: number;
   maxOutputTokens: number;
+  reasoning: ProviderReasoningConfig | null;
   enabled: boolean;
   revision: number;
   credentialPresent: boolean;
+}
+
+export type ConcreteReasoningEffort = "minimal" | "low" | "medium" | "high" | "very_high" | "maximum";
+
+export interface ProviderReasoningConfig {
+  effortValues: Partial<Record<ConcreteReasoningEffort, string>>;
+  mappingVersion: string;
 }
 
 export interface UpsertOpenAiProviderRequest extends Omit<OpenAiProviderConfig, "credentialPresent"> {}

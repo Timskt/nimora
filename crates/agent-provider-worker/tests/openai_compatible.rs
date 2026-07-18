@@ -4,7 +4,8 @@ use nimora_agent_provider_worker::{
 };
 use nimora_agent_runtime::{
     DataClassification, ProviderErrorKind, ProviderFinishReason, ProviderMessage,
-    ProviderMessageRole, ProviderRequest, ToolDescriptor, ToolEffect,
+    ProviderMessageRole, ProviderRequest, ReasoningEffort, ReasoningMapping, ToolDescriptor,
+    ToolEffect,
 };
 use nimora_runtime_core::CommandRisk;
 use serde_json::json;
@@ -165,6 +166,42 @@ fn parses_text_usage_and_tool_calls() {
     let document: serde_json::Value = serde_json::from_slice(&request[body_start..]).expect("JSON");
     assert_eq!(document["stream"], false);
     assert_eq!(document["messages"][0]["content"], "inspect profile");
+    assert!(document.get("reasoning_effort").is_none());
+}
+
+#[test]
+fn forwards_only_validated_reasoning_provider_value() {
+    let (endpoint, server) = mock_response(
+        "200 OK",
+        json!({"choices":[{"message":{"content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}),
+    );
+    let request = provider_request(Vec::new()).with_reasoning(
+        ReasoningMapping::new(
+            ReasoningEffort::High,
+            ReasoningEffort::High,
+            "vendor-high",
+            "mapping/7",
+        )
+        .expect("mapping"),
+    );
+    let response = execute(ProviderWorkerRequest::OpenAiComplete {
+        request,
+        endpoint,
+        credential: WorkerSecret::new("test-secret").expect("secret"),
+        timeout_ms: 2_000,
+    });
+    assert!(matches!(response, ProviderWorkerResponse::Completed { .. }));
+    let request = server.join().expect("server");
+    let body_start = request
+        .windows(4)
+        .position(|part| part == b"\r\n\r\n")
+        .expect("body")
+        + 4;
+    let document: serde_json::Value = serde_json::from_slice(&request[body_start..]).expect("JSON");
+    assert_eq!(document["reasoning_effort"], "vendor-high");
+    assert!(document.get("mappingVersion").is_none());
+    assert!(document.get("mapping_version").is_none());
+    assert!(!String::from_utf8_lossy(&request[body_start..]).contains("mapping/7"));
 }
 
 #[test]

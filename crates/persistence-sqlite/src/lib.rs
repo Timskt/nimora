@@ -53,7 +53,9 @@ pub use backup::{
 pub use context_cache_store::{
     ContextCacheKey, ContextCachePolicy, SqliteContextCacheRepository, StoredContextCacheEntry,
 };
-pub use provider_config_store::{ProviderConfig, SqliteProviderConfigRepository};
+pub use provider_config_store::{
+    ProviderConfig, ProviderReasoningConfig, SqliteProviderConfigRepository,
+};
 pub use skill_approval_journal::{
     SkillApprovalJournalEntry, SkillApprovalJournalStatus, SqliteSkillApprovalJournal,
 };

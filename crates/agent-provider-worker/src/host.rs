@@ -4,8 +4,8 @@ use crate::{
 };
 use nimora_agent_runtime::{
     ProviderAdapter, ProviderCapabilities, ProviderCapability, ProviderDescriptor, ProviderError,
-    ProviderErrorKind, ProviderExecutionContext, ProviderLocality, ProviderRequest,
-    ProviderResponse,
+    ProviderErrorKind, ProviderExecutionContext, ProviderLocality, ProviderReasoningCapabilities,
+    ProviderRequest, ProviderResponse,
 };
 use std::{
     collections::BTreeSet,
@@ -67,6 +67,7 @@ impl WorkerOpenAiCompatibleProvider {
         credential_reference: impl Into<String>,
         context_window_tokens: u64,
         max_output_tokens: u64,
+        reasoning: Option<ProviderReasoningCapabilities>,
         credential_resolver: Arc<dyn ProviderCredentialResolver>,
     ) -> Result<Self, ProviderError> {
         let executable = executable.into();
@@ -93,7 +94,7 @@ impl WorkerOpenAiCompatibleProvider {
                         ProviderCapability::Cancellation,
                         ProviderCapability::UsageReporting,
                     ]),
-                    reasoning: None,
+                    reasoning,
                 },
             )?,
             executable,

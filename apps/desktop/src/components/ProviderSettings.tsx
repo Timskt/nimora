@@ -15,6 +15,7 @@ const emptyProvider: UpsertOpenAiProviderRequest = {
   defaultModel: "gpt-4.1-mini",
   contextWindowTokens: 128_000,
   maxOutputTokens: 8_192,
+  reasoning: null,
   enabled: true,
   revision: 0,
 };
@@ -55,6 +56,7 @@ export function ProviderSettings({ disabled, onCatalogChanged, onNotice }: Provi
       defaultModel: provider.defaultModel,
       contextWindowTokens: provider.contextWindowTokens,
       maxOutputTokens: provider.maxOutputTokens,
+      reasoning: provider.reasoning,
       enabled: provider.enabled,
       revision: provider.revision,
     });
@@ -144,6 +146,11 @@ export function ProviderSettings({ disabled, onCatalogChanged, onNotice }: Provi
         <label><span>API Base URL</span><input disabled={hostLocked || busy} inputMode="url" required value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} /><small>公网仅允许 HTTPS；请求数据将发送到该服务。</small></label>
         <label><span>默认模型</span><input disabled={hostLocked || busy} maxLength={128} value={draft.defaultModel ?? ""} onChange={(event) => setDraft({ ...draft, defaultModel: event.target.value })} /></label>
         <div className="provider-token-grid"><label><span>上下文窗口</span><input disabled={hostLocked || busy} min={1024} step={1024} type="number" value={draft.contextWindowTokens} onChange={(event) => setDraft({ ...draft, contextWindowTokens: Number(event.target.value) })} /></label><label><span>最大输出</span><input disabled={hostLocked || busy} min={128} step={128} type="number" value={draft.maxOutputTokens} onChange={(event) => setDraft({ ...draft, maxOutputTokens: Number(event.target.value) })} /></label></div>
+        <fieldset className="provider-reasoning" disabled={hostLocked || busy}>
+          <legend>推理能力声明</legend>
+          <label className="provider-toggle"><input checked={draft.reasoning !== null} type="checkbox" onChange={(event) => setDraft({ ...draft, reasoning: event.target.checked ? { effortValues: { low: "low", medium: "medium", high: "high" }, mappingVersion: "openai-reasoning-effort/1" } : null })} /><span><strong>服务明确支持 reasoning_effort</strong><small>仅在服务与模型文档确认支持时启用；错误声明可能导致请求失败。</small></span></label>
+          {draft.reasoning && <div className="provider-reasoning-levels" aria-label="支持的推理等级">{(["minimal", "low", "medium", "high", "very_high", "maximum"] as const).map((effort) => <label key={effort}><input checked={draft.reasoning?.effortValues[effort] !== undefined} type="checkbox" onChange={(event) => { const effortValues = { ...draft.reasoning!.effortValues }; if (event.target.checked) effortValues[effort] = effort; else delete effortValues[effort]; setDraft({ ...draft, reasoning: { ...draft.reasoning!, effortValues } }); }} /><span>{effort.replace("very_high", "very high")}</span></label>)}</div>}
+        </fieldset>
         <label><span>API Key {selectedId && "（留空则保持不变）"}</span><input autoComplete="new-password" disabled={hostLocked || busy} maxLength={65_536} type="password" value={credential} onChange={(event) => setCredential(event.target.value)} /><small>提交后立即从界面状态清除，不写入 SQLite、日志或浏览器存储。</small></label>
         <label className="provider-toggle"><input checked={draft.enabled} disabled={hostLocked || busy} type="checkbox" onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span><strong>允许在 Agent 中选择</strong><small>实际联网仍需在每次运行时明确授权。</small></span></label>
         <button className="primary-button" disabled={hostLocked || busy} type="submit">{busy ? "安全保存中…" : "保存 Provider"}</button>

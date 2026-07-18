@@ -243,3 +243,11 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - Creation never calls `switch_active`, so the active Profile and native window/sound policy do not change. Creator Studio exposes an inert policy preview and labels the action `原子创建（不切换）`.
 - Focused tests prove strict frequency rejection, two-file atomic Workspace persistence, a real durable Profile creation with an unchanged active identity, and accessible frontend policy rendering.
 - This artifact is the existing core scene Profile, not an Agent Profile. Agent tool identity, model routing, memory and delegation profiles still require a separate production contract and lifecycle.
+
+## 2026-07-19 — OpenAI-compatible reasoning capability mapping
+
+- Provider 配置新增默认关闭的显式 `effort -> provider value` 映射与 Mapping Version；旧 `nimora.provider-config/1` JSON 通过默认字段继续读取，不迁移或伪造能力。
+- SQLite 在副作用前拒绝空映射、`auto`、空或越界版本、空或越界厂商值及控制字符；CAS 更新和持久恢复保留完整映射。
+- 动态 Worker Provider Descriptor 从配置投影具体等级集合与版本，Provider Registry 继续承担请求 Mapping 的能力、等级和版本复验。
+- OpenAI-compatible Worker 只把已验证 `provider_value` 写入 `reasoning_effort`；真实 loopback 测试证明无 Mapping 时不发送字段，且 Mapping Version 不越过 Worker 网络边界。
+- 桌面 Provider 管理器提供明确风险提示和具体等级选择，浏览器预览仍不伪造本机配置或能力。Agent Run/Auto Mode 的策略选择与映射生成仍是后续可信纵切，当前不得宣称已经自动应用推理等级。

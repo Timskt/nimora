@@ -2996,6 +2996,7 @@ struct UpsertOpenAiProviderRequest {
     default_model: Option<String>,
     context_window_tokens: u64,
     max_output_tokens: u64,
+    reasoning: Option<nimora_persistence_sqlite::ProviderReasoningConfig>,
     enabled: bool,
     revision: u64,
 }
@@ -3347,6 +3348,7 @@ fn upsert_openai_provider(
         request.max_output_tokens,
         request.enabled,
     )?;
+    config.reasoning = request.reasoning;
     config.revision = request.revision;
     state.provider_configs.save(&config).map_err(Into::into)
 }
@@ -5966,6 +5968,11 @@ fn register_openai_provider(
     credential_resolver: Arc<dyn ProviderCredentialResolver>,
 ) -> Result<(), DesktopError> {
     let endpoint = OpenAiCompatibleEndpoint::new(config.base_url).map_err(agent_error)?;
+    let reasoning = config
+        .reasoning
+        .as_ref()
+        .map(nimora_persistence_sqlite::ProviderReasoningConfig::capabilities)
+        .transpose()?;
     let provider = WorkerOpenAiCompatibleProvider::new(
         config.id,
         config.display_name,
@@ -5974,6 +5981,7 @@ fn register_openai_provider(
         config.credential_reference,
         config.context_window_tokens,
         config.max_output_tokens,
+        reasoning,
         credential_resolver,
     )
     .map_err(agent_error)?;
@@ -11117,7 +11125,7 @@ mod tests {
         state.secret_store =
             DesktopSecretStore(Arc::new(nimora_secret_store::MemorySecretStore::default()));
         state.agent_provider_worker = Some(root.join("provider-worker"));
-        let config = nimora_persistence_sqlite::ProviderConfig::new(
+        let mut config = nimora_persistence_sqlite::ProviderConfig::new(
             "provider:openai-compatible:test",
             "Test Provider",
             "https://api.example.test",
@@ -11128,6 +11136,16 @@ mod tests {
             true,
         )
         .expect("provider config");
+        config.reasoning = Some(nimora_persistence_sqlite::ProviderReasoningConfig {
+            effort_values: std::collections::BTreeMap::from([
+                (nimora_agent_runtime::ReasoningEffort::Low, "low".to_owned()),
+                (
+                    nimora_agent_runtime::ReasoningEffort::High,
+                    "vendor-high".to_owned(),
+                ),
+            ]),
+            mapping_version: "openai-compatible/test-1".to_owned(),
+        });
         state
             .provider_configs
             .save(&config)
@@ -11147,6 +11165,24 @@ mod tests {
             .map(|descriptor| descriptor.id.as_str())
             .collect::<Vec<_>>();
         assert!(ids.contains(&"provider:openai-compatible:test"));
+        let descriptor = registry
+            .descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.id == "provider:openai-compatible:test")
+            .expect("configured descriptor");
+        let reasoning = descriptor
+            .capabilities
+            .reasoning
+            .as_ref()
+            .expect("reasoning capabilities");
+        assert_eq!(reasoning.mapping_version, "openai-compatible/test-1");
+        assert_eq!(
+            reasoning.supported_efforts,
+            BTreeSet::from([
+                nimora_agent_runtime::ReasoningEffort::Low,
+                nimora_agent_runtime::ReasoningEffort::High,
+            ])
+        );
         let resolver = DesktopProviderCredentialResolver(state.secret_store.clone());
         let secret = nimora_agent_provider_worker::ProviderCredentialResolver::resolve(
             &resolver,

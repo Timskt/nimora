@@ -1,7 +1,8 @@
 use crate::{SqlitePersistenceError, prepare_connection};
+use nimora_agent_runtime::{ProviderReasoningCapabilities, ReasoningEffort};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use std::{path::Path, sync::Mutex};
+use std::{collections::BTreeMap, path::Path, sync::Mutex};
 use url::Url;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -18,8 +19,33 @@ pub struct ProviderConfig {
     pub default_model: Option<String>,
     pub context_window_tokens: u64,
     pub max_output_tokens: u64,
+    #[serde(default)]
+    pub reasoning: Option<ProviderReasoningConfig>,
     pub enabled: bool,
     pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderReasoningConfig {
+    pub effort_values: BTreeMap<ReasoningEffort, String>,
+    pub mapping_version: String,
+}
+
+impl ProviderReasoningConfig {
+    /// Projects the persisted mapping into the Provider capability declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the mapping is empty, unsafe, or advertises `auto`.
+    pub fn capabilities(&self) -> Result<ProviderReasoningCapabilities, SqlitePersistenceError> {
+        validate_reasoning(self)?;
+        ProviderReasoningCapabilities::new(
+            self.effort_values.keys().copied().collect(),
+            self.mapping_version.clone(),
+        )
+        .map_err(|_| SqlitePersistenceError::InvalidProviderConfig)
+    }
 }
 
 impl ProviderConfig {
@@ -48,6 +74,7 @@ impl ProviderConfig {
             default_model,
             context_window_tokens,
             max_output_tokens,
+            reasoning: None,
             enabled,
             revision: 0,
         };
@@ -261,6 +288,25 @@ fn validate(config: &ProviderConfig) -> Result<(), SqlitePersistenceError> {
         || config.context_window_tokens == 0
         || config.max_output_tokens == 0
         || config.max_output_tokens > config.context_window_tokens
+        || config
+            .reasoning
+            .as_ref()
+            .is_some_and(|value| validate_reasoning(value).is_err())
+    {
+        return Err(SqlitePersistenceError::InvalidProviderConfig);
+    }
+    Ok(())
+}
+
+fn validate_reasoning(value: &ProviderReasoningConfig) -> Result<(), SqlitePersistenceError> {
+    if value.effort_values.is_empty()
+        || value.effort_values.contains_key(&ReasoningEffort::Auto)
+        || value.mapping_version.trim().is_empty()
+        || value.mapping_version.len() > 64
+        || value.mapping_version.chars().any(char::is_control)
+        || value.effort_values.values().any(|mapped| {
+            mapped.trim().is_empty() || mapped.len() > 64 || mapped.chars().any(char::is_control)
+        })
     {
         return Err(SqlitePersistenceError::InvalidProviderConfig);
     }
@@ -324,6 +370,7 @@ fn canonical_endpoint(value: &str) -> Result<String, SqlitePersistenceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     fn config(id: &str) -> ProviderConfig {
         ProviderConfig::new(
@@ -386,6 +433,56 @@ mod tests {
                 )
                 .is_err()
             );
+        }
+    }
+
+    #[test]
+    fn reasoning_mapping_is_optional_validated_and_persisted_by_cas() {
+        let repository = SqliteProviderConfigRepository::in_memory().expect("repository");
+        let mut legacy = serde_json::to_value(config("provider:openai-compatible:legacy"))
+            .expect("serialize legacy");
+        legacy
+            .as_object_mut()
+            .expect("legacy object")
+            .remove("reasoning");
+        let decoded: ProviderConfig = serde_json::from_value(legacy).expect("decode legacy");
+        assert_eq!(decoded.reasoning, None);
+
+        let mut configured = config("provider:openai-compatible:reasoning");
+        configured.reasoning = Some(ProviderReasoningConfig {
+            effort_values: BTreeMap::from([
+                (ReasoningEffort::Low, "low".to_owned()),
+                (ReasoningEffort::High, "high".to_owned()),
+            ]),
+            mapping_version: "openai-reasoning-effort/1".to_owned(),
+        });
+        let saved = repository.save(&configured).expect("save mapping");
+        assert_eq!(
+            repository.get(&saved.id).expect("read"),
+            Some(saved.clone())
+        );
+        assert_eq!(saved.reasoning.expect("reasoning").effort_values.len(), 2);
+
+        for invalid in [
+            ProviderReasoningConfig {
+                effort_values: BTreeMap::new(),
+                mapping_version: "v1".to_owned(),
+            },
+            ProviderReasoningConfig {
+                effort_values: BTreeMap::from([(ReasoningEffort::Auto, "auto".to_owned())]),
+                mapping_version: "v1".to_owned(),
+            },
+            ProviderReasoningConfig {
+                effort_values: BTreeMap::from([(ReasoningEffort::High, "high".to_owned())]),
+                mapping_version: String::new(),
+            },
+        ] {
+            let mut rejected = config("provider:openai-compatible:invalid-reasoning");
+            rejected.reasoning = Some(invalid);
+            assert!(matches!(
+                repository.save(&rejected),
+                Err(SqlitePersistenceError::InvalidProviderConfig)
+            ));
         }
     }
 }

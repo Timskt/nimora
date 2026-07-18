@@ -177,13 +177,17 @@ fn completion_payload(request: &ProviderRequest) -> Value {
             })
         })
         .collect::<Vec<_>>();
-    json!({
+    let mut payload = json!({
         "model": request.model,
         "messages": messages,
         "tools": tools,
         "max_tokens": request.max_output_tokens,
         "stream": false
-    })
+    });
+    if let Some(reasoning) = &request.reasoning {
+        payload["reasoning_effort"] = json!(reasoning.provider_value);
+    }
+    payload
 }
 
 #[derive(Deserialize)]

@@ -514,6 +514,8 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-102 | Full Device 警告与硬禁区 | UI 完整提示文件、命令、联网、凭据、供应链和不可逆副作用；硬禁区不可绕过 | P0 |
 | AGT-103 | Auto-review 不扩权 | Reviewer 不能扩大 Sandbox、网络、工具或参数；不可用或不确定时恢复人工审批 | P0 |
 | AGT-104 | 推理等级映射 | Adapter 报告支持等级并记录 requested/actual/provider value；显式不支持在调用前失败 | P0 |
+| AGT-104A | 兼容 Provider 显式能力配置 | 旧配置无字段可读；空映射、`auto`、非法版本和值拒绝；CAS 保存与重启精确恢复等级到厂商值映射 | P0 |
+| AGT-104B | Worker 推理参数隔离 | 真实 loopback HTTP 仅收到已验证 `provider_value`；无 Mapping 时字段缺失，Mapping Version、隐藏推理和宿主策略不出进程边界 | P0 |
 | AGT-105 | Adaptive 与缓存隔离 | 推荐等级受任务、风险、费用上限约束；策略、实际等级或映射版本变化不命中旧生成缓存 | P1 |
 | AGT-106 | Away Summary | 展示文件、测试、网络、预算、自动授权、失败重试和暂停原因，不暴露 Secret 或隐藏推理 | P1 |
 | AGT-107 | 授权撤销与未知结果 | 撤销阻止新派发；无法确认的在途结果进入 `indeterminate` 且不自动重放 | P0 |
