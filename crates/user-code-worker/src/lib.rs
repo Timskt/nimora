@@ -51,6 +51,26 @@ pub fn validate(source: &str) -> Result<(), EngineError> {
         .map_err(|error| EngineError::JavaScript(error.to_string()))
 }
 
+/// Executes one source unit with an immutable input snapshot while discarding its return value.
+///
+/// # Errors
+///
+/// Returns an error for oversized source or JavaScript failures.
+pub fn sandbox(source: &str, input: &serde_json::Value) -> Result<(), EngineError> {
+    if source.len() > MAX_SOURCE_BYTES {
+        return Err(EngineError::SourceTooLarge);
+    }
+    let input = serde_json::to_string(input)
+        .map_err(|error| EngineError::ResultSerialization(error.to_string()))?;
+    let wrapped_source = format!(
+        "const __nimoraDeepFreeze = (value) => {{\n  if (value && typeof value === 'object' && !Object.isFrozen(value)) {{\n    Object.freeze(value);\n    Object.values(value).forEach(__nimoraDeepFreeze);\n  }}\n  return value;\n}};\nconst nimora = Object.freeze({{ input: __nimoraDeepFreeze({input}) }});\n{source}"
+    );
+    Context::default()
+        .eval(Source::from_bytes(wrapped_source.as_bytes()))
+        .map(|_| ())
+        .map_err(|error| EngineError::JavaScript(error.to_string()))
+}
+
 /// Evaluates one source unit with an immutable JSON input snapshot.
 ///
 /// # Errors
@@ -86,6 +106,13 @@ pub fn execute(message: WorkerMessage) -> WorkerMessage {
             Ok(()) => WorkerMessage::Validated,
             Err(error) => WorkerMessage::Error {
                 code: "validation-error".to_owned(),
+                message: error.to_string(),
+            },
+        },
+        WorkerMessage::Sandbox { source, input, .. } => match sandbox(&source, &input) {
+            Ok(()) => WorkerMessage::Sandboxed,
+            Err(error) => WorkerMessage::Error {
+                code: "sandbox-error".to_owned(),
                 message: error.to_string(),
             },
         },
@@ -127,6 +154,26 @@ mod tests {
         assert!(matches!(
             execute(WorkerMessage::Validate { source: "const =".to_owned() }),
             WorkerMessage::Error { code, .. } if code == "validation-error"
+        ));
+    }
+
+    #[test]
+    fn sandboxes_top_level_code_without_requiring_a_json_result() {
+        assert_eq!(
+            execute(WorkerMessage::Sandbox {
+                manifest: json!({"id": "example"}),
+                source: "const answer = 42;".to_owned(),
+                input: json!({"event": "test"}),
+            }),
+            WorkerMessage::Sandboxed
+        );
+        assert!(matches!(
+            execute(WorkerMessage::Sandbox {
+                manifest: json!({"id": "example"}),
+                source: "throw new Error('boom')".to_owned(),
+                input: serde_json::Value::Null,
+            }),
+            WorkerMessage::Error { code, .. } if code == "sandbox-error"
         ));
     }
 

@@ -1243,7 +1243,7 @@ struct CreatorDraftCheck {
     id: &'static str,
     status: &'static str,
     file: Option<String>,
-    message: &'static str,
+    message: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2299,82 +2299,17 @@ fn check_creator_draft_inner(
         id: "production-contract",
         status: "passed",
         file: None,
-        message: "生产契约校验通过",
+        message: "生产契约校验通过".to_owned(),
     }];
     match &draft.artifact {
-        nimora_creator_draft::CreatorArtifact::Automation { .. } => {}
-        nimora_creator_draft::CreatorArtifact::UserProgram { files, .. } => {
-            for file in files.iter().filter(|file| {
-                Path::new(&file.path)
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("js"))
-            }) {
-                let execution_id = Uuid::now_v7().to_string();
-                let config = WorkerConfig {
-                    executable: user_code_worker_executable(app)
-                        .to_string_lossy()
-                        .into_owned(),
-                    args: Vec::new(),
-                    execution_id,
-                    timeout: Duration::from_secs(5),
-                    output_bytes: 64 * 1024,
-                    cancellation: None,
-                };
-                let response = WorkerProcess::spawn(
-                    config,
-                    &WorkerMessage::Validate {
-                        source: file.source.clone(),
-                    },
-                )
-                .map_err(|error| DesktopError::UserCodeHost(error.to_string()))?
-                .wait()
-                .map_err(|error| DesktopError::UserCodeHost(error.to_string()))?;
-                let passed = matches!(response, WorkerMessage::Validated);
-                checks.push(CreatorDraftCheck {
-                    id: "javascript-syntax",
-                    status: if passed { "passed" } else { "failed" },
-                    file: Some(file.path.clone()),
-                    message: if passed {
-                        "独立 Worker 语法检查通过"
-                    } else {
-                        "独立 Worker 语法检查失败"
-                    },
-                });
-            }
+        nimora_creator_draft::CreatorArtifact::Automation { definition } => {
+            checks.push(check_creator_automation_behavior(definition)?);
+        }
+        nimora_creator_draft::CreatorArtifact::UserProgram { manifest, files } => {
+            checks.extend(check_creator_program_behavior(app, manifest, files)?);
         }
         nimora_creator_draft::CreatorArtifact::Skill { manifest, files } => {
-            for file in files.iter().filter(|file| {
-                Path::new(&file.path)
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("js"))
-            }) {
-                let execution_id = Uuid::now_v7();
-                let cancellation = ExecutionCancellation::default();
-                let message = SkillWorkerMessage::Validate {
-                    protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
-                    execution_id: execution_id.to_string(),
-                    manifest: Box::new(manifest.clone()),
-                    source: file.source.clone(),
-                };
-                let lifecycle = nimora_skill_runtime::SkillHost::default();
-                let response = SkillWorkerProcess::spawn(
-                    skill_worker_config(app, execution_id, cancellation),
-                    &message,
-                    &lifecycle,
-                )?
-                .wait()?;
-                let passed = matches!(response, SkillWorkerMessage::Validated { .. });
-                checks.push(CreatorDraftCheck {
-                    id: "javascript-syntax",
-                    status: if passed { "passed" } else { "failed" },
-                    file: Some(file.path.clone()),
-                    message: if passed {
-                        "独立 Skill Worker 语法检查通过"
-                    } else {
-                        "独立 Skill Worker 语法检查失败"
-                    },
-                });
-            }
+            checks.extend(check_creator_skill_behavior(app, manifest, files)?);
         }
     }
     let status = if checks.iter().all(|check| check.status == "passed") {
@@ -2387,6 +2322,199 @@ fn check_creator_draft_inner(
         status,
         checks,
     })
+}
+
+fn check_creator_automation_behavior(
+    definition: &AutomationDefinition,
+) -> Result<CreatorDraftCheck, DesktopError> {
+    let run = dry_run_automation(
+        definition,
+        definition.trigger.event_type.clone(),
+        serde_json::json!({}),
+    )?;
+    Ok(CreatorDraftCheck {
+        id: "sandbox-behavior",
+        status: "passed",
+        file: None,
+        message: format!(
+            "Automation Dry-run 完成，状态 {:?}，记录 {} 个无副作用步骤",
+            run.status,
+            run.steps.len()
+        ),
+    })
+}
+
+fn check_creator_program_behavior(
+    app: &AppHandle,
+    manifest: &ProgramManifest,
+    files: &[nimora_creator_draft::CreatorDraftFile],
+) -> Result<Vec<CreatorDraftCheck>, DesktopError> {
+    let mut checks = Vec::new();
+    for file in files.iter().filter(|file| is_javascript_path(&file.path)) {
+        let validation = run_user_code_worker(
+            app,
+            Duration::from_secs(5),
+            &WorkerMessage::Validate {
+                source: file.source.clone(),
+            },
+        )?;
+        let passed = matches!(validation, WorkerMessage::Validated);
+        checks.push(CreatorDraftCheck {
+            id: "javascript-syntax",
+            status: if passed { "passed" } else { "failed" },
+            file: Some(file.path.clone()),
+            message: if passed {
+                "独立 Worker 语法检查通过".to_owned()
+            } else {
+                "独立 Worker 语法检查失败".to_owned()
+            },
+        });
+        if passed {
+            let behavior = run_user_code_worker(
+                app,
+                Duration::from_millis(manifest.timeout_ms.min(5_000)),
+                &WorkerMessage::Sandbox {
+                    manifest: serde_json::to_value(manifest)
+                        .map_err(|error| DesktopError::Agent(error.to_string()))?,
+                    source: file.source.clone(),
+                    input: serde_json::Value::Null,
+                },
+            )?;
+            let behavior_passed = matches!(behavior, WorkerMessage::Sandboxed);
+            checks.push(CreatorDraftCheck {
+                id: "sandbox-behavior",
+                status: if behavior_passed { "passed" } else { "failed" },
+                file: Some(file.path.clone()),
+                message: if behavior_passed {
+                    "独立 Worker 以空输入完成行为执行，未获得原生能力".to_owned()
+                } else {
+                    "独立 Worker 行为执行失败".to_owned()
+                },
+            });
+        }
+    }
+    Ok(checks)
+}
+
+fn run_user_code_worker(
+    app: &AppHandle,
+    timeout: Duration,
+    message: &WorkerMessage,
+) -> Result<WorkerMessage, DesktopError> {
+    let config = WorkerConfig {
+        executable: user_code_worker_executable(app)
+            .to_string_lossy()
+            .into_owned(),
+        args: Vec::new(),
+        execution_id: Uuid::now_v7().to_string(),
+        timeout,
+        output_bytes: 64 * 1024,
+        cancellation: None,
+    };
+    WorkerProcess::spawn(config, message)
+        .map_err(|error| DesktopError::UserCodeHost(error.to_string()))?
+        .wait()
+        .map_err(|error| DesktopError::UserCodeHost(error.to_string()))
+}
+
+fn check_creator_skill_behavior(
+    app: &AppHandle,
+    manifest: &SkillManifest,
+    files: &[nimora_creator_draft::CreatorDraftFile],
+) -> Result<Vec<CreatorDraftCheck>, DesktopError> {
+    let mut checks = Vec::new();
+    for file in files.iter().filter(|file| is_javascript_path(&file.path)) {
+        let execution_id = Uuid::now_v7();
+        let message = SkillWorkerMessage::Validate {
+            protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
+            execution_id: execution_id.to_string(),
+            manifest: Box::new(manifest.clone()),
+            source: file.source.clone(),
+        };
+        let response = SkillWorkerProcess::spawn(
+            skill_worker_config(app, execution_id, ExecutionCancellation::default()),
+            &message,
+            &SkillHost::default(),
+        )?
+        .wait()?;
+        let passed = matches!(response, SkillWorkerMessage::Validated { .. });
+        checks.push(CreatorDraftCheck {
+            id: "javascript-syntax",
+            status: if passed { "passed" } else { "failed" },
+            file: Some(file.path.clone()),
+            message: if passed {
+                "独立 Skill Worker 语法检查通过".to_owned()
+            } else {
+                "独立 Skill Worker 语法检查失败".to_owned()
+            },
+        });
+    }
+    if let (Some(entrypoint), Some(activation_event)) = (
+        files.iter().find(|file| file.path == manifest.entrypoint),
+        manifest.activation_events.iter().next(),
+    ) {
+        checks.push(run_creator_skill_sandbox(
+            app,
+            manifest,
+            entrypoint,
+            activation_event,
+        )?);
+    }
+    Ok(checks)
+}
+
+fn run_creator_skill_sandbox(
+    app: &AppHandle,
+    manifest: &SkillManifest,
+    entrypoint: &nimora_creator_draft::CreatorDraftFile,
+    activation_event: &str,
+) -> Result<CreatorDraftCheck, DesktopError> {
+    let execution_id = Uuid::now_v7();
+    let mut lifecycle = SkillHost::default();
+    lifecycle.install(nimora_skill_runtime::validate_manifest(manifest.clone())?)?;
+    lifecycle.authorize(SkillGrant {
+        skill_id: manifest.id.clone(),
+        version: manifest.version.clone(),
+        capabilities: manifest.capabilities.clone(),
+    })?;
+    lifecycle.activate(&manifest.id)?;
+    let message = SkillWorkerMessage::Run {
+        protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
+        execution_id: execution_id.to_string(),
+        manifest: Box::new(manifest.clone()),
+        source: entrypoint.source.clone(),
+        activation_event: activation_event.to_owned(),
+        input: serde_json::Value::Null,
+    };
+    let response = SkillWorkerProcess::spawn(
+        skill_worker_config(app, execution_id, ExecutionCancellation::default()),
+        &message,
+        &lifecycle,
+    )?
+    .wait()?;
+    let (status, message) = match response {
+        SkillWorkerMessage::Completed { output, .. } => (
+            "passed",
+            format!(
+                "Skill 沙箱记录 {} 个命令与 {} 个 Agent 请求，未调用真实 Gateway",
+                output.commands.len(),
+                output.agent_tasks.len()
+            ),
+        ),
+        _ => ("failed", "Skill 沙箱行为执行失败".to_owned()),
+    };
+    Ok(CreatorDraftCheck {
+        id: "sandbox-behavior",
+        status,
+        file: Some(entrypoint.path.clone()),
+        message,
+    })
+}
+
+fn is_javascript_path(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("js"))
 }
 
 #[tauri::command]

@@ -53,4 +53,5 @@
 | R-044 | AI 创作复用普通 Agent Tool allowlist，使生成阶段获得无关生产能力 | 低（已缓解） | 严重 | Creator 使用独立 requester、空 Tool 集合、Draft autonomy 与深度 1；Tool Call 和确认等待失败关闭，架构与功能测试防回退 |
 | R-045 | Creator 复用正常执行协议做安装前检查，导致草案顶层代码在授权前运行 | 低（已缓解） | 严重 | User Program 与 Skill 使用显式 `Validate/Validated` parse-only 协议；不注入 SDK 或 Capability；保存 IPC 强制重新检查，测试用顶层 `throw` 防回退 |
 | R-046 | AI 能力工厂把模型判断当作安全结论，自动安装或扩大产物权限 | 中 | 严重 | 模型只负责生成与解释；Schema、Worker、沙箱、权限 Diff、风险批准和原子安装由确定性宿主执行；运行 Grant 按最终 Manifest 重新签发 |
+| R-047 | Creator 行为检查调用真实 Gateway，或把临时 Skill Lease 误持久化为安装授权 | 低（已缓解） | 严重 | User Program 无原生能力；Skill Worker 仅返回调用计划且不接 Gateway；Automation 使用拒绝命令的 DryRun Backend；临时 Lease 只存在于检查函数栈，保存后仍显示未安装 |
 | R-045 | 模型输出以 Markdown 或任意文件直接落盘，造成路径逃逸、权限欺骗或未验证代码安装 | 低（保存阶段已缓解） | 严重 | 保存前重新执行严格契约和生产校验；Tauri-free Writer 使用隐藏 staging、create-new、拒绝符号链接/覆盖并同目录原子 rename；保存仍不安装，后续必须经过 Worker、Diff、批准和原子安装 |

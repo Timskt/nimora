@@ -25,11 +25,18 @@ pub enum WorkerMessage {
     Validate {
         source: String,
     },
+    Sandbox {
+        manifest: serde_json::Value,
+        source: String,
+        #[serde(default)]
+        input: serde_json::Value,
+    },
     Cancel,
     Result {
         value: serde_json::Value,
     },
     Validated,
+    Sandboxed,
     Error {
         code: String,
         message: String,
@@ -197,6 +204,7 @@ impl WorkerProcess {
                         message,
                         WorkerMessage::Result { .. }
                             | WorkerMessage::Validated
+                            | WorkerMessage::Sandboxed
                             | WorkerMessage::Error { .. }
                     ) {
                         let _ = self.child.wait();
@@ -241,6 +249,12 @@ mod tests {
                 source: "throw new Error('must not run')".to_owned(),
             },
             WorkerMessage::Validated,
+            WorkerMessage::Sandbox {
+                manifest: serde_json::json!({"id": "example"}),
+                source: "const answer = 42;".to_owned(),
+                input: serde_json::Value::Null,
+            },
+            WorkerMessage::Sandboxed,
         ] {
             let encoded = serde_json::to_string(&message).unwrap();
             assert_eq!(

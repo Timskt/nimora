@@ -280,3 +280,10 @@ Actions 分钟：
 - 契约边界：Skill Validate 校验协议、Execution ID 与 Manifest，但安装前不要求 Active Lease；Skill Run 的 Lease 与 Activation Event 约束保持不变。Automation 继续复用生产 Engine 校验。
 - 范围校准：外接 AI 的完整产品范围扩展为 User Program、Skill、Automation、Connector、Agent、角色资产、声明式 UI、测试、迁移与运维能力工厂；当前仅前三类草案生成和前两类 parse-only 检查已实现，不能误报完整流水线完成。
 - 后续硬门禁：沙箱行为测试、权限与行为 Diff、风险批准、原子安装启用、运行监控、AI 最小修复和回滚。
+
+## M-2026-07-18 Creator 无副作用行为沙箱
+
+- 实现：User Program 新增版本化 `Sandbox/Sandboxed` Worker 协议，顶层代码在独立进程执行但不要求 JSON 返回值；Skill 使用临时内存 Lease 通过正常 Worker Admission，只收集 Command/Agent Task 计划；Automation 使用生产 DryRun Backend。
+- 安全：三类行为检查均不调用真实 Capability Gateway、Provider 或模块 Backend，不获得 Node、Tauri、文件、网络和数据库对象；保存 IPC 在写盘前重新执行语法与行为两阶段审查。
+- 工程修正：按 Automation、User Program、Skill 拆分桌面审查服务，避免继续膨胀 Tauri 编排函数；严格 Clippy 阻止回退。
+- 剩余边界：当前只使用空输入、首个 Skill Activation Event 和单个 Automation 事件；多事件夹具、虚拟时间、Connector Mock、调用参数 Diff、风险批准与安装仍未完成。

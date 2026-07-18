@@ -557,3 +557,7 @@ ID / 标题 / 优先级 / 前置条件
 - Verify Skill 草案检查校验协议版本、Execution ID 和 Manifest，但安装前不要求 Active Skill Lease；正式 `Run` 仍必须精确匹配 Active Lease 与 Activation Event。
 - Verify UI 检查报告使用 `nimora.creator-draft-check/1`，逐文件区分 passed/failed；未通过检查时保存按钮不可用，绕过 UI 直接调用保存 IPC 仍失败关闭。
 - Verify Automation 草案复用生产 Engine 的确定性校验且不会伪装成 JavaScript Worker 检查；检查、保存、安装和启用状态在 UI 中不可混淆。
+- Verify User Program `Sandbox/Sandboxed` 在独立进程执行顶层代码但不要求返回值可 JSON 化；声明函数的脚本通过，顶层异常失败，Node/Tauri/文件/网络等原生对象仍不可用。
+- Verify Skill 行为沙箱只返回记录的命令与 Agent Task 数量，不调用 Capability Gateway、Provider 或模块 Backend；使用临时精确 Manifest Lease 仅满足 Worker Admission，绝不持久化或继承为安装授权。
+- Verify Automation 行为沙箱使用匹配的触发事件和空对象数据运行生产 DryRun Backend；条件不匹配是确定性运行状态而不是检查器故障，任何 Command Backend 调用均失败测试。
+- Verify 保存 IPC 在写盘前重新运行 parse-only 与行为沙箱；任一 JavaScript 语法或顶层行为失败均不创建 `.nimora-drafts/<artifact-id>`。
