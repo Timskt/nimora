@@ -1122,7 +1122,7 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
         CREATE TABLE IF NOT EXISTS skill_execution_history (
             execution_id TEXT PRIMARY KEY,
             skill_id TEXT NOT NULL,
-            status TEXT NOT NULL CHECK (status IN ('waiting-for-approval', 'completed', 'rejected', 'failed')),
+            status TEXT NOT NULL CHECK (status IN ('waiting-for-approval', 'completed', 'rejected', 'cancelled', 'failed')),
             created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
             updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
             schema_version INTEGER NOT NULL,

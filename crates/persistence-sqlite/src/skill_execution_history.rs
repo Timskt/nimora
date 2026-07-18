@@ -20,6 +20,7 @@ pub enum SkillExecutionHistoryStatus {
     WaitingForApproval,
     Completed,
     Rejected,
+    Cancelled,
     Failed,
 }
 
@@ -228,6 +229,7 @@ const fn status_name(status: SkillExecutionHistoryStatus) -> &'static str {
         SkillExecutionHistoryStatus::WaitingForApproval => "waiting-for-approval",
         SkillExecutionHistoryStatus::Completed => "completed",
         SkillExecutionHistoryStatus::Rejected => "rejected",
+        SkillExecutionHistoryStatus::Cancelled => "cancelled",
         SkillExecutionHistoryStatus::Failed => "failed",
     }
 }
@@ -295,5 +297,39 @@ mod tests {
             history.list(Some((200, newest)), 1).unwrap()[0].execution_id,
             oldest
         );
+    }
+
+    #[test]
+    fn cancelled_status_cannot_be_overwritten_by_completion() {
+        let history = SqliteSkillExecutionHistory::in_memory().unwrap();
+        let id = Uuid::now_v7();
+        let cancelled = SkillExecutionHistoryRecord::new(
+            id,
+            "studio.example.focus",
+            SkillExecutionHistoryStatus::Cancelled,
+            1,
+            1,
+            100,
+            200,
+            None,
+        )
+        .unwrap();
+        history.save(&cancelled).unwrap();
+        history
+            .save(
+                &SkillExecutionHistoryRecord::new(
+                    id,
+                    "studio.example.focus",
+                    SkillExecutionHistoryStatus::Completed,
+                    1,
+                    1,
+                    100,
+                    300,
+                    None,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(history.list(None, 10).unwrap(), [cancelled]);
     }
 }

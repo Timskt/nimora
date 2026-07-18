@@ -64,7 +64,8 @@ use nimora_skill_host::{
     SkillWorkerConfig, SkillWorkerMessage, SkillWorkerProcess,
 };
 use nimora_skill_package::{
-    SkillPackageError, install_skill_atomically, load_installed_skill, rollback_skill,
+    InstalledSkill, SkillPackageError, install_skill_atomically, load_installed_skill,
+    rollback_skill,
 };
 use nimora_skill_runtime::{
     SkillCapability, SkillError, SkillGrant, SkillHost, SkillManifest, SkillStatus,
@@ -158,6 +159,7 @@ struct DesktopState {
     pending_agent_tools: Mutex<HashMap<Uuid, PendingAgentTool>>,
     skill_approval_journal: SqliteSkillApprovalJournal,
     skill_execution_history: SqliteSkillExecutionHistory,
+    active_skill_executions: Mutex<HashMap<Uuid, ActiveSkillExecution>>,
     active_agent_tasks: Mutex<HashMap<Uuid, CancellationFlag>>,
     active_automation_runs: Mutex<HashMap<Uuid, CancellationFlag>>,
     execution_controller: ExecutionController,
@@ -283,6 +285,29 @@ struct ActiveUserProgramWorker {
     cancellation: ExecutionCancellation,
 }
 
+#[derive(Debug)]
+struct ActiveSkillExecution {
+    skill_id: String,
+    created_at_ms: u64,
+    command_count: usize,
+    agent_task_count: usize,
+    cancellation: ExecutionCancellation,
+    agent_task_id: Option<Uuid>,
+}
+
+struct ActiveSkillExecutionGuard<'a> {
+    executions: &'a Mutex<HashMap<Uuid, ActiveSkillExecution>>,
+    execution_id: Uuid,
+}
+
+impl Drop for ActiveSkillExecutionGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut executions) = self.executions.lock() {
+            executions.remove(&self.execution_id);
+        }
+    }
+}
+
 struct UserProgramEventCompletion {
     scheduled_execution_id: Uuid,
     result: Result<UserProgramExecutionReceipt, String>,
@@ -394,6 +419,7 @@ impl DesktopState {
             pending_agent_tools: Mutex::new(HashMap::new()),
             skill_approval_journal,
             skill_execution_history,
+            active_skill_executions: Mutex::new(HashMap::new()),
             active_agent_tasks: Mutex::new(HashMap::new()),
             active_automation_runs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
@@ -463,6 +489,7 @@ impl DesktopState {
             pending_agent_tools: Mutex::new(HashMap::new()),
             skill_approval_journal: SqliteSkillApprovalJournal::in_memory()?,
             skill_execution_history: SqliteSkillExecutionHistory::in_memory()?,
+            active_skill_executions: Mutex::new(HashMap::new()),
             active_agent_tasks: Mutex::new(HashMap::new()),
             active_automation_runs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
@@ -998,6 +1025,8 @@ enum DesktopError {
     SkillApprovalCapacityExceeded,
     #[error("Skill approval does not exist or was already resolved")]
     SkillApprovalNotFound,
+    #[error("Skill execution is not active")]
+    SkillExecutionNotFound,
     #[error("Skill approval expired before it was resolved")]
     SkillApprovalExpired,
     #[error(transparent)]
@@ -4001,7 +4030,90 @@ fn execute_skill_inner(
     let installed = load_installed_skill(&state.skill_store, &request.skill_id)?;
     let execution_id = Uuid::now_v7();
     let created_at_ms = current_time_ms()?;
-    let (output, command_allowlist) = {
+    let cancellation = ExecutionCancellation::default();
+    register_active_skill_execution(
+        state,
+        execution_id,
+        &request.skill_id,
+        created_at_ms,
+        &cancellation,
+    )?;
+    let _execution_guard = ActiveSkillExecutionGuard {
+        executions: &state.active_skill_executions,
+        execution_id,
+    };
+    let (output, command_allowlist) = run_skill_worker(
+        app,
+        state,
+        &request,
+        &installed,
+        execution_id,
+        &cancellation,
+    )?;
+    update_active_skill_execution_plan(state, execution_id, &output)?;
+    ensure_skill_execution_active(&cancellation)?;
+    let approval_commands = preflight_skill_commands(&command_allowlist, &output.commands)?;
+    if approval_commands.iter().any(|command| {
+        matches!(
+            command.risk,
+            CommandRisk::Medium | CommandRisk::High | CommandRisk::Critical
+        )
+    }) {
+        return queue_skill_execution_approval(
+            state,
+            request.skill_id,
+            execution_id,
+            created_at_ms,
+            command_allowlist,
+            output,
+            approval_commands,
+        );
+    }
+    complete_skill_execution(
+        state,
+        execution_id,
+        request.skill_id,
+        &command_allowlist,
+        output,
+        created_at_ms,
+        Some(&cancellation),
+    )
+}
+
+fn register_active_skill_execution(
+    state: &DesktopState,
+    execution_id: Uuid,
+    skill_id: &str,
+    created_at_ms: u64,
+    cancellation: &ExecutionCancellation,
+) -> Result<(), DesktopError> {
+    state
+        .active_skill_executions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .insert(
+            execution_id,
+            ActiveSkillExecution {
+                skill_id: skill_id.to_owned(),
+                created_at_ms,
+                command_count: 0,
+                agent_task_count: 0,
+                cancellation: cancellation.clone(),
+                agent_task_id: None,
+            },
+        );
+    Ok(())
+}
+
+fn run_skill_worker(
+    app: &AppHandle,
+    state: &DesktopState,
+    request: &ExecuteSkillRequest,
+    installed: &InstalledSkill,
+    execution_id: Uuid,
+    cancellation: &ExecutionCancellation,
+) -> Result<(SkillExecutionOutput, BTreeSet<String>), DesktopError> {
+    {
         let mut host = state
             .skill_host
             .lock()
@@ -4015,78 +4127,88 @@ fn execute_skill_inner(
             protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
             execution_id: execution_id.to_string(),
             manifest: Box::new(manifest),
-            source: installed.source,
-            activation_event: request.activation_event,
-            input: request.input,
+            source: installed.source.clone(),
+            activation_event: request.activation_event.clone(),
+            input: request.input.clone(),
         };
         let mut worker = SkillWorkerProcess::spawn(
-            skill_worker_config(app, execution_id),
+            skill_worker_config(app, execution_id, cancellation.clone()),
             &worker_request,
             &host,
         )?;
         let response =
             worker.wait_recording_failure(&mut host, &request.skill_id, current_time_ms()?)?;
-        (terminal_skill_worker_output(response)?, command_allowlist)
-    };
-    let approval_commands = preflight_skill_commands(&command_allowlist, &output.commands)?;
-    if approval_commands.iter().any(|command| {
-        matches!(
-            command.risk,
-            CommandRisk::Medium | CommandRisk::High | CommandRisk::Critical
-        )
-    }) {
-        let expires_at_ms = current_time_ms()?.saturating_add(SKILL_APPROVAL_TTL_MS);
-        let pending = PendingSkillExecution {
-            execution_id,
-            skill_id: request.skill_id.clone(),
-            command_allowlist,
-            output,
-            expires_at_ms,
-            created_at_ms,
-        };
-        if state.skill_approval_journal.pending_count(created_at_ms)?
-            >= MAX_PENDING_SKILL_EXECUTIONS
-        {
-            return Err(DesktopError::SkillApprovalCapacityExceeded);
-        }
-        state
-            .skill_approval_journal
-            .insert(&SkillApprovalJournalEntry::new(
-                execution_id,
-                execution_id,
-                request.skill_id.clone(),
-                created_at_ms,
-                expires_at_ms,
-                serde_json::to_value(&pending)?,
-            )?)?;
-        save_skill_execution_history(
-            state,
-            &pending,
-            SkillExecutionHistoryStatus::WaitingForApproval,
-            created_at_ms,
-            None,
-        )?;
-        return Ok(SkillExecutionReceipt {
-            execution_id,
-            skill_id: request.skill_id,
-            status: SkillExecutionStatus::WaitingForApproval,
-            approval: Some(SkillApprovalRequest {
-                approval_id: execution_id,
-                expires_at_ms,
-                commands: approval_commands,
-            }),
-            command_results: Vec::new(),
-            agent_results: Vec::new(),
-        });
+        Ok((terminal_skill_worker_output(response)?, command_allowlist))
     }
-    complete_skill_execution(
-        state,
+}
+
+fn update_active_skill_execution_plan(
+    state: &DesktopState,
+    execution_id: Uuid,
+    output: &SkillExecutionOutput,
+) -> Result<(), DesktopError> {
+    let mut executions = state
+        .active_skill_executions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    let active = executions
+        .get_mut(&execution_id)
+        .ok_or(DesktopError::SkillExecutionNotFound)?;
+    active.command_count = output.commands.len();
+    active.agent_task_count = output.agent_tasks.len();
+    Ok(())
+}
+
+fn queue_skill_execution_approval(
+    state: &DesktopState,
+    skill_id: String,
+    execution_id: Uuid,
+    created_at_ms: u64,
+    command_allowlist: BTreeSet<String>,
+    output: SkillExecutionOutput,
+    approval_commands: Vec<SkillApprovalCommand>,
+) -> Result<SkillExecutionReceipt, DesktopError> {
+    let expires_at_ms = current_time_ms()?.saturating_add(SKILL_APPROVAL_TTL_MS);
+    let pending = PendingSkillExecution {
         execution_id,
-        request.skill_id,
-        &command_allowlist,
+        skill_id: skill_id.clone(),
+        command_allowlist,
         output,
+        expires_at_ms,
         created_at_ms,
-    )
+    };
+    if state.skill_approval_journal.pending_count(created_at_ms)? >= MAX_PENDING_SKILL_EXECUTIONS {
+        return Err(DesktopError::SkillApprovalCapacityExceeded);
+    }
+    state
+        .skill_approval_journal
+        .insert(&SkillApprovalJournalEntry::new(
+            execution_id,
+            execution_id,
+            skill_id.clone(),
+            created_at_ms,
+            expires_at_ms,
+            serde_json::to_value(&pending)?,
+        )?)?;
+    save_skill_execution_history(
+        state,
+        &pending,
+        SkillExecutionHistoryStatus::WaitingForApproval,
+        created_at_ms,
+        None,
+    )?;
+    Ok(SkillExecutionReceipt {
+        execution_id,
+        skill_id,
+        status: SkillExecutionStatus::WaitingForApproval,
+        approval: Some(SkillApprovalRequest {
+            approval_id: execution_id,
+            expires_at_ms,
+            commands: approval_commands,
+        }),
+        command_results: Vec::new(),
+        agent_results: Vec::new(),
+    })
 }
 
 fn complete_skill_execution(
@@ -4096,6 +4218,7 @@ fn complete_skill_execution(
     command_allowlist: &BTreeSet<String>,
     output: SkillExecutionOutput,
     created_at_ms: u64,
+    cancellation: Option<&ExecutionCancellation>,
 ) -> Result<SkillExecutionReceipt, DesktopError> {
     let command_count = output.commands.len();
     let agent_task_count = output.agent_tasks.len();
@@ -4106,7 +4229,11 @@ fn complete_skill_execution(
             command_allowlist,
             output.commands,
             true,
+            cancellation,
         )?;
+        if let Some(cancellation) = cancellation {
+            ensure_skill_execution_active(cancellation)?;
+        }
         let requester = state
             .skill_host
             .lock()
@@ -4114,12 +4241,16 @@ fn complete_skill_execution(
             .module_agent_identity(&skill_id)?;
         let mut agent_results = Vec::with_capacity(output.agent_tasks.len());
         for task in output.agent_tasks {
+            if let Some(cancellation) = cancellation {
+                ensure_skill_execution_active(cancellation)?;
+            }
             agent_results.push(run_skill_agent_task(
                 state,
                 &skill_id,
                 execution_id,
                 &requester,
                 task,
+                cancellation,
             )?);
         }
         Ok(SkillExecutionReceipt {
@@ -4202,6 +4333,26 @@ fn approve_skill_execution_inner(
         .claim(request.approval_id, now_ms)
         .map_err(map_skill_approval_error)?;
     let pending: PendingSkillExecution = serde_json::from_value(entry.plan)?;
+    let cancellation = ExecutionCancellation::default();
+    state
+        .active_skill_executions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .insert(
+            pending.execution_id,
+            ActiveSkillExecution {
+                skill_id: pending.skill_id.clone(),
+                created_at_ms: pending.created_at_ms,
+                command_count: pending.output.commands.len(),
+                agent_task_count: pending.output.agent_tasks.len(),
+                cancellation: cancellation.clone(),
+                agent_task_id: None,
+            },
+        );
+    let _execution_guard = ActiveSkillExecutionGuard {
+        executions: &state.active_skill_executions,
+        execution_id: pending.execution_id,
+    };
     let result = complete_skill_execution(
         state,
         pending.execution_id,
@@ -4209,6 +4360,7 @@ fn approve_skill_execution_inner(
         &pending.command_allowlist,
         pending.output,
         pending.created_at_ms,
+        Some(&cancellation),
     );
     let (status, error) = match &result {
         Ok(_) => (SkillApprovalJournalStatus::Completed, None),
@@ -4318,6 +4470,61 @@ fn delete_skill_execution_history(
     })
 }
 
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn cancel_skill_execution(
+    execution_id: Uuid,
+    state: State<'_, DesktopState>,
+) -> Result<bool, DesktopError> {
+    cancel_skill_execution_inner(&state, execution_id)
+}
+
+fn cancel_skill_execution_inner(
+    state: &DesktopState,
+    execution_id: Uuid,
+) -> Result<bool, DesktopError> {
+    let snapshot = {
+        let executions = state
+            .active_skill_executions
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?;
+        let Some(active) = executions.get(&execution_id) else {
+            return Ok(false);
+        };
+        active.cancellation.cancel();
+        (
+            active.skill_id.clone(),
+            active.created_at_ms,
+            active.command_count,
+            active.agent_task_count,
+            active.agent_task_id,
+        )
+    };
+    if let Some(task_id) = snapshot.4
+        && let Some(cancellation) = state
+            .active_agent_tasks
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?
+            .get(&task_id)
+            .cloned()
+    {
+        cancellation.cancel();
+    }
+    state
+        .skill_execution_history
+        .save(&SkillExecutionHistoryRecord::new(
+            execution_id,
+            snapshot.0,
+            SkillExecutionHistoryStatus::Cancelled,
+            snapshot.2,
+            snapshot.3,
+            snapshot.1,
+            current_time_ms()?,
+            None,
+        )?)?;
+    Ok(true)
+}
+
 fn map_skill_approval_error(error: SqlitePersistenceError) -> DesktopError {
     match error {
         SqlitePersistenceError::SkillApprovalExpired => DesktopError::SkillApprovalExpired,
@@ -4356,6 +4563,7 @@ fn dispatch_skill_commands(
     allowlist: &BTreeSet<String>,
     commands: Vec<nimora_skill_host::SkillCommandRequest>,
     approved: bool,
+    cancellation: Option<&ExecutionCancellation>,
 ) -> Result<Vec<CapabilityResponse>, DesktopError> {
     let admitted = preflight_skill_commands(allowlist, &commands)?;
     if !approved
@@ -4380,6 +4588,9 @@ fn dispatch_skill_commands(
         .into_iter()
         .enumerate()
         .map(|(index, command)| {
+            if let Some(cancellation) = cancellation {
+                ensure_skill_execution_active(cancellation)?;
+            }
             gateway
                 .dispatch_module(
                     &policy,
@@ -4396,6 +4607,14 @@ fn dispatch_skill_commands(
                 .map_err(DesktopError::from)
         })
         .collect()
+}
+
+fn ensure_skill_execution_active(cancellation: &ExecutionCancellation) -> Result<(), DesktopError> {
+    if cancellation.is_cancelled() {
+        Err(DesktopError::SkillHost(SkillHostError::Cancelled))
+    } else {
+        Ok(())
+    }
 }
 
 fn skill_command_risk(command: &str) -> Option<CommandRisk> {
@@ -5330,6 +5549,7 @@ fn run_user_program_agent_task(
                 content: segment.content,
             })
             .collect(),
+        None,
     )
 }
 
@@ -5339,6 +5559,7 @@ fn run_skill_agent_task(
     execution_id: Uuid,
     requester: &str,
     request: SkillAgentTaskRequest,
+    cancellation: Option<&ExecutionCancellation>,
 ) -> Result<DesktopAgentRunResult, DesktopError> {
     run_module_agent_task(
         state,
@@ -5356,6 +5577,7 @@ fn run_skill_agent_task(
                 content: segment.content,
             })
             .collect(),
+        cancellation.map(|_| execution_id),
     )
 }
 
@@ -5369,6 +5591,7 @@ fn run_module_agent_task(
     model: String,
     instruction: String,
     context: Vec<ContextSegment>,
+    skill_execution_id: Option<Uuid>,
 ) -> Result<DesktopAgentRunResult, DesktopError> {
     let budget = AgentBudget {
         max_steps: 2,
@@ -5410,6 +5633,19 @@ fn run_module_agent_task(
             other => DesktopError::Agent(other.to_string()),
         })?;
     let task = admitted.admission.task;
+    if let Some(skill_execution_id) = skill_execution_id {
+        let mut executions = state
+            .active_skill_executions
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?;
+        let active = executions
+            .get_mut(&skill_execution_id)
+            .ok_or(DesktopError::SkillExecutionNotFound)?;
+        if active.cancellation.is_cancelled() {
+            return Err(DesktopError::SkillHost(SkillHostError::Cancelled));
+        }
+        active.agent_task_id = Some(task.id);
+    }
     let cancellation = provider_agent_cancellation(state, task.id)?;
     let outcome = advance_provider_agent(
         &desktop_provider_registry(state)?,
@@ -5421,8 +5657,14 @@ fn run_module_agent_task(
         true,
         BTreeSet::new(),
         cancellation,
-    )?;
-    Ok(desktop_agent_run_result(outcome))
+    );
+    if let Some(skill_execution_id) = skill_execution_id
+        && let Ok(mut executions) = state.active_skill_executions.lock()
+        && let Some(active) = executions.get_mut(&skill_execution_id)
+    {
+        active.agent_task_id = None;
+    }
+    Ok(desktop_agent_run_result(outcome?))
 }
 
 fn record_module_context_rejection(
@@ -5568,7 +5810,11 @@ fn worker_config(app: &AppHandle, execution: &ExecutionHandle) -> WorkerConfig {
     }
 }
 
-fn skill_worker_config(app: &AppHandle, execution_id: Uuid) -> SkillWorkerConfig {
+fn skill_worker_config(
+    app: &AppHandle,
+    execution_id: Uuid,
+    cancellation: ExecutionCancellation,
+) -> SkillWorkerConfig {
     let executable = option_env!("NIMORA_SKILL_WORKER_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -5606,7 +5852,7 @@ fn skill_worker_config(app: &AppHandle, execution_id: Uuid) -> SkillWorkerConfig
         execution_id: execution_id.to_string(),
         timeout: Duration::from_secs(5),
         output_bytes: 256 * 1024,
-        cancellation: None,
+        cancellation: Some(cancellation),
     }
 }
 
@@ -6375,6 +6621,7 @@ pub fn run() {
             reject_skill_execution,
             skill_execution_history_list,
             delete_skill_execution_history,
+            cancel_skill_execution,
             install_user_program,
             rollback_user_program,
             user_program_permission_status,
@@ -6513,25 +6760,26 @@ fn discover_ollama_worker(app: &AppHandle) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVE_CHARACTER_FILE, AssetInstallReceipt, AutomationTestRequest, BUILTIN_CHARACTER_ID,
-        CapabilityBackend, DETERMINISTIC_PROVIDER_ID, DesktopAgentRunStatus,
-        DesktopCapabilityBackend, DesktopError, DesktopState, LocalAgentRequest,
-        PendingSkillExecution, PetAction, PrepareAgentToolRequest, ProfilePolicy,
-        ResolveAgentToolRequest, ResolveSkillApprovalRequest, StartupMode, TrayAction,
-        UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
-        WindowPolicy, agent_catalog_inner, approve_skill_execution_inner,
-        automation_agent_messages, cancel_agent_task_inner, cancel_all_pending_agent_tools,
-        cancel_automation_run_inner, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
-        current_time_ms, default_agent_model, default_agent_provider_id, diagnostic_report,
-        dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
-        ensure_user_program_agent_capability, inspect_asset_catalog, install_gltf_character,
-        open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
-        permission_grant, persist_active_character, prepare_agent_tool_inner,
-        reject_agent_tool_inner, resolve_active_character, resolve_character_renderer,
-        run_live_automation, run_local_agent_inner, run_skill_agent_task,
-        run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
-        skill_capability_names, test_automation, user_program_input, valid_asset_identifier,
-        validate_model_source, validate_package_source, validate_requested_animation_map,
+        ACTIVE_CHARACTER_FILE, ActiveSkillExecution, AssetInstallReceipt, AutomationTestRequest,
+        BUILTIN_CHARACTER_ID, CapabilityBackend, DETERMINISTIC_PROVIDER_ID, DesktopAgentRunStatus,
+        DesktopCapabilityBackend, DesktopError, DesktopState, ExecutionCancellation,
+        LocalAgentRequest, PendingSkillExecution, PetAction, PrepareAgentToolRequest,
+        ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest, StartupMode,
+        TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
+        UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
+        approve_skill_execution_inner, automation_agent_messages, cancel_agent_task_inner,
+        cancel_all_pending_agent_tools, cancel_automation_run_inner, cancel_skill_execution_inner,
+        confirm_agent_tool_inner, confirm_agent_tool_with_registry, current_time_ms,
+        default_agent_model, default_agent_provider_id, diagnostic_report, dispatch_skill_commands,
+        ensure_normal_mode, ensure_program_permissions, ensure_user_program_agent_capability,
+        inspect_asset_catalog, install_gltf_character, open_diagnostic_journal,
+        parse_asset_protocol_path, parse_user_program_plan, permission_grant,
+        persist_active_character, prepare_agent_tool_inner, reject_agent_tool_inner,
+        resolve_active_character, resolve_character_renderer, run_live_automation,
+        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
+        screen_coordinate, serve_asset_protocol, skill_capability_names, test_automation,
+        user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
+        validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentTask, AgentTaskOrigin, AgentTaskStatus, CancellationFlag,
@@ -6551,7 +6799,8 @@ mod tests {
     use nimora_persistence_sqlite::{
         AutomationAgentJournalEntry, AutomationAgentJournalStatus, AutomationJournalStatus,
         AutomationRunStart, BackupCoordinator, BackupPolicy, SkillApprovalJournalEntry,
-        SkillStateRecord, SqliteAutomationJournal, SqliteProgramPermissionRepository,
+        SkillExecutionHistoryStatus, SkillStateRecord, SqliteAutomationJournal,
+        SqliteProgramPermissionRepository,
     };
     use nimora_runtime_core::{Event, EventSource, Position, RuntimeMode};
     use nimora_skill_host::{
@@ -8541,6 +8790,7 @@ mod tests {
                     content: "The focus session lasted 25 minutes.".to_owned(),
                 }],
             },
+            None,
         )
         .expect("Skill module Agent task");
         assert_eq!(result.status, DesktopAgentRunStatus::Completed);
@@ -8562,9 +8812,60 @@ mod tests {
                 arguments: serde_json::json!({"action": "celebrate"}),
             }],
             false,
+            None,
         )
         .expect("registered Skill command");
         assert_eq!(results.len(), 1);
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn cancelling_active_skill_reaches_worker_and_provider_and_converges_history() {
+        let (root, state) = normal_desktop_state();
+        let execution_id = Uuid::now_v7();
+        let task_id = Uuid::now_v7();
+        let worker_cancellation = ExecutionCancellation::default();
+        let provider_cancellation = CancellationFlag::default();
+        let created_at_ms = super::current_time_ms().expect("clock");
+        state
+            .active_skill_executions
+            .lock()
+            .expect("active Skill executions")
+            .insert(
+                execution_id,
+                ActiveSkillExecution {
+                    skill_id: "studio.example.summarizer".to_owned(),
+                    created_at_ms,
+                    command_count: 2,
+                    agent_task_count: 1,
+                    cancellation: worker_cancellation.clone(),
+                    agent_task_id: Some(task_id),
+                },
+            );
+        state
+            .active_agent_tasks
+            .lock()
+            .expect("active Agent tasks")
+            .insert(task_id, provider_cancellation.clone());
+
+        assert!(cancel_skill_execution_inner(&state, execution_id).expect("cancel Skill"));
+        assert!(worker_cancellation.is_cancelled());
+        assert!(provider_cancellation.is_cancelled());
+        let history = state
+            .skill_execution_history
+            .list(None, 10)
+            .expect("Skill history");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].status, SkillExecutionHistoryStatus::Cancelled);
+        assert_eq!(history[0].command_count, 2);
+        assert_eq!(history[0].agent_task_count, 1);
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn cancelling_unknown_or_terminal_skill_returns_false() {
+        let (root, state) = normal_desktop_state();
+        assert!(!cancel_skill_execution_inner(&state, Uuid::now_v7()).expect("unknown Skill"));
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
@@ -8591,6 +8892,7 @@ mod tests {
                     },
                 ],
                 false,
+                None,
             ),
             Err(DesktopError::SkillCommandApprovalRequired)
         ));

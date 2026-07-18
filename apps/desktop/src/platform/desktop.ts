@@ -89,7 +89,7 @@ export interface SkillExecutionHistoryRecord {
   spec: "nimora.skill-execution-history/1";
   executionId: string;
   skillId: string;
-  status: "waitingForApproval" | "completed" | "rejected" | "failed";
+  status: "waitingForApproval" | "completed" | "rejected" | "cancelled" | "failed";
   commandCount: number;
   agentTaskCount: number;
   createdAtMs: number;
@@ -473,6 +473,7 @@ export interface DesktopApi {
   deleteAgentHistory(taskId?: string): Promise<number>;
   skillExecutionHistory(limit?: number, before?: { createdAtMs: number; executionId: string }): Promise<SkillExecutionHistoryPage>;
   deleteSkillExecutionHistory(executionId?: string): Promise<number>;
+  cancelSkillExecution(executionId: string): Promise<boolean>;
   runLocalAgent(prompt: string, providerId?: string, model?: string): Promise<LocalAgentResult>;
   prepareAgentTool(toolId: string, argumentsValue: Record<string, unknown>): Promise<AgentToolResult>;
   confirmAgentTool(invocationId: string): Promise<AgentToolResult>;
@@ -817,6 +818,7 @@ export function createDesktopApi(
     deleteAgentHistory: async (taskId) => (await invokeCommand("delete_agent_history", { request: { taskId: taskId ?? null } }) as { deleted: number }).deleted,
     skillExecutionHistory: async (limit = 50, before) => await invokeCommand("skill_execution_history_list", { request: { beforeCreatedAtMs: before?.createdAtMs ?? null, beforeExecutionId: before?.executionId ?? null, limit } }) as SkillExecutionHistoryPage,
     deleteSkillExecutionHistory: async (executionId) => (await invokeCommand("delete_skill_execution_history", { request: { executionId: executionId ?? null } }) as { deleted: number }).deleted,
+    cancelSkillExecution: async (executionId) => await invokeCommand("cancel_skill_execution", { executionId }) as boolean,
     runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1") => await invokeCommand("run_local_agent", { request: { prompt, providerId, model } }) as LocalAgentResult,
     prepareAgentTool: async (toolId, argumentsValue) => await invokeCommand("prepare_agent_tool", { request: { toolId, arguments: argumentsValue } }) as AgentToolResult,
     confirmAgentTool: async (invocationId) => await invokeCommand("confirm_agent_tool", { request: { invocationId } }) as AgentToolResult,

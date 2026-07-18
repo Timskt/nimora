@@ -413,6 +413,9 @@ ID / 标题 / 优先级 / 前置条件
 | SKH-004 | 用户拒绝执行 | 状态原地收敛为 `rejected`，Command 与 Agent Task 均无副作用 | P0 |
 | SKH-005 | 历史稳定分页 | 使用 `(createdAtMs, executionId)` 成对游标，新到旧稳定分页且限制每页 1–200 条 | P1 |
 | SKH-006 | 隐私删除 | 支持按 execution 删除或全部删除；删除历史不执行、取消或恢复任何 Skill | P0 |
+| SKH-007 | 活跃 Skill 取消传播 | 按 `execution_id` 取消会同时设置 Worker 取消令牌与当前 Provider `CancellationFlag`，并在下一条 Command 前阻断副作用 | P0 |
+| SKH-008 | 取消终态竞态 | 历史立即进入 `cancelled`；迟到的 completed/failed 不得覆盖，未知或已终态 execution 返回 false | P0 |
+| SKH-009 | 等待批准与运行取消分离 | pending 计划使用 reject，未进入活跃注册表；cancel 不得把尚未执行的批准计划伪装成运行中取消 | P0 |
 
 - 每次提交：Unit、Schema、核心 Contract。
 - 每次合并：核心 Integration、Pet/Asset/Permission P0。
