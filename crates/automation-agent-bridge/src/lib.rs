@@ -14,6 +14,23 @@ use std::collections::BTreeSet;
 pub const AGENT_TASK_RUN_COMMAND: &str = "agent.task.run";
 const MAX_INSTRUCTION_BYTES: usize = 32 * 1024;
 
+/// Resolves the host-controlled effective risk for an Automation Agent action.
+///
+/// # Errors
+///
+/// Rejects commands other than [`AGENT_TASK_RUN_COMMAND`]. A caller may
+/// overstate risk, but cannot lower the host minimum of medium.
+pub fn admit_agent_task_command(command: &Command) -> Result<CommandRisk, String> {
+    if command.command_id.to_string() != AGENT_TASK_RUN_COMMAND {
+        return Err("automation agent command is not registered".to_owned());
+    }
+    Ok(match command.risk {
+        CommandRisk::Safe | CommandRisk::Low | CommandRisk::Medium => CommandRisk::Medium,
+        CommandRisk::High => CommandRisk::High,
+        CommandRisk::Critical => CommandRisk::Critical,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutomationAgentTask {
     pub admission: AgentTaskAdmission,
@@ -149,9 +166,7 @@ where
         context: &AutomationExecutionContext,
         command: &Command,
     ) -> Result<(), ActionFailure> {
-        if matches!(command.risk, CommandRisk::Safe | CommandRisk::Low) {
-            return Err(permanent("agent task action risk must be medium or higher"));
-        }
+        admit_agent_task_command(command).map_err(permanent)?;
         let arguments = serde_json::from_value::<AgentActionArguments>(command.arguments.clone())
             .map_err(|_| permanent("agent task action arguments are invalid"))?;
         if arguments.instruction.trim().is_empty()

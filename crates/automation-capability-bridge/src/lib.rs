@@ -13,6 +13,12 @@ pub struct AutomationCommandBinding {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutomationCommandAdmission {
+    pub gateway_command: String,
+    pub effective_risk: CommandRisk,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutomationCapabilityPolicy {
     bindings: BTreeMap<String, AutomationCommandBinding>,
 }
@@ -60,6 +66,23 @@ impl AutomationCapabilityPolicy {
             ]),
         }
     }
+
+    /// Resolves one action through the same host policy used by execution.
+    ///
+    /// # Errors
+    ///
+    /// Rejects commands that are not registered by the host. A definition may
+    /// overstate risk, but cannot lower the host minimum.
+    pub fn admit(&self, command: &Command) -> Result<AutomationCommandAdmission, String> {
+        let binding = self
+            .bindings
+            .get(&command.command_id.to_string())
+            .ok_or_else(|| "automation command is not allowed by host policy".to_owned())?;
+        Ok(AutomationCommandAdmission {
+            gateway_command: binding.gateway_command.clone(),
+            effective_risk: max_risk(command.risk, binding.minimum_risk),
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -84,20 +107,12 @@ impl<B: CapabilityBackend> AutomationBackend for AutomationCapabilityBridge<B> {
         context: &AutomationExecutionContext,
         command: Command,
     ) -> Result<(), ActionFailure> {
-        let command_id = command.command_id.to_string();
-        let binding = self
-            .policy
-            .bindings
-            .get(&command_id)
-            .ok_or_else(|| permanent("automation command is not allowed by host policy"))?;
-        if risk_rank(command.risk) < risk_rank(binding.minimum_risk) {
-            return Err(permanent("automation command risk is understated"));
-        }
+        let admission = self.policy.admit(&command).map_err(permanent)?;
         let policy = ModuleGatewayPolicy {
             execution_id: context.run_id,
             trace_id: context.trace_id,
             read_capabilities: BTreeSet::new(),
-            commands: BTreeSet::from([binding.gateway_command.clone()]),
+            commands: BTreeSet::from([admission.gateway_command.clone()]),
         };
         self.gateway
             .dispatch_module(
@@ -107,7 +122,7 @@ impl<B: CapabilityBackend> AutomationBackend for AutomationCapabilityBridge<B> {
                     trace_id: context.trace_id.to_string(),
                     idempotency_key: command.idempotency_key,
                     request: CapabilityRequest::InvokeCommand {
-                        command: binding.gateway_command.clone(),
+                        command: admission.gateway_command,
                         arguments: command.arguments,
                     },
                 },
@@ -124,6 +139,14 @@ const fn risk_rank(risk: CommandRisk) -> u8 {
         CommandRisk::Medium => 2,
         CommandRisk::High => 3,
         CommandRisk::Critical => 4,
+    }
+}
+
+const fn max_risk(left: CommandRisk, right: CommandRisk) -> CommandRisk {
+    if risk_rank(left) >= risk_rank(right) {
+        left
+    } else {
+        right
     }
 }
 
@@ -231,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_or_understated_actions_before_backend() {
+    fn rejects_unknown_actions_and_raises_understated_risk() {
         let backend = Backend::default();
         let calls = Arc::clone(&backend.calls);
         let bridge =
@@ -250,12 +273,14 @@ mod tests {
             CommandRisk::Safe,
         )
         .expect("understated command");
-        assert!(
-            !bridge
-                .execute(&context(), understated)
-                .expect_err("denied")
-                .transient
-        );
-        assert!(calls.lock().expect("calls").is_empty());
+        let admission = bridge.policy.admit(&understated).expect("admission");
+        assert_eq!(admission.gateway_command, "safe.pet.move");
+        assert_eq!(admission.effective_risk, CommandRisk::Low);
+        bridge
+            .execute(&context(), understated)
+            .expect("execute with raised risk");
+        let calls = calls.lock().expect("calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "safe.pet.move");
     }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AutomationCatalogEntry, AutomationDefinition, AutomationEventHealthSnapshot, AutomationJournalEntry, AutomationRun } from "../platform/desktop";
+import type { AutomationApprovalCatalog, AutomationCatalogEntry, AutomationDefinition, AutomationEventHealthSnapshot, AutomationJournalEntry, AutomationRun } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const sampleDefinition: AutomationDefinition = {
@@ -34,6 +34,7 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
   const [history, setHistory] = useState<AutomationJournalEntry[]>([]);
   const [historyExhausted, setHistoryExhausted] = useState(false);
   const [eventHealth, setEventHealth] = useState<AutomationEventHealthSnapshot["sessions"]>([]);
+  const [approvals, setApprovals] = useState<AutomationApprovalCatalog["approvals"]>([]);
   const definition = useMemo(() => sampleDefinition, []);
 
   async function refreshCatalog() {
@@ -63,7 +64,35 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
     }
   }
 
-  useEffect(() => { void Promise.all([refreshCatalog(), refreshHistory(), refreshEventHealth()]); }, []);
+  async function refreshApprovals() {
+    try {
+      setApprovals((await desktopApi.pendingAutomationApprovals()).approvals);
+    } catch {
+      setApprovals([]);
+    }
+  }
+
+  useEffect(() => { void Promise.all([refreshCatalog(), refreshHistory(), refreshEventHealth(), refreshApprovals()]); }, []);
+
+  async function resolveApproval(approvalId: string, approve: boolean) {
+    setBusy(true);
+    try {
+      if (approve) {
+        const result = await desktopApi.approveAutomationRun(approvalId);
+        setRun(result);
+        onNotice(result.status === "succeeded" ? "自动化已按已审查参数执行" : "自动化已执行并记录终态");
+      } else {
+        await desktopApi.rejectAutomationRun(approvalId);
+        onNotice("自动化运行已拒绝，未产生任何副作用");
+      }
+      await Promise.all([refreshApprovals(), refreshHistory(), refreshEventHealth()]);
+    } catch {
+      await refreshApprovals();
+      onNotice("审批已过期、被处理或计划发生变化，未执行自动化");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function deleteHistory(runId?: string) {
     setBusy(true);
@@ -127,6 +156,19 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
       <span>离线可用</span>
     </div>
     <div className="automation-grid">
+      <section className="automation-catalog automation-approvals" aria-label="待批准自动化运行">
+        <div className="section-heading"><div><p className="card-label">RUNTIME APPROVAL</p><h3>待批准运行</h3></div><button disabled={disabled || busy} onClick={() => void refreshApprovals()} type="button">刷新</button></div>
+        {approvals.length === 0 ? <p>没有等待批准的运行。中高风险动作会在任何副作用发生前出现在这里。</p> : approvals.map((approval) => <article className="automation-approval-card" key={approval.approvalId}>
+          <div className="automation-approval-heading"><div><strong>{approval.automationId}</strong><small>版本 {approval.automationVersion} · {new Date(approval.expiresAtMs).toLocaleTimeString()} 过期</small></div><code>{approval.runId}</code></div>
+          <div className="automation-safety-note"><strong>整次执行尚未开始</strong><p>批准绑定当前版本、事件和下列实际参数；参数或宿主风险策略变化后旧批准自动失效。</p></div>
+          <div className="automation-risk-list">{approval.risks.map((risk) => <div className="automation-risk-row" key={`${risk.actionId}:${risk.command}`}>
+            <div><strong>{risk.actionId}</strong><code>{risk.command}</code></div>
+            <span data-risk={risk.effectiveRisk}>{risk.effectiveRisk.toUpperCase()}</span>
+            <pre>{JSON.stringify(risk.arguments, null, 2)}</pre>
+          </div>)}</div>
+          <div className="automation-approval-actions"><button disabled={disabled || busy} onClick={() => void resolveApproval(approval.approvalId, false)} type="button">拒绝</button><button className="primary-button" disabled={disabled || busy} onClick={() => void resolveApproval(approval.approvalId, true)} type="button">批准整次执行</button></div>
+        </article>)}
+      </section>
       <section className="automation-catalog" aria-label="已安装自动化目录">
         <div className="section-heading"><div><p className="card-label">INSTALLED CATALOG</p><h3>已安装自动化</h3></div><span>{catalog.length} 项</span></div>
         {catalog.length === 0 ? <p>尚未安装自动化。可在“扩展”工作区让外接 AI 生成、审查并原子安装。</p> : catalog.map((entry) => <article className="automation-catalog-entry" key={entry.definition.id}>
@@ -191,5 +233,11 @@ function statusLabel(status: AutomationRun["status"]): string {
   if (status === "planned") return "计划验证通过";
   if (status === "condition_not_matched") return "条件未满足";
   if (status === "trigger_not_matched") return "触发器未匹配";
+  if (status === "waiting_for_approval") return "等待参数级批准";
+  if (status === "succeeded") return "运行成功";
+  if (status === "cancelled") return "运行已取消";
+  if (status === "timed_out") return "运行超时";
+  if (status === "compensation_failed") return "动作与补偿均失败";
+  if (status === "failed") return "运行失败";
   return "运行未完成";
 }

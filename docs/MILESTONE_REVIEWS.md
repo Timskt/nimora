@@ -287,3 +287,11 @@ Actions 分钟：
 - 安全：三类行为检查均不调用真实 Capability Gateway、Provider 或模块 Backend，不获得 Node、Tauri、文件、网络和数据库对象；保存 IPC 在写盘前重新执行语法与行为两阶段审查。
 - 工程修正：按 Automation、User Program、Skill 拆分桌面审查服务，避免继续膨胀 Tauri 编排函数；严格 Clippy 阻止回退。
 - 剩余边界：当前只使用空输入、首个 Skill Activation Event 和单个 Automation 事件；多事件夹具、虚拟时间、Connector Mock、调用参数 Diff、风险批准与安装仍未完成。
+
+## M-2026-07-18 Automation 参数绑定运行期批准
+
+- 修正：Automation 安装批准不再被视为真实运行授权；生产 Engine 先做零副作用匹配判定，再用宿主策略整批解析主动作与补偿动作的有效风险。
+- 实现：Safe/Low 立即执行；Medium/High 使用五分钟不可变 SQLite Approval Journal，返回 `waiting_for_approval`，批准前不创建 Run Journal、不注册活跃运行、不调用 Pet 或 Agent Backend。
+- 复验：批准原子 claim 后重新校验定义、事件身份、完整参数、风险摘要和已安装精确版本，并使用同一预分配 `runId` 执行；Critical 不进入普通批准。
+- 鲁棒性：拒绝、过期、重复处理和 Safe Mode 均失败关闭；重启保留未过期 pending、将 executing 标记 interrupted；Engine 异常精确中断 Run Journal，避免遗留 running。
+- UI：Automation Workspace 显示逐动作有效风险、实际参数和过期时间，明确整次执行尚未开始；Browser Preview 只返回空目录并拒绝伪造批准。

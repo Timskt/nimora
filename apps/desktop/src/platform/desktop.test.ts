@@ -19,6 +19,10 @@ describe("desktop platform adapter", () => {
     expect((await api.profiles()).profiles[0]?.name).toBe("Default");
     expect((await api.agentCatalog()).tools).toHaveLength(13);
     expect((await api.agentCatalog()).providers).toHaveLength(2);
+    await expect(api.automationPendingApprovalCount()).resolves.toBe(0);
+    await expect(api.pendingAutomationApprovals()).resolves.toEqual({ spec: "nimora.automation-approval-catalog/1", approvals: [] });
+    await expect(api.approveAutomationRun("018f0000-0000-7000-8000-000000000021")).rejects.toThrow("desktop runtime");
+    await expect(api.rejectAutomationRun("018f0000-0000-7000-8000-000000000021")).rejects.toThrow("desktop runtime");
     const result = await api.runLocalAgent("离线检查");
     expect(result.usage?.costMicrounits).toBe(0);
     expect((await api.agentHistory()).records[0]).toMatchObject({
@@ -167,6 +171,10 @@ describe("desktop platform adapter", () => {
       : null);
     const startDragging = vi.fn(async () => undefined);
     const api = createDesktopApi(true, invoke, startDragging);
+    await api.automationPendingApprovalCount();
+    await api.pendingAutomationApprovals();
+    await api.approveAutomationRun("018f0000-0000-7000-8000-000000000021");
+    await api.rejectAutomationRun("018f0000-0000-7000-8000-000000000022");
     await api.automationAgentTaskStatus("018f0000-0000-7000-8000-000000000008");
     await api.automationRunAgentTasks("018f0000-0000-7000-8000-000000000009");
     await api.cancelAutomationRun("018f0000-0000-7000-8000-000000000011");
@@ -280,6 +288,10 @@ describe("desktop platform adapter", () => {
     });
     await api.stopUserProgram(envelope.executionId);
     expect(invoke.mock.calls).toEqual([
+      ["automation_pending_approval_count"],
+      ["pending_automation_approvals"],
+      ["approve_automation_run", { request: { approvalId: "018f0000-0000-7000-8000-000000000021" } }],
+      ["reject_automation_run", { request: { approvalId: "018f0000-0000-7000-8000-000000000022" } }],
       ["automation_agent_task_status", { taskId: "018f0000-0000-7000-8000-000000000008" }],
       ["automation_run_agent_tasks", { runId: "018f0000-0000-7000-8000-000000000009" }],
       ["cancel_automation_run", { runId: "018f0000-0000-7000-8000-000000000011" }],

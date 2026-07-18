@@ -7,6 +7,7 @@ mod auto_mode_commit_store;
 mod auto_mode_store;
 mod auto_mode_turn_attempt_store;
 mod automation_agent_journal;
+mod automation_approval_journal;
 mod automation_catalog;
 mod automation_journal;
 mod backup;
@@ -28,6 +29,9 @@ pub use auto_mode_turn_attempt_store::{
 };
 pub use automation_agent_journal::{
     AutomationAgentJournalEntry, AutomationAgentJournalStatus, SqliteAutomationAgentJournal,
+};
+pub use automation_approval_journal::{
+    AutomationApprovalEntry, AutomationApprovalStatus, SqliteAutomationApprovalJournal,
 };
 pub use automation_catalog::{
     AutomationCatalogEntry, AutomationInstallReceipt, SqliteAutomationCatalog,
@@ -1113,6 +1117,7 @@ fn prepare_connection(connection: &mut Connection) -> Result<(), SqlitePersisten
         transaction.commit()?;
     }
     ensure_current_schema_extensions(connection)?;
+    automation_approval_journal::ensure_automation_approval_schema(connection)?;
     automation_catalog::ensure_automation_catalog_schema(connection)?;
     Ok(())
 }
@@ -1578,18 +1583,26 @@ pub enum SqlitePersistenceError {
     InvalidAutomationJournal,
     #[error("Automation Agent journal record or state transition is invalid")]
     InvalidAutomationAgentJournal,
+    #[error("Automation approval journal record or state transition is invalid")]
+    InvalidAutomationApprovalJournal,
     #[error("Skill approval journal record or state transition is invalid")]
     InvalidSkillApprovalJournal,
     #[error("Skill execution history record or request is invalid")]
     InvalidSkillExecutionHistory,
     #[error("Skill approval is missing, claimed, expired, or already resolved")]
     SkillApprovalNotPending,
+    #[error("Automation approval is missing, claimed, expired, or already resolved")]
+    AutomationApprovalNotPending,
+    #[error("Automation approval expired")]
+    AutomationApprovalExpired,
     #[error("Skill approval expired")]
     SkillApprovalExpired,
     #[error("Automation journal version {0} is unsupported")]
     UnsupportedAutomationJournalVersion(u32),
     #[error("Automation Agent journal version {0} is unsupported")]
     UnsupportedAutomationAgentJournalVersion(u32),
+    #[error("Automation approval journal version {0} is unsupported")]
+    UnsupportedAutomationApprovalJournalVersion(u32),
     #[error("Skill approval journal version {0} is unsupported")]
     UnsupportedSkillApprovalJournalVersion(u32),
     #[error("Skill execution history version {0} is unsupported")]

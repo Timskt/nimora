@@ -580,3 +580,15 @@ ID / 标题 / 优先级 / 前置条件
 - Verify Skill 行为沙箱只返回记录的命令与 Agent Task 数量，不调用 Capability Gateway、Provider 或模块 Backend；使用临时精确 Manifest Lease 仅满足 Worker Admission，绝不持久化或继承为安装授权。
 - Verify Automation 行为沙箱使用匹配的触发事件和空对象数据运行生产 DryRun Backend；条件不匹配是确定性运行状态而不是检查器故障，任何 Command Backend 调用均失败测试。
 - Verify 保存 IPC 在写盘前重新运行 parse-only 与行为沙箱；任一 JavaScript 语法或顶层行为失败均不创建 `.nimora-drafts/<artifact-id>`。
+
+## Automation 参数绑定运行期批准
+
+- Verify Safe/Low 动作直接执行；用户把宿主最低 Low 自报为 Safe 时按宿主有效风险执行，不形成旁路或虚假失败。
+- Verify 未注册命令在任何 Journal、活跃运行或 Backend 副作用前失败关闭。
+- Verify 任一 Medium/High 主动作或补偿动作使整次 Run 返回 `waiting_for_approval`；此前低风险动作也未执行，Run Journal 不存在。
+- Verify 待批目录只返回 Automation/版本/Run ID/过期时间与逐项实际参数，不返回 Event data 正文。
+- Verify 批准绑定不可变定义、事件、参数、风险摘要和 `runId`；安装版本、启用状态或宿主策略漂移后不能执行。
+- Verify 批准原子单次 claim；拒绝、过期、重复批准和 Safe Mode 批准均失败关闭且不创建 Run Journal。
+- Verify 批准后使用预分配 `runId` 创建并完成真实 Run Journal；Backend 或 Engine 异常收敛为 failed/interrupted，不遗留 running。
+- Verify 重启保留未过期 pending、过期 pending 变为 expired、executing 变为 interrupted，且不会自动重放命令。
+- Verify Browser Preview 返回空待批目录，并对批准/拒绝明确报“需要桌面运行时”，不得伪造成功。

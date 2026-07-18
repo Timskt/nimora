@@ -137,6 +137,38 @@ impl SqliteAutomationJournal {
         Ok(())
     }
 
+    /// Marks one running journal entry as interrupted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the run is not running or metadata is invalid.
+    pub fn interrupt(
+        &self,
+        run_id: Uuid,
+        interrupted_at_ms: u64,
+        reason: &str,
+    ) -> Result<(), SqlitePersistenceError> {
+        if reason.trim().is_empty() || reason.len() > MAX_INTERRUPTION_REASON_BYTES {
+            return Err(SqlitePersistenceError::InvalidAutomationJournal);
+        }
+        let interrupted_at_ms = i64::try_from(interrupted_at_ms)
+            .map_err(|_| SqlitePersistenceError::InvalidAutomationJournal)?;
+        let changed = self
+            .connection
+            .lock()
+            .map_err(|_| SqlitePersistenceError::StatePoisoned)?
+            .execute(
+                "UPDATE automation_run_journal
+                 SET status = 'interrupted', updated_at_ms = ?2, interruption_reason = ?3
+                 WHERE run_id = ?1 AND status = 'running' AND started_at_ms <= ?2",
+                params![run_id.to_string(), interrupted_at_ms, reason],
+            )?;
+        if changed != 1 {
+            return Err(SqlitePersistenceError::InvalidAutomationJournal);
+        }
+        Ok(())
+    }
+
     /// Marks all crash-left running entries as interrupted.
     ///
     /// # Errors

@@ -665,7 +665,7 @@ export interface AutomationRun {
   traceId: string;
   eventId: string;
   mode: "dry_run" | "live";
-  status: "trigger_not_matched" | "condition_not_matched" | "planned" | "succeeded" | "failed" | "compensation_failed" | "cancelled" | "timed_out";
+  status: "trigger_not_matched" | "condition_not_matched" | "planned" | "waiting_for_approval" | "succeeded" | "failed" | "compensation_failed" | "cancelled" | "timed_out";
   steps: Array<{
     actionId: string;
     command: string;
@@ -707,6 +707,33 @@ export interface AutomationEventHealthSnapshot {
   }>;
 }
 
+export interface AutomationApprovalRisk {
+  actionId: string;
+  command: string;
+  effectiveRisk: "safe" | "low" | "medium" | "high" | "critical";
+  arguments: unknown;
+}
+
+export interface AutomationApprovalCatalog {
+  spec: "nimora.automation-approval-catalog/1";
+  approvals: Array<{
+    approvalId: string;
+    runId: string;
+    automationId: string;
+    automationVersion: string;
+    createdAtMs: number;
+    expiresAtMs: number;
+    risks: AutomationApprovalRisk[];
+  }>;
+}
+
+export interface AutomationApprovalResolution {
+  spec: "nimora.automation-approval-resolution/1";
+  approvalId: string;
+  runId: string;
+  status: "rejected";
+}
+
 export interface AutomationAgentJournalEntry {
   spec: "nimora.automation-agent-journal/1";
   runId: string;
@@ -736,6 +763,10 @@ export interface DesktopApi {
   automationRunStatus(runId: string): Promise<AutomationJournalEntry | null>;
   automationRunHistory(limit?: number, before?: { startedAtMs: number; runId: string }): Promise<AutomationRunHistoryPage>;
   automationEventHealth(): Promise<AutomationEventHealthSnapshot>;
+  automationPendingApprovalCount(): Promise<number>;
+  pendingAutomationApprovals(): Promise<AutomationApprovalCatalog>;
+  approveAutomationRun(approvalId: string): Promise<AutomationRun>;
+  rejectAutomationRun(approvalId: string): Promise<AutomationApprovalResolution>;
   deleteAutomationRunHistory(runId?: string): Promise<number>;
   automationAgentTaskStatus(taskId: string): Promise<AutomationAgentJournalEntry | null>;
   automationRunAgentTasks(runId: string): Promise<AutomationAgentJournalEntry[]>;
@@ -935,6 +966,10 @@ export function createDesktopApi(
       async automationRunStatus() { return null; },
       async automationRunHistory() { return { spec: "nimora.desktop-automation-run-history/1", records: [] }; },
       async automationEventHealth() { return { spec: "nimora.automation-event-health/1", sessions: [] }; },
+      async automationPendingApprovalCount() { return 0; },
+      async pendingAutomationApprovals() { return { spec: "nimora.automation-approval-catalog/1", approvals: [] }; },
+      async approveAutomationRun() { throw new Error("Automation approval requires the Nimora desktop runtime."); },
+      async rejectAutomationRun() { throw new Error("Automation approval requires the Nimora desktop runtime."); },
       async deleteAutomationRunHistory() { return 0; },
       async automationAgentTaskStatus() { return null; },
       async automationRunAgentTasks() { return []; },
@@ -1211,6 +1246,10 @@ export function createDesktopApi(
     automationRunStatus: async (runId) => await invokeCommand("automation_run_status", { runId }) as AutomationJournalEntry | null,
     automationRunHistory: async (limit = 20, before) => await invokeCommand("automation_run_history", { request: { beforeStartedAtMs: before?.startedAtMs ?? null, beforeRunId: before?.runId ?? null, limit } }) as AutomationRunHistoryPage,
     automationEventHealth: async () => await invokeCommand("automation_event_health") as AutomationEventHealthSnapshot,
+    automationPendingApprovalCount: async () => await invokeCommand("automation_pending_approval_count") as number,
+    pendingAutomationApprovals: async () => await invokeCommand("pending_automation_approvals") as AutomationApprovalCatalog,
+    approveAutomationRun: async (approvalId) => await invokeCommand("approve_automation_run", { request: { approvalId } }) as AutomationRun,
+    rejectAutomationRun: async (approvalId) => await invokeCommand("reject_automation_run", { request: { approvalId } }) as AutomationApprovalResolution,
     deleteAutomationRunHistory: async (runId) => await invokeCommand("delete_automation_run_history", { runId: runId ?? null }) as number,
     automationAgentTaskStatus: async (taskId) => await invokeCommand("automation_agent_task_status", { taskId }) as AutomationAgentJournalEntry | null,
     automationRunAgentTasks: async (runId) => await invokeCommand("automation_run_agent_tasks", { runId }) as AutomationAgentJournalEntry[],

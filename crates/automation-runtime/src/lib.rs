@@ -88,6 +88,7 @@ pub enum AutomationRunStatus {
     TriggerNotMatched,
     ConditionNotMatched,
     Planned,
+    WaitingForApproval,
     Succeeded,
     Failed,
     CompensationFailed,

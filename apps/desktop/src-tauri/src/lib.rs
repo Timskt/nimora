@@ -57,8 +57,9 @@ use nimora_asset_installer::{
     install_gltf_character, read_asset_voice_clip, rollback_latest,
 };
 use nimora_automation_agent_bridge::{
-    AdmittedContextSegment, AgentTaskSubmissionError, AgentTaskSubmissionOutcome,
-    AgentTaskSubmitter, AutomationAgentBridge, AutomationAgentContext, AutomationAgentTask,
+    AGENT_TASK_RUN_COMMAND, AdmittedContextSegment, AgentTaskSubmissionError,
+    AgentTaskSubmissionOutcome, AgentTaskSubmitter, AutomationAgentBridge, AutomationAgentContext,
+    AutomationAgentTask, admit_agent_task_command,
 };
 use nimora_automation_capability_bridge::{AutomationCapabilityBridge, AutomationCapabilityPolicy};
 use nimora_automation_runtime::{
@@ -84,15 +85,16 @@ use nimora_module_agent_adapter::{
 use nimora_persistence_sqlite::{
     AgentHistoryRecord, AutoModeAttemptResolution, AutoModeAttemptResolutionDecision,
     AutoModeTurnAttempt, AutoModeTurnAttemptStatus, AutomationAgentJournalEntry,
-    AutomationAgentJournalStatus, AutomationJournalEntry, AutomationRunStart, BackupCoordinator,
-    BackupHealth, BackupPolicy, BackupRecord, ContextCachePolicy, DATABASE_VERSION, OutboxSnapshot,
-    ProgramPermissionGrant, ResolveAutoModeAttemptRequest, SkillApprovalJournalEntry,
-    SkillApprovalJournalStatus, SkillExecutionHistoryRecord, SkillExecutionHistoryStatus,
-    SkillStateRecord, SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
+    AutomationAgentJournalStatus, AutomationApprovalEntry, AutomationApprovalStatus,
+    AutomationJournalEntry, AutomationRunStart, BackupCoordinator, BackupHealth, BackupPolicy,
+    BackupRecord, ContextCachePolicy, DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant,
+    ResolveAutoModeAttemptRequest, SkillApprovalJournalEntry, SkillApprovalJournalStatus,
+    SkillExecutionHistoryRecord, SkillExecutionHistoryStatus, SkillStateRecord,
+    SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
     SqliteAutoModeAttemptResolutionRepository, SqliteAutoModeCheckpointRepository,
     SqliteAutoModeRepository, SqliteAutoModeTurnAttemptRepository, SqliteAutomationAgentJournal,
-    SqliteAutomationCatalog, SqliteAutomationJournal, SqliteOutboxRepository,
-    SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
+    SqliteAutomationApprovalJournal, SqliteAutomationCatalog, SqliteAutomationJournal,
+    SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
     SqliteProgramPermissionRepository, SqliteSkillApprovalJournal, SqliteSkillExecutionHistory,
     SqliteSkillStateRepository, apply_pending_restore, verify_database_file,
 };
@@ -167,6 +169,8 @@ const MAX_PENDING_AGENT_TOOLS: usize = 32;
 const AGENT_TOOL_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
 const MAX_PENDING_SKILL_EXECUTIONS: usize = 32;
 const SKILL_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
+const MAX_PENDING_AUTOMATION_APPROVALS: usize = 32;
+const AUTOMATION_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
 const CREATOR_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
 const MAX_PENDING_CREATOR_APPROVALS: usize = 32;
 const SKILL_EVENT_QUEUE_CAPACITY: usize = 32;
@@ -211,6 +215,7 @@ struct DesktopState {
     pending_agent_tools: Mutex<HashMap<Uuid, PendingAgentTool>>,
     pending_creator_approvals: Mutex<HashMap<Uuid, PendingCreatorApproval>>,
     skill_approval_journal: SqliteSkillApprovalJournal,
+    automation_approval_journal: SqliteAutomationApprovalJournal,
     skill_execution_history: SqliteSkillExecutionHistory,
     active_skill_executions: Mutex<HashMap<Uuid, ActiveSkillExecution>>,
     skill_event_sessions: Mutex<HashMap<String, SkillEventSession>>,
@@ -507,6 +512,8 @@ impl DesktopState {
         automation_agent_journal.recover_active(current_time_ms()?)?;
         let skill_approval_journal = SqliteSkillApprovalJournal::open(database_path)?;
         skill_approval_journal.recover(current_time_ms()?)?;
+        let automation_approval_journal = SqliteAutomationApprovalJournal::open(database_path)?;
+        automation_approval_journal.recover(current_time_ms()?)?;
         let skill_execution_history = SqliteSkillExecutionHistory::open(database_path)?;
         let auto_mode_jobs = restore_auto_mode_jobs(database_path, current_time_ms()?)?;
         Ok(Self {
@@ -543,6 +550,7 @@ impl DesktopState {
             pending_agent_tools: Mutex::new(HashMap::new()),
             pending_creator_approvals: Mutex::new(HashMap::new()),
             skill_approval_journal,
+            automation_approval_journal,
             skill_execution_history,
             active_skill_executions: Mutex::new(HashMap::new()),
             skill_event_sessions: Mutex::new(HashMap::new()),
@@ -619,6 +627,7 @@ impl DesktopState {
             pending_agent_tools: Mutex::new(HashMap::new()),
             pending_creator_approvals: Mutex::new(HashMap::new()),
             skill_approval_journal: SqliteSkillApprovalJournal::in_memory()?,
+            automation_approval_journal: SqliteAutomationApprovalJournal::in_memory()?,
             skill_execution_history: SqliteSkillExecutionHistory::in_memory()?,
             active_skill_executions: Mutex::new(HashMap::new()),
             skill_event_sessions: Mutex::new(HashMap::new()),
@@ -1235,6 +1244,16 @@ enum DesktopError {
     SkillApprovalExpired,
     #[error(transparent)]
     Automation(#[from] AutomationError),
+    #[error("Automation command is not registered by the host: {0}")]
+    AutomationCommandNotRegistered(String),
+    #[error("too many Automation runs are waiting for approval")]
+    AutomationApprovalCapacityExceeded,
+    #[error("critical Automation actions cannot use standard runtime approval")]
+    AutomationCriticalApprovalRequired,
+    #[error("Automation approval plan no longer matches its definition or host policy")]
+    AutomationApprovalPlanChanged,
+    #[error("installed Automation changed before its pending run was approved")]
+    AutomationApprovalVersionChanged,
     #[error("user program execution was not found")]
     UserProgramNotFound,
     #[error("user program permissions must be granted for this exact installed version")]
@@ -1497,6 +1516,67 @@ struct AutomationRunHistoryPage {
     records: Vec<AutomationJournalEntry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PendingAutomationRun {
+    spec: String,
+    run_id: Uuid,
+    definition: AutomationDefinition,
+    event: Event,
+    origin: AutomationRunOrigin,
+    risks: Vec<AutomationApprovalRisk>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AutomationRunOrigin {
+    AdHoc,
+    Installed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AutomationApprovalRisk {
+    action_id: String,
+    command: String,
+    effective_risk: CommandRisk,
+    arguments: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationApprovalCatalogEntry {
+    approval_id: Uuid,
+    run_id: Uuid,
+    automation_id: String,
+    automation_version: String,
+    created_at_ms: u64,
+    expires_at_ms: u64,
+    risks: Vec<AutomationApprovalRisk>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationApprovalCatalog {
+    spec: &'static str,
+    approvals: Vec<AutomationApprovalCatalogEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResolveAutomationApprovalRequest {
+    approval_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationApprovalResolution {
+    spec: &'static str,
+    approval_id: Uuid,
+    run_id: Uuid,
+    status: AutomationApprovalStatus,
+}
+
 #[derive(Debug)]
 struct DryRunAutomationBackend;
 
@@ -1607,6 +1687,7 @@ fn run_live_automation(
         &request.definition,
         &event,
         CancellationFlag::default(),
+        AutomationRunOrigin::AdHoc,
     )
 }
 
@@ -1615,11 +1696,49 @@ fn run_live_automation_event(
     definition: &AutomationDefinition,
     event: &Event,
     cancellation: CancellationFlag,
+    origin: AutomationRunOrigin,
 ) -> Result<AutomationRun, DesktopError> {
     ensure_normal_mode(state)?;
     AutomationEngine::validate(definition)?;
-    let agent_policy = desktop_automation_agent_policy(state)?;
     let run_id = Uuid::now_v7();
+    let dry_run = AutomationEngine::run_with_id(
+        run_id,
+        definition,
+        event,
+        RunMode::DryRun,
+        &DryRunAutomationBackend,
+        &Uncancelled,
+    )?;
+    if dry_run.status != nimora_automation_runtime::AutomationRunStatus::Planned {
+        return Ok(AutomationRun {
+            mode: "live".to_owned(),
+            ..dry_run
+        });
+    }
+    let risks = preflight_automation_risks(definition)?;
+    if risks
+        .iter()
+        .any(|risk| risk.effective_risk == CommandRisk::Critical)
+    {
+        return Err(DesktopError::AutomationCriticalApprovalRequired);
+    }
+    if risks
+        .iter()
+        .any(|risk| matches!(risk.effective_risk, CommandRisk::Medium | CommandRisk::High))
+    {
+        return queue_automation_approval(state, run_id, definition, event, origin, risks);
+    }
+    execute_live_automation_event_with_id(state, run_id, definition, event, cancellation)
+}
+
+fn execute_live_automation_event_with_id(
+    state: &DesktopState,
+    run_id: Uuid,
+    definition: &AutomationDefinition,
+    event: &Event,
+    cancellation: CancellationFlag,
+) -> Result<AutomationRun, DesktopError> {
+    let agent_policy = desktop_automation_agent_policy(state)?;
     state.automation_journal.start(&AutomationRunStart {
         run_id,
         automation_id: definition.id.clone(),
@@ -1649,11 +1768,117 @@ fn run_live_automation_event(
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?
         .remove(&run_id);
-    let run = result?;
+    let run = match result {
+        Ok(run) => run,
+        Err(error) => {
+            state.automation_journal.interrupt(
+                run_id,
+                current_time_ms()?,
+                "automation engine admission failed after journal start",
+            )?;
+            return Err(error.into());
+        }
+    };
     state
         .automation_journal
         .complete(&run, current_time_ms()?)?;
     Ok(run)
+}
+
+fn preflight_automation_risks(
+    definition: &AutomationDefinition,
+) -> Result<Vec<AutomationApprovalRisk>, DesktopError> {
+    let pet_policy = AutomationCapabilityPolicy::pet_actions();
+    let mut risks = Vec::new();
+    for action in &definition.actions {
+        risks.push(preflight_automation_command(
+            &pet_policy,
+            &action.id,
+            &action.command,
+            action.arguments.clone(),
+            action.risk,
+        )?);
+        if let Some(compensation) = &action.compensation {
+            risks.push(preflight_automation_command(
+                &pet_policy,
+                &format!("{}:compensation", action.id),
+                &compensation.command,
+                compensation.arguments.clone(),
+                compensation.risk,
+            )?);
+        }
+    }
+    Ok(risks)
+}
+
+fn preflight_automation_command(
+    pet_policy: &AutomationCapabilityPolicy,
+    action_id: &str,
+    command_name: &str,
+    arguments: serde_json::Value,
+    declared_risk: CommandRisk,
+) -> Result<AutomationApprovalRisk, DesktopError> {
+    let command =
+        Command::new(command_name, arguments.clone(), declared_risk).map_err(RuntimeError::from)?;
+    let effective_risk = if command_name == AGENT_TASK_RUN_COMMAND {
+        admit_agent_task_command(&command)
+            .map_err(|_| DesktopError::AutomationCommandNotRegistered(command_name.to_owned()))?
+    } else {
+        pet_policy
+            .admit(&command)
+            .map_err(|_| DesktopError::AutomationCommandNotRegistered(command_name.to_owned()))?
+            .effective_risk
+    };
+    Ok(AutomationApprovalRisk {
+        action_id: action_id.to_owned(),
+        command: command_name.to_owned(),
+        effective_risk,
+        arguments,
+    })
+}
+
+fn queue_automation_approval(
+    state: &DesktopState,
+    run_id: Uuid,
+    definition: &AutomationDefinition,
+    event: &Event,
+    origin: AutomationRunOrigin,
+    risks: Vec<AutomationApprovalRisk>,
+) -> Result<AutomationRun, DesktopError> {
+    let now_ms = current_time_ms()?;
+    if state.automation_approval_journal.pending_count(now_ms)? >= MAX_PENDING_AUTOMATION_APPROVALS
+    {
+        return Err(DesktopError::AutomationApprovalCapacityExceeded);
+    }
+    let plan = PendingAutomationRun {
+        spec: "nimora.pending-automation-run/1".to_owned(),
+        run_id,
+        definition: definition.clone(),
+        event: event.clone(),
+        origin,
+        risks,
+    };
+    state
+        .automation_approval_journal
+        .insert(&AutomationApprovalEntry::new(
+            Uuid::now_v7(),
+            run_id,
+            definition.id.clone(),
+            now_ms,
+            now_ms.saturating_add(AUTOMATION_APPROVAL_TTL_MS),
+            serde_json::to_value(plan)?,
+        )?)?;
+    Ok(AutomationRun {
+        spec: "nimora.automation-run/1".to_owned(),
+        run_id,
+        automation_id: definition.id.clone(),
+        trace_id: event.trace_id,
+        event_id: event.id.to_string(),
+        mode: "live".to_owned(),
+        status: nimora_automation_runtime::AutomationRunStatus::WaitingForApproval,
+        steps: Vec::new(),
+        reason: Some("automation requires parameter-bound approval".to_owned()),
+    })
 }
 
 #[derive(Debug)]
@@ -1977,6 +2202,175 @@ fn automation_event_health(
         spec: "nimora.automation-event-health/1",
         sessions,
     })
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri managed state command arguments are owned extractors"
+)]
+fn automation_pending_approval_count(
+    state: State<'_, DesktopState>,
+) -> Result<usize, DesktopError> {
+    ensure_normal_mode(&state)?;
+    state
+        .automation_approval_journal
+        .pending_count(current_time_ms()?)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri managed state command arguments are owned extractors"
+)]
+fn pending_automation_approvals(
+    state: State<'_, DesktopState>,
+) -> Result<AutomationApprovalCatalog, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let now_ms = current_time_ms()?;
+    let approvals = state
+        .automation_approval_journal
+        .list_pending(now_ms, MAX_PENDING_AUTOMATION_APPROVALS)?
+        .into_iter()
+        .map(|entry| {
+            let plan: PendingAutomationRun = serde_json::from_value(entry.plan.clone())?;
+            validate_pending_automation_plan(&entry, &plan)?;
+            Ok(AutomationApprovalCatalogEntry {
+                approval_id: entry.approval_id,
+                run_id: entry.run_id,
+                automation_id: entry.automation_id,
+                automation_version: plan.definition.version,
+                created_at_ms: entry.created_at_ms,
+                expires_at_ms: entry.expires_at_ms,
+                risks: plan.risks,
+            })
+        })
+        .collect::<Result<Vec<_>, DesktopError>>()?;
+    Ok(AutomationApprovalCatalog {
+        spec: "nimora.automation-approval-catalog/1",
+        approvals,
+    })
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri command arguments are owned deserialization and state extractors"
+)]
+fn approve_automation_run(
+    request: ResolveAutomationApprovalRequest,
+    state: State<'_, DesktopState>,
+) -> Result<AutomationRun, DesktopError> {
+    approve_automation_run_inner(&state, request.approval_id)
+}
+
+fn approve_automation_run_inner(
+    state: &DesktopState,
+    approval_id: Uuid,
+) -> Result<AutomationRun, DesktopError> {
+    ensure_normal_mode(state)?;
+    if state.safety.snapshot()?.mode == RuntimeMode::Safe {
+        return Err(DesktopError::SafeModeActive);
+    }
+    let now_ms = current_time_ms()?;
+    let entry = state
+        .automation_approval_journal
+        .claim(approval_id, now_ms)?;
+    let execution = (|| {
+        let plan: PendingAutomationRun = serde_json::from_value(entry.plan.clone())?;
+        validate_pending_automation_plan(&entry, &plan)?;
+        if plan.origin == AutomationRunOrigin::Installed {
+            let installed = state
+                .automation_catalog
+                .get(&plan.definition.id)?
+                .ok_or(DesktopError::AutomationApprovalVersionChanged)?;
+            if installed.definition != plan.definition || !installed.enabled {
+                return Err(DesktopError::AutomationApprovalVersionChanged);
+            }
+        }
+        execute_live_automation_event_with_id(
+            state,
+            plan.run_id,
+            &plan.definition,
+            &plan.event,
+            CancellationFlag::default(),
+        )
+    })();
+    match execution {
+        Ok(run) => {
+            state.automation_approval_journal.finish(
+                entry.approval_id,
+                AutomationApprovalStatus::Completed,
+                current_time_ms()?,
+                None,
+            )?;
+            Ok(run)
+        }
+        Err(error) => {
+            let bounded_error = error.to_string().chars().take(4 * 1024).collect::<String>();
+            state.automation_approval_journal.finish(
+                entry.approval_id,
+                AutomationApprovalStatus::Failed,
+                current_time_ms()?,
+                Some(bounded_error),
+            )?;
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri command arguments are owned deserialization and state extractors"
+)]
+fn reject_automation_run(
+    request: ResolveAutomationApprovalRequest,
+    state: State<'_, DesktopState>,
+) -> Result<AutomationApprovalResolution, DesktopError> {
+    reject_automation_run_inner(&state, request.approval_id)
+}
+
+fn reject_automation_run_inner(
+    state: &DesktopState,
+    approval_id: Uuid,
+) -> Result<AutomationApprovalResolution, DesktopError> {
+    ensure_normal_mode(state)?;
+    let entry = state
+        .automation_approval_journal
+        .reject(approval_id, current_time_ms()?)?;
+    Ok(AutomationApprovalResolution {
+        spec: "nimora.automation-approval-resolution/1",
+        approval_id: entry.approval_id,
+        run_id: entry.run_id,
+        status: entry.status,
+    })
+}
+
+fn validate_pending_automation_plan(
+    entry: &AutomationApprovalEntry,
+    plan: &PendingAutomationRun,
+) -> Result<(), DesktopError> {
+    AutomationEngine::validate(&plan.definition)?;
+    let recalculated = preflight_automation_risks(&plan.definition)?;
+    if plan.spec != "nimora.pending-automation-run/1"
+        || plan.run_id != entry.run_id
+        || plan.definition.id != entry.automation_id
+        || plan.event.trace_id.is_nil()
+        || plan.risks != recalculated
+        || !plan
+            .risks
+            .iter()
+            .any(|risk| matches!(risk.effective_risk, CommandRisk::Medium | CommandRisk::High))
+        || plan
+            .risks
+            .iter()
+            .any(|risk| risk.effective_risk == CommandRisk::Critical)
+    {
+        return Err(DesktopError::AutomationApprovalPlanChanged);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -7493,7 +7887,15 @@ fn run_automation_event_session(
             break;
         }
         let state = app.state::<DesktopState>();
-        if run_live_automation_event(&state, definition, &event, cancellation.clone()).is_err() {
+        if run_live_automation_event(
+            &state,
+            definition,
+            &event,
+            cancellation.clone(),
+            AutomationRunOrigin::Installed,
+        )
+        .is_err()
+        {
             metrics.record_failure();
             break;
         }
@@ -8890,6 +9292,10 @@ pub fn run() {
             automation_run_status,
             automation_run_history,
             automation_event_health,
+            automation_pending_approval_count,
+            pending_automation_approvals,
+            approve_automation_run,
+            reject_automation_run,
             delete_automation_run_history,
             automation_agent_task_status,
             automation_run_agent_tasks,
@@ -9106,31 +9512,32 @@ fn discover_ollama_worker(app: &AppHandle) -> Option<PathBuf> {
 mod tests {
     use super::{
         ACTIVE_CHARACTER_FILE, ACTIVE_THEME_FILE, ACTIVE_VOICE_FILE, ActiveSkillExecution,
-        AssetInstallReceipt, AutoModeJobStatus, AutomationEventMetrics, AutomationTestRequest,
-        BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID, BUILTIN_VOICE_ID, CHARACTER_SELECTION,
-        CapabilityBackend, DETERMINISTIC_PROVIDER_ID, DesktopAgentRunStatus,
-        DesktopCapabilityBackend, DesktopError, DesktopResolveAutoModeAttemptRequest, DesktopState,
-        ExecutionCancellation, LocalAgentRequest, PendingCreatorApproval, PendingSkillExecution,
-        PetAction, PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
+        AssetInstallReceipt, AutoModeJobStatus, AutomationEventMetrics, AutomationRun,
+        AutomationRunOrigin, AutomationTestRequest, BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID,
+        BUILTIN_VOICE_ID, CHARACTER_SELECTION, CapabilityBackend, DETERMINISTIC_PROVIDER_ID,
+        DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
+        DesktopResolveAutoModeAttemptRequest, DesktopState, ExecutionCancellation,
+        LocalAgentRequest, PendingCreatorApproval, PendingSkillExecution, PetAction,
+        PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
         ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SkillEventSession, StartupMode,
         THEME_SELECTION, TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
         UserProgramRollbackReceipt, VOICE_SELECTION, WindowPolicy, agent_catalog_inner,
-        append_program_scope_diff, approve_skill_execution_inner, auto_mode_control_center_inner,
-        automation_agent_messages, cancel_agent_task_inner, cancel_all_pending_agent_tools,
-        cancel_auto_mode_job_inner, cancel_automation_run_inner, cancel_skill_execution_inner,
-        capability_set_diff, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
-        consume_creator_approval_from, creator_capability_risk, current_time_ms,
-        default_agent_model, default_agent_provider_id, desktop_tool_registry, diagnostic_report,
-        dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
+        append_program_scope_diff, approve_automation_run_inner, approve_skill_execution_inner,
+        auto_mode_control_center_inner, automation_agent_messages, cancel_agent_task_inner,
+        cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
+        cancel_skill_execution_inner, capability_set_diff, confirm_agent_tool_inner,
+        confirm_agent_tool_with_registry, consume_creator_approval_from, creator_capability_risk,
+        current_time_ms, default_agent_model, default_agent_provider_id, desktop_tool_registry,
+        diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_gltf_character, open_diagnostic_journal, parse_asset_protocol_path,
         parse_user_program_plan, pause_auto_mode_job_inner, permission_grant,
         persist_asset_selection, prepare_agent_tool_inner, quiesce_auto_mode_jobs,
-        reject_agent_tool_inner, resolve_active_character, resolve_active_theme,
-        resolve_active_voice, resolve_asset_selection, resolve_auto_mode_attempt_inner,
-        resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
-        run_live_automation_event, run_local_agent_inner, run_skill_agent_task,
-        run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
+        reject_agent_tool_inner, reject_automation_run_inner, resolve_active_character,
+        resolve_active_theme, resolve_active_voice, resolve_asset_selection,
+        resolve_auto_mode_attempt_inner, resolve_character_renderer, resume_auto_mode_turn_inner,
+        run_live_automation, run_live_automation_event, run_local_agent_inner,
+        run_skill_agent_task, run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
         skill_capability_names, skill_event_types, stage_creator_package,
         stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
         validate_model_source, validate_package_source, validate_requested_animation_map,
@@ -9153,10 +9560,10 @@ mod tests {
     };
     use nimora_persistence_sqlite::{
         AutoModeAttemptResolutionDecision, AutomationAgentJournalEntry,
-        AutomationAgentJournalStatus, AutomationJournalStatus, AutomationRunStart,
-        BackupCoordinator, BackupPolicy, SkillApprovalJournalEntry, SkillExecutionHistoryStatus,
-        SkillStateRecord, SqliteAgentGoalRepository, SqliteAutoModeRepository,
-        SqliteAutomationJournal, SqliteProgramPermissionRepository,
+        AutomationAgentJournalStatus, AutomationApprovalStatus, AutomationJournalStatus,
+        AutomationRunStart, BackupCoordinator, BackupPolicy, SkillApprovalJournalEntry,
+        SkillExecutionHistoryStatus, SkillStateRecord, SqliteAgentGoalRepository,
+        SqliteAutoModeRepository, SqliteAutomationJournal, SqliteProgramPermissionRepository,
     };
     use nimora_runtime_core::{CommandRisk, Event, EventSource, Position, RuntimeMode};
     use nimora_skill_host::{
@@ -9776,6 +10183,31 @@ mod tests {
         .expect("Agent automation request")
     }
 
+    fn approve_pending_automation(state: &DesktopState, waiting: &AutomationRun) -> AutomationRun {
+        assert_eq!(
+            waiting.status,
+            nimora_automation_runtime::AutomationRunStatus::WaitingForApproval
+        );
+        assert!(
+            state
+                .automation_journal
+                .get(waiting.run_id)
+                .expect("journal lookup before approval")
+                .is_none()
+        );
+        let approval = state
+            .automation_approval_journal
+            .list_pending(current_time_ms().expect("clock"), 32)
+            .expect("pending approvals")
+            .into_iter()
+            .find(|entry| entry.run_id == waiting.run_id)
+            .expect("run approval");
+        let run = approve_automation_run_inner(state, approval.approval_id)
+            .expect("approved Automation run");
+        assert_eq!(run.run_id, waiting.run_id);
+        run
+    }
+
     #[test]
     fn live_automation_changes_pet_through_gateway_and_completes_journal() {
         let (root, state) = normal_desktop_state();
@@ -9816,6 +10248,7 @@ mod tests {
             &request.definition,
             &event,
             CancellationFlag::default(),
+            AutomationRunOrigin::AdHoc,
         )
         .expect("event-driven run");
 
@@ -9833,21 +10266,21 @@ mod tests {
     }
 
     #[test]
-    fn live_automation_denies_unknown_understated_and_safe_mode_actions() {
+    fn live_automation_denies_unknown_but_host_upgrades_understated_risk() {
         let (root, state) = normal_desktop_state();
-        for request in [
-            live_move_request("profile.active.switch", "medium"),
-            live_move_request("pet.position.move", "safe"),
-        ] {
-            let run = run_live_automation(&state, request).expect("denied run is journaled");
-            assert_eq!(
-                run.status,
-                nimora_automation_runtime::AutomationRunStatus::Failed
-            );
-        }
+        assert!(matches!(
+            run_live_automation(&state, live_move_request("profile.active.switch", "medium")),
+            Err(DesktopError::AutomationCommandNotRegistered(_))
+        ));
+        let run = run_live_automation(&state, live_move_request("pet.position.move", "safe"))
+            .expect("host-upgraded low-risk run");
+        assert_eq!(
+            run.status,
+            nimora_automation_runtime::AutomationRunStatus::Succeeded
+        );
         assert_eq!(
             state.runtime.snapshot().expect("snapshot").position,
-            Position { x: 0.0, y: 0.0 }
+            Position { x: 41.0, y: 73.0 }
         );
         state
             .safety
@@ -9857,6 +10290,84 @@ mod tests {
             run_live_automation(&state, live_move_request("pet.position.move", "low")),
             Err(DesktopError::SafeModeActive)
         ));
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn medium_automation_waits_without_side_effects_and_rejection_is_final() {
+        let (root, state) = normal_desktop_state();
+        let waiting = run_live_automation(&state, live_move_request("pet.position.move", "medium"))
+            .expect("pending medium-risk run");
+        assert_eq!(
+            waiting.status,
+            nimora_automation_runtime::AutomationRunStatus::WaitingForApproval
+        );
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").position,
+            Position { x: 0.0, y: 0.0 }
+        );
+        assert!(
+            state
+                .automation_journal
+                .get(waiting.run_id)
+                .expect("run journal")
+                .is_none()
+        );
+        let entry = state
+            .automation_approval_journal
+            .list_pending(current_time_ms().expect("clock"), 32)
+            .expect("pending approvals")
+            .into_iter()
+            .next()
+            .expect("approval");
+        let plan: super::PendingAutomationRun =
+            serde_json::from_value(entry.plan.clone()).expect("approval plan");
+        assert_eq!(plan.run_id, waiting.run_id);
+        assert_eq!(plan.risks[0].arguments, json!({ "x": 41.0, "y": 73.0 }));
+        let rejected =
+            reject_automation_run_inner(&state, entry.approval_id).expect("reject pending run");
+        assert_eq!(rejected.status, AutomationApprovalStatus::Rejected);
+        assert!(approve_automation_run_inner(&state, entry.approval_id).is_err());
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").position,
+            Position { x: 0.0, y: 0.0 }
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn high_risk_compensation_pauses_entire_run_before_low_risk_action() {
+        let (root, state) = normal_desktop_state();
+        let mut request = live_move_request("pet.position.move", "low");
+        request.definition.actions[0].compensation = Some(
+            serde_json::from_value(json!({
+                "command": "pet.animation.play",
+                "arguments": { "action": "idle" },
+                "risk": "high"
+            }))
+            .expect("compensation"),
+        );
+        let waiting = run_live_automation(&state, request).expect("pending compensation run");
+        assert_eq!(
+            waiting.status,
+            nimora_automation_runtime::AutomationRunStatus::WaitingForApproval
+        );
+        assert_eq!(
+            state.runtime.snapshot().expect("snapshot").position,
+            Position { x: 0.0, y: 0.0 }
+        );
+        let entry = state
+            .automation_approval_journal
+            .list_pending(current_time_ms().expect("clock"), 32)
+            .expect("pending approvals")
+            .into_iter()
+            .next()
+            .expect("approval");
+        let plan: super::PendingAutomationRun =
+            serde_json::from_value(entry.plan).expect("approval plan");
+        assert_eq!(plan.risks.len(), 2);
+        assert_eq!(plan.risks[1].action_id, "move:compensation");
+        assert_eq!(plan.risks[1].effective_risk, CommandRisk::High);
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
@@ -9904,7 +10415,8 @@ mod tests {
             "eventData": { "durationMinutes": 25 }
         }))
         .expect("Agent automation request");
-        let run = run_live_automation(&state, request).expect("Agent automation run");
+        let waiting = run_live_automation(&state, request).expect("pending Agent automation run");
+        let run = approve_pending_automation(&state, &waiting);
         assert_eq!(
             run.status,
             nimora_automation_runtime::AutomationRunStatus::Succeeded
@@ -9942,7 +10454,8 @@ mod tests {
             "content": attack
         }]);
 
-        let run = run_live_automation(&state, request).expect("rejected automation run");
+        let waiting = run_live_automation(&state, request).expect("pending automation run");
+        let run = approve_pending_automation(&state, &waiting);
         assert_eq!(
             run.status,
             nimora_automation_runtime::AutomationRunStatus::Failed
@@ -9992,7 +10505,8 @@ mod tests {
             "completed-key",
             "Verify idempotency.",
         );
-        let run = run_live_automation(&state, request).expect("Agent automation run");
+        let waiting = run_live_automation(&state, request).expect("pending Agent automation run");
+        let run = approve_pending_automation(&state, &waiting);
         let completed = state
             .automation_agent_journal
             .list_by_run(run.run_id)
