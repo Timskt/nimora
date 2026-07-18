@@ -167,3 +167,5 @@ schemas + files + tests + migrations + documentation
 6. **退役器**：在 Provider 消失、协议变化或扩展无人维护时，保留可读导出和替代路径，撤销 Grant、Secret 与后台任务并证明数据处理结果。
 
 Creator Studio 应为每项能力显示统一成熟度：`idea → draft → validated → installed → observed → maintained → deprecated → retired`。成熟度只能由宿主证据推进，模型文字不能把草案标记为已验证；任何阶段都能导出、换模型续作、查看 Diff、取消和回滚。
+
+外接 AI 的四级扩展模型、受控 Builder Tool、`CapabilityGap`、平台能力提案和多模型项目接力协议见 [`AI_CAPABILITY_DEVELOPMENT_PLATFORM.md`](AI_CAPABILITY_DEVELOPMENT_PLATFORM.md)。

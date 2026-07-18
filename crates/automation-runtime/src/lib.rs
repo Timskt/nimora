@@ -10,6 +10,9 @@ use uuid::Uuid;
 const MAX_AUTOMATION_ACTIONS: usize = 64;
 const MAX_AUTOMATION_CONDITIONS: usize = 32;
 const MAX_AUTOMATION_TIMEOUT_MS: u64 = 300_000;
+const MAX_AUTOMATION_CONCURRENT_RUNS: u16 = 16;
+const MAX_AUTOMATION_COOLDOWN_MS: u64 = 24 * 60 * 60 * 1000;
+const MAX_AUTOMATION_DAILY_COST_MICROUNITS: u64 = 1_000_000_000_000;
 const MAX_ACTION_ATTEMPTS: u8 = 3;
 const MAX_JSON_POINTER_BYTES: usize = 256;
 
@@ -67,6 +70,9 @@ pub struct CompensationAction {
 pub struct AutomationPolicy {
     pub timeout_ms: u64,
     pub failure: FailurePolicy,
+    pub max_concurrent_runs: u16,
+    pub cooldown_ms: u64,
+    pub daily_cost_budget_microunits: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,6 +193,10 @@ impl AutomationEngine {
             || definition.conditions.len() > MAX_AUTOMATION_CONDITIONS
             || definition.policy.timeout_ms == 0
             || definition.policy.timeout_ms > MAX_AUTOMATION_TIMEOUT_MS
+            || definition.policy.max_concurrent_runs == 0
+            || definition.policy.max_concurrent_runs > MAX_AUTOMATION_CONCURRENT_RUNS
+            || definition.policy.cooldown_ms > MAX_AUTOMATION_COOLDOWN_MS
+            || definition.policy.daily_cost_budget_microunits > MAX_AUTOMATION_DAILY_COST_MICROUNITS
         {
             return Err(AutomationError::InvalidDefinition);
         }
@@ -575,6 +585,9 @@ mod tests {
             policy: AutomationPolicy {
                 timeout_ms: 5_000,
                 failure: FailurePolicy::Compensate,
+                max_concurrent_runs: 1,
+                cooldown_ms: 0,
+                daily_cost_budget_microunits: 0,
             },
         }
     }

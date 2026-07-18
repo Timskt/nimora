@@ -86,17 +86,19 @@ use nimora_persistence_sqlite::{
     AgentHistoryRecord, AutoModeAttemptResolution, AutoModeAttemptResolutionDecision,
     AutoModeTurnAttempt, AutoModeTurnAttemptStatus, AutomationAgentJournalEntry,
     AutomationAgentJournalStatus, AutomationApprovalEntry, AutomationApprovalStatus,
-    AutomationJournalEntry, AutomationRunStart, BackupCoordinator, BackupHealth, BackupPolicy,
-    BackupRecord, ContextCachePolicy, DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant,
-    ResolveAutoModeAttemptRequest, SkillApprovalJournalEntry, SkillApprovalJournalStatus,
-    SkillExecutionHistoryRecord, SkillExecutionHistoryStatus, SkillStateRecord,
-    SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
-    SqliteAutoModeAttemptResolutionRepository, SqliteAutoModeCheckpointRepository,
-    SqliteAutoModeRepository, SqliteAutoModeTurnAttemptRepository, SqliteAutomationAgentJournal,
-    SqliteAutomationApprovalJournal, SqliteAutomationCatalog, SqliteAutomationJournal,
-    SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
-    SqliteProgramPermissionRepository, SqliteSkillApprovalJournal, SqliteSkillExecutionHistory,
-    SqliteSkillStateRepository, apply_pending_restore, verify_database_file,
+    AutomationCostReservation, AutomationJournalEntry, AutomationRunAdmission, AutomationRunStart,
+    BackupCoordinator, BackupHealth, BackupPolicy, BackupRecord, ContextCachePolicy,
+    DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant, ResolveAutoModeAttemptRequest,
+    SkillApprovalJournalEntry, SkillApprovalJournalStatus, SkillExecutionHistoryRecord,
+    SkillExecutionHistoryStatus, SkillStateRecord, SqliteAgentGoalRepository,
+    SqliteAgentHistoryRepository, SqliteAutoModeAttemptResolutionRepository,
+    SqliteAutoModeCheckpointRepository, SqliteAutoModeRepository,
+    SqliteAutoModeTurnAttemptRepository, SqliteAutomationAgentJournal,
+    SqliteAutomationApprovalJournal, SqliteAutomationCatalog, SqliteAutomationGovernance,
+    SqliteAutomationJournal, SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository,
+    SqliteProfileRepository, SqliteProgramPermissionRepository, SqliteSkillApprovalJournal,
+    SqliteSkillExecutionHistory, SqliteSkillStateRepository, apply_pending_restore,
+    verify_database_file,
 };
 use nimora_runtime_app::{
     ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBatch,
@@ -203,6 +205,7 @@ struct DesktopState {
     outbox: SqliteOutboxRepository,
     agent_history: SqliteAgentHistoryRepository,
     automation_catalog: SqliteAutomationCatalog,
+    automation_governance: SqliteAutomationGovernance,
     automation_journal: SqliteAutomationJournal,
     automation_agent_journal: SqliteAutomationAgentJournal,
     agent_history_last_error: Mutex<bool>,
@@ -510,6 +513,8 @@ impl DesktopState {
         automation_journal.recover_running(current_time_ms()?, "desktop process restarted")?;
         let automation_agent_journal = SqliteAutomationAgentJournal::open(database_path)?;
         automation_agent_journal.recover_active(current_time_ms()?)?;
+        let automation_governance = SqliteAutomationGovernance::open(database_path)?;
+        automation_governance.recover(current_time_ms()?)?;
         let skill_approval_journal = SqliteSkillApprovalJournal::open(database_path)?;
         skill_approval_journal.recover(current_time_ms()?)?;
         let automation_approval_journal = SqliteAutomationApprovalJournal::open(database_path)?;
@@ -538,6 +543,7 @@ impl DesktopState {
             outbox: SqliteOutboxRepository::open(database_path)?,
             agent_history: SqliteAgentHistoryRepository::open(database_path)?,
             automation_catalog: SqliteAutomationCatalog::open(database_path)?,
+            automation_governance,
             automation_journal,
             automation_agent_journal,
             agent_history_last_error: Mutex::new(false),
@@ -615,6 +621,7 @@ impl DesktopState {
             outbox: SqliteOutboxRepository::in_memory()?,
             agent_history: SqliteAgentHistoryRepository::in_memory()?,
             automation_catalog: SqliteAutomationCatalog::in_memory()?,
+            automation_governance: SqliteAutomationGovernance::in_memory()?,
             automation_journal: SqliteAutomationJournal::in_memory()?,
             automation_agent_journal: SqliteAutomationAgentJournal::in_memory()?,
             agent_history_last_error: Mutex::new(false),
@@ -1739,12 +1746,55 @@ fn execute_live_automation_event_with_id(
     cancellation: CancellationFlag,
 ) -> Result<AutomationRun, DesktopError> {
     let agent_policy = desktop_automation_agent_policy(state)?;
+    let started_at_ms = current_time_ms()?;
+    let lease_expires_at_ms = started_at_ms
+        .checked_add(definition.policy.timeout_ms)
+        .and_then(|value| value.checked_add(60_000))
+        .ok_or(SqlitePersistenceError::InvalidAutomationGovernance)?;
+    state
+        .automation_governance
+        .admit_run(&AutomationRunAdmission {
+            run_id,
+            automation_id: definition.id.clone(),
+            max_concurrent_runs: definition.policy.max_concurrent_runs,
+            cooldown_ms: definition.policy.cooldown_ms,
+            daily_cost_budget_microunits: definition.policy.daily_cost_budget_microunits,
+            now_ms: started_at_ms,
+            lease_expires_at_ms,
+        })?;
+    let execution = execute_admitted_automation_event(
+        state,
+        run_id,
+        definition,
+        event,
+        cancellation,
+        agent_policy,
+        started_at_ms,
+    );
+    let released = state.automation_governance.release_run(run_id);
+    match (execution, released) {
+        (Ok(run), Ok(true)) => Ok(run),
+        (Ok(_), Ok(false)) => Err(SqlitePersistenceError::InvalidAutomationGovernance.into()),
+        (Ok(_), Err(error)) => Err(error.into()),
+        (Err(error), _) => Err(error),
+    }
+}
+
+fn execute_admitted_automation_event(
+    state: &DesktopState,
+    run_id: Uuid,
+    definition: &AutomationDefinition,
+    event: &Event,
+    cancellation: CancellationFlag,
+    agent_policy: AgentTaskGatewayPolicy,
+    started_at_ms: u64,
+) -> Result<AutomationRun, DesktopError> {
     state.automation_journal.start(&AutomationRunStart {
         run_id,
         automation_id: definition.id.clone(),
         trace_id: event.trace_id,
         event_id: event.id.to_string(),
-        started_at_ms: current_time_ms()?,
+        started_at_ms,
     })?;
     state
         .active_automation_runs
@@ -1953,20 +2003,34 @@ impl AgentTaskSubmitter for DesktopAutomationAgentSubmitter<'_> {
             };
         }
         let task_id = task.admission.task.id;
+        let run_id = task.admission.root_task_id;
+        let reserved_cost_microunits = task.admission.task.budget.max_cost_microunits;
         let submitted_at_ms = current_time_ms()
             .map_err(|error| AgentTaskSubmissionError::transient(error.to_string()))?;
+        self.state
+            .automation_governance
+            .reserve_agent_cost(AutomationCostReservation {
+                task_id,
+                run_id,
+                reserved_cost_microunits,
+                now_ms: submitted_at_ms,
+            })
+            .map_err(|error| AgentTaskSubmissionError::permanent(error.to_string()))?;
         let journal_entry = AutomationAgentJournalEntry::new(
-            task.admission.root_task_id,
+            run_id,
             task.idempotency_key.clone(),
             task.admission.clone(),
             task.model.clone(),
             submitted_at_ms,
         )
         .map_err(|error| AgentTaskSubmissionError::permanent(error.to_string()))?;
-        self.state
-            .automation_agent_journal
-            .submit(&journal_entry)
-            .map_err(|error| AgentTaskSubmissionError::transient(error.to_string()))?;
+        if let Err(error) = self.state.automation_agent_journal.submit(&journal_entry) {
+            let _ = self
+                .state
+                .automation_governance
+                .settle_agent_cost(task_id, 0, submitted_at_ms);
+            return Err(AgentTaskSubmissionError::transient(error.to_string()));
+        }
         match self.execute(task) {
             Ok(outcome) => {
                 self.record_outcome(task_id, &outcome)
@@ -1974,6 +2038,17 @@ impl AgentTaskSubmitter for DesktopAutomationAgentSubmitter<'_> {
                 Ok(AgentTaskSubmissionOutcome::Accepted)
             }
             Err(error) => {
+                self.state
+                    .automation_governance
+                    .mark_agent_cost_indeterminate(
+                        task_id,
+                        current_time_ms().map_err(|clock| {
+                            AgentTaskSubmissionError::transient(clock.to_string())
+                        })?,
+                    )
+                    .map_err(|governance| {
+                        AgentTaskSubmissionError::transient(governance.to_string())
+                    })?;
                 let bounded_error = error.chars().take(4 * 1024).collect::<String>();
                 self.state
                     .automation_agent_journal
@@ -2026,6 +2101,14 @@ impl DesktopAutomationAgentSubmitter<'_> {
         task_id: Uuid,
         outcome: &ProviderAgentOutcome,
     ) -> Result<(), SqlitePersistenceError> {
+        if let ProviderAgentOutcome::Completed { task, .. } = outcome {
+            self.state.automation_governance.settle_agent_cost(
+                task_id,
+                task.usage.cost_microunits,
+                current_time_ms()
+                    .map_err(|_| SqlitePersistenceError::InvalidAutomationGovernance)?,
+            )?;
+        }
         let status = match outcome {
             ProviderAgentOutcome::Completed { .. } => AutomationAgentJournalStatus::Completed,
             ProviderAgentOutcome::Waiting { .. } => {
@@ -4854,6 +4937,13 @@ fn record_automation_agent_outcome(
     let Some(entry) = state.automation_agent_journal.get_by_task_id(task_id)? else {
         return Ok(());
     };
+    if let ProviderAgentOutcome::Completed { task, .. } = outcome {
+        state.automation_governance.settle_agent_cost(
+            task.id,
+            task.usage.cost_microunits,
+            current_time_ms()?,
+        )?;
+    }
     if entry.status == target {
         return Ok(());
     }
@@ -10075,7 +10165,7 @@ mod tests {
                     "idempotencyKey": "preview-build-celebrate",
                     "compensation": null
                 }],
-                "policy": { "timeoutMs": 5000, "failure": "stop" }
+                "policy": { "timeoutMs": 5000, "failure": "stop", "maxConcurrentRuns": 1, "cooldownMs": 0, "dailyCostBudgetMicrounits": 0 }
             },
             "eventType": "dev.build.finished",
             "eventData": { "succeeded": true }
@@ -10126,7 +10216,7 @@ mod tests {
                     "idempotencyKey": "live-build-move",
                     "compensation": null
                 }],
-                "policy": { "timeoutMs": 5000, "failure": "stop" }
+                "policy": { "timeoutMs": 5000, "failure": "stop", "maxConcurrentRuns": 1, "cooldownMs": 0, "dailyCostBudgetMicrounits": 0 }
             },
             "eventType": "dev.build.finished",
             "eventData": {}
@@ -10175,7 +10265,7 @@ mod tests {
                     "idempotencyKey": idempotency_key,
                     "compensation": null
                 }],
-                "policy": { "timeoutMs": 30000, "failure": "stop" }
+                "policy": { "timeoutMs": 30000, "failure": "stop", "maxConcurrentRuns": 1, "cooldownMs": 0, "dailyCostBudgetMicrounits": 0 }
             },
             "eventType": event_type,
             "eventData": {}
@@ -10543,7 +10633,7 @@ mod tests {
                     "idempotencyKey": "focus-summary-42",
                     "compensation": null
                 }],
-                "policy": { "timeoutMs": 30000, "failure": "stop" }
+                "policy": { "timeoutMs": 30000, "failure": "stop", "maxConcurrentRuns": 1, "cooldownMs": 0, "dailyCostBudgetMicrounits": 0 }
             },
             "eventType": "focus.session.finished",
             "eventData": { "durationMinutes": 25 }
@@ -10812,7 +10902,7 @@ mod tests {
                             "idempotencyKey": "agent-build-celebrate",
                             "compensation": null
                         }],
-                        "policy": { "timeoutMs": 5000, "failure": "stop" }
+                        "policy": { "timeoutMs": 5000, "failure": "stop", "maxConcurrentRuns": 1, "cooldownMs": 0, "dailyCostBudgetMicrounits": 0 }
                     },
                     "eventType": "dev.build.finished",
                     "eventData": { "succeeded": true }
@@ -13247,7 +13337,7 @@ mod tests {
                     "idempotencyKey": null,
                     "compensation": null
                 }],
-                "policy": { "timeoutMs": 5000, "failure": "stop" }
+                "policy": { "timeoutMs": 5000, "failure": "stop", "maxConcurrentRuns": 1, "cooldownMs": 0, "dailyCostBudgetMicrounits": 0 }
             }))
             .expect("previous definition");
         state
@@ -13278,7 +13368,7 @@ mod tests {
                         "idempotencyKey": null,
                         "compensation": null
                     }],
-                    "policy": { "timeoutMs": 7000, "failure": "stop" }
+                    "policy": { "timeoutMs": 7000, "failure": "stop", "maxConcurrentRuns": 1, "cooldownMs": 0, "dailyCostBudgetMicrounits": 0 }
                 }
             }
         }))

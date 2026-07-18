@@ -82,7 +82,13 @@ describe("desktop platform adapter", () => {
       trigger: { eventType: "dev.build.finished" },
       conditions: [{ pointer: "/succeeded", equals: true }],
       actions: [{ id: "celebrate", command: "pet.animation.play", arguments: { action: "celebrate" }, risk: "low" as const, retrySafe: true, idempotencyKey: "preview", compensation: null }],
-      policy: { timeoutMs: 5_000, failure: "stop" as const },
+      policy: {
+        timeoutMs: 5_000,
+        failure: "stop" as const,
+        maxConcurrentRuns: 1,
+        cooldownMs: 0,
+        dailyCostBudgetMicrounits: 0,
+      },
     };
     const planned = await api.testAutomation(definition, "dev.build.finished", { succeeded: true });
     expect(planned).toMatchObject({ mode: "dry_run", status: "planned" });

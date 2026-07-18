@@ -200,7 +200,7 @@ mod tests {
                         "arguments": { "action": "pet.click" }, "risk": "safe",
                         "retrySafe": false, "idempotencyKey": null, "compensation": null
                     }],
-                    "policy": { "timeoutMs": 5000, "failure": "stop" }
+                    "policy": { "timeoutMs": 5000, "failure": "stop", "maxConcurrentRuns": 1, "cooldownMs": 0, "dailyCostBudgetMicrounits": 0 }
                 }
             }
         }))

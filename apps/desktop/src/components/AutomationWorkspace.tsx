@@ -23,7 +23,13 @@ const sampleDefinition: AutomationDefinition = {
       risk: "low",
     },
   }],
-  policy: { timeoutMs: 5_000, failure: "compensate" },
+  policy: {
+    timeoutMs: 5_000,
+    failure: "compensate",
+    maxConcurrentRuns: 1,
+    cooldownMs: 0,
+    dailyCostBudgetMicrounits: 0,
+  },
 };
 
 export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean; onNotice(message: string): void }) {

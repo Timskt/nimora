@@ -211,3 +211,7 @@ AI Creator 使用独立 `desktop:creator-user` requester、空 Tool 集合、`Dr
 Automation 安装、启用与单次真实运行是三个独立授权状态。真实事件先由生产 Engine 以 DryRun 判断触发器和条件，再对全部主动作与补偿动作调用宿主 admission；有效风险为声明值与宿主最低值的较高者。Safe/Low 直接执行，Medium/High 将定义、事件快照、逐项参数、有效风险和预分配 `runId` 写入专属 SQLite Journal 后返回 `waiting_for_approval`，此时没有 Run Journal、活跃运行或 Backend 调用。Critical 必须使用未来的专用高保证授权流程，不能借普通按钮批准。
 
 批准采用原子单次 claim，并重新验证计划 Schema、定义、Event/Trace 身份、全部风险摘要及已安装精确版本和 enabled 状态；漂移、拒绝、过期、重复处理或 Safe Mode 均失败关闭。执行从第一项开始并沿用已批准 `runId`，完成后同时收敛 Run 与 Approval Journal。启动恢复保留未过期 pending、将 executing 变为 interrupted，不自动重放可能已产生的副作用。待批 IPC 只返回 Automation 身份、版本、过期时间和风险参数，不返回 Event data 正文。
+
+### 6.6 Automation Agent 费用治理
+
+Automation 调用 AI 时，`AgentTask.budget.maxCostMicrounits` 只作为当日费用预留上限，不得写成实际消费。预留在 Agent Journal 和 Provider 调用前通过 SQLite 原子完成；预算不足必须保持零 Provider 副作用。Completed 只按任务树累计的 Provider Usage 结算；Tool Confirmation 等待期间保留预留，续跑后使用同一 Task 身份最终结算。Provider 错误、进程退出或恢复时无法证明实际费用的记录进入 `indeterminate` 并继续占用完整预留，禁止按零释放或静默重试。相同结算可幂等重放，不同实际金额必须冲突失败。

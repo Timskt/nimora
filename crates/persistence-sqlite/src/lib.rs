@@ -9,6 +9,7 @@ mod auto_mode_turn_attempt_store;
 mod automation_agent_journal;
 mod automation_approval_journal;
 mod automation_catalog;
+mod automation_governance;
 mod automation_journal;
 mod backup;
 mod context_cache_store;
@@ -35,6 +36,10 @@ pub use automation_approval_journal::{
 };
 pub use automation_catalog::{
     AutomationCatalogEntry, AutomationInstallReceipt, SqliteAutomationCatalog,
+};
+pub use automation_governance::{
+    AutomationCostEntry, AutomationCostReservation, AutomationCostStatus, AutomationRunAdmission,
+    SqliteAutomationGovernance,
 };
 pub use automation_journal::{
     AutomationJournalEntry, AutomationJournalStatus, AutomationRunStart, SqliteAutomationJournal,
@@ -1119,6 +1124,7 @@ fn prepare_connection(connection: &mut Connection) -> Result<(), SqlitePersisten
     ensure_current_schema_extensions(connection)?;
     automation_approval_journal::ensure_automation_approval_schema(connection)?;
     automation_catalog::ensure_automation_catalog_schema(connection)?;
+    automation_governance::ensure_automation_governance_schema(connection)?;
     Ok(())
 }
 
@@ -1583,6 +1589,16 @@ pub enum SqlitePersistenceError {
     InvalidAutomationJournal,
     #[error("Automation Agent journal record or state transition is invalid")]
     InvalidAutomationAgentJournal,
+    #[error("Automation governance record or request is invalid")]
+    InvalidAutomationGovernance,
+    #[error("Automation concurrent run limit is active")]
+    AutomationConcurrencyExceeded,
+    #[error("Automation cooldown is active")]
+    AutomationCooldownActive,
+    #[error("Automation daily Agent cost budget is exhausted")]
+    AutomationDailyCostBudgetExceeded,
+    #[error("Automation Agent cost reservation is stale or inconsistent")]
+    AutomationCostReservationConflict,
     #[error("Automation approval journal record or state transition is invalid")]
     InvalidAutomationApprovalJournal,
     #[error("Skill approval journal record or state transition is invalid")]

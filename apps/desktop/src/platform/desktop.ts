@@ -638,7 +638,13 @@ export interface AutomationDefinition {
       risk: "safe" | "low" | "medium" | "high" | "critical";
     };
   }>;
-  policy: { timeoutMs: number; failure: "stop" | "compensate" };
+  policy: {
+    timeoutMs: number;
+    failure: "stop" | "compensate";
+    maxConcurrentRuns: number;
+    cooldownMs: number;
+    dailyCostBudgetMicrounits: number;
+  };
 }
 
 export interface AutomationCatalogEntry {

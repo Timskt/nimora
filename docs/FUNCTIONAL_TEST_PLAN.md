@@ -595,3 +595,33 @@ ID / 标题 / 优先级 / 前置条件
 - Verify 批准后使用预分配 `runId` 创建并完成真实 Run Journal；Backend 或 Engine 异常收敛为 failed/interrupted，不遗留 running。
 - Verify 重启保留未过期 pending、过期 pending 变为 expired、executing 变为 interrupted，且不会自动重放命令。
 - Verify Browser Preview 返回空待批目录，并对批准/拒绝明确报“需要桌面运行时”，不得伪造成功。
+
+## Automation 持久运行与费用治理
+
+- Verify 并发与冷却准入在 Run Journal、活跃运行、Agent Task 和 Backend 前完成；拒绝路径零业务副作用。
+- Verify 相同 Automation 的跨连接并发竞争只有策略允许的数量成功，不同 Automation 互不占用配额。
+- Verify 冷却从真实准入时刻计算，边界时刻允许运行；重启保留冷却事实但释放旧进程运行租约。
+- Verify 参数绑定批准等待不获取运行租约；批准 claim 并重验成功后才竞争并发和冷却配额。
+- Verify Agent `maxCostMicrounits` 只作为并发预留，不写成真实费用；Provider 前预算不足时不创建 Agent Journal 或调用 Provider。
+- Verify Completed 使用累计 `AgentTask.usage.costMicrounits` 原子替换预留，实际费用超过预留时账本保持不变并失败关闭。
+- Verify WaitingForConfirmation 保留完整预留；确认后的 continuation 使用累计 Usage 最终结算且重复相同结算幂等。
+- Verify Provider 错误、崩溃或重启造成费用不确定时状态为 `indeterminate`，完整预留继续计入当日预算且不能自动重试。
+- Verify 两个并发 Agent 费用预留只有不超过当日预算的组合成功；任务 ID 重放不重复预留，身份或金额漂移失败关闭。
+- Verify `dailyCostBudgetMicrounits = 0` 只允许最大费用同为零的任务，Safe/Recovery/Browser Preview 不修改治理账本。
+
+## 外接 AI 能力开发平台
+
+- Verify 同一用户目标分别存在配置、组合和代码方案时，Creator 返回可比较方案并默认选择最低充分复杂度。
+- Verify Registry 无法表达目标时返回结构化 `CapabilityGap`；未知 Command、私有 IPC、任意系统调用和自生成 Handler 均在写盘与执行前拒绝。
+- Verify `catalog.search/explain` 只暴露调用方获准的能力元数据，不泄露 Secret、内部句柄、未授权模块或数据正文。
+- Verify 所有 Builder Tool 使用版本化 Schema、Task/Trace ID、截止时间、取消、幂等键、稳定错误码和脱敏审计；Provider 不能覆盖宿主身份。
+- Verify AI 生成的测试报告、自评结论和聊天同意不能推进 `validated`、`approved`、`installed` 或 `activated` 状态。
+- Verify Capability Proposal 只能进入评审队列，不能动态修改当前 Registry、风险等级、安全策略或 Capability Grant。
+- Verify 两个不同 Provider 可从同一 Creator Project 接力，且 Goal、决定、文件追踪、Diff、测试证据、预算和回滚点不丢失或被摘要伪造。
+- Verify Prompt 污染的网页、文档、Schema、模型资产和 Connector 数据保持 Untrusted Data，不能成为 Creator System 指令。
+- Verify 生成、验证、自动修复和 Agent 循环分别受费用、Token、时间、步骤、工具、内存和重试硬上限约束；超限后项目保留最后有效检查点。
+- Verify 仿真使用虚拟 Clock、Event、Connector 和 Backend 且零真实副作用；仿真结果在 UI 与审计中不能显示为生产执行。
+- Verify Canary 失败只产生最小修复候选或回滚，不自动扩大权限、数据范围、预算、网络目的地或主动性。
+- Verify Provider 下线、协议破坏和扩展退役会撤销 Grant、Secret 引用、订阅、任务和缓存，保留可读导出并验证删除传播。
+- Verify 离线时项目编辑、已缓存契约检查、模拟、导出和回滚可用；需要云模型或在线 Connector 的步骤明确等待且不伪造完成。
+- Verify Creator Studio 的方案、能力图、Diff、风险、预算和证据是权威状态；聊天文本不能覆盖，并通过键盘、读屏、200% 缩放和高对比度测试。

@@ -1,5 +1,21 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-18 — Automation 持久并发、冷却与 AI 费用治理
+
+- Automation 策略新增 `maxConcurrentRuns`、`cooldownMs` 与 `dailyCostBudgetMicrounits`，生产校验和 Creator/桌面契约使用同一硬上限。
+- 真实运行在 Run Journal、活跃运行和 Backend 之前通过 SQLite Immediate 事务获取租约；并发上限与冷却按 Automation 隔离，批准等待阶段不占租约。
+- Agent 子任务在 Journal 与 Provider 前按 `maxCostMicrounits` 原子预留当日预算；预留不是实际费用，Completed 只用累计 `AgentTask.usage.costMicrounits` 结算。
+- Tool Confirmation 等待期间保留预留；Provider 失败或进程重启导致费用未知时标记 `indeterminate` 并继续占用完整当日预算，禁止按零费用自动重试。
+- 运行租约在正常、Engine 拒绝和 Journal 失败后尽力释放；启动恢复释放旧进程租约、保留冷却状态，并把所有未结算费用预留收敛为未知终态。
+- SQLite 测试覆盖跨连接并发唯一胜者、冷却边界与重启、费用竞争、真实结算、超预留拒绝和未知费用不释放；Desktop 124 项宿主测试通过。
+
+## 2026-07-18 — 外接 AI 能力开发平台目标契约
+
+- 新增外接 AI 四级扩展模型：配置、组合、SDK 扩展和平台能力提案；AI 必须选择最低充分复杂度，不能通过自建 Handler 扩权。
+- 定义 Provider 无关 Builder API、结构化 `CapabilityGap`、多模型项目接力、确定性证据链、Canary 运营与完整退役协议。
+- 补充语义桥接、个人数据应用、模型/协议适配、上下文工程、仿真、形式验证、隐私增强、资源治理、协作交接和数字遗产等可由用户委托 AI 创建的能力族。
+- 当前实现仍仅覆盖 User Program、Skill 和 Automation 的部分 Creator 纵切；通用 Builder Tool、Gap 提案、Connector/Agent/UI/数据应用生成和持续运营闭环均保持未实现，不得误报。
+
 ## 2026-07-18 — Automation 参数绑定的运行期批准
 
 - Automation 主动作与补偿动作在任何副作用前整批预检，统一采用宿主注册表计算的有效风险；未知命令失败关闭，Critical 不进入普通批准链路。

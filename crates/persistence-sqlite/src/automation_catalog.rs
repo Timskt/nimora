@@ -374,6 +374,9 @@ mod tests {
             policy: AutomationPolicy {
                 timeout_ms: 5_000,
                 failure: FailurePolicy::Stop,
+                max_concurrent_runs: 1,
+                cooldown_ms: 0,
+                daily_cost_budget_microunits: 0,
             },
         }
     }
