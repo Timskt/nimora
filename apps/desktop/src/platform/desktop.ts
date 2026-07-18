@@ -104,6 +104,38 @@ export interface DesktopAutoModeJobSnapshot {
   updatedAtMs: number;
 }
 
+export type AutoModeAttemptResolutionDecision = "confirmed_not_executed" | "accept_external_effect_and_cancel";
+
+export interface DesktopAutoModeAttemptResolution {
+  spec: "nimora.auto-mode-attempt-resolution/1";
+  id: string;
+  sessionId: string;
+  attemptId: string;
+  checkpointSequence: number;
+  requestFingerprint: string;
+  decision: AutoModeAttemptResolutionDecision;
+  actor: string;
+  reason: string | null;
+  resolvedAtMs: number;
+}
+
+export interface DesktopAutoModeAttemptDetail {
+  spec: "nimora.desktop-auto-mode-attempt-detail/1";
+  attempt: {
+    id: string;
+    sessionId: string;
+    checkpointSequence: number;
+    expectedSessionUpdatedAtMs: number;
+    requestFingerprint: string;
+    status: "active" | "indeterminate";
+    startedAtMs: number;
+    updatedAtMs: number;
+  } | null;
+  resolutions: DesktopAutoModeAttemptResolution[];
+  risk: string;
+  nextActions: AutoModeAttemptResolutionDecision[];
+}
+
 export interface AgentHistoryRecord {
   spec: "nimora.agent-history/1";
   task: { id: string; createdAtMs: number; providerId: string; status: string };
@@ -515,6 +547,11 @@ export interface DesktopApi {
   startAutoModeJob(request: StartAutoModeJobRequest): Promise<DesktopAutoModeJobSnapshot>;
   autoModeJobStatus(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
   autoModeJobHistory(): Promise<DesktopAutoModeJobSnapshot[]>;
+  autoModeAttemptDetail(sessionId: string): Promise<DesktopAutoModeAttemptDetail>;
+  resolveAutoModeAttempt(request: {
+    sessionId: string; attemptId: string; checkpointSequence: number; requestFingerprint: string;
+    decision: AutoModeAttemptResolutionDecision; actor: string; reason?: string;
+  }): Promise<DesktopAutoModeAttemptResolution>;
   pauseAutoModeJob(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
   cancelAutoModeJob(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
   prepareAgentTool(toolId: string, argumentsValue: Record<string, unknown>): Promise<AgentToolResult>;
@@ -770,6 +807,12 @@ export function createDesktopApi(
       async autoModeJobHistory() {
         throw new Error("desktop-host-required");
       },
+      async autoModeAttemptDetail() {
+        throw new Error("desktop-host-required");
+      },
+      async resolveAutoModeAttempt() {
+        throw new Error("desktop-host-required");
+      },
       async pauseAutoModeJob() {
         throw new Error("desktop-host-required");
       },
@@ -914,6 +957,8 @@ export function createDesktopApi(
     }) as DesktopAutoModeJobSnapshot,
     autoModeJobStatus: async (jobId) => await invokeCommand("auto_mode_job_status", { jobId }) as DesktopAutoModeJobSnapshot,
     autoModeJobHistory: async () => await invokeCommand("auto_mode_job_history") as DesktopAutoModeJobSnapshot[],
+    autoModeAttemptDetail: async (sessionId) => await invokeCommand("auto_mode_attempt_detail", { sessionId }) as DesktopAutoModeAttemptDetail,
+    resolveAutoModeAttempt: async (request) => await invokeCommand("resolve_auto_mode_attempt", { request }) as DesktopAutoModeAttemptResolution,
     pauseAutoModeJob: async (jobId) => await invokeCommand("pause_auto_mode_job", { jobId }) as DesktopAutoModeJobSnapshot,
     cancelAutoModeJob: async (jobId) => await invokeCommand("cancel_auto_mode_job", { jobId }) as DesktopAutoModeJobSnapshot,
     prepareAgentTool: async (toolId, argumentsValue) => await invokeCommand("prepare_agent_tool", { request: { toolId, arguments: argumentsValue } }) as AgentToolResult,

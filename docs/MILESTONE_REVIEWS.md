@@ -101,7 +101,31 @@
 4. Goal/Plan/Attempt/Job 控制中心展示恢复历史、暂停原因、预算、Checkpoint 和下一安全动作。
 5. 浏览器完成视觉预览，真实 Tauri 完成宿主交互与跨重启端到端验证。
 
-## 4. 后续回顾模板
+## 4. M-2026-07-18 未知执行结果人工对账
+
+### 完成证据
+
+- 新增不可变 `auto_mode_attempt_resolution` 事实表与单一原子用例；Session、Task、Checkpoint、Attempt 和 Resolution 在同一 Immediate 事务内收敛。
+- 决议严格限定为 `confirmed_not_executed` 与 `accept_external_effect_and_cancel`，不伪造 Provider 成功、不删除证据后续跑、不在决议命令内自动重试。
+- 请求绑定 Session、Attempt、Checkpoint sequence、request fingerprint、actor、reason 与宿主时间；陈旧、重放和非 `indeterminate` 状态失败关闭。
+- 桌面 IPC 提供详情、风险说明、下一安全动作、100 条有界审计查询与决议入口；浏览器预览稳定返回 `desktop-host-required`。
+- Workspace Clippy、Workspace Rust tests、桌面 85 tests、持久化 52 tests、Vitest 31 tests、TypeScript 与生产构建全部通过。
+
+### 架构复核与纠正
+
+- 对账属于持久化应用用例，不放在 UI 或 Supervisor；未来桌面、CLI 与恢复向导复用同一事实契约。
+- Agent Runtime 保持纯领域化，未新增“未知成功”伪状态；宿主仍负责时间和数据库路径。
+- Resolution 是审计事实，Job Snapshot 仍只是投影。后续控制中心应由 Session/Checkpoint/Attempt/Resolution 组合查询生成恢复视图。
+- 当前专属仓储事务测试夹具仍需补齐，尤其是故障注入零部分写入、数据库 reopen 与双客户端竞争；现有全量回归只能证明无破坏，不能替代该证据。
+
+### 下一纵切硬验收
+
+1. 补真实 SQLite 决议专属测试：两种决议、陈旧绑定、重放、非未知状态、故障回滚、跨 reopen 与并发竞争。
+2. 实现 Goal/Plan/Attempt/Job 控制中心，把风险、预算、Checkpoint、不可变历史和安全下一步做成可访问 UI。
+3. 用浏览器完成响应式、键盘、读屏与视觉截图审查，并在真实 Tauri 完成宿主交互验证。
+4. 独立处理 `GltfRenderer` 约 615 KB 的按需加载与性能预算，不混入 Agent 安全提交。
+
+## 5. 后续回顾模板
 
 ```text
 里程碑：

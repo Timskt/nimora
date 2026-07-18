@@ -1,17 +1,20 @@
 use crate::{SqlitePersistenceError, prepare_connection};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use serde::Serialize;
 use std::path::Path;
 use uuid::Uuid;
 
 const MAX_FINGERPRINT_BYTES: usize = 256;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AutoModeTurnAttemptStatus {
     Active,
     Indeterminate,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AutoModeTurnAttempt {
     pub id: Uuid,
     pub session_id: Uuid,

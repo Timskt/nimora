@@ -38,6 +38,16 @@ describe("desktop platform adapter", () => {
       sessionId: "018f0000-0000-7000-8000-000000000012",
       workspaceRoot: "/preview/workspace",
     })).rejects.toThrow("desktop-host-required");
+    await expect(api.autoModeAttemptDetail("018f0000-0000-7000-8000-000000000012"))
+      .rejects.toThrow("desktop-host-required");
+    await expect(api.resolveAutoModeAttempt({
+      sessionId: "018f0000-0000-7000-8000-000000000012",
+      attemptId: "018f0000-0000-7000-8000-000000000013",
+      checkpointSequence: 1,
+      requestFingerprint: "sha256:preview",
+      decision: "confirmed_not_executed",
+      actor: "user:preview",
+    })).rejects.toThrow("desktop-host-required");
     await expect(api.playAction("celebrate")).resolves.toBeNull();
   });
 

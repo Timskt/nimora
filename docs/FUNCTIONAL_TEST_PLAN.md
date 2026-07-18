@@ -493,3 +493,11 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-117 | 有界退出排空 | 应用退出向全部活跃 Job 取消并通过 Condvar 最多等待 2 秒；正常终态唤醒排空，超时统一隔离为 `indeterminate/shutdown-timeout`，迟到 Runner 不得覆盖且 Session 可重新启动 | P0 |
 | AGT-118 | Safe Mode 后台封锁 | 进入 Safe Mode 与应用退出复用同一 Auto Job 排空协议；超时使用独立 `safe-mode-timeout` 未知态，释放 Session 且共享 Provider CancellationFlag 已取消；Recovery Mode 不存在可继承活跃 Job 并拒绝 Start | P0 |
 | AGT-119 | 崩溃投影重建 | 使用真实 SQLite 构造 Running Session 后重启桌面；Session 原子恢复为 `paused/restarted`，历史 IPC 可见同 Session ID 的终态 Job 投影、活跃列表为空且不触发 Provider；未决 Active Attempt 必须先转 `indeterminate/restart-attempt-indeterminate`，可恢复记录超过上限时失败关闭而非静默截断 | P0 |
+## Auto Mode indeterminate-attempt reconciliation
+
+- Verify an indeterminate attempt can be resolved exactly once with all binding parameters unchanged.
+- Verify `confirmed_not_executed` leaves no active attempt, pauses Session and Task, increments Checkpoint sequence, and records immutable audit evidence.
+- Verify `accept_external_effect_and_cancel` cancels Session and Task without recording a fabricated Provider result.
+- Verify stale Session, Attempt, Checkpoint sequence, request fingerprint, non-indeterminate status, replay, invalid actor, and oversized/control-character reason fail with zero partial writes.
+- Verify resolution audit survives database reopen and list bounds reject zero or more than 100 records.
+- Verify browser preview rejects detail and resolution commands with `desktop-host-required`.

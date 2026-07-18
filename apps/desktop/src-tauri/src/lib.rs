@@ -54,12 +54,14 @@ use nimora_module_agent_adapter::{
     ModuleAgentRequest,
 };
 use nimora_persistence_sqlite::{
-    AgentHistoryRecord, AutoModeTurnAttemptStatus, AutomationAgentJournalEntry,
+    AgentHistoryRecord, AutoModeAttemptResolution, AutoModeAttemptResolutionDecision,
+    AutoModeTurnAttempt, AutoModeTurnAttemptStatus, AutomationAgentJournalEntry,
     AutomationAgentJournalStatus, AutomationJournalEntry, AutomationRunStart, BackupCoordinator,
     BackupHealth, BackupPolicy, BackupRecord, ContextCachePolicy, DATABASE_VERSION, OutboxSnapshot,
-    ProgramPermissionGrant, SkillApprovalJournalEntry, SkillApprovalJournalStatus,
-    SkillExecutionHistoryRecord, SkillExecutionHistoryStatus, SkillStateRecord,
-    SqliteAgentHistoryRepository, SqliteAutoModeCheckpointRepository, SqliteAutoModeRepository,
+    ProgramPermissionGrant, ResolveAutoModeAttemptRequest, SkillApprovalJournalEntry,
+    SkillApprovalJournalStatus, SkillExecutionHistoryRecord, SkillExecutionHistoryStatus,
+    SkillStateRecord, SqliteAgentHistoryRepository, SqliteAutoModeAttemptResolutionRepository,
+    SqliteAutoModeCheckpointRepository, SqliteAutoModeRepository,
     SqliteAutoModeTurnAttemptRepository, SqliteAutomationAgentJournal, SqliteAutomationJournal,
     SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
     SqliteProgramPermissionRepository, SqliteSkillApprovalJournal, SqliteSkillExecutionHistory,
@@ -1174,6 +1176,28 @@ struct StartAutoModeJobRequest {
     max_turns_per_batch: u16,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DesktopResolveAutoModeAttemptRequest {
+    session_id: Uuid,
+    attempt_id: Uuid,
+    checkpoint_sequence: u64,
+    request_fingerprint: String,
+    decision: AutoModeAttemptResolutionDecision,
+    actor: String,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopAutoModeAttemptDetail {
+    spec: &'static str,
+    attempt: Option<AutoModeTurnAttempt>,
+    resolutions: Vec<AutoModeAttemptResolution>,
+    risk: &'static str,
+    next_actions: [&'static str; 2],
+}
+
 const fn default_auto_mode_output_tokens() -> u64 {
     512
 }
@@ -2080,6 +2104,56 @@ fn auto_mode_job_history(
     state: State<'_, DesktopState>,
 ) -> Result<Vec<AutoModeJobSnapshot>, DesktopError> {
     state.auto_mode_jobs.snapshots().map_err(agent_error)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn auto_mode_attempt_detail(
+    session_id: Uuid,
+    state: State<'_, DesktopState>,
+) -> Result<DesktopAutoModeAttemptDetail, DesktopError> {
+    let database_path = state
+        .database_path
+        .as_ref()
+        .ok_or_else(|| DesktopError::Agent("Auto Mode persistence is unavailable".to_owned()))?;
+    let attempt = SqliteAutoModeTurnAttemptRepository::open(database_path)?.get(session_id)?;
+    let resolutions = SqliteAutoModeAttemptResolutionRepository::open(database_path)?
+        .list_for_session(session_id, 100)?;
+    Ok(DesktopAutoModeAttemptDetail {
+        spec: "nimora.desktop-auto-mode-attempt-detail/1",
+        attempt,
+        resolutions,
+        risk: "The external Provider or Tool may have produced effects; never retry until manually reconciled.",
+        next_actions: [
+            "confirmed_not_executed",
+            "accept_external_effect_and_cancel",
+        ],
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn resolve_auto_mode_attempt(
+    request: DesktopResolveAutoModeAttemptRequest,
+    state: State<'_, DesktopState>,
+) -> Result<AutoModeAttemptResolution, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let database_path = state
+        .database_path
+        .as_ref()
+        .ok_or_else(|| DesktopError::Agent("Auto Mode persistence is unavailable".to_owned()))?;
+    SqliteAutoModeAttemptResolutionRepository::open(database_path)?
+        .resolve(&ResolveAutoModeAttemptRequest {
+            session_id: request.session_id,
+            attempt_id: request.attempt_id,
+            checkpoint_sequence: request.checkpoint_sequence,
+            request_fingerprint: request.request_fingerprint,
+            decision: request.decision,
+            actor: request.actor,
+            reason: request.reason,
+            resolved_at_ms: current_time_ms()?,
+        })
+        .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -7179,6 +7253,8 @@ pub fn run() {
             start_auto_mode_job,
             auto_mode_job_status,
             auto_mode_job_history,
+            auto_mode_attempt_detail,
+            resolve_auto_mode_attempt,
             pause_auto_mode_job,
             cancel_auto_mode_job,
             prepare_agent_tool,

@@ -255,3 +255,11 @@ Yield 边界的宿主 Pause/Cancel 现已具备独立原子提交：此时没有
 生产桌面构建会嵌入 `ollama-provider.json` 的 SHA-256 信任摘要。启动时宿主仅从受控资源候选目录发现 sidecar，并复用 CLI 的 Manifest 路径、Manifest 摘要、普通文件、大小和 Worker 摘要校验；全部通过后才把 `provider:ollama-loopback` 注册到同一 `ProviderRegistry`。工作台只展示 Registry 中真实可用的 Provider，任务显式携带 Provider ID 与模型名，未知 Provider、空模型和越界模型名在调用前拒绝。
 
 桌面健康检查通过同一受验证 Worker 请求 loopback-only `/api/tags`，Tauri Core 与 React 均不直接联网。协议限制 2 秒桌面超时、16 KiB Header、1 MiB Body、256 个模型和 128 bytes 模型名，拒绝 chunked、长度错配、非 200、畸形字段与远程地址；结果去重并稳定排序。UI 分别表达 Worker 完整性、服务可达性和模型可用性，模型目录用于 `datalist` 建议与运行前 fail-closed 校验。Safe/Recovery Mode 禁止启动 Worker 探测。生产 Worker 双轮 Tool Call 已由真实跨进程 mock Ollama 自动化覆盖；使用用户本机实际模型的桌面验收、历史持久化和任务恢复尚未实现。
+## Unknown external-result reconciliation
+
+An Auto Mode Attempt marked `indeterminate` is quarantined. Desktop UI and future CLI clients must first read its exact Session ID, Attempt ID, Checkpoint sequence, and request fingerprint, explain that an external effect may already exist, then submit one of two explicit decisions:
+
+- `confirmed_not_executed`: pause at a new Checkpoint and permit only a later explicit resume to create a fresh Attempt.
+- `accept_external_effect_and_cancel`: accept the possible external effect and cancel because no trustworthy continuation or Provider result exists.
+
+The persistence use case performs Session, Task, Checkpoint, Attempt, and immutable Resolution changes in one immediate transaction. No client may delete evidence, auto-retry, or synthesize success.

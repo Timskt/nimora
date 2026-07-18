@@ -1,6 +1,7 @@
 //! `SQLite` persistence adapters for the `Nimora` runtime.
 
 mod agent_goal_store;
+mod auto_mode_attempt_resolution_store;
 mod auto_mode_checkpoint_store;
 mod auto_mode_commit_store;
 mod auto_mode_store;
@@ -14,6 +15,10 @@ mod skill_execution_history;
 mod workspace_snapshot_store;
 
 pub use agent_goal_store::{AgentGoalSnapshot, SqliteAgentGoalRepository};
+pub use auto_mode_attempt_resolution_store::{
+    AutoModeAttemptResolution, AutoModeAttemptResolutionDecision, ResolveAutoModeAttemptRequest,
+    SqliteAutoModeAttemptResolutionRepository,
+};
 pub use auto_mode_checkpoint_store::SqliteAutoModeCheckpointRepository;
 pub use auto_mode_commit_store::SqliteAutoModeCommitRepository;
 pub use auto_mode_store::SqliteAutoModeRepository;
@@ -1204,8 +1209,35 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
             ON auto_mode_checkpoint(goal_id, updated_at_ms DESC, session_id DESC);",
     )?;
     ensure_auto_mode_turn_attempt_schema(connection)?;
+    ensure_auto_mode_attempt_resolution_schema(connection)?;
     ensure_workspace_snapshot_schema(connection)?;
     ensure_context_cache_schema(connection)?;
+    Ok(())
+}
+
+fn ensure_auto_mode_attempt_resolution_schema(
+    connection: &Connection,
+) -> Result<(), SqlitePersistenceError> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS auto_mode_attempt_resolution (
+            resolution_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL UNIQUE,
+            checkpoint_sequence INTEGER NOT NULL CHECK (checkpoint_sequence > 0),
+            request_fingerprint TEXT NOT NULL,
+            decision TEXT NOT NULL CHECK (decision IN (
+                'confirmed_not_executed', 'accept_external_effect_and_cancel'
+            )),
+            actor TEXT NOT NULL,
+            reason TEXT,
+            resolved_at_ms INTEGER NOT NULL CHECK (resolved_at_ms >= 0),
+            schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES auto_mode_session(session_id) ON DELETE RESTRICT
+        );
+        CREATE INDEX IF NOT EXISTS auto_mode_attempt_resolution_session_idx
+            ON auto_mode_attempt_resolution(session_id, resolved_at_ms DESC, resolution_id DESC);",
+    )?;
     Ok(())
 }
 
@@ -1515,6 +1547,10 @@ pub enum SqlitePersistenceError {
     InvalidAutoModeTurnAttempt,
     #[error("Auto Mode turn attempt is stale or already exists")]
     AutoModeTurnAttemptConflict,
+    #[error("Auto Mode attempt resolution record or request is invalid")]
+    InvalidAutoModeAttemptResolution,
+    #[error("Auto Mode attempt resolution is stale or already decided")]
+    AutoModeAttemptResolutionConflict,
     #[error("Workspace snapshot record or request is invalid")]
     InvalidWorkspaceSnapshot,
     #[error("Workspace snapshot was changed by another writer")]
