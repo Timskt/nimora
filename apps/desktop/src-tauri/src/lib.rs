@@ -4,6 +4,7 @@ pub mod auto_mode_jobs;
 mod auto_mode_runner;
 mod backup_service;
 mod diagnostic_report;
+mod reversible_transition;
 
 #[cfg(test)]
 use asset_protocol::parse_asset_protocol_path;
@@ -19,6 +20,7 @@ use backup_service::BackupService;
 use diagnostic_report::{
     DiagnosticReportFacts, DiagnosticSafetyMode, DiagnosticStartupMode, build_diagnostic_report,
 };
+use reversible_transition::{ReversibleTransitionError, run_reversible_transition};
 
 use auto_mode_jobs::{
     AutoModeJobControl, AutoModeJobSnapshot, AutoModeJobStatus, AutoModeJobSupervisor,
@@ -3586,6 +3588,33 @@ fn switch_profile(
     switch_profile_inner(&app, &state, profile_id)
 }
 
+fn run_window_policy_transition<Output, CommitError>(
+    app: &AppHandle,
+    previous: WindowPolicy,
+    target: WindowPolicy,
+    commit: impl FnOnce() -> Result<Output, CommitError>,
+) -> Result<Output, DesktopError>
+where
+    CommitError: std::fmt::Display + Into<DesktopError>,
+{
+    match run_reversible_transition(
+        previous,
+        target,
+        |from, to| apply_window_policy(app, from, to),
+        commit,
+    ) {
+        Ok(output) => Ok(output),
+        Err(ReversibleTransitionError::NativeApply(error)) => Err(error),
+        Err(ReversibleTransitionError::Commit(primary)) => Err(primary.into()),
+        Err(ReversibleTransitionError::Rollback { primary, rollback }) => {
+            Err(DesktopError::NativePolicyRollback {
+                primary: primary.to_string(),
+                rollback: rollback.to_string(),
+            })
+        }
+    }
+}
+
 fn switch_profile_inner(
     app: &AppHandle,
     state: &DesktopState,
@@ -3600,20 +3629,11 @@ fn switch_profile_inner(
         .ok_or(ProfileServiceError::ProfileNotFound)?;
     let next_policy = WindowPolicy::from_profile(&target.policy);
     let previous_policy = current_window_policy(state)?;
-    apply_window_policy(app, previous_policy, next_policy)?;
-    match state.profiles.switch_active(profile_id) {
-        Ok(command) => {
-            set_current_window_policy(state, next_policy)?;
-            Ok(command)
-        }
-        Err(primary) => match apply_window_policy(app, next_policy, previous_policy) {
-            Ok(()) => Err(primary.into()),
-            Err(rollback) => Err(DesktopError::NativePolicyRollback {
-                primary: primary.to_string(),
-                rollback: rollback.to_string(),
-            }),
-        },
-    }
+    let command = run_window_policy_transition(app, previous_policy, next_policy, || {
+        state.profiles.switch_active(profile_id)
+    })?;
+    set_current_window_policy(state, next_policy)?;
+    Ok(command)
 }
 
 #[tauri::command]
@@ -3623,30 +3643,21 @@ fn enter_safe_mode(
     state: State<'_, DesktopState>,
 ) -> Result<Command, DesktopError> {
     let previous_policy = current_window_policy(&state)?;
-    apply_window_policy(&app, previous_policy, WindowPolicy::SAFE)?;
-    match state.safety.enter(SafeModeReason::Manual) {
-        Ok(command) => {
-            quiesce_auto_mode_jobs(&state, AUTO_MODE_SHUTDOWN_TIMEOUT, "safe-mode-timeout")?;
-            cancel_all_user_programs(&state)?;
-            cancel_all_user_program_event_sessions(&state)?;
-            stop_skill_event_sessions(&state)?;
-            cancel_all_pending_agent_tools(&state)?;
-            *state
-                .policy_before_safe_mode
-                .lock()
-                .map_err(|_| DesktopError::StatePoisoned)? = Some(previous_policy);
-            set_current_window_policy(&state, WindowPolicy::SAFE)?;
-            app.emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
-            Ok(command)
-        }
-        Err(primary) => match apply_window_policy(&app, WindowPolicy::SAFE, previous_policy) {
-            Ok(()) => Err(primary.into()),
-            Err(rollback) => Err(DesktopError::NativePolicyRollback {
-                primary: primary.to_string(),
-                rollback: rollback.to_string(),
-            }),
-        },
-    }
+    let command = run_window_policy_transition(&app, previous_policy, WindowPolicy::SAFE, || {
+        state.safety.enter(SafeModeReason::Manual)
+    })?;
+    quiesce_auto_mode_jobs(&state, AUTO_MODE_SHUTDOWN_TIMEOUT, "safe-mode-timeout")?;
+    cancel_all_user_programs(&state)?;
+    cancel_all_user_program_event_sessions(&state)?;
+    stop_skill_event_sessions(&state)?;
+    cancel_all_pending_agent_tools(&state)?;
+    *state
+        .policy_before_safe_mode
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)? = Some(previous_policy);
+    set_current_window_policy(&state, WindowPolicy::SAFE)?;
+    app.emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
+    Ok(command)
 }
 
 fn cancel_all_pending_agent_tools(state: &DesktopState) -> Result<(), DesktopError> {
@@ -3711,26 +3722,16 @@ fn exit_safe_mode(app: AppHandle, state: State<'_, DesktopState>) -> Result<Comm
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?
         .unwrap_or(active_window_policy(&state.profiles.snapshot()?)?);
-    apply_window_policy(&app, previous_policy, target_policy)?;
-    match state.safety.exit() {
-        Ok(command) => {
-            *state
-                .policy_before_safe_mode
-                .lock()
-                .map_err(|_| DesktopError::StatePoisoned)? = None;
-            set_current_window_policy(&state, target_policy)?;
-            sync_skill_event_sessions(&state)?;
-            app.emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
-            Ok(command)
-        }
-        Err(primary) => match apply_window_policy(&app, target_policy, previous_policy) {
-            Ok(()) => Err(primary.into()),
-            Err(rollback) => Err(DesktopError::NativePolicyRollback {
-                primary: primary.to_string(),
-                rollback: rollback.to_string(),
-            }),
-        },
-    }
+    let command =
+        run_window_policy_transition(&app, previous_policy, target_policy, || state.safety.exit())?;
+    *state
+        .policy_before_safe_mode
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)? = None;
+    set_current_window_policy(&state, target_policy)?;
+    sync_skill_event_sessions(&state)?;
+    app.emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
+    Ok(command)
 }
 
 #[tauri::command]

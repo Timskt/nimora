@@ -242,3 +242,11 @@ Actions 分钟：
 - 错误语义：成功操作必须清除旧错误；真实 I/O 失败保留原始错误并以共享投影暴露给所有健康消费者；错误锁损坏时成功路径 fail closed。
 - 防回退：架构门禁拒绝 Backup Service 引入 Tauri 类型；稳定的“数据库路径被目录占用”故障夹具同时覆盖手动与定时入口。
 - 证据：Desktop Host 102 项测试覆盖手动/定时失败共享投影与成功后清除旧错误；跨休眠调度、磁盘耗尽、并发手动/定时备份和真实恢复重启仍需平台故障注入。
+
+## M-2026-07-18 原生策略可逆事务统一
+
+- 不足：Profile 切换、进入 Safe Mode、退出 Safe Mode 各自复制“原生窗口预应用→领域提交→失败回滚”模板，任一入口都可能漏掉回滚或吞掉次级故障。
+- 修正：新增泛型 Tauri-free `run_reversible_transition`，宿主 Adapter 只绑定 `WindowPolicy` 与 `apply_window_policy`；三条入口共享完全相同的事务状态机。
+- 鲁棒性：原生预应用失败绝不调用领域提交；领域提交失败必尝试逆向原生变更；回滚失败同时保留 primary 与 rollback 原因；成功路径不会误触发回滚。
+- 防回退：架构门禁禁止协调器依赖 Tauri、`State` 或 `AppHandle`；四项纯测试覆盖每条状态路径，Desktop Host 总测试增至 106 项。
+- 剩余边界：Safe Mode 领域提交后的 Auto Mode、用户程序、Skill、Agent 静默过程仍是多步骤收敛，任一步失败时需要持久化补偿/indeterminate 设计，当前可逆事务不能被夸大为完整分布式事务。
