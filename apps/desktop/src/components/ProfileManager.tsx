@@ -24,6 +24,10 @@ function profileModeLabel(mode: ProfileMode): string {
   return profileModes.find((item) => item.value === mode)?.label ?? "自定义";
 }
 
+export function proactiveFrequencyLabel(value: number): string {
+  return value === 0 ? "关闭自主互动" : `主动频率 ${value}%`;
+}
+
 export function normalizedProfileName(value: string): string | null {
   const name = value.trim();
   return name.length > 0 && name.length <= 64 ? name : null;
@@ -106,7 +110,7 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
                   {profileModeLabel(profile.policy.mode)}
                   {profile.policy.alwaysOnTop === false ? " · 普通窗口" : " · 保持置顶"}
                   {profile.policy.soundEnabled === false ? " · 静音" : " · 声音开启"}
-                  {` · 主动频率 ${profile.policy.proactiveFrequency ?? 25}%`}
+                  {` · ${proactiveFrequencyLabel(profile.policy.proactiveFrequency ?? 25)}`}
                 </p>
               </div>
               <button
@@ -161,14 +165,18 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
             启用声音
           </label>
           <label className="profile-frequency">
-            <span>主动互动频率 <strong>{policy.proactiveFrequency}%</strong></span>
+            <span>主动互动频率 <strong>{proactiveFrequencyLabel(policy.proactiveFrequency ?? 25)}</strong></span>
             <input
+              aria-label="主动互动频率"
               type="range"
               min="0"
               max="100"
               value={policy.proactiveFrequency ?? 25}
               onChange={(event) => setPolicy({ ...policy, proactiveFrequency: Number(event.target.value) })}
             />
+            {(policy.mode === "focus" || policy.mode === "presentation") && (
+              <small>此场景会暂停自主互动，手动互动仍然可用。</small>
+            )}
           </label>
           <button className="primary-button" type="submit" disabled={busy}>保存 Profile</button>
         </form>

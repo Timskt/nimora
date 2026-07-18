@@ -105,6 +105,7 @@ pub enum PetAutonomyDecision {
         action: PetAction,
     },
     Finish,
+    Suppress,
     Interrupt,
 }
 
@@ -312,6 +313,9 @@ impl Pet {
             if self.state != expected_state {
                 return PetAutonomyDecision::Interrupt;
             }
+            if !policy.enabled || policy.quiet || policy.focus {
+                return PetAutonomyDecision::Suppress;
+            }
             return if now_ms >= active_until_ms {
                 PetAutonomyDecision::Finish
             } else {
@@ -363,6 +367,12 @@ impl Pet {
                 self.autonomy.active_intent = None;
                 self.autonomy.active_until_ms = None;
                 self.autonomy.next_due_ms = now_ms.saturating_add(policy.cooldown_ms);
+            }
+            PetAutonomyDecision::Suppress => {
+                self.apply_action(PetAction::Idle);
+                self.autonomy.active_intent = None;
+                self.autonomy.active_until_ms = None;
+                self.autonomy.next_due_ms = 0;
             }
             PetAutonomyDecision::Interrupt => {
                 self.autonomy.active_intent = None;
@@ -438,6 +448,32 @@ mod tests {
         assert_eq!(decision, PetAutonomyDecision::Interrupt);
         pet.apply_autonomy_decision(decision, policy, 101);
         assert_eq!(pet.state, PetState::Dragged);
+        assert_eq!(pet.autonomy.active_intent, None);
+    }
+
+    #[test]
+    fn suppressed_policy_stops_matching_autonomy_immediately() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        let active_policy = PetAutonomyPolicy::default();
+        pet.apply_autonomy_decision(
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Explore,
+                action: PetAction::Walk,
+            },
+            active_policy,
+            100,
+        );
+        let quiet_policy = PetAutonomyPolicy {
+            quiet: true,
+            ..active_policy
+        };
+        let decision = pet.autonomy_decision(quiet_policy, 101);
+        assert_eq!(decision, PetAutonomyDecision::Suppress);
+        pet.apply_autonomy_decision(decision, quiet_policy, 101);
+        assert_eq!(pet.state, PetState::Idle);
+        assert_eq!(pet.autonomy.sequence, 1);
+        assert_eq!(pet.autonomy.next_due_ms, 0);
+        assert_eq!(pet.autonomy.active_until_ms, None);
         assert_eq!(pet.autonomy.active_intent, None);
     }
 

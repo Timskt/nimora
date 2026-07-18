@@ -124,8 +124,8 @@ use nimora_runtime_app::{
 };
 use nimora_runtime_core::{
     Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction, PetAutonomyPolicy,
-    PointerButton, Position, Profile, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason,
-    SafetySnapshot,
+    PointerButton, Position, Profile, ProfileId, ProfileMode, ProfilePolicy, RuntimeMode,
+    SafeModeReason, SafetySnapshot,
 };
 use nimora_secret_store::{
     MemorySecretStore, SecretPresence, SecretReference, SecretStore, SecretStoreError,
@@ -10705,10 +10705,15 @@ fn start_pet_autonomy(app: AppHandle) {
             let before = state.runtime.snapshot().ok();
             if normal
                 && let Ok(now_ms) = current_time_ms()
+                && let Ok(profile_snapshot) = state.profiles.snapshot()
+                && let Some(active_profile) = profile_snapshot
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.id == profile_snapshot.active_profile_id)
                 && matches!(
                     state
                         .runtime
-                        .tick_autonomy(PetAutonomyPolicy::default(), now_ms),
+                        .tick_autonomy(pet_autonomy_policy(&active_profile.policy), now_ms),
                     Ok(Some(_))
                 )
             {
@@ -10725,6 +10730,26 @@ fn start_pet_autonomy(app: AppHandle) {
             std::thread::sleep(Duration::from_secs(1));
         }
     });
+}
+
+fn pet_autonomy_policy(profile: &ProfilePolicy) -> PetAutonomyPolicy {
+    let frequency = profile.proactive_frequency.unwrap_or(25).min(100);
+    let (idle_delay_ms, cooldown_ms) = match frequency {
+        0..=20 => (120_000, 300_000),
+        21..=40 => (60_000, 180_000),
+        41..=60 => (30_000, 90_000),
+        61..=80 => (15_000, 45_000),
+        81..=100 => (8_000, 20_000),
+        _ => unreachable!("frequency is clamped"),
+    };
+    PetAutonomyPolicy {
+        enabled: frequency > 0,
+        quiet: profile.mode == ProfileMode::Presentation,
+        focus: profile.mode == ProfileMode::Focus,
+        idle_delay_ms,
+        action_duration_ms: 8_000,
+        cooldown_ms,
+    }
 }
 
 fn ensure_pet_window_visible(app: &AppHandle) -> Result<(), DesktopError> {
@@ -10849,12 +10874,13 @@ mod tests {
         DesktopCapabilityBackend, DesktopError, DesktopProviderCredentialResolver,
         DesktopResolveAutoModeAttemptRequest, DesktopSecretStore, DesktopState,
         ExecutionCancellation, LocalAgentRequest, PendingCreatorApproval, PendingSkillExecution,
-        PetAction, PhysicalArea, PrepareAgentToolRequest, ProfilePolicy, ResolveAgentToolRequest,
-        ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SkillEventSession, StartupMode,
-        THEME_SELECTION, TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
-        UserProgramRollbackReceipt, VOICE_SELECTION, WindowPolicy, agent_catalog_inner,
-        agent_provider_status_inner, append_program_scope_diff, approve_automation_run_inner,
-        approve_skill_execution_inner, auto_mode_control_center_inner, automation_agent_messages,
+        PetAction, PhysicalArea, PrepareAgentToolRequest, ProfileMode, ProfilePolicy,
+        ResolveAgentToolRequest, ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest,
+        SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
+        UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
+        VOICE_SELECTION, WindowPolicy, agent_catalog_inner, agent_provider_status_inner,
+        append_program_scope_diff, approve_automation_run_inner, approve_skill_execution_inner,
+        auto_mode_control_center_inner, automation_agent_messages,
         automation_governance_catalog_inner, cancel_agent_task_inner,
         cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
         cancel_skill_execution_inner, capability_set_diff, confirm_agent_tool_inner,
@@ -10866,13 +10892,13 @@ mod tests {
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_generated_theme, install_gltf_character, open_diagnostic_journal,
         parse_asset_protocol_path, parse_user_program_plan, pause_auto_mode_job_inner,
-        permission_grant, persist_asset_selection, plan_wander_target, prepare_agent_tool_inner,
-        quiesce_auto_mode_jobs, recover_visible_position, reject_agent_tool_inner,
-        reject_automation_run_inner, resolve_active_character, resolve_active_theme,
-        resolve_active_voice, resolve_asset_selection, resolve_auto_mode_attempt_inner,
-        resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
-        run_live_automation_event, run_local_agent_inner, run_skill_agent_task,
-        run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
+        permission_grant, persist_asset_selection, pet_autonomy_policy, plan_wander_target,
+        prepare_agent_tool_inner, quiesce_auto_mode_jobs, recover_visible_position,
+        reject_agent_tool_inner, reject_automation_run_inner, resolve_active_character,
+        resolve_active_theme, resolve_active_voice, resolve_asset_selection,
+        resolve_auto_mode_attempt_inner, resolve_character_renderer, resume_auto_mode_turn_inner,
+        run_live_automation, run_live_automation_event, run_local_agent_inner,
+        run_skill_agent_task, run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
         skill_capability_names, skill_event_types, stage_creator_package,
         stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
         validate_model_source, validate_package_source, validate_requested_animation_map,
@@ -15236,5 +15262,43 @@ mod tests {
         assert_eq!(created.policy.mode, nimora_runtime_core::ProfileMode::Focus);
         assert!(!receipt.enabled);
         assert!(receipt.authorized);
+    }
+
+    #[test]
+    fn pet_autonomy_policy_maps_frequency_monotonically() {
+        let policy = |frequency| ProfilePolicy {
+            mode: ProfileMode::Companion,
+            proactive_frequency: Some(frequency),
+            ..ProfilePolicy::standard()
+        };
+        let frequencies = [1, 20, 21, 40, 41, 60, 61, 80, 81, 100];
+        let mapped = frequencies.map(|frequency| pet_autonomy_policy(&policy(frequency)));
+        assert!(mapped.iter().all(|item| item.enabled));
+        assert!(
+            mapped
+                .windows(2)
+                .all(|pair| pair[0].idle_delay_ms >= pair[1].idle_delay_ms)
+        );
+        assert!(
+            mapped
+                .windows(2)
+                .all(|pair| pair[0].cooldown_ms >= pair[1].cooldown_ms)
+        );
+    }
+
+    #[test]
+    fn pet_autonomy_policy_respects_quiet_modes_without_disabling_offline() {
+        let policy = |mode, frequency| ProfilePolicy {
+            mode,
+            proactive_frequency: Some(frequency),
+            ..ProfilePolicy::standard()
+        };
+        assert!(!pet_autonomy_policy(&policy(ProfileMode::Companion, 0)).enabled);
+        assert!(pet_autonomy_policy(&policy(ProfileMode::Focus, 50)).focus);
+        assert!(pet_autonomy_policy(&policy(ProfileMode::Presentation, 50)).quiet);
+        let offline = pet_autonomy_policy(&policy(ProfileMode::Offline, 50));
+        assert!(offline.enabled);
+        assert!(!offline.quiet);
+        assert!(!offline.focus);
     }
 }

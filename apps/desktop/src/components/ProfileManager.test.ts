@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizedProfileName } from "./ProfileManager";
+import { normalizedProfileName, proactiveFrequencyLabel } from "./ProfileManager";
 
 describe("normalizedProfileName", () => {
   it("trims valid names at the UI boundary", () => {
@@ -9,5 +9,12 @@ describe("normalizedProfileName", () => {
   it("rejects empty and oversized names", () => {
     expect(normalizedProfileName("   ")).toBeNull();
     expect(normalizedProfileName("a".repeat(65))).toBeNull();
+  });
+});
+
+describe("proactiveFrequencyLabel", () => {
+  it("explains that zero disables autonomy", () => {
+    expect(proactiveFrequencyLabel(0)).toBe("关闭自主互动");
+    expect(proactiveFrequencyLabel(25)).toBe("主动频率 25%");
   });
 });
