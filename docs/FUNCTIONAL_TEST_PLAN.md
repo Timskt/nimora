@@ -308,6 +308,7 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-077 | Auto Mode 重启安全 | 持久 Running Session 在宿主重启后转为 `paused/restarted`，不得自动调用 Provider、Tool 或复用旧批准 | P0 |
 | AGT-078 | Auto Mode CLI 控制面 | `goal auto start|status|pause|resume|cancel` 使用显式数据库和有界 JSON；跨进程保持状态，绑定变化时 stdout 为空且 stderr 为稳定 JSON 错误 | P0 |
 | AGT-079 | Auto Mode 整轮工具预检 | Provider Turn 的全部 Tool 在首个 Backend 调用前完成 allowlist、数据、风险、副作用和预算预检；任一调用需确认时整轮零 Tool 副作用，全部安全只读时才按原顺序执行并生成严格关联 continuation | P0 |
+| AGT-080 | Auto Mode Checkpoint CAS | Checkpoint 只保存有界 Task、Provider continuation 和 Goal/Plan/Workspace/Policy 绑定，不含 Approval 或宿主对象；SQLite 每 Session 仅保留最新序号，跳号、陈旧替换、未知版本和索引/Payload 不一致均 fail-closed | P0 |
 | AGT-030 | Gateway 固定映射 | Agent 写工具无批准时不调用 Backend；批准后只映射到固定安全命令，并携带 Task、Trace 与 Invocation 幂等键 | P0 |
 | AGT-031 | Agent Gateway 关联隔离 | Gateway Policy 的 Task 或 Trace 与 Invocation 不一致、命令不在 allowlist、Agent 请求程序私有存储时均在 Backend 前拒绝 | P0 |
 | AGT-032 | 桌面离线工作台 | 桌面展示同一生产 Tool Catalog、风险与确认要求；确定性 Provider 在无网络和无凭据时回显任务、完成状态、Token 与零费用 | P0 |

@@ -12,11 +12,11 @@ Agent 能力包括对话、计划、工具调用、任务暂停/继续/取消、
 
 ### 1.1 Codex 与 Claude Code 级交互基线
 
-Nimora 借鉴 Coding Agent 的优秀交互，但不复制其宿主权限模型。必须提供：持久 Goal、显式 Plan、Auto Mode、Checkpoint/Resume、工作区上下文压缩、工具调用回执、可审计计划变更、后台任务、多 Agent 编排和机器可读 CLI。Goal 表示跨会话最终目标，不等同于单次 Prompt；Plan 是可修改的执行视图，不得被当作完成证明；Checkpoint 保存任务、预算、批准、工具结果摘要和资源版本，不保存原生句柄或可重放的批准证明。
+Nimora 借鉴 Coding Agent 的优秀交互，但不复制其宿主权限模型。必须提供：持久 Goal、显式 Plan、Auto Mode、Checkpoint/Resume、工作区上下文压缩、工具调用回执、可审计计划变更、后台任务、多 Agent 编排和机器可读 CLI。Goal 表示跨会话最终目标，不等同于单次 Prompt；Plan 是可修改的执行视图，不得被当作完成证明；Checkpoint 保存任务、预算、Provider continuation、工具结果摘要和资源版本，不保存 Approval、原生句柄或可重放的批准证明。
 
 Auto Mode 不是“跳过确认”。它只允许 Agent 在 Goal、调用方 Capability、Tool allowlist、数据策略、费用、墙钟、步骤和并发预算的交集内持续推进。Safe 只读步骤可自动运行；写入、外部副作用、数据出境、凭据访问、安装执行代码和 Medium 以上风险仍按策略逐项确认或绑定已批准不可变计划。预算耗尽、目标冲突、上下文不确定、工作区版本变化、Provider 降级或不可补偿副作用必须暂停并给出结构化原因。
 
-当前实现已具备任务状态机、Provider/Tool 单步、参数绑定批准、预算、取消、历史、CLI JSON 契约和受控模块调用基础。`agent-runtime` 已实现独立 Goal/Plan 领域契约：Goal 生命周期与可修订 Plan 分离，Plan 修订保持单调，完成状态要求当前 Plan 每一步均有证据；SQLite 使用 Goal 当前状态表与不可变 Plan 修订表事务持久化，并拒绝陈旧写入和索引元数据/Payload 不一致。CLI 已提供 `goal create|list|show`、`goal plan replace` 与 `goal status set` 的稳定 JSON 接口，可跨进程恢复。Auto Mode 已实现有界 Policy、Goal/Plan/Workspace 精确绑定、逐步准入决策、预算累积、结构化暂停原因、SQLite 乐观并发仓储、重启强制暂停，以及 `goal auto start|status|pause|resume|cancel` 机器可读控制面。宿主无关的 `AutoModeTurnSupervisor` 已接入现有 `AgentCoordinator`：每轮先准入 Provider 步骤，再对整批 Tool 做零副作用预检；只有全部调用均为获准安全只读时，才通过原 Tool Registry 与 Backend 执行并生成严格关联 continuation。桌面 Capability Gateway 宿主循环、持久 Checkpoint/Resume、上下文压缩、多 Agent 调度、桌面 Goal UI 与完整终端交互仍是明确实施缺口，不得以单轮 Supervisor、普通 Agent Task 或 Automation Run 冒充完成。
+当前实现已具备任务状态机、Provider/Tool 单步、参数绑定批准、预算、取消、历史、CLI JSON 契约和受控模块调用基础。`agent-runtime` 已实现独立 Goal/Plan 领域契约：Goal 生命周期与可修订 Plan 分离，Plan 修订保持单调，完成状态要求当前 Plan 每一步均有证据；SQLite 使用 Goal 当前状态表与不可变 Plan 修订表事务持久化，并拒绝陈旧写入和索引元数据/Payload 不一致。CLI 已提供 `goal create|list|show`、`goal plan replace` 与 `goal status set` 的稳定 JSON 接口，可跨进程恢复。Auto Mode 已实现有界 Policy、Goal/Plan/Workspace 精确绑定、逐步准入决策、预算累积、结构化暂停原因、SQLite 乐观并发仓储、重启强制暂停，以及 `goal auto start|status|pause|resume|cancel` 机器可读控制面。宿主无关的 `AutoModeTurnSupervisor` 已接入现有 `AgentCoordinator`：每轮先准入 Provider 步骤，再对整批 Tool 做零副作用预检；只有全部调用均为获准安全只读时，才通过原 Tool Registry 与 Backend 执行并生成严格关联 continuation。版本化 `AutoModeCheckpoint` 与 SQLite CAS 仓储已实现有界 Provider continuation、Task/Goal/Plan/Workspace/Policy 精确绑定、序号单调和索引元数据复验，不保存批准或宿主对象。桌面 Capability Gateway 持久循环、Checkpoint 恢复应用服务、上下文压缩、多 Agent 调度、桌面 Goal UI 与完整终端交互仍是明确实施缺口，不得以单轮 Supervisor、普通 Agent Task 或 Automation Run 冒充完成。
 
 Goal CLI 的所有内容输入均使用 256 KiB 有界 JSON 文件或 stdin；Goal 标题、目标、步骤、证据数量与单项字节数还受领域硬上限约束。Plan 替换创建新修订而不覆盖历史修订；`completed` 不是任意可写字段，只有当前修订非空且所有步骤为 `completed` 并携带非空有界证据时才允许进入。暂停、恢复、取消和完成均由领域状态机与仓储二次复核，CLI 不能直接修改数据库 Payload 绕过门禁。
 
@@ -29,7 +29,7 @@ Nimora 不以复刻某个 CLI 为目标，而是吸收 Codex、Claude Code 等 C
 | Goal / Plan | Goal 跨会话持久化；Plan 独立修订；完成需要逐步证据 | 核心、SQLite 与机器可读 CLI 已实现 | 桌面 Goal 工作台、交互式 Plan diff、证据查看与回退 |
 | Auto Mode | 在 Tool、Capability、风险、数据、费用、时间、步骤和并发预算交集内自动推进 | Supervisor 领域、SQLite 会话、CLI 控制面及安全单轮 Provider/Tool 协调已实现 | 桌面 Gateway 持久循环、桌面控制与真实执行端到端验证 |
 | 权限模式 | 支持建议、只读、受控执行等主动性；批准绑定具体参数，不提供全局永久绕过 | Task/Tool 准入和一次性批准已实现 | 面向用户的模式预设、会话权限摘要、计划级不可变批准 |
-| Checkpoint / Resume | 保存 Goal、Plan 修订、预算、工具摘要、资源版本和暂停原因；批准不可重放 | 未实现 | 原子 Checkpoint、兼容校验、重启恢复、损坏恢复和版本漂移检测 |
+| Checkpoint / Resume | 保存 Goal、Plan 修订、Task 预算、Provider continuation、工具摘要和资源版本；批准不可重放 | 版本化领域对象与 SQLite 单调序号 CAS 仓储已实现 | 桌面原子轮次提交、恢复应用服务、损坏处置和版本漂移 UI |
 | 上下文压缩 | 压缩时保留目标、约束、待办、证据与来源；不提升不可信内容权限 | 规格与测试项已定义 | 可追溯压缩器、Token 水位策略、压缩前后一致性验证 |
 | 工具执行 | Schema 化 Tool Registry、参数风险复核、Capability Gateway、结构化回执 | 已形成生产基础 | 更完整工具覆盖、流式进度、可重试/可补偿状态展示 |
 | 会话与历史 | 任务状态、取消、脱敏历史、跨进程 Goal 恢复 | 部分实现 | Session 分支、命名、搜索、导出、恢复入口和保留策略 UI |

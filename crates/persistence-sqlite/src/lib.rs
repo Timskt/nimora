@@ -1,6 +1,7 @@
 //! `SQLite` persistence adapters for the `Nimora` runtime.
 
 mod agent_goal_store;
+mod auto_mode_checkpoint_store;
 mod auto_mode_store;
 mod automation_agent_journal;
 mod automation_journal;
@@ -9,6 +10,7 @@ mod skill_approval_journal;
 mod skill_execution_history;
 
 pub use agent_goal_store::{AgentGoalSnapshot, SqliteAgentGoalRepository};
+pub use auto_mode_checkpoint_store::SqliteAutoModeCheckpointRepository;
 pub use auto_mode_store::SqliteAutoModeRepository;
 pub use automation_agent_journal::{
     AutomationAgentJournalEntry, AutomationAgentJournalStatus, SqliteAutomationAgentJournal,
@@ -1175,7 +1177,19 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
         CREATE INDEX IF NOT EXISTS auto_mode_session_goal_idx
             ON auto_mode_session(goal_id, updated_at_ms DESC, session_id DESC);
         CREATE UNIQUE INDEX IF NOT EXISTS auto_mode_one_running_per_goal_idx
-            ON auto_mode_session(goal_id) WHERE status = 'running';",
+            ON auto_mode_session(goal_id) WHERE status = 'running';
+        CREATE TABLE IF NOT EXISTS auto_mode_checkpoint (
+            session_id TEXT PRIMARY KEY,
+            goal_id TEXT NOT NULL,
+            plan_revision INTEGER NOT NULL CHECK (plan_revision > 0),
+            sequence INTEGER NOT NULL CHECK (sequence > 0),
+            task_id TEXT NOT NULL,
+            updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+            schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS auto_mode_checkpoint_goal_idx
+            ON auto_mode_checkpoint(goal_id, updated_at_ms DESC, session_id DESC);",
     )?;
     Ok(())
 }
@@ -1411,6 +1425,10 @@ pub enum SqlitePersistenceError {
     AutoModeSessionNotFound,
     #[error("Auto Mode session was changed by another writer")]
     AutoModeSessionConflict,
+    #[error("Auto Mode checkpoint record or request is invalid")]
+    InvalidAutoModeCheckpoint,
+    #[error("Auto Mode checkpoint was changed by another writer")]
+    AutoModeCheckpointConflict,
     #[error("Automation journal record or state transition is invalid")]
     InvalidAutomationJournal,
     #[error("Automation Agent journal record or state transition is invalid")]
@@ -1437,6 +1455,8 @@ pub enum SqlitePersistenceError {
     UnsupportedAgentGoalVersion(u32),
     #[error("Auto Mode session version {0} is unsupported")]
     UnsupportedAutoModeSessionVersion(u32),
+    #[error("Auto Mode checkpoint version {0} is unsupported")]
+    UnsupportedAutoModeCheckpointVersion(u32),
     #[error("outbox lease is not owned by this consumer")]
     OutboxLeaseNotOwned,
     #[error("backup or restore request is invalid")]

@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 mod auto_execution;
 mod auto_mode;
+mod checkpoint;
 mod coordinator;
 mod deterministic;
 mod goal;
@@ -19,6 +20,7 @@ pub use auto_mode::{
     AutoModeError, AutoModePauseReason, AutoModePolicy, AutoModeSession, AutoModeStatus,
     AutoModeStepDecision, AutoModeStepRequest, AutoModeUsage,
 };
+pub use checkpoint::{AutoModeCheckpoint, AutoModeCheckpointError};
 pub use coordinator::{
     AgentCoordinator, CoordinatorError, PlannedToolCall, ProviderStepInput, ProviderStepOutcome,
     ProviderToolTurn, ToolStepOutcome,
@@ -164,6 +166,31 @@ impl AgentTask {
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
         })
+    }
+
+    /// Validates task metadata restored across a persistence or process boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid identities, budgets, usage, specs, or timestamps.
+    pub fn validate(&self) -> Result<(), AgentRuntimeError> {
+        if self.spec != "nimora.agent-task/1"
+            || !valid_principal(&self.requester)
+            || !valid_principal(&self.provider_id)
+            || self.updated_at_ms < self.created_at_ms
+        {
+            return Err(AgentRuntimeError::InvalidTaskIdentity);
+        }
+        self.budget.validate()?;
+        if self.usage.steps > self.budget.max_steps
+            || self.usage.tool_calls > self.budget.max_tool_calls
+            || self.usage.input_tokens > self.budget.max_input_tokens
+            || self.usage.output_tokens > self.budget.max_output_tokens
+            || self.usage.cost_microunits > self.budget.max_cost_microunits
+        {
+            return Err(AgentRuntimeError::TaskBudgetExhausted);
+        }
+        Ok(())
     }
 
     /// Transitions the task into an active lifecycle state.
