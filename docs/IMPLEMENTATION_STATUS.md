@@ -337,3 +337,12 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - 已完成：控制中心关系卡展示本地化纪念标签和可访问空态，Browser Preview 提供三项代表性收藏。
 - 已验证：Runtime Core 38、Runtime App 23、SQLite 82、Schemas 19、Frontend 63 项聚焦测试与生产构建通过。
 - 待验收：Chrome 扩展返回跨会话旧 Tab，本次未取得可信截图；`UI-024` 保留为真机视觉门禁，不将源码结构替代视觉证据。
+
+## 2026-07-19 离线随身背包与可使用道具
+
+- 已完成：Pet 领域新增排序去重、数量有界的版本化背包；新建与旧快照迁移统一获得三种道具各 3 个的一次性 Starter Pack，已有空背包不会重发。
+- 已完成：莓果、星星球和泡泡皂拥有独立有界效果、5 秒冷却、Drag 拒绝、耗尽删除和稳定错误语义；使用不依赖 AI、网络或控制中心。
+- 已完成：`pet.inventory.use` Command、`pet.inventory.used` Event、Snapshot 与库存扣减共用 Repository 原子边界，保存失败零副作用。
+- 已完成：Tauri Command、Typed IPC、Browser Preview、控制中心背包卡片、数量/效果/空态及 Recovery 禁用态接通；原“快速开始”伪按钮已移除。
+- 约束：未来奖励、Creator 包和商店只能授予，不能回收或绕过本地所有权；AI、Program 与 Skill 不获得库存写权限。
+- 待真机验收：原生窗口内点击、键盘焦点、窄宽度、缩放、高对比度与跨平台视觉截图；浏览器扩展会话故障时不得误报完成。

@@ -70,6 +70,38 @@ pub enum PetKeepsake {
     HundredMoments,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PetItemId {
+    BerryBite,
+    StarBall,
+    BubbleSoap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PetInventoryStack {
+    pub item_id: PetItemId,
+    pub quantity: u16,
+}
+
+fn starter_inventory() -> Vec<PetInventoryStack> {
+    vec![
+        PetInventoryStack {
+            item_id: PetItemId::BerryBite,
+            quantity: 3,
+        },
+        PetInventoryStack {
+            item_id: PetItemId::StarBall,
+            quantity: 3,
+        },
+        PetInventoryStack {
+            item_id: PetItemId::BubbleSoap,
+            quantity: 3,
+        },
+    ]
+}
+
 impl PetKeepsake {
     pub const ALL: [(Self, u64); 4] = [
         (Self::FirstHello, 1),
@@ -199,10 +231,14 @@ pub struct Pet {
     pub bond_points: u64,
     #[serde(default)]
     pub keepsakes: Vec<PetKeepsake>,
+    #[serde(default = "starter_inventory")]
+    pub inventory: Vec<PetInventoryStack>,
     #[serde(default)]
     pub last_vitals_update_ms: u64,
     #[serde(default)]
     pub last_care_ms: u64,
+    #[serde(default)]
+    pub last_item_use_ms: u64,
     #[serde(default)]
     pub autonomy: PetAutonomyState,
 }
@@ -259,8 +295,10 @@ impl Pet {
             affinity: 0,
             bond_points: 0,
             keepsakes: Vec::new(),
+            inventory: starter_inventory(),
             last_vitals_update_ms: 0,
             last_care_ms: 0,
+            last_item_use_ms: 0,
             autonomy: PetAutonomyState::default(),
         })
     }
@@ -412,6 +450,17 @@ impl Pet {
         if self.keepsakes.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err(PetError::InvalidCollection);
         }
+        if self
+            .inventory
+            .iter()
+            .any(|stack| stack.quantity == 0 || stack.quantity > 999)
+            || self
+                .inventory
+                .windows(2)
+                .any(|pair| pair[0].item_id >= pair[1].item_id)
+        {
+            return Err(PetError::InvalidInventory);
+        }
         Ok(())
     }
 
@@ -539,6 +588,61 @@ impl Pet {
         Ok(())
     }
 
+    /// Consumes one owned item and applies its bounded local effect.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error while dragged, during cooldown, or when the item is not owned.
+    pub fn use_item(
+        &mut self,
+        item_id: PetItemId,
+        now_ms: u64,
+        cooldown_ms: u64,
+    ) -> Result<(), PetError> {
+        if self.state == PetState::Dragged {
+            return Err(PetError::InvalidTransition);
+        }
+        if self.last_item_use_ms != 0 && now_ms.saturating_sub(self.last_item_use_ms) < cooldown_ms
+        {
+            return Err(PetError::ItemCooldown);
+        }
+        let index = self
+            .inventory
+            .binary_search_by_key(&item_id, |stack| stack.item_id)
+            .map_err(|_| PetError::ItemUnavailable)?;
+        match item_id {
+            PetItemId::BerryBite => {
+                self.energy = self.energy.saturating_add(30).min(100);
+                self.satiety = self.satiety.saturating_add(35).min(100);
+                self.mood = self.mood.saturating_add(3).min(100);
+                self.add_bond_points(1);
+                self.affinity = self.affinity.saturating_add(1).min(100);
+            }
+            PetItemId::StarBall => {
+                self.energy = self.energy.saturating_sub(3);
+                self.satiety = self.satiety.saturating_sub(2);
+                self.cleanliness = self.cleanliness.saturating_sub(2);
+                self.mood = self.mood.saturating_add(18).min(100);
+                self.add_bond_points(3);
+                self.affinity = self.affinity.saturating_add(3).min(100);
+            }
+            PetItemId::BubbleSoap => {
+                self.cleanliness = self.cleanliness.saturating_add(45).min(100);
+                self.mood = self.mood.saturating_add(8).min(100);
+                self.add_bond_points(3);
+                self.affinity = self.affinity.saturating_add(3).min(100);
+            }
+        }
+        self.inventory[index].quantity -= 1;
+        if self.inventory[index].quantity == 0 {
+            self.inventory.remove(index);
+        }
+        self.last_item_use_ms = now_ms;
+        self.state = PetState::Interacting;
+        self.emotion = Emotion::Happy;
+        Ok(())
+    }
+
     pub fn recover_transient_state(&mut self) -> bool {
         if matches!(
             self.state,
@@ -661,6 +765,12 @@ pub enum PetError {
     InvalidTransition,
     #[error("pet keepsake collection must be sorted and unique")]
     InvalidCollection,
+    #[error("pet inventory must be sorted, unique, and contain quantities between 1 and 999")]
+    InvalidInventory,
+    #[error("pet item is not available")]
+    ItemUnavailable,
+    #[error("pet item use is cooling down")]
+    ItemCooldown,
 }
 
 #[cfg(test)]
@@ -904,6 +1014,119 @@ mod tests {
         object.remove("cleanliness");
         let restored: Pet = serde_json::from_value(value).expect("legacy pet");
         assert_eq!((restored.satiety, restored.cleanliness), (100, 100));
+    }
+
+    #[test]
+    fn inventory_starts_with_and_migrates_to_the_local_starter_pack() {
+        let pet = Pet::new("Aster").expect("valid pet");
+        assert_eq!(pet.inventory, starter_inventory());
+
+        let mut value = serde_json::to_value(pet).expect("serialize pet");
+        let object = value.as_object_mut().expect("pet object");
+        object.remove("inventory");
+        object.remove("lastItemUseMs");
+        let restored: Pet = serde_json::from_value(value).expect("legacy pet");
+        assert_eq!(restored.inventory, starter_inventory());
+        assert_eq!(restored.last_item_use_ms, 0);
+    }
+
+    #[test]
+    fn owned_items_apply_distinct_bounded_effects() {
+        let mut berry = Pet::new("Aster").expect("valid pet");
+        berry.energy = 60;
+        berry.satiety = 50;
+        berry
+            .use_item(PetItemId::BerryBite, 1_000, 0)
+            .expect("berry");
+        assert_eq!(
+            (
+                berry.energy,
+                berry.satiety,
+                berry.mood,
+                berry.affinity,
+                berry.bond_points
+            ),
+            (90, 85, 73, 1, 1)
+        );
+        assert_eq!(berry.inventory[0].quantity, 2);
+
+        let mut ball = Pet::new("Aster").expect("valid pet");
+        ball.use_item(PetItemId::StarBall, 1_000, 0).expect("ball");
+        assert_eq!(
+            (
+                ball.energy,
+                ball.satiety,
+                ball.cleanliness,
+                ball.mood,
+                ball.affinity,
+                ball.bond_points
+            ),
+            (97, 98, 98, 88, 3, 3)
+        );
+
+        let mut soap = Pet::new("Aster").expect("valid pet");
+        soap.cleanliness = 40;
+        soap.use_item(PetItemId::BubbleSoap, 1_000, 0)
+            .expect("soap");
+        assert_eq!(
+            (soap.cleanliness, soap.mood, soap.affinity, soap.bond_points),
+            (85, 78, 3, 3)
+        );
+    }
+
+    #[test]
+    fn item_exhaustion_cooldown_and_drag_rejections_preserve_inventory() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.inventory[0].quantity = 1;
+        pet.use_item(PetItemId::BerryBite, 1_000, 5_000)
+            .expect("first use");
+        assert!(
+            !pet.inventory
+                .iter()
+                .any(|stack| stack.item_id == PetItemId::BerryBite)
+        );
+        let inventory = pet.inventory.clone();
+        assert_eq!(
+            pet.use_item(PetItemId::StarBall, 2_000, 5_000),
+            Err(PetError::ItemCooldown)
+        );
+        assert_eq!(pet.inventory, inventory);
+        assert_eq!(
+            pet.use_item(PetItemId::BerryBite, 7_000, 5_000),
+            Err(PetError::ItemUnavailable)
+        );
+
+        pet.begin_drag().expect("drag");
+        let inventory = pet.inventory.clone();
+        assert_eq!(
+            pet.use_item(PetItemId::StarBall, 8_000, 0),
+            Err(PetError::InvalidTransition)
+        );
+        assert_eq!(pet.inventory, inventory);
+    }
+
+    #[test]
+    fn inventory_validation_rejects_invalid_quantity_order_and_duplicates() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.inventory[0].quantity = 0;
+        assert_eq!(pet.validate(), Err(PetError::InvalidInventory));
+        pet.inventory[0].quantity = 1_000;
+        assert_eq!(pet.validate(), Err(PetError::InvalidInventory));
+
+        pet.inventory = starter_inventory();
+        pet.inventory.swap(0, 1);
+        assert_eq!(pet.validate(), Err(PetError::InvalidInventory));
+        pet.inventory = vec![
+            PetInventoryStack {
+                item_id: PetItemId::BerryBite,
+                quantity: 1,
+            },
+            PetInventoryStack {
+                item_id: PetItemId::BerryBite,
+                quantity: 2,
+            },
+        ];
+        assert_eq!(pet.validate(), Err(PetError::InvalidInventory));
     }
 
     #[test]

@@ -17,6 +17,8 @@ export const petActions = ["idle", "walk", "sleep", "work", "celebrate"] as cons
 export type PetAction = (typeof petActions)[number];
 export const petCareActions = ["feed", "play", "groom"] as const;
 export type PetCareAction = (typeof petCareActions)[number];
+export const petItemIds = ["berry_bite", "star_ball", "bubble_soap"] as const;
+export type PetItemId = (typeof petItemIds)[number];
 export type CommandRisk = "safe" | "low" | "medium" | "high" | "critical";
 
 export interface DesktopSnapshot {
@@ -1017,6 +1019,7 @@ export interface DesktopApi {
   movePet(x: number, y: number): Promise<NimoraCommand | null>;
   playAction(action: PetAction): Promise<NimoraCommand | null>;
   carePet(action: PetCareAction): Promise<NimoraCommand | null>;
+  usePetItem(itemId: PetItemId): Promise<NimoraCommand | null>;
   clickPet(x: number, y: number, button: PointerButton): Promise<NimoraCommand | null>;
   strokePet(distancePx: number, durationMs: number, reversals: number): Promise<NimoraCommand | null>;
   dragPet(): Promise<NimoraCommand | null>;
@@ -1074,6 +1077,11 @@ const previewSnapshot: DesktopSnapshot = {
     affinity: 34,
     bondPoints: 84,
     keepsakes: ["first_hello", "caring_hands", "trusted_companion"],
+    inventory: [
+      { itemId: "berry_bite", quantity: 3 },
+      { itemId: "star_ball", quantity: 2 },
+      { itemId: "bubble_soap", quantity: 3 },
+    ],
   },
   windowPolicy: { alwaysOnTop: true, clickThrough: false },
   safety: { mode: "normal", reason: null },
@@ -1419,6 +1427,25 @@ export function createDesktopApi(
         previewSnapshot.pet.bondPoints += gains.affinity;
         return null;
       },
+      async usePetItem(itemId) {
+        const index = previewSnapshot.pet.inventory.findIndex((stack) => stack.itemId === itemId);
+        const stack = previewSnapshot.pet.inventory[index];
+        if (!stack) throw new Error("item unavailable");
+        const effects = itemId === "berry_bite"
+          ? { energy: 30, mood: 3, satiety: 35, cleanliness: 0, affinity: 1 }
+          : itemId === "star_ball"
+            ? { energy: -3, mood: 18, satiety: -2, cleanliness: -2, affinity: 3 }
+            : { energy: 0, mood: 8, satiety: 0, cleanliness: 45, affinity: 3 };
+        previewSnapshot.pet.energy = Math.max(0, Math.min(100, previewSnapshot.pet.energy + effects.energy));
+        previewSnapshot.pet.mood = Math.min(100, previewSnapshot.pet.mood + effects.mood);
+        previewSnapshot.pet.satiety = Math.max(0, Math.min(100, previewSnapshot.pet.satiety + effects.satiety));
+        previewSnapshot.pet.cleanliness = Math.max(0, Math.min(100, previewSnapshot.pet.cleanliness + effects.cleanliness));
+        previewSnapshot.pet.affinity = Math.min(100, previewSnapshot.pet.affinity + effects.affinity);
+        previewSnapshot.pet.bondPoints += effects.affinity;
+        stack.quantity -= 1;
+        if (stack.quantity === 0) previewSnapshot.pet.inventory.splice(index, 1);
+        return null;
+      },
       async clickPet() {
         previewSnapshot.pet.mood = Math.min(100, previewSnapshot.pet.mood + 2);
         previewSnapshot.pet.affinity = Math.min(100, previewSnapshot.pet.affinity + 1);
@@ -1605,6 +1632,7 @@ export function createDesktopApi(
     movePet: async (x, y) => await invokeCommand("move_pet", { request: { x, y } }) as NimoraCommand,
     playAction: async (action) => await invokeCommand("play_pet_action", { action }) as NimoraCommand,
     carePet: async (action) => await invokeCommand("care_pet", { action }) as NimoraCommand,
+    usePetItem: async (itemId) => await invokeCommand("use_pet_item", { itemId }) as NimoraCommand,
     clickPet: async (x, y, button) => await invokeCommand("click_pet", {
       request: { x, y, button },
     }) as NimoraCommand,

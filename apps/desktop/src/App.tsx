@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { ProfileManager } from "./components/ProfileManager";
 import { LazyWorkspace } from "./components/LazyWorkspace";
 import { petGrowth } from "./components/petGrowth";
-import type { ActiveThemeSnapshot, AssetPreviewAudio, DesktopSnapshot, OutboxSnapshot, PetCareAction, ThemeDescriptor } from "./platform/desktop";
+import type { ActiveThemeSnapshot, AssetPreviewAudio, DesktopSnapshot, OutboxSnapshot, PetCareAction, PetItemId, ThemeDescriptor } from "./platform/desktop";
 import { desktopApi } from "./platform/desktop";
 
 const loadCreatorStudio = () => import("./components/CreatorStudio").then((module) => ({ default: module.CreatorStudio }));
@@ -30,6 +30,16 @@ const keepsakeMetadata = {
 
 export function keepsakePresentation(id: keyof typeof keepsakeMetadata) {
   return keepsakeMetadata[id];
+}
+
+const itemMetadata: Record<PetItemId, { glyph: string; label: string; effect: string }> = {
+  berry_bite: { glyph: "●", label: "莓果小食", effect: "饱腹 +35 · 精力 +30" },
+  star_ball: { glyph: "✦", label: "星星球", effect: "心情 +18 · 陪伴 +3" },
+  bubble_soap: { glyph: "○", label: "泡泡皂", effect: "清洁 +45 · 心情 +8" },
+};
+
+export function itemPresentation(id: PetItemId) {
+  return itemMetadata[id];
 }
 
 async function playVoiceCue(cue: "pet.celebrate" | "pet.work", quiet: boolean): Promise<void> {
@@ -127,6 +137,20 @@ export function App() {
       setNotice(labels[action]);
     } catch {
       setNotice("照料正在冷却，请稍后再试");
+    }
+  }
+
+  async function useItem(itemId: PetItemId) {
+    if (recoveryMode) {
+      setNotice("恢复模式下背包保持只读");
+      return;
+    }
+    try {
+      await desktopApi.usePetItem(itemId);
+      setDesktopSnapshot(await desktopApi.snapshot());
+      setNotice(`已使用${itemPresentation(itemId).label}`);
+    } catch {
+      setNotice("道具不可用或正在冷却，请稍后再试");
     }
   }
 
@@ -293,13 +317,20 @@ export function App() {
           </section>
 
           <section className="quick-card">
-            <p className="card-label">快速开始</p>
-            <h2>让 Aster 帮你做点什么</h2>
-            <div className="quick-grid">
-              <button type="button"><span>◷</span>开始计时</button>
-              <button type="button" onClick={() => void runAction("celebrate")}><span>✦</span>播放动作</button>
-              <button type="button"><span>⌘</span>运行命令</button>
-              <button type="button"><span>＋</span>添加能力</button>
+            <p className="card-label">随身背包</p>
+            <h2>本地拥有，离线也能使用</h2>
+            <div className="inventory-grid" aria-label={`背包中有 ${desktopSnapshot?.pet.inventory.length ?? 0} 种道具`}>
+              {(desktopSnapshot?.pet.inventory ?? []).map((stack) => {
+                const item = itemPresentation(stack.itemId);
+                return (
+                  <button type="button" key={stack.itemId} disabled={recoveryMode} onClick={() => void useItem(stack.itemId)}>
+                    <i aria-hidden="true">{item.glyph}</i>
+                    <span><strong>{item.label}</strong><small>{item.effect}</small></span>
+                    <b aria-label={`剩余 ${stack.quantity} 个`}>×{stack.quantity}</b>
+                  </button>
+                );
+              })}
+              {(desktopSnapshot?.pet.inventory.length ?? 0) === 0 && <p className="inventory-empty">背包空空的。已有收藏不会过期，新的奖励也不会依赖联网。</p>}
             </div>
           </section>
 

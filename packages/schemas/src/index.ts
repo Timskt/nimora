@@ -62,6 +62,25 @@ export const emotionSchema = z.enum([
 
 export const pointerButtonSchema = z.enum(["left", "middle", "right"]);
 export const petKeepsakeSchema = z.enum(["first_hello", "caring_hands", "trusted_companion", "hundred_moments"]);
+export const petItemIdSchema = z.enum(["berry_bite", "star_ball", "bubble_soap"]);
+const starterInventory = [
+  { itemId: "berry_bite" as const, quantity: 3 },
+  { itemId: "star_ball" as const, quantity: 3 },
+  { itemId: "bubble_soap" as const, quantity: 3 },
+];
+const petInventorySchema = z.array(z.object({
+  itemId: petItemIdSchema,
+  quantity: z.number().int().min(1).max(999),
+})).superRefine((inventory, context) => {
+  const order = new Map(petItemIdSchema.options.map((itemId, index) => [itemId, index]));
+  for (let index = 1; index < inventory.length; index += 1) {
+    const previous = inventory[index - 1];
+    const current = inventory[index];
+    if (previous && current && (order.get(previous.itemId) ?? -1) >= (order.get(current.itemId) ?? -1)) {
+      context.addIssue({ code: "custom", message: "inventory must be sorted and unique", path: [index, "itemId"] });
+    }
+  }
+});
 
 export const petSchema = z.object({
   id: z.uuid(),
@@ -76,8 +95,10 @@ export const petSchema = z.object({
   affinity: z.number().int().min(0).max(100),
   bondPoints: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).default(0),
   keepsakes: z.array(petKeepsakeSchema).default([]),
+  inventory: petInventorySchema.default(starterInventory),
   lastVitalsUpdateMs: z.number().int().nonnegative().optional(),
   lastCareMs: z.number().int().nonnegative().optional(),
+  lastItemUseMs: z.number().int().nonnegative().optional(),
   autonomy: z.object({
     sequence: z.number().int().nonnegative(),
     nextDueMs: z.number().int().nonnegative(),

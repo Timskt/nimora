@@ -113,6 +113,36 @@ describe("petSchema", () => {
     });
     expect(result.satiety).toBe(100);
     expect(result.cleanliness).toBe(100);
+    expect(result.inventory).toEqual([
+      { itemId: "berry_bite", quantity: 3 },
+      { itemId: "star_ball", quantity: 3 },
+      { itemId: "bubble_soap", quantity: 3 },
+    ]);
+  });
+
+  it("accepts only bounded, sorted, unique known inventory stacks", () => {
+    const pet = {
+      id: "019bf2c6-4d40-7000-8000-000000000001",
+      name: "Aster",
+      state: "idle",
+      emotion: "happy",
+      position: { x: 0, y: 0 },
+      energy: 80,
+      mood: 70,
+      affinity: 0,
+    };
+    expect(petSchema.safeParse({ ...pet, inventory: [{ itemId: "berry_bite", quantity: 1 }] }).success).toBe(true);
+    expect(petSchema.safeParse({ ...pet, inventory: [{ itemId: "berry_bite", quantity: 0 }] }).success).toBe(false);
+    expect(petSchema.safeParse({ ...pet, inventory: [{ itemId: "berry_bite", quantity: 1_000 }] }).success).toBe(false);
+    expect(petSchema.safeParse({ ...pet, inventory: [{ itemId: "unknown", quantity: 1 }] }).success).toBe(false);
+    expect(petSchema.safeParse({ ...pet, inventory: [
+      { itemId: "star_ball", quantity: 1 },
+      { itemId: "berry_bite", quantity: 1 },
+    ] }).success).toBe(false);
+    expect(petSchema.safeParse({ ...pet, inventory: [
+      { itemId: "berry_bite", quantity: 1 },
+      { itemId: "berry_bite", quantity: 2 },
+    ] }).success).toBe(false);
   });
 });
 

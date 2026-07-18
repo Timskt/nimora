@@ -2,6 +2,23 @@ import { describe, expect, it, vi } from "vitest";
 import { createDesktopApi, type UserProgramExecutionReceipt } from "./desktop";
 
 describe("desktop platform adapter", () => {
+  it("consumes owned items in the offline browser preview", async () => {
+    const api = createDesktopApi(false);
+    const before = await api.snapshot();
+    const quantity = before.pet.inventory.find((stack) => stack.itemId === "berry_bite")?.quantity;
+    expect(quantity).toBeGreaterThan(0);
+    await api.usePetItem("berry_bite");
+    const after = await api.snapshot();
+    expect(after.pet.inventory.find((stack) => stack.itemId === "berry_bite")?.quantity).toBe((quantity ?? 0) - 1);
+  });
+
+  it("maps item use to the typed native command contract", async () => {
+    const invoke = vi.fn(async () => null);
+    const api = createDesktopApi(true, invoke);
+    await api.usePetItem("berry_bite");
+    expect(invoke).toHaveBeenCalledWith("use_pet_item", { itemId: "berry_bite" });
+  });
+
   it("keeps browser preview fully offline", async () => {
     const api = createDesktopApi(false);
     expect(api.native).toBe(false);

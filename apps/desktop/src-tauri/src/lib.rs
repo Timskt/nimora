@@ -124,8 +124,8 @@ use nimora_runtime_app::{
 };
 use nimora_runtime_core::{
     CareNeedsMode, Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction,
-    PetAutonomyPolicy, PetCareAction, PetVitalsPolicy, PointerButton, Position, Profile, ProfileId,
-    ProfileMode, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
+    PetAutonomyPolicy, PetCareAction, PetItemId, PetVitalsPolicy, PointerButton, Position, Profile,
+    ProfileId, ProfileMode, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
 };
 use nimora_secret_store::{
     MemorySecretStore, SecretPresence, SecretReference, SecretStore, SecretStoreError,
@@ -187,6 +187,7 @@ const PET_VITALS_CHANGED_EVENT: &str = "nimora://pet-vitals-changed";
 const PET_VITALS_INTERVAL_MS: u64 = 10 * 60 * 1_000;
 const PET_VITALS_MAX_OFFLINE_INTERVALS: u64 = 24 * 60 / 10;
 const PET_CARE_COOLDOWN_MS: u64 = 30_000;
+const PET_ITEM_COOLDOWN_MS: u64 = 5_000;
 const ASSET_PROTOCOL: &str = "nimora-asset";
 const DETERMINISTIC_PROVIDER_ID: &str = "provider:deterministic-local";
 const DEFAULT_AGENT_MODEL: &str = "model:echo-v1";
@@ -6750,6 +6751,27 @@ fn care_pet_inner(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn use_pet_item(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    item_id: PetItemId,
+) -> Result<Command, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let command = state
+        .runtime
+        .use_pet_item(item_id, current_time_ms()?, PET_ITEM_COOLDOWN_MS)?;
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(CLICK_FEEDBACK_DURATION);
+        let _ = app.state::<DesktopState>().runtime.finish_interaction();
+    });
+    Ok(command)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn click_pet(
     app: AppHandle,
     state: State<'_, DesktopState>,
@@ -10702,6 +10724,7 @@ pub fn run() {
             move_pet,
             play_pet_action,
             care_pet,
+            use_pet_item,
             click_pet,
             stroke_pet,
             begin_pet_drag,

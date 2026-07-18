@@ -2,8 +2,9 @@
 
 use nimora_runtime_core::{
     Command, CommandError, CommandRisk, Event, EventError, EventSource, Pet, PetAction,
-    PetAutonomyDecision, PetAutonomyPolicy, PetCareAction, PetError, PointerButton, Position,
-    Profile, ProfileError, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
+    PetAutonomyDecision, PetAutonomyPolicy, PetCareAction, PetError, PetItemId, PointerButton,
+    Position, Profile, ProfileError, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason,
+    SafetySnapshot,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -610,6 +611,38 @@ impl<R: PetRepository> RuntimeService<R> {
                         "bondPoints": after.effective_bond_points(),
                         "relationshipLevel": after.relationship_level(),
                     },
+                })
+            },
+        )
+    }
+
+    /// Consumes one durable inventory item and publishes the resulting state atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the item is unavailable, cooling down, or persistence fails.
+    pub fn use_pet_item(
+        &self,
+        item_id: PetItemId,
+        now_ms: u64,
+        cooldown_ms: u64,
+    ) -> Result<Command, RuntimeError> {
+        self.update(
+            |pet| pet.use_item(item_id, now_ms, cooldown_ms),
+            || {
+                Command::new(
+                    "pet.inventory.use",
+                    serde_json::json!({ "itemId": item_id, "nowMs": now_ms }),
+                    CommandRisk::Safe,
+                )
+            },
+            "pet.inventory.used",
+            |before, after| {
+                serde_json::json!({
+                    "itemId": item_id,
+                    "before": { "energy": before.energy, "mood": before.mood, "satiety": before.satiety, "cleanliness": before.cleanliness, "inventory": before.inventory },
+                    "after": { "energy": after.energy, "mood": after.mood, "satiety": after.satiety, "cleanliness": after.cleanliness, "inventory": after.inventory },
+                    "affinity": after.affinity,
                 })
             },
         )
@@ -1301,6 +1334,57 @@ mod tests {
         );
         assert_eq!(snapshot.bond_points, 0);
         assert_eq!(snapshot.last_care_ms, 0);
+        assert!(service.drain_events().expect("events").is_empty());
+    }
+
+    #[test]
+    fn item_use_is_persisted_with_a_correlated_inventory_event() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let command = service
+            .use_pet_item(PetItemId::StarBall, 1_000, 5_000)
+            .expect("use item");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(
+            (snapshot.energy, snapshot.mood, snapshot.affinity),
+            (97, 88, 3)
+        );
+        assert_eq!(snapshot.inventory[1].quantity, 2);
+        assert!(matches!(
+            service.use_pet_item(PetItemId::BubbleSoap, 2_000, 5_000),
+            Err(RuntimeError::Pet(PetError::ItemCooldown))
+        ));
+        let event = service
+            .drain_events()
+            .expect("events")
+            .pop()
+            .expect("event");
+        assert_eq!(command.command_id.to_string(), "pet.inventory.use");
+        assert_eq!(event.event_type, "pet.inventory.used");
+        assert_eq!(event.trace_id, command.trace_id);
+        assert_eq!(event.data["itemId"], "star_ball");
+        assert_eq!(event.data["before"]["inventory"][1]["quantity"], 3);
+        assert_eq!(event.data["after"]["inventory"][1]["quantity"], 2);
+    }
+
+    #[test]
+    fn failed_item_persistence_preserves_inventory_vitals_and_cooldown() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let before = service.snapshot().expect("snapshot");
+        service.repository.fail_save.store(true, Ordering::Relaxed);
+        assert!(
+            service
+                .use_pet_item(PetItemId::BerryBite, 1_000, 5_000)
+                .is_err()
+        );
+        let after = service.snapshot().expect("snapshot");
+        assert_eq!(after.inventory, before.inventory);
+        assert_eq!(
+            (after.energy, after.satiety, after.mood),
+            (before.energy, before.satiety, before.mood)
+        );
+        assert_eq!(after.last_item_use_ms, 0);
         assert!(service.drain_events().expect("events").is_empty());
     }
 
