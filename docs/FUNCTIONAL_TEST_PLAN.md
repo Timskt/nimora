@@ -173,6 +173,8 @@ ID / 标题 / 优先级 / 前置条件
 | EXT-027 | Skill 双向模块调用 | Worker Command 计划只能进入共享 Command Registry、风险批准与 Capability Gateway；Agent Task 计划只能凭激活 requester 进入 Module Adapter | P0 |
 | EXT-028 | Desktop Skill Worker 执行 | `execute_skill` 重新复验 active 包，Worker 请求 Manifest 必须与当前 Activated 租约逐字段一致，未激活、篡改或未声明 activation event 时进程前拒绝 | P0 |
 | EXT-035 | Skill 事件订阅授权 | Manifest 声明任一 `onEvent:*` 必须同时声明 `subscribe-events`；缺失 Capability 在安装验证阶段拒绝，授权精确绑定包含该 Capability 的版本 | P0 |
+| EXT-036 | Skill Runtime Event 自动调度 | Activated Skill 仅订阅 Manifest 中 `onEvent:*` 的精确事件类型；独立 32 项队列、串行 Worker 调度，事件以版本化 JSON 输入传入且不暴露 Event Bus | P0 |
+| EXT-037 | Skill 事件会话生命周期 | 停用、升级、回滚、Host 重建、Safe Mode 或 Worker 故障撤销订阅并取消在途 Worker/Provider；旧线程迟到退出不得删除替代会话 | P0 |
 | EXT-029 | Desktop Skill Agent 回执 | Agent 计划固定使用 `Module + skill:<id> + draft + no-tools`，上下文注入检测、Provider allowlist、Agent History 与用户程序共用生产链路 | P0 |
 | EXT-030 | Skill Command 整批准入 | Worker 计划必须逐项命中精确 `commandAllowlist` 与宿主风险注册；Safe/Low 直接经 Module Gateway 执行，Medium/High 返回完整参数与风险并进入五分钟一次性整批批准；未知、未声明、拒绝、过期或重复批准在任何副作用与 Agent Task 前失败 | P0 |
 | EXT-031 | Skill Command Manifest 授权 | `commandAllowlist` 只接受有界 `safe.*` 标识并要求 `invoke-commands`；升级变更 allowlist 后安装状态回到未授权、停用 | P0 |

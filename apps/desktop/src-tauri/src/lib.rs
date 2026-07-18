@@ -124,6 +124,8 @@ const MAX_PENDING_AGENT_TOOLS: usize = 32;
 const AGENT_TOOL_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
 const MAX_PENDING_SKILL_EXECUTIONS: usize = 32;
 const SKILL_APPROVAL_TTL_MS: u64 = 5 * 60 * 1_000;
+const SKILL_EVENT_QUEUE_CAPACITY: usize = 32;
+const SKILL_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const AUTOMATION_AGENT_REQUESTER: &str = "automation:desktop";
 
 #[derive(Debug)]
@@ -160,6 +162,7 @@ struct DesktopState {
     skill_approval_journal: SqliteSkillApprovalJournal,
     skill_execution_history: SqliteSkillExecutionHistory,
     active_skill_executions: Mutex<HashMap<Uuid, ActiveSkillExecution>>,
+    skill_event_sessions: Mutex<HashMap<String, SkillEventSession>>,
     active_agent_tasks: Mutex<HashMap<Uuid, CancellationFlag>>,
     active_automation_runs: Mutex<HashMap<Uuid, CancellationFlag>>,
     execution_controller: ExecutionController,
@@ -295,6 +298,12 @@ struct ActiveSkillExecution {
     agent_task_id: Option<Uuid>,
 }
 
+#[derive(Debug)]
+struct SkillEventSession {
+    session_id: Uuid,
+    cancellation: ExecutionCancellation,
+}
+
 struct ActiveSkillExecutionGuard<'a> {
     executions: &'a Mutex<HashMap<Uuid, ActiveSkillExecution>>,
     execution_id: Uuid,
@@ -420,6 +429,7 @@ impl DesktopState {
             skill_approval_journal,
             skill_execution_history,
             active_skill_executions: Mutex::new(HashMap::new()),
+            skill_event_sessions: Mutex::new(HashMap::new()),
             active_agent_tasks: Mutex::new(HashMap::new()),
             active_automation_runs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
@@ -490,6 +500,7 @@ impl DesktopState {
             skill_approval_journal: SqliteSkillApprovalJournal::in_memory()?,
             skill_execution_history: SqliteSkillExecutionHistory::in_memory()?,
             active_skill_executions: Mutex::new(HashMap::new()),
+            skill_event_sessions: Mutex::new(HashMap::new()),
             active_agent_tasks: Mutex::new(HashMap::new()),
             active_automation_runs: Mutex::new(HashMap::new()),
             execution_controller: ExecutionController::default(),
@@ -3039,6 +3050,7 @@ fn enter_safe_mode(
         Ok(command) => {
             cancel_all_user_programs(&state)?;
             cancel_all_user_program_event_sessions(&state)?;
+            stop_skill_event_sessions(&state)?;
             cancel_all_pending_agent_tools(&state)?;
             *state
                 .policy_before_safe_mode
@@ -3105,6 +3117,7 @@ fn exit_safe_mode(app: AppHandle, state: State<'_, DesktopState>) -> Result<Comm
                 .lock()
                 .map_err(|_| DesktopError::StatePoisoned)? = None;
             set_current_window_policy(&state, target_policy)?;
+            sync_skill_event_sessions(&state)?;
             app.emit_to(PET_WINDOW_LABEL, CHARACTER_RENDERER_CHANGED_EVENT, ())?;
             Ok(command)
         }
@@ -5246,11 +5259,184 @@ fn restore_skill_host(
 }
 
 fn rebuild_skill_host(state: &DesktopState) -> Result<(), DesktopError> {
+    stop_skill_event_sessions(state)?;
     let rebuilt = restore_skill_host(&state.skill_store, &state.skill_states)?;
     *state
         .skill_host
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)? = rebuilt;
+    start_active_skill_event_sessions(state)?;
+    Ok(())
+}
+
+fn sync_skill_event_sessions(state: &DesktopState) -> Result<(), DesktopError> {
+    stop_skill_event_sessions(state)?;
+    start_active_skill_event_sessions(state)
+}
+
+fn start_active_skill_event_sessions(state: &DesktopState) -> Result<(), DesktopError> {
+    let Some(app) = state.native_app.clone() else {
+        return Ok(());
+    };
+    let subscriptions = {
+        let host = state
+            .skill_host
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?;
+        state
+            .skill_states
+            .list()?
+            .into_iter()
+            .filter_map(|record| {
+                if !record.authorized || !record.enabled {
+                    return None;
+                }
+                let manifest = host.active_manifest(&record.skill_id).ok()?;
+                let event_types = skill_event_types(manifest);
+                (!event_types.is_empty()).then_some((record.skill_id, event_types))
+            })
+            .collect::<Vec<_>>()
+    };
+    for (skill_id, event_types) in subscriptions {
+        start_skill_event_session(state, &app, &skill_id, &event_types)?;
+    }
+    Ok(())
+}
+
+fn skill_event_types(manifest: &SkillManifest) -> BTreeSet<String> {
+    manifest
+        .activation_events
+        .iter()
+        .filter_map(|activation| activation.strip_prefix("onEvent:").map(ToOwned::to_owned))
+        .collect()
+}
+
+fn start_skill_event_session(
+    state: &DesktopState,
+    app: &AppHandle,
+    skill_id: &str,
+    event_types: &BTreeSet<String>,
+) -> Result<(), DesktopError> {
+    let subscription = state
+        .events
+        .subscribe(event_types.clone(), SKILL_EVENT_QUEUE_CAPACITY)?;
+    let cancellation = ExecutionCancellation::default();
+    let session_id = Uuid::now_v7();
+    state
+        .skill_event_sessions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .insert(
+            skill_id.to_owned(),
+            SkillEventSession {
+                session_id,
+                cancellation: cancellation.clone(),
+            },
+        );
+    let app = app.clone();
+    let thread_skill_id = skill_id.to_owned();
+    if let Err(error) = std::thread::Builder::new()
+        .name(format!("nimora-skill-event-{skill_id}"))
+        .spawn(move || {
+            run_skill_event_session(&app, &thread_skill_id, &subscription, &cancellation);
+            finish_skill_event_session(&app.state::<DesktopState>(), &thread_skill_id, session_id);
+        })
+    {
+        state
+            .skill_event_sessions
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?
+            .remove(skill_id);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+fn run_skill_event_session(
+    app: &AppHandle,
+    skill_id: &str,
+    subscription: &RuntimeEventSubscription,
+    cancellation: &ExecutionCancellation,
+) {
+    while !cancellation.is_cancelled() {
+        let Ok(batch) = subscription.pop() else {
+            break;
+        };
+        let Some(event) = batch.events.into_iter().next() else {
+            std::thread::sleep(SKILL_EVENT_POLL_INTERVAL);
+            continue;
+        };
+        if cancellation.is_cancelled() {
+            break;
+        }
+        let activation_event = format!("onEvent:{}", event.event_type);
+        let Ok(input) = serde_json::to_value(event) else {
+            continue;
+        };
+        let state = app.state::<DesktopState>();
+        if execute_skill_inner(
+            app,
+            &state,
+            ExecuteSkillRequest {
+                skill_id: skill_id.to_owned(),
+                activation_event,
+                input,
+            },
+        )
+        .is_err()
+        {
+            break;
+        }
+    }
+}
+
+fn finish_skill_event_session(state: &DesktopState, skill_id: &str, session_id: Uuid) {
+    if let Ok(mut sessions) = state.skill_event_sessions.lock()
+        && sessions
+            .get(skill_id)
+            .is_some_and(|session| session.session_id == session_id)
+    {
+        sessions.remove(skill_id);
+    }
+}
+
+fn stop_skill_event_sessions(state: &DesktopState) -> Result<(), DesktopError> {
+    let sessions = std::mem::take(
+        &mut *state
+            .skill_event_sessions
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?,
+    );
+    for (skill_id, session) in sessions {
+        session.cancellation.cancel();
+        cancel_active_skill_executions_for_skill(state, &skill_id)?;
+    }
+    Ok(())
+}
+
+fn cancel_active_skill_executions_for_skill(
+    state: &DesktopState,
+    skill_id: &str,
+) -> Result<(), DesktopError> {
+    let executions = state
+        .active_skill_executions
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    for active in executions
+        .values()
+        .filter(|active| active.skill_id == skill_id)
+    {
+        active.cancellation.cancel();
+        if let Some(task_id) = active.agent_task_id
+            && let Some(cancellation) = state
+                .active_agent_tasks
+                .lock()
+                .map_err(|_| DesktopError::StatePoisoned)?
+                .get(&task_id)
+        {
+            cancellation.cancel();
+        }
+    }
     Ok(())
 }
 
@@ -6692,6 +6878,9 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
     let schedule_backups = state.startup.mode == StartupMode::Normal;
     app.manage(state);
     if schedule_backups {
+        sync_skill_event_sessions(&app.state::<DesktopState>())?;
+    }
+    if schedule_backups {
         let backup_app = app.handle().clone();
         std::thread::spawn(move || {
             loop {
@@ -6764,20 +6953,21 @@ mod tests {
         BUILTIN_CHARACTER_ID, CapabilityBackend, DETERMINISTIC_PROVIDER_ID, DesktopAgentRunStatus,
         DesktopCapabilityBackend, DesktopError, DesktopState, ExecutionCancellation,
         LocalAgentRequest, PendingSkillExecution, PetAction, PrepareAgentToolRequest,
-        ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest, StartupMode,
-        TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
+        ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest, SkillEventSession,
+        StartupMode, TrayAction, UserProgramAgentContextSegment, UserProgramAgentTask,
         UserProgramRollbackReceipt, WindowPolicy, agent_catalog_inner,
         approve_skill_execution_inner, automation_agent_messages, cancel_agent_task_inner,
         cancel_all_pending_agent_tools, cancel_automation_run_inner, cancel_skill_execution_inner,
         confirm_agent_tool_inner, confirm_agent_tool_with_registry, current_time_ms,
         default_agent_model, default_agent_provider_id, diagnostic_report, dispatch_skill_commands,
         ensure_normal_mode, ensure_program_permissions, ensure_user_program_agent_capability,
-        inspect_asset_catalog, install_gltf_character, open_diagnostic_journal,
-        parse_asset_protocol_path, parse_user_program_plan, permission_grant,
-        persist_active_character, prepare_agent_tool_inner, reject_agent_tool_inner,
-        resolve_active_character, resolve_character_renderer, run_live_automation,
-        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
-        screen_coordinate, serve_asset_protocol, skill_capability_names, test_automation,
+        finish_skill_event_session, inspect_asset_catalog, install_gltf_character,
+        open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
+        permission_grant, persist_active_character, prepare_agent_tool_inner,
+        reject_agent_tool_inner, resolve_active_character, resolve_character_renderer,
+        run_live_automation, run_local_agent_inner, run_skill_agent_task,
+        run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
+        skill_capability_names, skill_event_types, stop_skill_event_sessions, test_automation,
         user_program_input, valid_asset_identifier, validate_model_source, validate_package_source,
         validate_requested_animation_map,
     };
@@ -8866,6 +9056,122 @@ mod tests {
     fn cancelling_unknown_or_terminal_skill_returns_false() {
         let (root, state) = normal_desktop_state();
         assert!(!cancel_skill_execution_inner(&state, Uuid::now_v7()).expect("unknown Skill"));
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn skill_event_types_include_only_declared_runtime_events() {
+        let manifest = SkillManifest {
+            spec: nimora_skill_runtime::SKILL_SPEC.to_owned(),
+            id: "studio.example.events".to_owned(),
+            version: "1.0.0".to_owned(),
+            publisher: "studio.example".to_owned(),
+            entrypoint: "main.js".to_owned(),
+            capabilities: BTreeSet::from([SkillCapability::SubscribeEvents]),
+            activation_events: BTreeSet::from([
+                "onStartup".to_owned(),
+                "onCommand:studio.example.events.open".to_owned(),
+                "onEvent:runtime.pet.changed".to_owned(),
+                "onEvent:runtime.profile.changed".to_owned(),
+            ]),
+            command_allowlist: BTreeSet::new(),
+            contributions: SkillContributions::default(),
+        };
+        assert_eq!(
+            skill_event_types(&manifest),
+            BTreeSet::from([
+                "runtime.pet.changed".to_owned(),
+                "runtime.profile.changed".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn stopping_skill_event_sessions_cancels_inflight_worker_and_provider() {
+        let (root, state) = normal_desktop_state();
+        let skill_id = "studio.example.events";
+        let execution_id = Uuid::now_v7();
+        let task_id = Uuid::now_v7();
+        let session_cancellation = ExecutionCancellation::default();
+        let worker_cancellation = ExecutionCancellation::default();
+        let provider_cancellation = CancellationFlag::default();
+        state
+            .skill_event_sessions
+            .lock()
+            .expect("Skill event sessions")
+            .insert(
+                skill_id.to_owned(),
+                SkillEventSession {
+                    session_id: Uuid::now_v7(),
+                    cancellation: session_cancellation.clone(),
+                },
+            );
+        state
+            .active_skill_executions
+            .lock()
+            .expect("active Skill executions")
+            .insert(
+                execution_id,
+                ActiveSkillExecution {
+                    skill_id: skill_id.to_owned(),
+                    created_at_ms: current_time_ms().expect("clock"),
+                    command_count: 0,
+                    agent_task_count: 1,
+                    cancellation: worker_cancellation.clone(),
+                    agent_task_id: Some(task_id),
+                },
+            );
+        state
+            .active_agent_tasks
+            .lock()
+            .expect("active Agent tasks")
+            .insert(task_id, provider_cancellation.clone());
+
+        stop_skill_event_sessions(&state).expect("stop Skill event sessions");
+
+        assert!(session_cancellation.is_cancelled());
+        assert!(worker_cancellation.is_cancelled());
+        assert!(provider_cancellation.is_cancelled());
+        assert!(
+            state
+                .skill_event_sessions
+                .lock()
+                .expect("Skill event sessions")
+                .is_empty()
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn stale_skill_event_thread_cannot_remove_replacement_session() {
+        let (root, state) = normal_desktop_state();
+        let skill_id = "studio.example.events";
+        let stale_session_id = Uuid::now_v7();
+        let replacement_session_id = Uuid::now_v7();
+        state
+            .skill_event_sessions
+            .lock()
+            .expect("Skill event sessions")
+            .insert(
+                skill_id.to_owned(),
+                SkillEventSession {
+                    session_id: replacement_session_id,
+                    cancellation: ExecutionCancellation::default(),
+                },
+            );
+
+        finish_skill_event_session(&state, skill_id, stale_session_id);
+
+        assert_eq!(
+            state
+                .skill_event_sessions
+                .lock()
+                .expect("Skill event sessions")
+                .get(skill_id)
+                .expect("replacement session")
+                .session_id,
+            replacement_session_id
+        );
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
