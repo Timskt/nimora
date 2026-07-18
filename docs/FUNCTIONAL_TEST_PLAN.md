@@ -165,6 +165,12 @@ ID / 标题 / 优先级 / 前置条件
 | EXT-019 | Package 到 Runtime 精确租约 | 只有复验返回的 `ValidatedSkillManifest` 可安装进 Host；授权与激活后 `active_manifest` 必须逐字段一致 | P0 |
 | EXT-020 | Skill 包库存边界 | 缺少动态 entrypoint、重复/保留/非 UTF-8 路径、超过 256 文件或 16 MiB 均在切换 active 前拒绝 | P0 |
 | EXT-021 | Skill 授权与启用持久化 | 安装不自动授权；授权绑定精确版本和完整 Capability 集，未授权不能保存 enabled；升级替换旧授权，删除状态同时撤销恢复资格 | P0 |
+| EXT-022 | Desktop Skill 生命周期 IPC | 安装后为未授权且停用；授权后仍停用；启用后才 Activated；停用立即撤销 Contribution 租约 | P0 |
+| EXT-023 | Desktop Skill 启动恢复复验 | 重启逐包复验完整库存、版本和 Capability；只有 authorized + enabled 的健康包恢复 Activated | P0 |
+| EXT-024 | Desktop Skill 篡改恢复 | 已启用 Skill 被篡改、缺失或状态不匹配时重启不进入 Host，目录仅返回脱敏 unhealthy 状态 | P0 |
+| EXT-025 | Desktop Skill 升级与回滚授权 | 升级或回滚后强制清零授权和启用状态，旧版本授权不得跨版本复用 | P0 |
+| EXT-026 | Recovery Mode 扩展隔离 | 不读取正常 Skill Store、不恢复 Worker 或 Contribution，所有 Skill 写 IPC fail-closed | P0 |
+| EXT-027 | Skill 双向模块调用 | Worker Command 计划只能进入共享 Command Registry、风险批准与 Capability Gateway；Agent Task 计划只能凭激活 requester 进入 Module Adapter | P0 |
 | SCRIPT-001 | 用户脚本调用已授权 Command | 正常执行并产生 Run、Trace 和审计记录 | P0 |
 | SCRIPT-002 | 脚本访问未授权文件、网络、进程 | Host 拒绝，不能绕过 Capability Broker | P0 |
 | SCRIPT-003 | 死循环、内存泄漏、事件递归 | 对应实例被限流或终止，Core 继续运行 | P0 |

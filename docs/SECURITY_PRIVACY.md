@@ -50,6 +50,8 @@
 - 连续崩溃、超额或异常网络行为触发 quarantine。
 - Skill Contribution 与 AI requester 都是租约式激活结果，不是永久授权；暂停、崩溃、quarantine、版本变化或卸载必须同步撤销。只有精确版本授权且已激活的 Agent Task Contribution 能获得 `skill:<id>`，并且仍只能进入固定 `Module + draft + no-tools` Adapter，不能直接访问 Provider 或继承 Agent 工具权限。
 - Skill 安装器必须原子切换 active 并生成宿主拥有的完整性锁；每次加载重新校验 Manifest 身份/版本、完整库存、大小和 SHA-256，拒绝额外文件、符号链接、非 UTF-8 库存路径及 canonical path 逃逸。只有该复验结果能成为 Runtime 与 Worker 的精确 Manifest 租约。
+- Desktop 不信任上次进程留下的 Activated 状态。正常启动必须从已安装包重新取得完整性租约，并与 SQLite 中精确的版本、Capability、授权和启用状态共同重建 Host；任何不一致均 fail-closed。Recovery Mode 使用独立空 Host 和内存状态，不加载正常扩展。
+- AI 调用模块必须经过 Tool Registry、风险计算/批准与 Capability Gateway；Skill、Connector 和用户程序请求 AI 必须经过 `module-agent-adapter` 与 `AgentTaskGateway`。两条方向都不得把 Provider、数据库、Node、Tauri、文件系统或网络原生对象交给不可信代码。
 
 ## 7. 数据分类
 

@@ -2258,6 +2258,8 @@ dependencies = [
  "nimora-persistence-sqlite",
  "nimora-runtime-app",
  "nimora-runtime-core",
+ "nimora-skill-package",
+ "nimora-skill-runtime",
  "nimora-user-code-gateway",
  "nimora-user-code-host",
  "nimora-user-code-package",

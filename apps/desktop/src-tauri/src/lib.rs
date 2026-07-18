@@ -43,10 +43,11 @@ use nimora_module_agent_adapter::{
 use nimora_persistence_sqlite::{
     AgentHistoryRecord, AutomationAgentJournalEntry, AutomationAgentJournalStatus,
     AutomationJournalEntry, AutomationRunStart, BackupCoordinator, BackupHealth, BackupPolicy,
-    BackupRecord, DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant,
+    BackupRecord, DATABASE_VERSION, OutboxSnapshot, ProgramPermissionGrant, SkillStateRecord,
     SqliteAgentHistoryRepository, SqliteAutomationAgentJournal, SqliteAutomationJournal,
     SqliteOutboxRepository, SqlitePersistenceError, SqlitePetRepository, SqliteProfileRepository,
-    SqliteProgramPermissionRepository, apply_pending_restore, verify_database_file,
+    SqliteProgramPermissionRepository, SqliteSkillStateRepository, apply_pending_restore,
+    verify_database_file,
 };
 use nimora_runtime_app::{
     ProfileService, ProfileServiceError, ProfileSnapshot, RuntimeError, RuntimeEventBatch,
@@ -55,6 +56,12 @@ use nimora_runtime_app::{
 use nimora_runtime_core::{
     Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction, PointerButton,
     Position, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
+};
+use nimora_skill_package::{
+    SkillPackageError, install_skill_atomically, load_installed_skill, rollback_skill,
+};
+use nimora_skill_runtime::{
+    SkillCapability, SkillError, SkillGrant, SkillHost, SkillManifest, SkillStatus,
 };
 use nimora_user_code_gateway::{
     CapabilityBackend, CapabilityGateway, CapabilityResponse, GatewayEnvelope, GatewayError,
@@ -125,6 +132,9 @@ struct DesktopState {
     program_store: PathBuf,
     program_data_store: ProgramDataStore,
     program_permissions: SqliteProgramPermissionRepository,
+    skill_store: PathBuf,
+    skill_states: SqliteSkillStateRepository,
+    skill_host: Mutex<SkillHost>,
     outbox: SqliteOutboxRepository,
     agent_history: SqliteAgentHistoryRepository,
     automation_journal: SqliteAutomationJournal,
@@ -315,6 +325,9 @@ impl DesktopState {
         let window_policy = active_window_policy(&profiles.snapshot()?)?;
         let program_data_store =
             ProgramDataStore::new(program_store.with_file_name("program-data"));
+        let skill_store = program_store.with_file_name("skills");
+        let skill_states = SqliteSkillStateRepository::open(database_path)?;
+        let skill_host = restore_skill_host(&skill_store, &skill_states)?;
         let _ = diagnostic_journal.record(diagnostic_event(
             DiagnosticSeverity::Info,
             DiagnosticComponent::Application,
@@ -339,6 +352,9 @@ impl DesktopState {
             program_store,
             program_data_store,
             program_permissions: SqliteProgramPermissionRepository::open(database_path)?,
+            skill_store,
+            skill_states,
+            skill_host: Mutex::new(skill_host),
             outbox: SqliteOutboxRepository::open(database_path)?,
             agent_history: SqliteAgentHistoryRepository::open(database_path)?,
             automation_journal,
@@ -382,6 +398,7 @@ impl DesktopState {
         let window_policy = active_window_policy(&profiles.snapshot()?)?;
         let program_data_store =
             ProgramDataStore::new(program_store.with_file_name("program-data-recovery"));
+        let skill_store = program_store.with_file_name("skills-recovery");
         let _ = diagnostic_journal.record(diagnostic_event(
             DiagnosticSeverity::Error,
             DiagnosticComponent::Persistence,
@@ -402,6 +419,9 @@ impl DesktopState {
             program_store,
             program_data_store,
             program_permissions: SqliteProgramPermissionRepository::in_memory()?,
+            skill_store,
+            skill_states: SqliteSkillStateRepository::in_memory()?,
+            skill_host: Mutex::new(SkillHost::default()),
             outbox: SqliteOutboxRepository::in_memory()?,
             agent_history: SqliteAgentHistoryRepository::in_memory()?,
             automation_journal: SqliteAutomationJournal::in_memory()?,
@@ -611,6 +631,53 @@ struct UserProgramPermissionStatus {
     granted: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InstallSkillRequest {
+    source_path: PathBuf,
+    manifest: SkillManifest,
+    files: Vec<InstallAssetFile>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillInstallReceipt {
+    skill_id: String,
+    version: String,
+    capabilities: Vec<SkillCapability>,
+    replaced_previous: bool,
+    authorized: bool,
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillRollbackReceipt {
+    skill_id: String,
+    restored_version: String,
+    quarantined_failed_version: bool,
+    requires_authorization: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillCatalogEntry {
+    skill_id: String,
+    version: String,
+    publisher: String,
+    capabilities: Vec<SkillCapability>,
+    authorized: bool,
+    enabled: bool,
+    runtime_status: Option<SkillStatus>,
+    healthy: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillCatalogSnapshot {
+    skills: Vec<SkillCatalogEntry>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UserProgramEventSessionReceipt {
@@ -794,6 +861,14 @@ enum DesktopError {
     UserCodeGateway(#[from] GatewayError),
     #[error(transparent)]
     UserCodePackage(#[from] ProgramPackageError),
+    #[error(transparent)]
+    SkillPackage(#[from] SkillPackageError),
+    #[error(transparent)]
+    SkillRuntime(#[from] SkillError),
+    #[error("Skill must be authorized before it can be enabled")]
+    SkillAuthorizationRequired,
+    #[error("installed Skill does not match its persisted exact-version state")]
+    SkillStateMismatch,
     #[error(transparent)]
     Automation(#[from] AutomationError),
     #[error("user program execution was not found")]
@@ -3600,6 +3675,184 @@ fn rollback_asset(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn install_skill(
+    state: State<'_, DesktopState>,
+    request: InstallSkillRequest,
+) -> Result<SkillInstallReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let files = request
+        .files
+        .into_iter()
+        .map(|file| InstallFile {
+            relative_path: file.relative_path,
+            bytes: file.bytes,
+            sha256: file.sha256,
+        })
+        .collect::<Vec<_>>();
+    let result = install_skill_atomically(
+        &request.source_path,
+        &state.skill_store,
+        request.manifest,
+        &files,
+    )?;
+    let installed = load_installed_skill(&state.skill_store, &result.skill_id)?;
+    let capabilities = installed.manifest.manifest().capabilities.clone();
+    state.skill_states.save(&SkillStateRecord {
+        skill_id: result.skill_id.clone(),
+        version: result.version.clone(),
+        capabilities: skill_capability_names(&capabilities)?,
+        authorized: false,
+        enabled: false,
+    })?;
+    rebuild_skill_host(&state)?;
+    Ok(SkillInstallReceipt {
+        skill_id: result.skill_id,
+        version: result.version,
+        capabilities: capabilities.into_iter().collect(),
+        replaced_previous: result.backup_path.is_some(),
+        authorized: false,
+        enabled: false,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn skill_catalog(state: State<'_, DesktopState>) -> Result<SkillCatalogSnapshot, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let host = state
+        .skill_host
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    let skills = state
+        .skill_states
+        .list()?
+        .into_iter()
+        .map(|record| {
+            let installed = load_installed_skill(&state.skill_store, &record.skill_id);
+            match installed {
+                Ok(installed) => {
+                    let manifest = installed.manifest.manifest();
+                    let healthy = manifest.version == record.version
+                        && persisted_skill_capabilities(&record.capabilities)?
+                            == manifest.capabilities;
+                    Ok(SkillCatalogEntry {
+                        skill_id: record.skill_id.clone(),
+                        version: record.version,
+                        publisher: manifest.publisher.clone(),
+                        capabilities: manifest.capabilities.iter().copied().collect(),
+                        authorized: healthy && record.authorized,
+                        enabled: healthy && record.enabled,
+                        runtime_status: healthy.then(|| host.status(&record.skill_id)).flatten(),
+                        healthy,
+                    })
+                }
+                Err(_) => Ok(SkillCatalogEntry {
+                    skill_id: record.skill_id,
+                    version: record.version,
+                    publisher: String::new(),
+                    capabilities: Vec::new(),
+                    authorized: false,
+                    enabled: false,
+                    runtime_status: None,
+                    healthy: false,
+                }),
+            }
+        })
+        .collect::<Result<Vec<_>, DesktopError>>()?;
+    Ok(SkillCatalogSnapshot { skills })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn authorize_skill(
+    state: State<'_, DesktopState>,
+    skill_id: String,
+) -> Result<SkillCatalogEntry, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let (installed, mut record) = installed_skill_state(&state, &skill_id)?;
+    record.authorized = true;
+    record.enabled = false;
+    state.skill_states.save(&record)?;
+    rebuild_skill_host(&state)?;
+    let status = state
+        .skill_host
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .status(&skill_id);
+    let manifest = installed.manifest.manifest();
+    Ok(SkillCatalogEntry {
+        skill_id,
+        version: manifest.version.clone(),
+        publisher: manifest.publisher.clone(),
+        capabilities: manifest.capabilities.iter().copied().collect(),
+        authorized: true,
+        enabled: false,
+        runtime_status: status,
+        healthy: true,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn set_skill_enabled(
+    state: State<'_, DesktopState>,
+    skill_id: String,
+    enabled: bool,
+) -> Result<SkillCatalogEntry, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let (installed, mut record) = installed_skill_state(&state, &skill_id)?;
+    if enabled && !record.authorized {
+        return Err(DesktopError::SkillAuthorizationRequired);
+    }
+    record.enabled = enabled;
+    state.skill_states.save(&record)?;
+    rebuild_skill_host(&state)?;
+    let status = state
+        .skill_host
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .status(&skill_id);
+    let manifest = installed.manifest.manifest();
+    Ok(SkillCatalogEntry {
+        skill_id,
+        version: manifest.version.clone(),
+        publisher: manifest.publisher.clone(),
+        capabilities: manifest.capabilities.iter().copied().collect(),
+        authorized: record.authorized,
+        enabled,
+        runtime_status: status,
+        healthy: true,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn rollback_installed_skill(
+    state: State<'_, DesktopState>,
+    skill_id: String,
+) -> Result<SkillRollbackReceipt, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let result = rollback_skill(&state.skill_store, &skill_id)?;
+    let installed = load_installed_skill(&state.skill_store, &skill_id)?;
+    let manifest = installed.manifest.manifest();
+    state.skill_states.save(&SkillStateRecord {
+        skill_id: skill_id.clone(),
+        version: manifest.version.clone(),
+        capabilities: skill_capability_names(&manifest.capabilities)?,
+        authorized: false,
+        enabled: false,
+    })?;
+    rebuild_skill_host(&state)?;
+    Ok(SkillRollbackReceipt {
+        skill_id,
+        restored_version: manifest.version.clone(),
+        quarantined_failed_version: result.quarantined_path.is_some(),
+        requires_authorization: true,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn install_user_program(
     state: State<'_, DesktopState>,
     request: InstallUserProgramRequest,
@@ -4145,6 +4398,88 @@ fn permission_grant(manifest: &ProgramManifest) -> ProgramPermissionGrant {
         version: manifest.version.clone(),
         capabilities,
     }
+}
+
+fn skill_capability_names(
+    capabilities: &BTreeSet<SkillCapability>,
+) -> Result<Vec<String>, DesktopError> {
+    capabilities
+        .iter()
+        .map(|capability| {
+            serde_json::to_value(capability)?
+                .as_str()
+                .map(ToOwned::to_owned)
+                .ok_or(DesktopError::SkillStateMismatch)
+        })
+        .collect()
+}
+
+fn persisted_skill_capabilities(
+    capabilities: &[String],
+) -> Result<BTreeSet<SkillCapability>, DesktopError> {
+    capabilities
+        .iter()
+        .map(|capability| {
+            serde_json::from_value::<SkillCapability>(serde_json::Value::String(capability.clone()))
+                .map_err(DesktopError::from)
+        })
+        .collect()
+}
+
+fn restore_skill_host(
+    skill_store: &Path,
+    states: &SqliteSkillStateRepository,
+) -> Result<SkillHost, DesktopError> {
+    let mut host = SkillHost::default();
+    for record in states.list()? {
+        let Ok(installed) = load_installed_skill(skill_store, &record.skill_id) else {
+            continue;
+        };
+        let manifest = installed.manifest.manifest();
+        let capabilities = persisted_skill_capabilities(&record.capabilities)?;
+        if manifest.version != record.version || manifest.capabilities != capabilities {
+            continue;
+        }
+        host.install(installed.manifest)?;
+        if record.authorized {
+            host.authorize(SkillGrant {
+                skill_id: record.skill_id.clone(),
+                version: record.version,
+                capabilities,
+            })?;
+            if record.enabled {
+                host.activate(&record.skill_id)?;
+            }
+        }
+    }
+    Ok(host)
+}
+
+fn rebuild_skill_host(state: &DesktopState) -> Result<(), DesktopError> {
+    let rebuilt = restore_skill_host(&state.skill_store, &state.skill_states)?;
+    *state
+        .skill_host
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)? = rebuilt;
+    Ok(())
+}
+
+fn installed_skill_state(
+    state: &DesktopState,
+    skill_id: &str,
+) -> Result<(nimora_skill_package::InstalledSkill, SkillStateRecord), DesktopError> {
+    let installed = load_installed_skill(&state.skill_store, skill_id)?;
+    let record = state
+        .skill_states
+        .load(skill_id)?
+        .ok_or(DesktopError::SkillStateMismatch)?;
+    if record.version != installed.manifest.manifest().version
+        || persisted_skill_capabilities(&record.capabilities)?
+            != installed.manifest.manifest().capabilities
+    {
+        return Err(DesktopError::SkillStateMismatch);
+    }
+    Ok((installed, record))
 }
 
 fn ensure_program_permissions(
@@ -5367,6 +5702,11 @@ pub fn run() {
             export_asset,
             install_asset,
             rollback_asset,
+            install_skill,
+            skill_catalog,
+            authorize_skill,
+            set_skill_enabled,
+            rollback_installed_skill,
             install_user_program,
             rollback_user_program,
             user_program_permission_status,
@@ -5519,8 +5859,9 @@ mod tests {
         permission_grant, persist_active_character, prepare_agent_tool_inner,
         reject_agent_tool_inner, resolve_active_character, resolve_character_renderer,
         run_live_automation, run_local_agent_inner, run_user_program_agent_task, screen_coordinate,
-        serve_asset_protocol, test_automation, user_program_input, valid_asset_identifier,
-        validate_model_source, validate_package_source, validate_requested_animation_map,
+        serve_asset_protocol, skill_capability_names, test_automation, user_program_input,
+        valid_asset_identifier, validate_model_source, validate_package_source,
+        validate_requested_animation_map,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentTask, AgentTaskOrigin, AgentTaskStatus, CancellationFlag,
@@ -5529,7 +5870,7 @@ mod tests {
         ProviderFinishReason, ProviderLocality, ProviderMessage, ProviderMessageRole,
         ProviderRegistry, ProviderRequest, ProviderResponse, ProviderToolCall, ProviderUsage,
     };
-    use nimora_asset_installer::{GltfCharacterMetadata, ModelAnimationBinding};
+    use nimora_asset_installer::{GltfCharacterMetadata, InstallFile, ModelAnimationBinding};
     use nimora_automation_agent_bridge::AdmittedContextSegment;
     use nimora_automation_agent_bridge::{
         AgentTaskSubmissionOutcome, AgentTaskSubmitter, AutomationAgentTask,
@@ -5539,12 +5880,15 @@ mod tests {
     };
     use nimora_persistence_sqlite::{
         AutomationAgentJournalEntry, AutomationAgentJournalStatus, AutomationJournalStatus,
-        AutomationRunStart, BackupCoordinator, BackupPolicy, SqliteAutomationJournal,
-        SqliteProgramPermissionRepository,
+        AutomationRunStart, BackupCoordinator, BackupPolicy, SkillStateRecord,
+        SqliteAutomationJournal, SqliteProgramPermissionRepository,
     };
     use nimora_runtime_core::{Event, EventSource, Position, RuntimeMode};
+    use nimora_skill_package::install_skill_atomically;
+    use nimora_skill_runtime::{SkillCapability, SkillManifest, SkillStatus};
     use nimora_user_code_policy::{Capability, ProgramManifest, evaluate};
     use serde_json::json;
+    use sha2::{Digest, Sha256};
     use std::{
         collections::BTreeSet,
         path::Path,
@@ -5571,6 +5915,123 @@ mod tests {
         )
         .expect("normal desktop state");
         (root, state)
+    }
+
+    fn install_test_skill(state: &DesktopState) -> SkillManifest {
+        let source = state.skill_store.with_file_name("skill-source");
+        std::fs::create_dir_all(source.join("dist")).expect("source directory");
+        let manifest = SkillManifest {
+            spec: nimora_skill_runtime::SKILL_SPEC.to_owned(),
+            id: "studio.example.focus".to_owned(),
+            version: "1.0.0".to_owned(),
+            publisher: "studio.example".to_owned(),
+            entrypoint: "dist/main.js".to_owned(),
+            capabilities: BTreeSet::from([SkillCapability::InvokeCommands]),
+            activation_events: BTreeSet::from(["onStartup".to_owned()]),
+            contributions: nimora_skill_runtime::SkillContributions::default(),
+        };
+        let manifest_bytes = serde_json::to_vec(&manifest).expect("manifest bytes");
+        let source_bytes = b"null;";
+        std::fs::write(source.join("manifest.json"), &manifest_bytes).expect("manifest");
+        std::fs::write(source.join("dist/main.js"), source_bytes).expect("entrypoint");
+        let files = vec![
+            InstallFile {
+                relative_path: "manifest.json".into(),
+                bytes: u64::try_from(manifest_bytes.len()).expect("manifest length"),
+                sha256: format!("{:x}", Sha256::digest(&manifest_bytes)),
+            },
+            InstallFile {
+                relative_path: "dist/main.js".into(),
+                bytes: u64::try_from(source_bytes.len()).expect("source length"),
+                sha256: format!("{:x}", Sha256::digest(source_bytes)),
+            },
+        ];
+        install_skill_atomically(&source, &state.skill_store, manifest.clone(), &files)
+            .expect("install Skill");
+        manifest
+    }
+
+    #[test]
+    fn desktop_restart_reverifies_and_restores_enabled_skill() {
+        let (root, state) = normal_desktop_state();
+        let manifest = install_test_skill(&state);
+        state
+            .skill_states
+            .save(&SkillStateRecord {
+                skill_id: manifest.id.clone(),
+                version: manifest.version.clone(),
+                capabilities: skill_capability_names(&manifest.capabilities).expect("capabilities"),
+                authorized: true,
+                enabled: true,
+            })
+            .expect("persist Skill state");
+        drop(state);
+
+        let database = root.join("runtime.sqlite3");
+        let restored = DesktopState::open(
+            None,
+            &database,
+            root.join("assets"),
+            root.join("programs"),
+            BackupCoordinator::new(&database, root.join("backups"), BackupPolicy::default()),
+            PersistentDiagnosticJournal::in_memory(),
+            None,
+        )
+        .expect("restored state");
+        assert_eq!(
+            restored
+                .skill_host
+                .lock()
+                .expect("Skill Host")
+                .status(&manifest.id),
+            Some(SkillStatus::Activated)
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn desktop_restart_rejects_tampered_enabled_skill() {
+        let (root, state) = normal_desktop_state();
+        let manifest = install_test_skill(&state);
+        state
+            .skill_states
+            .save(&SkillStateRecord {
+                skill_id: manifest.id.clone(),
+                version: manifest.version.clone(),
+                capabilities: skill_capability_names(&manifest.capabilities).expect("capabilities"),
+                authorized: true,
+                enabled: true,
+            })
+            .expect("persist Skill state");
+        std::fs::write(
+            state
+                .skill_store
+                .join("studio.example.focus/active/dist/main.js"),
+            "tampered;",
+        )
+        .expect("tamper");
+        drop(state);
+
+        let database = root.join("runtime.sqlite3");
+        let restored = DesktopState::open(
+            None,
+            &database,
+            root.join("assets"),
+            root.join("programs"),
+            BackupCoordinator::new(&database, root.join("backups"), BackupPolicy::default()),
+            PersistentDiagnosticJournal::in_memory(),
+            None,
+        )
+        .expect("restored state");
+        assert_eq!(
+            restored
+                .skill_host
+                .lock()
+                .expect("Skill Host")
+                .status(&manifest.id),
+            None
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]
