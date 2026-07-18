@@ -768,3 +768,23 @@ ID / 标题 / 优先级 / 前置条件
 - Verify Provider 下线、协议破坏和扩展退役会撤销 Grant、Secret 引用、订阅、任务和缓存，保留可读导出并验证删除传播。
 - Verify 离线时项目编辑、已缓存契约检查、模拟、导出和回滚可用；需要云模型或在线 Connector 的步骤明确等待且不伪造完成。
 - Verify Creator Studio 的方案、能力图、Diff、风险、预算和证据是权威状态；聊天文本不能覆盖，并通过键盘、读屏、200% 缩放和高对比度测试。
+
+### PET-057 Profile 完整照料
+
+- 前置：活动 Profile 为 `careNeedsMode=full`，建立生命时间基线。
+- 验证：六个周期后 Energy -6、Mood -2、Satiety -3、Cleanliness -1；不死亡、不生病、不倒扣关系，AI 与网络关闭时结果一致。
+
+### PET-058 Profile 简化照料
+
+- 验证：Energy 与 Mood 按本地周期变化，Satiety 与 Cleanliness 保持不变。
+- 验证：Feed、Play、Groom 仍可主动执行并原子持久化。
+
+### PET-059 关闭与重新启用
+
+- 验证：关闭期间四项数值不变但时间基线推进；切回完整模式后不补算关闭期。
+- 验证：断网、禁用 Provider、关闭控制中心和应用重启后策略一致。
+
+### PET-060 Profile 迁移与界面
+
+- 验证：旧 Profile 缺少字段时按完整模式解析，当前生命值不重置。
+- 验证：创建界面提供三档说明，卡片展示当前模式，键盘和屏幕阅读器可访问。

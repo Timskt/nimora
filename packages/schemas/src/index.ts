@@ -94,6 +94,8 @@ export const profileModeSchema = z.enum([
   "offline",
 ]);
 
+export const careNeedsModeSchema = z.enum(["full", "simple", "off"]);
+
 export const profilePolicySchema = z.object({
   mode: profileModeSchema,
   alwaysOnTop: z.boolean().nullable(),
@@ -101,6 +103,7 @@ export const profilePolicySchema = z.object({
   edgeSnap: z.boolean().nullable().optional(),
   soundEnabled: z.boolean().nullable(),
   proactiveFrequency: z.number().int().min(0).max(100).nullable(),
+  careNeedsMode: careNeedsModeSchema.default("full"),
 });
 
 export const profileSchema = z.object({
@@ -305,6 +308,7 @@ export type Pet = z.infer<typeof petSchema>;
 export type PointerButton = z.infer<typeof pointerButtonSchema>;
 export type ProfilePolicy = z.infer<typeof profilePolicySchema>;
 export type ProfileMode = z.infer<typeof profileModeSchema>;
+export type CareNeedsMode = z.infer<typeof careNeedsModeSchema>;
 export type Profile = z.infer<typeof profileSchema>;
 export type ProfileSnapshot = z.infer<typeof profileSnapshotSchema>;
 export type RuntimeMode = z.infer<typeof runtimeModeSchema>;

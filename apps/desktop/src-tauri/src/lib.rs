@@ -123,9 +123,9 @@ use nimora_runtime_app::{
     RuntimeEventBus, RuntimeEventSubscription, RuntimeService, SafetyService, SafetyServiceError,
 };
 use nimora_runtime_core::{
-    Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction, PetAutonomyPolicy,
-    PetCareAction, PointerButton, Position, Profile, ProfileId, ProfileMode, ProfilePolicy,
-    RuntimeMode, SafeModeReason, SafetySnapshot,
+    CareNeedsMode, Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction,
+    PetAutonomyPolicy, PetCareAction, PetVitalsPolicy, PointerButton, Position, Profile, ProfileId,
+    ProfileMode, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
 };
 use nimora_secret_store::{
     MemorySecretStore, SecretPresence, SecretReference, SecretStore, SecretStoreError,
@@ -10892,8 +10892,14 @@ fn start_pet_autonomy(app: AppHandle) {
             }
             if normal
                 && let Ok(now_ms) = current_time_ms()
+                && let Ok(profile_snapshot) = state.profiles.snapshot()
+                && let Some(active_profile) = profile_snapshot
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.id == profile_snapshot.active_profile_id)
                 && matches!(
                     state.runtime.tick_vitals(
+                        pet_vitals_policy(&active_profile.policy),
                         now_ms,
                         PET_VITALS_INTERVAL_MS,
                         PET_VITALS_MAX_OFFLINE_INTERVALS,
@@ -10907,6 +10913,14 @@ fn start_pet_autonomy(app: AppHandle) {
             std::thread::sleep(Duration::from_secs(1));
         }
     });
+}
+
+fn pet_vitals_policy(profile: &ProfilePolicy) -> PetVitalsPolicy {
+    match profile.care_needs_mode.unwrap_or(CareNeedsMode::Full) {
+        CareNeedsMode::Full => PetVitalsPolicy::Full,
+        CareNeedsMode::Simple => PetVitalsPolicy::Simple,
+        CareNeedsMode::Off => PetVitalsPolicy::Off,
+    }
 }
 
 fn pet_autonomy_policy(profile: &ProfilePolicy) -> PetAutonomyPolicy {
@@ -11592,6 +11606,7 @@ mod tests {
                 "character.state.read".to_owned(),
                 "pet.action.catalog.read".to_owned(),
                 "pet.animation.play".to_owned(),
+                "pet.care.perform".to_owned(),
                 "pet.position.move".to_owned(),
                 "pet.state.read".to_owned(),
                 "profile.active.switch".to_owned(),
@@ -15095,6 +15110,7 @@ mod tests {
             edge_snap: None,
             sound_enabled: None,
             proactive_frequency: None,
+            care_needs_mode: None,
         };
         assert_eq!(
             WindowPolicy::from_profile(&policy),

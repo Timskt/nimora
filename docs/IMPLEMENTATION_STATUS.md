@@ -321,3 +321,11 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - 动态 Worker Provider Descriptor 从配置投影具体等级集合与版本，Provider Registry 继续承担请求 Mapping 的能力、等级和版本复验。
 - OpenAI-compatible Worker 只把已验证 `provider_value` 写入 `reasoning_effort`；真实 loopback 测试证明无 Mapping 时不发送字段，且 Mapping Version 不越过 Worker 网络边界。
 - 桌面 Provider 管理器提供明确风险提示和具体等级选择，浏览器预览仍不伪造本机配置或能力。Agent Run/Auto Mode 的策略选择与映射生成仍是后续可信纵切，当前不得宣称已经自动应用推理等级。
+
+## 2026-07-19 Profile 级照料压力策略
+
+- 已完成：领域层 `PetVitalsPolicy` 提供 Full、Simple、Off 三档确定性演化；Off 推进时间基线，重新启用不会追赶关闭期。
+- 已完成：Profile 契约新增向后兼容 `careNeedsMode`，标准与旧数据解析均为低压力完整照料。
+- 已完成：原生宿主每次 Tick 动态映射活动 Profile，不依赖 AI、网络或控制中心。
+- 已完成：Profile UI 提供可访问的三档选择、说明与卡片摘要；Browser Preview 使用完整照料默认值。
+- 已验证：Runtime Core 36、Runtime App 23、Schemas 19、Frontend 62 项测试通过。

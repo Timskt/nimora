@@ -1,4 +1,4 @@
-import type { ProfileMode, ProfilePolicy, ProfileSnapshot } from "@nimora/schemas";
+import type { CareNeedsMode, ProfileMode, ProfilePolicy, ProfileSnapshot } from "@nimora/schemas";
 import { useEffect, useState } from "react";
 import { desktopApi } from "../platform/desktop";
 
@@ -9,6 +9,7 @@ const initialPolicy: ProfilePolicy = {
   edgeSnap: true,
   soundEnabled: true,
   proactiveFrequency: 25,
+  careNeedsMode: "full",
 };
 
 const profileModes: ReadonlyArray<{ value: ProfileMode; label: string }> = [
@@ -27,6 +28,10 @@ function profileModeLabel(mode: ProfileMode): string {
 
 export function proactiveFrequencyLabel(value: number): string {
   return value === 0 ? "关闭自主互动" : `主动频率 ${value}%`;
+}
+
+export function careNeedsModeLabel(mode: CareNeedsMode | undefined): string {
+  return ({ full: "低压力完整照料", simple: "简化照料", off: "生命衰减关闭" } as const)[mode ?? "full"];
 }
 
 export function normalizedProfileName(value: string): string | null {
@@ -113,6 +118,7 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
                   {profile.policy.soundEnabled === false ? " · 静音" : " · 声音开启"}
                   {profile.policy.edgeSnap === false ? " · 自由摆放" : " · 桌边吸附"}
                   {` · ${proactiveFrequencyLabel(profile.policy.proactiveFrequency ?? 25)}`}
+                  {` · ${careNeedsModeLabel(profile.policy.careNeedsMode)}`}
                 </p>
               </div>
               <button
@@ -187,6 +193,19 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
             {(policy.mode === "focus" || policy.mode === "presentation") && (
               <small>此场景会暂停自主互动，手动互动仍然可用。</small>
             )}
+          </label>
+          <label className="profile-name">
+            <span>照料强度</span>
+            <select
+              aria-label="照料强度"
+              value={policy.careNeedsMode ?? "full"}
+              onChange={(event) => setPolicy({ ...policy, careNeedsMode: event.target.value as CareNeedsMode })}
+            >
+              <option value="full">完整照料：四项需求自然演化</option>
+              <option value="simple">简化照料：仅精力与心情变化</option>
+              <option value="off">关闭衰减：暂停时间驱动变化</option>
+            </select>
+            <small>所有模式都不会死亡、倒扣关系或惩罚离线；切换不会删除当前状态，喂食、玩耍和清洁始终可用。</small>
           </label>
           <button className="primary-button" type="submit" disabled={busy}>保存 Profile</button>
         </form>

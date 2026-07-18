@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizedProfileName, proactiveFrequencyLabel } from "./ProfileManager";
+import { careNeedsModeLabel, normalizedProfileName, proactiveFrequencyLabel } from "./ProfileManager";
 
 describe("normalizedProfileName", () => {
   it("trims valid names at the UI boundary", () => {
@@ -16,5 +16,13 @@ describe("proactiveFrequencyLabel", () => {
   it("explains that zero disables autonomy", () => {
     expect(proactiveFrequencyLabel(0)).toBe("关闭自主互动");
     expect(proactiveFrequencyLabel(25)).toBe("主动频率 25%");
+  });
+});
+
+describe("careNeedsModeLabel", () => {
+  it("uses full care for migrated profiles and labels every policy", () => {
+    expect(careNeedsModeLabel(undefined)).toBe("低压力完整照料");
+    expect(careNeedsModeLabel("simple")).toBe("简化照料");
+    expect(careNeedsModeLabel("off")).toBe("生命衰减关闭");
   });
 });

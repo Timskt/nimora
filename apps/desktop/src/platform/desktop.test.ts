@@ -311,6 +311,7 @@ describe("desktop platform adapter", () => {
       edgeSnap: true,
       soundEnabled: true,
       proactiveFrequency: 10,
+      careNeedsMode: "full" as const,
     };
     await api.createProfile("Focus", policy);
     await api.switchProfile("00000000-0000-4000-8000-000000000010");

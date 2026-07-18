@@ -536,6 +536,7 @@ impl<R: PetRepository> RuntimeService<R> {
     /// Returns an error when state access, command creation, or atomic persistence fails.
     pub fn tick_vitals(
         &self,
+        policy: nimora_runtime_core::PetVitalsPolicy,
         now_ms: u64,
         interval_ms: u64,
         max_intervals: u64,
@@ -545,13 +546,13 @@ impl<R: PetRepository> RuntimeService<R> {
         }
         self.update(
             |pet| {
-                pet.update_vitals(now_ms, interval_ms, max_intervals);
+                pet.update_vitals(policy, now_ms, interval_ms, max_intervals);
                 Ok(())
             },
             || {
                 Command::new(
                     "pet.vitals.tick",
-                    serde_json::json!({ "nowMs": now_ms }),
+                    serde_json::json!({ "nowMs": now_ms, "policy": format!("{policy:?}") }),
                     CommandRisk::Safe,
                 )
             },
@@ -1175,17 +1176,17 @@ mod tests {
         let service =
             RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
         let initialized = service
-            .tick_vitals(1_000, 100, 6)
+            .tick_vitals(nimora_runtime_core::PetVitalsPolicy::Full, 1_000, 100, 6)
             .expect("baseline")
             .expect("baseline command");
         assert!(
             service
-                .tick_vitals(1_050, 100, 6)
+                .tick_vitals(nimora_runtime_core::PetVitalsPolicy::Full, 1_050, 100, 6)
                 .expect("not due")
                 .is_none()
         );
         let updated = service
-            .tick_vitals(11_000, 100, 6)
+            .tick_vitals(nimora_runtime_core::PetVitalsPolicy::Full, 11_000, 100, 6)
             .expect("offline catchup")
             .expect("update command");
         let snapshot = service.snapshot().expect("snapshot");
@@ -1206,13 +1207,13 @@ mod tests {
         let service =
             RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
         service
-            .tick_vitals(1_000, 100, 6)
+            .tick_vitals(nimora_runtime_core::PetVitalsPolicy::Full, 1_000, 100, 6)
             .expect("baseline")
             .expect("command");
         service.play_action(PetAction::Sleep).expect("manual sleep");
         service.snapshot().expect("snapshot");
         let command = service
-            .tick_vitals(11_000, 100, 6)
+            .tick_vitals(nimora_runtime_core::PetVitalsPolicy::Full, 11_000, 100, 6)
             .expect("sleep recovery")
             .expect("command");
         let snapshot = service.snapshot().expect("snapshot");
@@ -1234,7 +1235,11 @@ mod tests {
         let service =
             RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
         service.repository.fail_save.store(true, Ordering::Relaxed);
-        assert!(service.tick_vitals(1_000, 100, 6).is_err());
+        assert!(
+            service
+                .tick_vitals(nimora_runtime_core::PetVitalsPolicy::Full, 1_000, 100, 6)
+                .is_err()
+        );
         assert_eq!(
             service.snapshot().expect("snapshot").last_vitals_update_ms,
             0

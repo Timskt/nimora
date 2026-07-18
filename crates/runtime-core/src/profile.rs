@@ -31,6 +31,14 @@ pub enum ProfileMode {
     Offline,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CareNeedsMode {
+    Full,
+    Simple,
+    Off,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfilePolicy {
@@ -41,6 +49,8 @@ pub struct ProfilePolicy {
     pub edge_snap: Option<bool>,
     pub sound_enabled: Option<bool>,
     pub proactive_frequency: Option<u8>,
+    #[serde(default)]
+    pub care_needs_mode: Option<CareNeedsMode>,
 }
 
 impl ProfilePolicy {
@@ -53,6 +63,7 @@ impl ProfilePolicy {
             edge_snap: Some(true),
             sound_enabled: Some(true),
             proactive_frequency: Some(25),
+            care_needs_mode: Some(CareNeedsMode::Full),
         }
     }
 
@@ -68,6 +79,7 @@ impl ProfilePolicy {
                 .proactive_frequency
                 .or(defaults.proactive_frequency)
                 .map(|value| value.min(100)),
+            care_needs_mode: override_policy.care_needs_mode.or(defaults.care_needs_mode),
         }
     }
 }
@@ -138,6 +150,7 @@ mod tests {
             edge_snap: Some(true),
             sound_enabled: Some(true),
             proactive_frequency: Some(25),
+            care_needs_mode: Some(CareNeedsMode::Full),
         };
         let overrides = ProfilePolicy {
             mode: ProfileMode::Work,
@@ -146,6 +159,7 @@ mod tests {
             edge_snap: None,
             sound_enabled: None,
             proactive_frequency: Some(200),
+            care_needs_mode: Some(CareNeedsMode::Simple),
         };
         let merged = ProfilePolicy::merge(&defaults, &overrides);
         assert_eq!(merged.always_on_top, Some(true));
@@ -153,6 +167,7 @@ mod tests {
         assert_eq!(merged.click_through, Some(true));
         assert_eq!(merged.edge_snap, Some(true));
         assert_eq!(merged.proactive_frequency, Some(100));
+        assert_eq!(merged.care_needs_mode, Some(CareNeedsMode::Simple));
     }
 
     #[test]
@@ -167,5 +182,20 @@ mod tests {
             Profile::new("Work", policy),
             Err(ProfileError::InvalidProactiveFrequency)
         );
+    }
+
+    #[test]
+    fn legacy_policy_without_care_mode_defaults_to_full_when_resolved() {
+        let policy: ProfilePolicy = serde_json::from_value(serde_json::json!({
+            "mode": "companion",
+            "alwaysOnTop": true,
+            "clickThrough": false,
+            "edgeSnap": true,
+            "soundEnabled": true,
+            "proactiveFrequency": 25
+        }))
+        .expect("legacy profile remains readable");
+        let resolved = ProfilePolicy::merge(&ProfilePolicy::standard(), &policy);
+        assert_eq!(resolved.care_needs_mode, Some(CareNeedsMode::Full));
     }
 }

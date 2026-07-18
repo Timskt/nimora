@@ -61,6 +61,13 @@ pub enum PetCareAction {
     Groom,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PetVitalsPolicy {
+    Full,
+    Simple,
+    Off,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PetIntent {
@@ -400,7 +407,13 @@ impl Pet {
             || now_ms.saturating_sub(self.last_vitals_update_ms) >= interval_ms
     }
 
-    pub fn update_vitals(&mut self, now_ms: u64, interval_ms: u64, max_intervals: u64) {
+    pub fn update_vitals(
+        &mut self,
+        policy: PetVitalsPolicy,
+        now_ms: u64,
+        interval_ms: u64,
+        max_intervals: u64,
+    ) {
         if self.last_vitals_update_ms == 0 {
             self.last_vitals_update_ms = now_ms;
             return;
@@ -411,6 +424,10 @@ impl Pet {
             .unwrap_or_default()
             .min(max_intervals);
         if intervals == 0 {
+            return;
+        }
+        if policy == PetVitalsPolicy::Off {
+            self.last_vitals_update_ms = now_ms;
             return;
         }
         let energy_delta = if self.state == PetState::Sleeping {
@@ -429,8 +446,10 @@ impl Pet {
             self.energy.saturating_sub(energy_delta)
         };
         self.mood = self.mood.saturating_sub(mood_loss);
-        self.satiety = self.satiety.saturating_sub(satiety_loss);
-        self.cleanliness = self.cleanliness.saturating_sub(cleanliness_loss);
+        if policy == PetVitalsPolicy::Full {
+            self.satiety = self.satiety.saturating_sub(satiety_loss);
+            self.cleanliness = self.cleanliness.saturating_sub(cleanliness_loss);
+        }
         self.last_vitals_update_ms = now_ms;
         if self.state == PetState::Idle {
             self.emotion = self.idle_emotion();
@@ -745,9 +764,9 @@ mod tests {
     #[test]
     fn vitals_initialize_then_apply_bounded_offline_decay() {
         let mut pet = Pet::new("Aster").expect("valid pet");
-        pet.update_vitals(1_000, 100, 6);
+        pet.update_vitals(PetVitalsPolicy::Full, 1_000, 100, 6);
         assert_eq!(pet.energy, 100);
-        pet.update_vitals(11_000, 100, 6);
+        pet.update_vitals(PetVitalsPolicy::Full, 11_000, 100, 6);
         assert_eq!(pet.energy, 94);
         assert_eq!(pet.mood, 68);
         assert_eq!(pet.satiety, 97);
@@ -759,15 +778,40 @@ mod tests {
     fn manual_sleep_restores_energy_while_other_needs_keep_evolving() {
         let mut pet = Pet::new("Aster").expect("valid pet");
         pet.energy = 40;
-        pet.update_vitals(1_000, 100, 6);
+        pet.update_vitals(PetVitalsPolicy::Full, 1_000, 100, 6);
         pet.apply_action(PetAction::Sleep);
-        pet.update_vitals(11_000, 100, 6);
+        pet.update_vitals(PetVitalsPolicy::Full, 11_000, 100, 6);
         assert_eq!(pet.energy, 52);
         assert_eq!((pet.mood, pet.satiety, pet.cleanliness), (68, 97, 99));
 
         pet.energy = 99;
-        pet.update_vitals(21_000, 100, 6);
+        pet.update_vitals(PetVitalsPolicy::Full, 21_000, 100, 6);
         assert_eq!(pet.energy, 100);
+    }
+
+    #[test]
+    fn simplified_and_disabled_vitals_preserve_user_choice() {
+        let mut simple = Pet::new("Aster").expect("valid pet");
+        simple.update_vitals(PetVitalsPolicy::Simple, 1_000, 100, 6);
+        simple.update_vitals(PetVitalsPolicy::Simple, 11_000, 100, 6);
+        assert_eq!((simple.energy, simple.mood), (94, 68));
+        assert_eq!((simple.satiety, simple.cleanliness), (100, 100));
+
+        let mut disabled = Pet::new("Aster").expect("valid pet");
+        disabled.update_vitals(PetVitalsPolicy::Off, 1_000, 100, 6);
+        disabled.update_vitals(PetVitalsPolicy::Off, 11_000, 100, 6);
+        assert_eq!(
+            (
+                disabled.energy,
+                disabled.mood,
+                disabled.satiety,
+                disabled.cleanliness
+            ),
+            (100, 70, 100, 100)
+        );
+        assert_eq!(disabled.last_vitals_update_ms, 11_000);
+        disabled.update_vitals(PetVitalsPolicy::Full, 11_100, 100, 6);
+        assert_eq!(disabled.energy, 99);
     }
 
     #[test]
