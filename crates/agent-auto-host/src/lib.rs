@@ -2,16 +2,120 @@
 
 use nimora_agent_runtime::{
     AgentGoal, AgentPlan, AgentTask, AgentTaskStatus, AutoModeCheckpoint, AutoModeSession,
-    AutoModeStatus, ProviderMessage, WorkspaceSnapshot,
+    AutoModeStatus, CompactedContext, ContextAnchor, ContextCompactionPolicy, ContextCompactor,
+    ContextManagementError, DataClassification, ProviderMessage, ToolDescriptor, WorkspaceSnapshot,
 };
 use nimora_agent_workspace_host::{WorkspaceHostError, WorkspaceScanPolicy, WorkspaceScanner};
 use nimora_persistence_sqlite::{
-    SqliteAgentGoalRepository, SqliteAutoModeCheckpointRepository, SqliteAutoModeCommitRepository,
-    SqliteAutoModeRepository, SqlitePersistenceError, SqliteWorkspaceSnapshotRepository,
+    ContextCachePolicy, SqliteAgentGoalRepository, SqliteAutoModeCheckpointRepository,
+    SqliteAutoModeCommitRepository, SqliteAutoModeRepository, SqliteContextCacheRepository,
+    SqlitePersistenceError, SqliteWorkspaceSnapshotRepository, StoredContextCacheEntry,
 };
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use uuid::Uuid;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedAutoModeContext {
+    pub context: CompactedContext,
+    pub cache_hit: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AutoModeContextService {
+    database_path: PathBuf,
+    cache_policy: ContextCachePolicy,
+    compaction_policy: ContextCompactionPolicy,
+    ttl_ms: u64,
+}
+
+impl AutoModeContextService {
+    /// Creates a bounded persistent context preparation service.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero TTL.
+    pub fn new(
+        database_path: impl Into<PathBuf>,
+        cache_policy: ContextCachePolicy,
+        compaction_policy: ContextCompactionPolicy,
+        ttl_ms: u64,
+    ) -> Result<Self, AutoModeContextError> {
+        if ttl_ms == 0 {
+            return Err(AutoModeContextError::InvalidTtl);
+        }
+        Ok(Self {
+            database_path: database_path.into(),
+            cache_policy,
+            compaction_policy,
+            ttl_ms,
+        })
+    }
+
+    /// Compacts a continuation and reuses only its exact persistent cache identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid protocol, compaction bounds, expiry overflow, or storage.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compact_or_load(
+        &self,
+        task: &AgentTask,
+        model: &str,
+        source: &[ProviderMessage],
+        tools: &[ToolDescriptor],
+        anchor: &ContextAnchor,
+        data_classification: DataClassification,
+        maximum_data_classification: DataClassification,
+        now_ms: u64,
+    ) -> Result<PreparedAutoModeContext, AutoModeContextError> {
+        let candidate = ContextCompactor.compact(
+            task.id,
+            task.trace_id,
+            &task.provider_id,
+            model,
+            source,
+            tools,
+            anchor,
+            self.compaction_policy,
+            now_ms,
+        )?;
+        let repository =
+            SqliteContextCacheRepository::open(&self.database_path, self.cache_policy)?;
+        if let Some(context) = repository.get(
+            &candidate.cache_key,
+            &anchor.workspace_fingerprint,
+            maximum_data_classification,
+            now_ms,
+        )? {
+            return Ok(PreparedAutoModeContext {
+                context,
+                cache_hit: true,
+            });
+        }
+        let expires_at_ms = now_ms
+            .checked_add(self.ttl_ms)
+            .ok_or(AutoModeContextError::InvalidTtl)?;
+        repository.put(
+            &StoredContextCacheEntry::new(candidate.clone(), data_classification, expires_at_ms)?,
+            now_ms,
+        )?;
+        Ok(PreparedAutoModeContext {
+            context: candidate,
+            cache_hit: false,
+        })
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum AutoModeContextError {
+    #[error("Auto Mode context cache TTL is invalid")]
+    InvalidTtl,
+    #[error(transparent)]
+    Context(#[from] ContextManagementError),
+    #[error(transparent)]
+    Persistence(#[from] SqlitePersistenceError),
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecoveredAutoModeTurn {
@@ -407,6 +511,80 @@ mod tests {
                 .status,
             AutoModeStatus::Paused
         );
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    #[test]
+    fn persistent_context_cache_hits_only_exact_turn_identity() {
+        let (database, workspace, session_id) = fixture();
+        let recovered = AutoModeRecoveryService::new(&database, WorkspaceScanPolicy::default())
+            .recover(session_id, &workspace, 1_100)
+            .expect("recover");
+        let service = AutoModeContextService::new(
+            &database,
+            ContextCachePolicy::new(16, 1024 * 1024).expect("cache policy"),
+            ContextCompactionPolicy {
+                max_messages: 32,
+                max_content_bytes: 32 * 1024,
+                retain_recent_units: 16,
+            },
+            60_000,
+        )
+        .expect("context service");
+        let anchor = ContextAnchor {
+            goal: recovered.goal.objective.clone(),
+            constraints: vec!["Do not replay approvals".to_owned()],
+            pending_steps: recovered
+                .plan
+                .steps
+                .iter()
+                .map(|step| step.text.clone())
+                .collect(),
+            evidence: Vec::new(),
+            workspace_fingerprint: recovered.workspace.fingerprint.clone(),
+            plan_revision: recovered.plan.revision,
+        };
+        let first = service
+            .compact_or_load(
+                &recovered.task,
+                &recovered.model,
+                &recovered.messages,
+                &[],
+                &anchor,
+                DataClassification::Personal,
+                DataClassification::Personal,
+                1_101,
+            )
+            .expect("first context");
+        assert!(!first.cache_hit);
+        let second = service
+            .compact_or_load(
+                &recovered.task,
+                &recovered.model,
+                &recovered.messages,
+                &[],
+                &anchor,
+                DataClassification::Personal,
+                DataClassification::Personal,
+                1_102,
+            )
+            .expect("cached context");
+        assert!(second.cache_hit);
+        assert_eq!(first.context, second.context);
+        let other_model = service
+            .compact_or_load(
+                &recovered.task,
+                "model:other",
+                &recovered.messages,
+                &[],
+                &anchor,
+                DataClassification::Personal,
+                DataClassification::Personal,
+                1_103,
+            )
+            .expect("isolated model");
+        assert!(!other_model.cache_hit);
         fs::remove_file(database).expect("database cleanup");
         fs::remove_dir_all(workspace).expect("workspace cleanup");
     }
