@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { ProfileManager } from "./components/ProfileManager";
 import { LazyWorkspace } from "./components/LazyWorkspace";
 import { petItemPresentation } from "./components/petItems";
-import { petGrowth } from "./components/petGrowth";
+import type { PetRelationshipStage } from "@nimora/schemas";
 import type { ActiveThemeSnapshot, AssetPreviewAudio, DesktopSnapshot, OutboxSnapshot, PetCareAction, PetItemId, ThemeDescriptor } from "./platform/desktop";
 import { desktopApi } from "./platform/desktop";
 
@@ -36,6 +36,14 @@ export function keepsakePresentation(id: keyof typeof keepsakeMetadata) {
 export function itemPresentation(id: PetItemId) {
   return petItemPresentation(id);
 }
+
+const relationshipStageLabels: Record<PetRelationshipStage, string> = {
+  newly_met: "初识",
+  familiar: "熟悉",
+  trusted: "信赖",
+  kindred: "知己",
+  lifelong: "长久相伴",
+};
 
 export function normalizedPetName(value: string): string | null {
   const name = value.trim();
@@ -75,7 +83,8 @@ export function App() {
   const [notice, setNotice] = useState(desktopApi.native ? "原生运行时已连接" : "浏览器预览模式");
   const [petNameDraft, setPetNameDraft] = useState("");
   const updateNotice = useCallback((message: string) => setNotice(message), []);
-  const relationship = petGrowth(desktopSnapshot?.pet.bondPoints, desktopSnapshot?.pet.affinity ?? 0);
+  const relationship = desktopSnapshot?.petRelationship ?? { bondPoints: 0, affinity: 0, level: 1, levelProgress: 0, pointsPerLevel: 50, stage: "newly_met" as const, nextStage: "familiar" as const, nextStageAt: 25 };
+  const relationshipProgress = relationship.levelProgress / relationship.pointsPerLevel * 100;
 
   useEffect(() => {
     void Promise.all([desktopApi.snapshot(), desktopApi.outboxSnapshot(), desktopApi.activeTheme()]).then(([snapshot, nextOutbox, nextTheme]) => {
@@ -309,13 +318,13 @@ export function App() {
               <label><span>伙伴名字</span><input aria-label="伙伴名字" disabled={recoveryMode} maxLength={64} value={petNameDraft} onChange={(event) => setPetNameDraft(event.target.value)} /></label>
               <button type="submit" disabled={recoveryMode}>保存</button>
             </form>
-            <div className="metric-row"><strong>Lv. {relationship.level}</strong><span>累计陪伴 {relationship.bondPoints}</span></div>
+            <div className="metric-row"><strong>{relationshipStageLabels[relationship.stage]} · Lv. {relationship.level}</strong><span>累计陪伴 {relationship.bondPoints}</span></div>
             <div className="progress-track relationship-progress" aria-label={`当前等级进度 ${relationship.levelProgress}/${relationship.pointsPerLevel}`}>
-              <span style={{ width: `${relationship.progressPercent}%` }} />
+              <span style={{ width: `${relationshipProgress}%` }} />
             </div>
             <p className="supporting relationship-detail">
-              <span>升级进度 {relationship.levelProgress} / {relationship.pointsPerLevel}</span>
-              <span>关系温度 {desktopSnapshot?.pet.affinity ?? 0} / 100</span>
+              <span>{relationship.nextStage ? `下一段关系：${relationshipStageLabels[relationship.nextStage]} · 在自然陪伴中逐渐抵达` : "我们的陪伴仍会继续生长"}</span>
+              <span>关系温度 {relationship.affinity} / 100</span>
             </p>
             <div className="keepsake-collection" aria-label={`已收藏 ${desktopSnapshot?.pet.keepsakes.length ?? 0} 件陪伴纪念`}>
               {(desktopSnapshot?.pet.keepsakes ?? []).map((id) => {

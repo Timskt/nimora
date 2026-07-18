@@ -5,6 +5,7 @@ import {
   eventSchema,
   modelAnimationMapSchema,
   petSchema,
+  petRelationshipSnapshotSchema,
   pointerButtonSchema,
   profileSnapshotSchema,
   safetySnapshotSchema,
@@ -63,6 +64,28 @@ describe("eventSchema", () => {
       data: null,
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("petRelationshipSnapshotSchema", () => {
+  const relationship = {
+    bondPoints: 84,
+    affinity: 84,
+    level: 2,
+    levelProgress: 34,
+    pointsPerLevel: 50,
+    stage: "familiar",
+    nextStage: "trusted",
+    nextStageAt: 100,
+  };
+
+  it("accepts an authoritative relationship projection", () => {
+    expect(petRelationshipSnapshotSchema.safeParse(relationship).success).toBe(true);
+  });
+
+  it("rejects unknown stages and unsafe counters", () => {
+    expect(petRelationshipSnapshotSchema.safeParse({ ...relationship, stage: "best_friend" }).success).toBe(false);
+    expect(petRelationshipSnapshotSchema.safeParse({ ...relationship, bondPoints: Number.MAX_SAFE_INTEGER + 1 }).success).toBe(false);
   });
 });
 

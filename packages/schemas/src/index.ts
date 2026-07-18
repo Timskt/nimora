@@ -62,6 +62,17 @@ export const emotionSchema = z.enum([
 
 export const pointerButtonSchema = z.enum(["left", "middle", "right"]);
 export const petKeepsakeSchema = z.enum(["first_hello", "caring_hands", "trusted_companion", "hundred_moments"]);
+export const petRelationshipStageSchema = z.enum(["newly_met", "familiar", "trusted", "kindred", "lifelong"]);
+export const petRelationshipSnapshotSchema = z.object({
+  bondPoints: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  affinity: z.number().int().min(0).max(100),
+  level: z.number().int().positive(),
+  levelProgress: z.number().int().nonnegative(),
+  pointsPerLevel: z.number().int().positive(),
+  stage: petRelationshipStageSchema,
+  nextStage: petRelationshipStageSchema.nullable(),
+  nextStageAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+});
 export const petItemIdSchema = z.enum(["berry_bite", "star_ball", "bubble_soap"]);
 const starterInventory = [
   { itemId: "berry_bite" as const, quantity: 3 },
@@ -329,6 +340,8 @@ export const assetPackageSchema = z.object({
 export type NimoraEvent = z.infer<typeof eventSchema>;
 export type NimoraCommand = z.infer<typeof commandSchema>;
 export type Pet = z.infer<typeof petSchema>;
+export type PetRelationshipStage = z.infer<typeof petRelationshipStageSchema>;
+export type PetRelationshipSnapshot = z.infer<typeof petRelationshipSnapshotSchema>;
 export type PointerButton = z.infer<typeof pointerButtonSchema>;
 export type ProfilePolicy = z.infer<typeof profilePolicySchema>;
 export type ProfileMode = z.infer<typeof profileModeSchema>;

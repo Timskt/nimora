@@ -996,6 +996,7 @@ fn restore_auto_mode_jobs(
 #[serde(rename_all = "camelCase")]
 struct DesktopSnapshot {
     pet: Pet,
+    pet_relationship: nimora_runtime_core::PetRelationshipSnapshot,
     window_policy: WindowPolicy,
     safety: SafetySnapshot,
     startup: StartupStatus,
@@ -3288,6 +3289,7 @@ impl Serialize for DesktopError {
 #[allow(clippy::needless_pass_by_value)]
 fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, DesktopError> {
     let pet = state.runtime.snapshot()?;
+    let pet_relationship = pet.relationship();
     let window_policy = *state
         .window_policy
         .lock()
@@ -3295,6 +3297,7 @@ fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, D
     let safety = state.safety.snapshot()?;
     Ok(DesktopSnapshot {
         pet,
+        pet_relationship,
         window_policy,
         safety,
         startup: state.startup.clone(),

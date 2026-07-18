@@ -2,6 +2,7 @@ import type {
   NimoraCommand,
   NimoraEvent,
   Pet,
+  PetRelationshipSnapshot,
   PointerButton,
   ProfilePolicy,
   ProfileSnapshot,
@@ -23,7 +24,9 @@ export type CommandRisk = "safe" | "low" | "medium" | "high" | "critical";
 
 export interface DesktopSnapshot {
   pet: Pet;
+  petRelationship: PetRelationshipSnapshot;
   windowPolicy: {
+    visible: boolean;
     alwaysOnTop: boolean;
     clickThrough: boolean;
   };
@@ -1087,12 +1090,39 @@ const previewSnapshot: DesktopSnapshot = {
       { itemId: "bubble_soap", quantity: 3 },
     ],
   },
-  windowPolicy: { alwaysOnTop: true, clickThrough: false },
+  petRelationship: { bondPoints: 84, affinity: 84, level: 2, levelProgress: 34, pointsPerLevel: 50, stage: "familiar", nextStage: "trusted", nextStageAt: 100 },
+  windowPolicy: { visible: true, alwaysOnTop: true, clickThrough: false },
   safety: { mode: "normal", reason: null },
   startup: previewRecoveryMode
     ? { mode: "recovery", reason: "database-unavailable" }
     : { mode: "normal", reason: null },
 };
+
+function refreshPreviewRelationship(): void {
+  const bondPoints = Math.max(previewSnapshot.pet.bondPoints, previewSnapshot.pet.affinity);
+  const stages = [
+    ["newly_met", 0],
+    ["familiar", 25],
+    ["trusted", 100],
+    ["kindred", 300],
+    ["lifelong", 1_000],
+  ] as const;
+  let stageIndex = 0;
+  for (let index = 1; index < stages.length; index += 1) {
+    if (bondPoints >= stages[index]![1]) stageIndex = index;
+  }
+  const next = stages[stageIndex + 1];
+  previewSnapshot.petRelationship = {
+    bondPoints,
+    affinity: previewSnapshot.pet.affinity,
+    level: Math.floor(bondPoints / 50) + 1,
+    levelProgress: bondPoints % 50,
+    pointsPerLevel: 50,
+    stage: stages[stageIndex]?.[0] ?? "newly_met",
+    nextStage: next?.[0] ?? null,
+    nextStageAt: next?.[1] ?? null,
+  };
+}
 
 const previewProfiles: ProfileSnapshot = {
   schemaVersion: 1,
@@ -1158,7 +1188,7 @@ export function createDesktopApi(
       async onCharacterRendererChanged() { return () => undefined; },
       async onPetAutonomyChanged() { return () => undefined; },
       async onPetVitalsChanged() { return () => undefined; },
-      async snapshot() { return structuredClone(previewSnapshot); },
+      async snapshot() { refreshPreviewRelationship(); return structuredClone(previewSnapshot); },
       async drainEvents() { return []; },
       async outboxSnapshot() { return { pending: 0, leased: 0, delivered: 0, deadLetter: 0 }; },
       async testAutomation(definition, eventType, eventData) {

@@ -70,6 +70,39 @@ pub enum PetKeepsake {
     HundredMoments,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PetRelationshipStage {
+    NewlyMet,
+    Familiar,
+    Trusted,
+    Kindred,
+    Lifelong,
+}
+
+impl PetRelationshipStage {
+    pub const ALL: [(Self, u64); 5] = [
+        (Self::NewlyMet, 0),
+        (Self::Familiar, 25),
+        (Self::Trusted, 100),
+        (Self::Kindred, 300),
+        (Self::Lifelong, 1_000),
+    ];
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PetRelationshipSnapshot {
+    pub bond_points: u64,
+    pub affinity: u8,
+    pub level: u64,
+    pub level_progress: u64,
+    pub points_per_level: u64,
+    pub stage: PetRelationshipStage,
+    pub next_stage: Option<PetRelationshipStage>,
+    pub next_stage_at: Option<u64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PetItemId {
@@ -254,6 +287,7 @@ impl Pet {
     const AUTONOMY_REST_ENERGY_GAIN: u8 = 8;
     const SLEEP_ENERGY_GAIN_PER_INTERVAL: u64 = 2;
     pub const MAX_BOND_POINTS: u64 = 9_007_199_254_740_991;
+    pub const BOND_POINTS_PER_LEVEL: u64 = 50;
 
     fn idle_emotion(&self) -> Emotion {
         if self.energy <= Self::LOW_VITAL_THRESHOLD {
@@ -417,13 +451,33 @@ impl Pet {
     #[must_use]
     pub fn relationship_level(&self) -> u64 {
         self.effective_bond_points()
-            .saturating_div(50)
+            .saturating_div(Self::BOND_POINTS_PER_LEVEL)
             .saturating_add(1)
     }
 
     #[must_use]
     pub fn relationship_level_progress(&self) -> u64 {
-        self.effective_bond_points() % 50
+        self.effective_bond_points() % Self::BOND_POINTS_PER_LEVEL
+    }
+
+    #[must_use]
+    pub fn relationship(&self) -> PetRelationshipSnapshot {
+        let bond_points = self.effective_bond_points();
+        let stage_index = PetRelationshipStage::ALL
+            .partition_point(|(_, threshold)| *threshold <= bond_points)
+            .saturating_sub(1);
+        let stage = PetRelationshipStage::ALL[stage_index].0;
+        let next = PetRelationshipStage::ALL.get(stage_index + 1).copied();
+        PetRelationshipSnapshot {
+            bond_points,
+            affinity: self.affinity,
+            level: self.relationship_level(),
+            level_progress: self.relationship_level_progress(),
+            points_per_level: Self::BOND_POINTS_PER_LEVEL,
+            stage,
+            next_stage: next.map(|(stage, _)| stage),
+            next_stage_at: next.map(|(_, threshold)| threshold),
+        }
     }
 
     fn add_bond_points(&mut self, points: u64) {
@@ -1256,6 +1310,95 @@ mod tests {
             assert_eq!(pet.relationship_level(), level);
             assert_eq!(pet.relationship_level_progress(), progress);
         }
+    }
+
+    #[test]
+    fn relationship_stage_uses_stable_bond_boundaries() {
+        let mut pet = Pet::new("Mori").expect("pet");
+        for (points, stage, next_stage, next_stage_at) in [
+            (
+                0,
+                PetRelationshipStage::NewlyMet,
+                Some(PetRelationshipStage::Familiar),
+                Some(25),
+            ),
+            (
+                24,
+                PetRelationshipStage::NewlyMet,
+                Some(PetRelationshipStage::Familiar),
+                Some(25),
+            ),
+            (
+                25,
+                PetRelationshipStage::Familiar,
+                Some(PetRelationshipStage::Trusted),
+                Some(100),
+            ),
+            (
+                99,
+                PetRelationshipStage::Familiar,
+                Some(PetRelationshipStage::Trusted),
+                Some(100),
+            ),
+            (
+                100,
+                PetRelationshipStage::Trusted,
+                Some(PetRelationshipStage::Kindred),
+                Some(300),
+            ),
+            (
+                299,
+                PetRelationshipStage::Trusted,
+                Some(PetRelationshipStage::Kindred),
+                Some(300),
+            ),
+            (
+                300,
+                PetRelationshipStage::Kindred,
+                Some(PetRelationshipStage::Lifelong),
+                Some(1_000),
+            ),
+            (
+                999,
+                PetRelationshipStage::Kindred,
+                Some(PetRelationshipStage::Lifelong),
+                Some(1_000),
+            ),
+            (1_000, PetRelationshipStage::Lifelong, None, None),
+            (
+                Pet::MAX_BOND_POINTS,
+                PetRelationshipStage::Lifelong,
+                None,
+                None,
+            ),
+        ] {
+            pet.bond_points = points;
+            let relationship = pet.relationship();
+            assert_eq!(
+                (
+                    relationship.stage,
+                    relationship.next_stage,
+                    relationship.next_stage_at
+                ),
+                (stage, next_stage, next_stage_at)
+            );
+        }
+    }
+
+    #[test]
+    fn relationship_projection_preserves_legacy_affinity_baseline() {
+        let mut pet = Pet::new("Mori").expect("pet");
+        pet.affinity = 84;
+        let relationship = pet.relationship();
+        assert_eq!(
+            (
+                relationship.bond_points,
+                relationship.level,
+                relationship.level_progress
+            ),
+            (84, 2, 34)
+        );
+        assert_eq!(relationship.stage, PetRelationshipStage::Familiar);
     }
 
     #[test]
