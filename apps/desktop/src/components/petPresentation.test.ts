@@ -9,6 +9,7 @@ describe("petStatusMessage", () => {
   it("prioritizes active behavior over vitals", () => {
     expect(petStatusMessage({ state: "sleeping", energy: 10, mood: 10, satiety: 10, cleanliness: 10 })).toBe("正在安静恢复体力");
     expect(petStatusMessage({ state: "walking", energy: 100, mood: 100, satiety: 100, cleanliness: 100 })).toBe("去桌面上走走看看");
+    expect(petStatusMessage({ state: "playing", energy: 100, mood: 100, satiety: 100, cleanliness: 100 })).toBe("正在桌面上自得其乐");
   });
 
   it("expresses low vitals without alarming the user", () => {

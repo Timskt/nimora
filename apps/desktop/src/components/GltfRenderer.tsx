@@ -4,7 +4,6 @@ import {
   AnimationClip,
   AnimationMixer,
   Box3,
-  Clock,
   DirectionalLight,
   HemisphereLight,
   LoopOnce,
@@ -17,6 +16,7 @@ import {
   Sphere,
   SRGBColorSpace,
   Texture,
+  Timer,
   Vector3,
   WebGLRenderer,
 } from "three";
@@ -139,11 +139,12 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
     resize();
 
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const clock = new Clock();
+    const timer = new Timer();
     const renderFrame = () => {
       if (disposed) return;
       animationFrame = window.requestAnimationFrame(renderFrame);
-      const delta = clock.getDelta();
+      timer.update();
+      const delta = timer.getDelta();
       if (!reducedMotion.matches) mixer?.update(delta);
       if (!reducedMotion.matches) vrm?.update(delta);
       renderer.render(scene, camera);
@@ -246,6 +247,7 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
 
     return () => {
       disposed = true;
+      timer.dispose();
       window.cancelAnimationFrame(animationFrame);
       resizeObserver.disconnect();
       canvas.removeEventListener("webglcontextlost", handleContextLost);

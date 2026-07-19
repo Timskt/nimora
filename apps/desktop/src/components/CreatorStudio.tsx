@@ -16,6 +16,7 @@ const modelActions = [
   { action: "pet.idle", label: "待机", looped: true, aliases: ["idle", "stand", "breath"] },
   { action: "pet.observe", label: "张望", looped: true, aliases: ["observe", "look", "curious"] },
   { action: "pet.walk", label: "行走", looped: true, aliases: ["walk", "locomotion"] },
+  { action: "pet.play", label: "自主玩耍", looped: true, aliases: ["play", "toy", "frolic"] },
   { action: "pet.perch", label: "栖息", looped: true, aliases: ["perch", "sit", "ledge"] },
   { action: "pet.climb", label: "攀爬", looped: true, aliases: ["climb", "wall", "edge"] },
   { action: "pet.peek", label: "探头", looped: true, aliases: ["peek", "head", "top-edge"] },

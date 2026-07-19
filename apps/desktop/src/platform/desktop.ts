@@ -15,7 +15,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
-export const petActions = ["idle", "observe", "walk", "perch", "climb", "peek", "stretch", "sleep", "work", "celebrate"] as const;
+export const petActions = ["idle", "observe", "walk", "play", "perch", "climb", "peek", "stretch", "sleep", "work", "celebrate"] as const;
 export type PetAction = (typeof petActions)[number];
 export const petCareActions = ["feed", "play", "groom"] as const;
 export type PetCareAction = (typeof petCareActions)[number];
@@ -1637,6 +1637,8 @@ export function createDesktopApi(
             ? { state: "working" as const, emotion: "focused" as const }
             : action === "walk"
               ? { state: "walking" as const, emotion: "happy" as const }
+              : action === "play"
+                ? { state: "playing" as const, emotion: "happy" as const }
               : action === "celebrate"
                 ? { state: "interacting" as const, emotion: "happy" as const }
                 : { state: "idle" as const, emotion: "neutral" as const };

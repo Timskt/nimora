@@ -14497,6 +14497,7 @@ mod tests {
                 "idle",
                 "observe",
                 "walk",
+                "play",
                 "perch",
                 "climb",
                 "peek",

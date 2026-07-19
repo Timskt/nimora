@@ -12,6 +12,7 @@ export function petStatusMessage(pet: Pick<Pet, "state" | "energy" | "mood" | "s
     case "observing": return "正好奇地看看桌面";
     case "sleeping": return "正在安静恢复体力";
     case "walking": return "去桌面上走走看看";
+    case "playing": return "正在桌面上自得其乐";
     case "stretching": return "舒舒服服伸个懒腰";
     case "working": return "正在专心陪你工作";
     case "dragged": return "抓稳啦…";

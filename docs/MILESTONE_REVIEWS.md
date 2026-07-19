@@ -1,5 +1,14 @@
 # Nimora 里程碑回顾
 
+## 2026-07-19 — 默认专业动画 3D 数字生命纵切复盘
+
+- 方向修正：用户验证否决程序化基础几何作为最终默认效果；默认角色改为离线打包的专业骨骼 Fox，复用 Survey、Walk、Run 动画。程序化黄色伙伴只承担模型加载失败后的可靠降级，不再代表最终美术质量。
+- 根因修正：所谓“方框感”不能只靠 Canvas Alpha 处理，宠物路由的 `html/body/#root` 必须共同透明并与控制中心画布隔离；原生窗口继续关闭 Decorations 与 Shadow。
+- 领域修正：玩耍不是 Renderer 私有动画，而是公开的 `PetIntent::Play → PetAction::Play → PetState::Playing`；所有 Renderer、Creator、Voice、Agent 与用户代码消费同一语义。
+- 鲁棒性：Three.js 使用独立懒加载与显式资源释放；自定义角色或 Fox 失败回退程序化 3D，WebGL 初始化失败和 React Error Boundary 再收敛到 SVG，减少资产、GPU 与驱动差异导致桌宠消失的风险。
+- 供应链：Fox 来源于 Khronos glTF Sample Assets；模型为 CC0，骨骼动画与 glTF 转换为 CC BY 4.0，原始来源说明随仓库保存，运行时不依赖网络。
+- 验证：前端 114 项、TypeScript、生产构建、包体预算及 GLB 打包前后 SHA-256 一致性通过；本轮仍无法取得可信原生截图，故视觉标记为“原生运行、待人工观察”，不以浏览器预览冒充桌面透明证据。
+
 ## 2026-07-19 — QQ 宠物式离屏召回闭环
 
 - 缺口修正：托盘恢复此前只处理可见性与鼠标穿透；显示器断开或分辨率变化后，宠物可能逻辑上已恢复但窗口仍在所有 Work Area 之外。

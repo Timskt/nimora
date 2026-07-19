@@ -1,0 +1,35 @@
+import type { CharacterRendererSnapshot } from "../platform/desktop";
+
+export const BUILTIN_FOX_RENDERER: CharacterRendererSnapshot = {
+  spec: "nimora.renderer/1",
+  assetId: "character.builtin.companion-fox",
+  assetBaseUrl: "/models/",
+  backend: "gltf",
+  canvas: { width: 218, height: 242 },
+  anchor: { x: 0.5, y: 0.9 },
+  defaultScale: 1,
+  pixelArt: false,
+  fallbacks: {},
+  clips: null,
+  model: "companion-fox.glb",
+  animationMap: {
+    spec: "nimora.animation-map/1",
+    clips: {
+      "pet.idle": { animation: "Survey", looped: true },
+      "pet.observe": { animation: "Survey", looped: true },
+      "pet.walk": { animation: "Walk", looped: true },
+      "pet.play": { animation: "Run", looped: true },
+      "pet.perch": { animation: "Survey", looped: true },
+      "pet.climb": { animation: "Walk", looped: true },
+      "pet.peek": { animation: "Survey", looped: true },
+      "pet.stretch": { animation: "Survey", looped: true },
+      "pet.sleep": { animation: "Survey", looped: true },
+      "pet.drag": { animation: "Survey", looped: true },
+      "pet.click": { animation: "Survey", looped: true },
+      "pet.work": { animation: "Survey", looped: true },
+      "pet.celebrate": { animation: "Run", looped: true },
+    },
+  },
+  vrmExpressionMap: null,
+  fallbackReason: null,
+};

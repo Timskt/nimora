@@ -472,7 +472,7 @@ mod tests {
 
         fn read_pet_action_catalog(&self) -> Result<Value, String> {
             Ok(
-                json!({"actions": ["idle", "observe", "walk", "perch", "climb", "peek", "stretch", "sleep", "work", "celebrate"]}),
+                json!({"actions": ["idle", "observe", "walk", "play", "perch", "climb", "peek", "stretch", "sleep", "work", "celebrate"]}),
             )
         }
 

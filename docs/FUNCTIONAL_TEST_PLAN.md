@@ -1324,3 +1324,14 @@ ID / 标题 / 优先级 / 前置条件
 | AST-VRM-EXPR-007 | 模型缺少目标 Preset或 Expression Manager 抛错 | 不执行替代私有参数，不破坏角色交互，安全回退 Neutral/内置角色策略 |
 | AST-VRM-EXPR-008 | 活动 3D 角色通过 Tauri Snapshot 加载 | `animationMap` 与 `vrmExpressionMap` 均完整保留，Browser Preview 不伪造第三方映射 |
 | AST-VRM-EXPR-009 | AI、Skill、Automation 或用户程序尝试直接改表情 | 只能选择公开 Pet Action；不能获得 Expression Manager、BlendShape 或 Renderer 写权限 |
+
+## PET-3D-BUILTIN — 默认 3D 桌面伙伴
+
+| ID | 场景 | 预期结果 |
+| --- | --- | --- |
+| PET-3D-001 | 全新离线安装后在 macOS/Windows 原生桌面启动并覆盖 Idle、Observe、Walk、Play、Sleep | 无需运行时下载或导入即可显示专业骨骼 Fox；Survey、Walk、Run 精确映射状态；发布物包含 CC0/CC BY 4.0 来源与署名 |
+| PET-3D-002 | 分别在浅色、深色、动态壁纸和多显示器上移动宠物并截图采样窗口四角 | 仅角色、影子、气泡和显式菜单可见；窗口四角 Alpha 为透明；无矩形底色、系统标题栏或窗口阴影 |
+| PET-3D-003 | 分别注入 Fox 加载失败、程序化 WebGL Context 创建失败、Context Lost 与 React Renderer 异常 | 依次回退程序化 3D 与本地 SVG，并给一次温和反馈；无空 Canvas、崩溃、重试风暴或网络请求 |
+| PET-3D-004 | 将健康宠物自主序列推进至 Play，等待动作结束并重启 | Playing/Happy、Renderer `pet.play` 和状态文案一致；动作有界结束回 Idle；Snapshot 可迁移且离线可用 |
+| PET-3D-005 | 构建生产包并校验 `public/models` 与 `dist/models` | `companion-fox.glb` 必须存在且 SHA-256 为 `d97044e701822bac5a62696459b27d7b375aada5de8574ed4362edbba94771f7`；离线断网启动仍可加载 |
+| PET-3D-006 | 检查所有公开 `pet.*` 动作映射 | 每个动作均绑定 Survey、Walk 或 Run；未知动作稳定回 Idle，不因缺失 Clip 停止渲染 |

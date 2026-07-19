@@ -20,10 +20,16 @@ import { focusMenuItem, isPetMenuShortcut, nextMenuItemIndex } from "./petMenu";
 import { agentCompanionPresentation } from "./agentCompanion";
 import { canPresentPetBubble, usePetBubble } from "./petBubble";
 import { subscribeReducedMotion } from "./reducedMotion";
+import { BuiltinPet } from "./BuiltinPet";
+import { BUILTIN_FOX_RENDERER } from "./builtinFox";
 
 const GltfRenderer = lazy(async () => {
   const module = await import("./GltfRenderer");
   return { default: module.GltfRenderer };
+});
+const BuiltinPet3D = lazy(async () => {
+  const module = await import("./BuiltinPet3D");
+  return { default: module.BuiltinPet3D };
 });
 const PET_WINDOW_HEARTBEAT_INTERVAL_MS = 15_000;
 
@@ -31,6 +37,8 @@ export function PetOverlay() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [renderer, setRenderer] = useState<CharacterRendererSnapshot | null>(null);
   const [rendererFailed, setRendererFailed] = useState(false);
+  const [builtinModelFailed, setBuiltinModelFailed] = useState(false);
+  const [builtin3dFailed, setBuiltin3dFailed] = useState(false);
   const [surface, setSurface] = useState<PetSurface | null>(null);
   const [statusBubblesEnabled, setStatusBubblesEnabled] = useState(true);
   const { message, visible: bubbleVisible, presentBubble } = usePetBubble("正在醒来…", statusBubblesEnabled);
@@ -75,6 +83,8 @@ export function PetOverlay() {
     const descriptor = await desktopApi.activeCharacterRenderer();
     setRenderer(descriptor);
     setRendererFailed(false);
+    setBuiltinModelFailed(false);
+    setBuiltin3dFailed(false);
   }, []);
 
   useEffect(() => {
@@ -215,23 +225,44 @@ export function PetOverlay() {
     presentBubble("角色渲染失败，已使用内置角色", "error");
   }, [presentBubble]);
 
+  const handleBuiltin3dFailure = useCallback(() => {
+    setBuiltin3dFailed(true);
+    presentBubble("3D 加速不可用，已切换轻量角色", "error");
+  }, [presentBubble]);
+
+  const handleBuiltinModelFailure = useCallback(() => {
+    setBuiltinModelFailed(true);
+    presentBubble("专业角色资源不可用，已切换内置 3D 角色", "error");
+  }, [presentBubble]);
+
   async function play(action: PetAction) {
-    presentBubble(action === "celebrate" ? "今天也很棒！" : action === "sleep" ? "晚安，我会慢慢恢复体力" : "收到");
-    await desktopApi.playAction(action);
-    const next = await desktopApi.snapshot();
-    setSnapshot(next);
+    try {
+      await desktopApi.playAction(action);
+      setSnapshot(await desktopApi.snapshot());
+      presentBubble(action === "celebrate" ? "今天也很棒！" : action === "sleep" ? "晚安，我会慢慢恢复体力" : "收到");
+    } catch {
+      presentBubble("这个动作现在接不上，再试一次吧", "error");
+    }
   }
 
   async function interact(x: number, y: number) {
-    presentBubble("今天也很棒！");
-    await desktopApi.clickPet(x, y, "left");
-    setSnapshot(await desktopApi.snapshot());
+    try {
+      await desktopApi.clickPet(x, y, "left");
+      setSnapshot(await desktopApi.snapshot());
+      presentBubble("今天也很棒！");
+    } catch {
+      presentBubble("慢一点，我还没站稳呢", "error");
+    }
   }
 
   async function doubleInteract(x: number, y: number) {
-    presentBubble("太开心了，再来一次吧！");
-    await desktopApi.doubleClickPet(x, y, "left");
-    setSnapshot(await desktopApi.snapshot());
+    try {
+      await desktopApi.doubleClickPet(x, y, "left");
+      setSnapshot(await desktopApi.snapshot());
+      presentBubble("太开心了，再来一次吧！");
+    } catch {
+      presentBubble("慢一点，我还没站稳呢", "error");
+    }
   }
 
   async function stroke(distancePx: number, durationMs: number, reversals: number) {
@@ -307,10 +338,15 @@ export function PetOverlay() {
   }
 
   async function drag() {
-    presentBubble("抓稳啦…");
-    await desktopApi.dragPet();
-    setSnapshot(await desktopApi.snapshot());
-    presentBubble("安全落地");
+    try {
+      presentBubble("抓稳啦…");
+      await desktopApi.dragPet();
+      setSnapshot(await desktopApi.snapshot());
+      presentBubble("安全落地");
+    } catch {
+      setSnapshot(await desktopApi.snapshot().catch(() => snapshot));
+      presentBubble("这次没拖起来，再试一次吧", "error");
+    }
   }
 
   async function setHome() {
@@ -498,13 +534,28 @@ export function PetOverlay() {
                 onFailure={handleRendererFailure}
               />
             )
+          ) : !builtinModelFailed ? (
+            <RendererErrorBoundary resetKey={BUILTIN_FOX_RENDERER.assetId} onFailure={handleBuiltinModelFailure}>
+              <Suspense fallback={<GltfLoadingPlaceholder descriptor={BUILTIN_FOX_RENDERER} />}>
+                <GltfRenderer
+                  descriptor={BUILTIN_FOX_RENDERER}
+                  action={companionAction ?? petStateAction(snapshot?.pet.state ?? "idle")}
+                  onFailure={handleBuiltinModelFailure}
+                />
+              </Suspense>
+            </RendererErrorBoundary>
+          ) : builtin3dFailed ? (
+            <BuiltinPet state={companionAction ?? snapshot?.pet.state ?? "idle"} emotion={snapshot?.pet.emotion ?? "neutral"} />
           ) : (
-            <span className={`overlay-pet ${companionAction ?? snapshot?.pet.state ?? "idle"} emotion-${snapshot?.pet.emotion ?? "neutral"}`} aria-hidden="true">
-              <i className="overlay-ear left" /><i className="overlay-ear right" />
-              <i className="overlay-star">✦</i>
-              <i className="overlay-eye left" /><i className="overlay-eye right" />
-              <i className="overlay-mouth" />
-            </span>
+            <RendererErrorBoundary resetKey="builtin.aster.3d" onFailure={handleBuiltin3dFailure}>
+              <Suspense fallback={<BuiltinPet state={companionAction ?? snapshot?.pet.state ?? "idle"} emotion={snapshot?.pet.emotion ?? "neutral"} />}>
+                <BuiltinPet3D
+                  state={companionAction ?? snapshot?.pet.state ?? "idle"}
+                  emotion={snapshot?.pet.emotion ?? "neutral"}
+                  onFailure={handleBuiltin3dFailure}
+                />
+              </Suspense>
+            </RendererErrorBoundary>
           )}
         </span>
         <span className="overlay-shadow" aria-hidden="true" />

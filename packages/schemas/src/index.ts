@@ -44,6 +44,7 @@ export const petStateSchema = z.enum([
   "idle",
   "observing",
   "walking",
+  "playing",
   "stretching",
   "sleeping",
   "dragged",
@@ -119,7 +120,7 @@ export const petSchema = z.object({
     sequence: z.number().int().nonnegative(),
     nextDueMs: z.number().int().nonnegative(),
     activeUntilMs: z.number().int().nonnegative().nullable(),
-    activeIntent: z.enum(["observe", "explore", "rest"]).nullable(),
+    activeIntent: z.enum(["observe", "explore", "play", "stretch", "rest"]).nullable(),
     resumeAction: z.enum(["perch", "climb", "peek"]).nullable().optional(),
   }).optional(),
 });

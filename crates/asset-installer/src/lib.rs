@@ -56,6 +56,7 @@ const VOICE_V1_CUES: &[&str] = &[
     "pet.click",
     "pet.idle",
     "pet.observe",
+    "pet.play",
     "pet.perch",
     "pet.climb",
     "pet.peek",
@@ -3516,7 +3517,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded.expressions["pet.click"].preset, "surprised");
-        assert_eq!(loaded.expressions["pet.click"].weight, 0.4);
+        assert!((loaded.expressions["pet.click"].weight - 0.4).abs() < f64::EPSILON);
         fs::remove_dir_all(root).unwrap();
     }
 

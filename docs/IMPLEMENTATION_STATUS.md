@@ -1,5 +1,14 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 专业动画 3D 桌面伙伴与自主玩耍闭环
+
+- 默认内置角色改为随安装包离线分发的 Khronos glTF Sample Assets Fox；专业骨骼与 `Survey`、`Walk`、`Run` 动画分别承载观察、移动和玩耍语义，不在运行时下载模型。
+- 自定义角色仍优先；加载失败后按“专业 Fox → Three.js 程序化黄色伙伴 → 本地 SVG”三级链收敛，不保留空 Canvas。模型、骨骼动画和 glTF 转换的 CC0/CC BY 4.0 来源与署名保存在 `licenses/COMPANION_FOX.md`。
+- `Playing/Play` 已进入 Rust 领域状态机、Schema、Browser Adapter、Sprite/VRM 映射、Creator Studio、Voice Cue、用户代码与 Agent Tool 动作目录；健康宠物的确定性自主循环包含有界玩耍并可安全结束。
+- 宠物 WebView 的 `html/body/#root` 透明样式独立于控制中心，原生窗口继续使用无装饰、透明、无阴影、跳过任务栏配置；拖动权限仅授予 `pet` 窗口。
+- 已验证：Frontend 114 项测试、TypeScript、生产 Build、Bundle Budget 与打包模型 SHA-256 一致性通过；Tauri Dev 已热加载模型，GLTF Adapter 使用 `Timer`，不再依赖弃用的 `Clock`。
+- 证据边界：macOS 当前拒绝命令行屏幕录制，浏览器插件返回不可用；因此不声称已取得本轮原生视觉截图。透明合成、实际拖动手感、DPI 与多屏外观仍需可观察原生会话验收，Browser Preview 不可替代。
+
 ## 2026-07-19 — VRM 包级安全表情映射
 
 - VRM 角色包可通过完整性清单内的 `entrypoints.vrmExpressions` 声明 `nimora.vrm-expression-map/1`，为公开 `pet.*` 动作选择 `happy`、`sad`、`surprised` 或 `relaxed` 标准 Preset 与 `0..1` 权重。
