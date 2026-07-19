@@ -1,5 +1,12 @@
 import type { Pet } from "@nimora/schemas";
 
+export type PetFacing = "left" | "right" | "neutral";
+
+export function petFacing(pet: Pick<Pet, "state" | "autonomy">): PetFacing {
+  if (pet.state !== "walking") return "neutral";
+  return (pet.autonomy?.sequence ?? 0) % 2 === 0 ? "right" : "left";
+}
+
 export function petStatusMessage(pet: Pick<Pet, "state" | "energy" | "mood" | "satiety" | "cleanliness">): string {
   switch (pet.state) {
     case "observing": return "正好奇地看看桌面";

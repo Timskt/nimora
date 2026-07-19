@@ -1,5 +1,12 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 自主漫游方向反馈
+
+- 原生桌宠的 12 帧平滑漫游现与角色朝向保持一致，不再出现角色面向固定方向却横向滑动的割裂感；朝向由 Core 已持久化的 Autonomy Sequence 确定性投影，和 Desktop Coordinator 的左右目标规划使用同一奇偶规则。
+- 表现层新增统一 `pet-character-stage` 容器，仅在 Walking 状态按左右方向镜像；内置角色、Sprite Sequence/Atlas、glTF 与 VRM 共用该容器，不要求各 Renderer 复制窗口移动逻辑，也不允许资产代码直接操作原生窗口。
+- 角色资源默认面向右侧；旧快照缺少 Autonomy 时 Walking 安全回退右侧，退出 Walking 后立即回到 Neutral，不把瞬时移动方向持久化成第二份状态。Reduced Motion 会移除朝向切换过渡，但保留必要的静态方向信息。
+- 单元测试覆盖奇偶方向、旧快照回退和非 Walking 收敛；Desktop 前端全量测试、TypeScript、生产构建与 Bundle Budget 通过。真实窗口移动与角色同步仍需 macOS/Windows 真机视觉门禁。
+
 ## 2026-07-19 — 自主张望语义纵切
 
 - 自主 Observe 不再错误复用 Celebrate：Core 新增稳定的 `PetAction::Observe` 与 `PetState::Observing`，公开 JSON 为 `observe`，情绪保持 Neutral，结束和重启恢复继续遵守可取消瞬时状态规则。

@@ -1,5 +1,15 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-19 自主漫游方向反馈
+
+- 范围：修正 QQ 宠物式自主漫游中“窗口移动但角色固定朝向”的视觉割裂，建立 Renderer 无关的左右朝向投影。
+- 证据：`petFacing` 单测覆盖确定性奇偶规则、非 Walking 收敛与旧 Snapshot 回退；Desktop 81 项测试、TypeScript、Vite Build、Bundle Budget 和 `git diff --check` 通过。
+- 架构：方向不是新的领域持久状态；Core Autonomy Sequence 仍是唯一依据，Desktop Coordinator 仍是唯一窗口执行者，统一舞台只消费投影并镜像角色视觉。
+- 用户价值：自主走动看起来像角色主动探索，而不是透明窗口拖着静态模型滑行；所有现有 Renderer 同步受益，离线行为不变且无新增权限、网络或桌面采集。
+- UI/无障碍：气泡、菜单、阴影和命中区保持正常阅读方向；Reduced Motion 去除过渡但保留静态方向。
+- 风险与下一步：尚未完成签名 macOS/Windows 的窗口—动画录屏验证；边缘栖息、攀爬和探头需要建立独立 Surface Semantic，不能通过任意 CSS 类或 Renderer 私有动作冒充。
+- Actions：仅运行本地门禁，不触发高频 GitHub Actions，继续保护每月 2000 分钟预算。
+
 ## M-2026-07-19 自主张望语义纵切
 
 - 结果：桌宠“观察”从庆祝动作中拆分，建立 `Observe → Observing → pet.observe` 的完整语义链，避免角色无缘无故跳跃庆祝，让 QQ 宠物式自主生命感更自然。

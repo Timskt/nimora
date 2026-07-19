@@ -1,5 +1,14 @@
 # Nimora 功能测试计划
 
+## 自主漫游方向反馈
+
+1. 当 Autonomy Sequence 为奇数且 Pet State 为 Walking 时，统一角色舞台必须投影为 Left；偶数必须投影为 Right，并与 Desktop 原生 Wander Target 的水平增量一致。
+2. Idle、Observe、Sleep、Work、Interact、Drag 与 Recover 均必须投影 Neutral，不能保留上一次移动方向；旧快照缺少 Autonomy 时 Walking 必须稳定回退 Right。
+3. 内置、Sprite Sequence、Sprite Atlas、glTF 和 VRM 必须由同一舞台容器镜像；状态气泡、径向菜单、阴影、点击与拖拽命中区不得被镜像。
+4. 拖拽或安全模式抢占 Walking 时，原生移动必须停止，下一次 Snapshot 刷新后角色朝向收敛 Neutral；Renderer 切换不得改变方向规则。
+5. `prefers-reduced-motion: reduce` 下取消朝向 Transition，但保留静态 Left/Right，避免用减少动态设置破坏必要空间语义。
+6. macOS 与 Windows 真机分别录制至少两轮左右漫游，确认窗口位移、脚步动作与朝向同步，且 Dock、菜单栏、任务栏和副屏负坐标边界仍安全。
+
 ## 自主张望语义
 
 - 让确定性自主序列进入 Observe，确认领域状态为 `observing`、动作目录为 `observe`、气泡表达好奇张望，不能播放庆祝跳跃或用户点击反馈。

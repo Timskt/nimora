@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction, PetCareAction, PetItemId } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 import { RendererErrorBoundary } from "./RendererErrorBoundary";
-import { petStatusMessage } from "./petPresentation";
+import { petFacing, petStatusMessage } from "./petPresentation";
 import {
   appendPetGesturePoint,
   createPetGestureTrail,
@@ -40,6 +40,7 @@ export function PetOverlay() {
   const [stroking, setStroking] = useState(false);
   const [companionAction, setCompanionAction] = useState<PetAction | null>(null);
   const companionResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const facing = snapshot ? petFacing(snapshot.pet) : "neutral";
 
   const refreshRenderer = useCallback(async () => {
     const descriptor = await desktopApi.activeCharacterRenderer();
@@ -391,28 +392,30 @@ export function PetOverlay() {
         aria-expanded={menuOpen}
       >
         <span className="overlay-status">{message}</span>
-        {renderer && renderer.backend !== "built-in" && !rendererFailed ? (
-          ["gltf", "vrm"].includes(renderer.backend) ? (
-            <RendererErrorBoundary resetKey={renderer.assetId} onFailure={handleRendererFailure}>
-              <Suspense fallback={<GltfLoadingPlaceholder descriptor={renderer} />}>
-                <GltfRenderer descriptor={renderer} action={companionAction ?? petStateAction(snapshot?.pet.state ?? "idle")} onFailure={handleRendererFailure} />
-              </Suspense>
-            </RendererErrorBoundary>
+        <span className={`pet-character-stage facing-${facing}`}>
+          {renderer && renderer.backend !== "built-in" && !rendererFailed ? (
+            ["gltf", "vrm"].includes(renderer.backend) ? (
+              <RendererErrorBoundary resetKey={renderer.assetId} onFailure={handleRendererFailure}>
+                <Suspense fallback={<GltfLoadingPlaceholder descriptor={renderer} />}>
+                  <GltfRenderer descriptor={renderer} action={companionAction ?? petStateAction(snapshot?.pet.state ?? "idle")} onFailure={handleRendererFailure} />
+                </Suspense>
+              </RendererErrorBoundary>
+            ) : (
+              <SpriteRenderer
+                descriptor={renderer}
+                action={companionAction ?? petStateAction(snapshot?.pet.state ?? "idle")}
+                onFailure={handleRendererFailure}
+              />
+            )
           ) : (
-            <SpriteRenderer
-              descriptor={renderer}
-              action={companionAction ?? petStateAction(snapshot?.pet.state ?? "idle")}
-              onFailure={handleRendererFailure}
-            />
-          )
-        ) : (
-          <span className={`overlay-pet ${companionAction ?? snapshot?.pet.state ?? "idle"} emotion-${snapshot?.pet.emotion ?? "neutral"}`} aria-hidden="true">
-            <i className="overlay-ear left" /><i className="overlay-ear right" />
-            <i className="overlay-star">✦</i>
-            <i className="overlay-eye left" /><i className="overlay-eye right" />
-            <i className="overlay-mouth" />
-          </span>
-        )}
+            <span className={`overlay-pet ${companionAction ?? snapshot?.pet.state ?? "idle"} emotion-${snapshot?.pet.emotion ?? "neutral"}`} aria-hidden="true">
+              <i className="overlay-ear left" /><i className="overlay-ear right" />
+              <i className="overlay-star">✦</i>
+              <i className="overlay-eye left" /><i className="overlay-eye right" />
+              <i className="overlay-mouth" />
+            </span>
+          )}
+        </span>
         <span className="overlay-shadow" aria-hidden="true" />
       </button>
       {menuOpen ? (
