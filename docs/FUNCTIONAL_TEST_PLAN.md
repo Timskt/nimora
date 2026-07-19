@@ -1,5 +1,20 @@
 # Nimora 功能测试计划
 
+## DP-TRAY-RECALL — 托盘恢复与离屏召回
+
+| ID | 场景 | 预期结果 |
+|---|---|---|
+| DP-TRAY-RECALL-001 | 宠物可见且在有效 Work Area 内 | 恢复交互只取消鼠标穿透并解除最小化，位置不抖动，`positionRecovered=false` |
+| DP-TRAY-RECALL-002 | 宠物完全位于已断开的显示器 | 夹回主显示器安全边界，窗口完整可见，`positionRecovered=true` |
+| DP-TRAY-RECALL-003 | 宠物跨越两个仍在线显示器 | 选择重叠面积最大的 Work Area，不无故跳回主屏 |
+| DP-TRAY-RECALL-004 | 分辨率或 Dock/任务栏 Work Area 缩小 | 保留尽可能接近的原位置并夹入新边界，不覆盖系统栏 |
+| DP-TRAY-RECALL-005 | 负坐标副屏 | 保留合法负坐标，不把负值误判为离屏或强制迁回主屏 |
+| DP-TRAY-RECALL-006 | 位置发生纠正 | Moved 事件防抖后把最终原生坐标写回 Runtime，重启不再次恢复旧离屏坐标 |
+| DP-TRAY-RECALL-007 | 显示器枚举或原生 set_position 失败 | 发布 `desktop.tray.action-failed`，不伪造召回成功，不访问网络或等待 AI |
+| DP-TRAY-RECALL-008 | Presence 原本隐藏宠物 | 托盘显式恢复使用既有 ForceVisible 决策；屏幕共享隐私等更高优先级规则仍按统一协调器裁决 |
+| DP-TRAY-RECALL-009 | Renderer、Agent、Skill 或用户代码尝试召回 | 无原生窗口句柄；只能通过受控 Capability 请求，不能绕过 Desktop Coordinator |
+| DP-TRAY-RECALL-010 | macOS/Windows 热插拔、混合 DPI 与自动隐藏系统栏 | 使用签名 Tauri 包检查窗口完整可见、无跳屏和坐标持久一致，Browser Preview 不得替代证据 |
+
 ## ACTIVITY-REFRESH — 活动健康自动刷新
 
 | ID | 场景 | 预期结果 |

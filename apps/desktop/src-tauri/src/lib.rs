@@ -11718,7 +11718,7 @@ fn resume_desktop_pet(app: &AppHandle) -> Result<(), DesktopError> {
                 PetResumePlan::RestoreExisting { ensure_visible } => {
                     apply_window_policy(app, policy, policy)?;
                     if ensure_visible {
-                        ensure_pet_window_visible(app)?;
+                        let _ = ensure_pet_window_visible(app)?;
                     }
                 }
                 PetResumePlan::RecoverMissing => schedule_pet_window_recovery(app.clone()),
@@ -11814,10 +11814,12 @@ fn restore_pet_interaction(app: &AppHandle) -> Result<Command, DesktopError> {
     })?;
     set_current_window_policy(&state, next_policy)?;
     if decision.visible {
-        app.get_webview_window(PET_WINDOW_LABEL)
-            .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?
-            .unminimize()?;
+        let window = app
+            .get_webview_window(PET_WINDOW_LABEL)
+            .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
+        window.unminimize()?;
     }
+    let position_recovered = decision.visible && ensure_pet_window_visible(app)?;
     publish_desktop_action(
         &state,
         "pet.window.interaction.restore",
@@ -11828,6 +11830,7 @@ fn restore_pet_interaction(app: &AppHandle) -> Result<Command, DesktopError> {
             "previousVisible": previous.visible,
             "visible": decision.visible,
             "presenceReason": decision.reason,
+            "positionRecovered": position_recovered,
             "source": "tray",
         }),
     )
@@ -12597,18 +12600,19 @@ fn pet_autonomy_policy(profile: &ProfilePolicy, local_minute: Option<u16>) -> Pe
     }
 }
 
-fn ensure_pet_window_visible(app: &AppHandle) -> Result<(), DesktopError> {
+fn ensure_pet_window_visible(app: &AppHandle) -> Result<bool, DesktopError> {
     let window = app
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
     let current = window.outer_position()?;
     let Some(target) = visible_position_for_window(&window, current)? else {
-        return Ok(());
+        return Ok(false);
     };
     if target != current {
         window.set_position(tauri::Position::Physical(target))?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 fn visible_position_for_window(
