@@ -365,6 +365,15 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - Reduced Motion 停止循环位移并保留静态顶部语义；气泡、菜单、阴影和命中区不参与角色舞台变换。
 - 至此 Bottom 栖息、Side 攀爬、Top 探头具备独立正式动作与共同扩展词表，但沿边自动移动和环境物体感知仍未宣称完成。
 - Desktop Coordinator 仍是唯一窗口执行者；探头不新增网络、桌面采集、显示器或窗口权限，离线路径保持完整。
+
+## 2026-07-19 — 拖放自动边缘动作收敛
+
+- Drop 后不再总是回 Idle：Desktop Coordinator 根据最终 Surface 自动选择 Perch、Climb、Peek 或 Idle，用户无需再打开菜单触发边缘姿态。
+- Bottom 与底部 Corner → Perch，Left/Right → Climb，Top 与顶部 Corner → Peek，Free/无显示器 → Idle；Corner 映射唯一且确定性。
+- Core 新增受限 `drop_at_with_action`，只接受四种被动落点动作；Runtime App 将坐标、状态、Emotion、Command 与 Event 在一次持久更新中提交。
+- Event 明确记录 `settleAction` 与 `afterState`，便于用户代码、自动化和诊断观察真实收敛结果，不依赖 CSS 或 Renderer 私有状态。
+- Runtime 持久失败保持 Dragged 且零事件；若 Desktop 已执行边缘吸附，则补偿回原生旧位置后返回失败，Surface 事件不发布。
+- 无当前显示器安全降级 Idle；尺寸和位置读取仍显式失败，Desktop Coordinator 唯一移窗、离线完整和无桌面采集边界不变。
 ## 2026-07-18 — Indeterminate Attempt reconciliation
 
 - Added a parameter-bound manual reconciliation contract for indeterminate Auto Mode attempts.

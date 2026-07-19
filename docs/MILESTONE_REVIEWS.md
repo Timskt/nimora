@@ -1,5 +1,14 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-19 拖放自动边缘动作收敛
+
+- 结果：用户把桌宠拖到边缘后自动进入栖息、攀爬或探头，Free 回 Idle，QQ 宠物式边缘生命感不再依赖二次菜单操作。
+- 原子性：最终坐标、State、Emotion、Command 与 Event 同一次 Runtime 持久更新；Core 拒绝非被动 settle action，防止 Host 借 Drop 注入任意行为。
+- 空间规则：Bottom/底角→Perch，纯 Side→Climb，Top/顶角→Peek，Free/无显示器→Idle；Corner 只产生一个确定动作。
+- 补偿：Runtime 保存失败保持 Dragged、零事件；已发生的原生吸附回滚到旧位置，成功后才清 Drag 并发布稳定 Surface。
+- 验证：Core 白名单与零副作用、Runtime 事件原子性、Desktop 全 Surface 映射均有专用测试；仍需签名真机验证原生补偿与视觉连续性。
+- Actions：完整纵切继续使用本地门禁并集中推送，保护 GitHub Actions 每月 2000 分钟预算。
+
 ## M-2026-07-19 QQ 宠物式顶部探头纵切
 
 - 结果：新增 `Peek → Peeking → pet.peek` 正式语义，完成 Bottom 栖息、Side 攀爬、Top 探头三类基础边缘动作的领域闭环。

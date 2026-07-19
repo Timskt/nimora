@@ -1049,3 +1049,17 @@ ID / 标题 / 优先级 / 前置条件
 | DP-PEEK-007 | 开启 Reduced Motion | 停止循环探出，保留静态顶部位置、表情和可识别空间语义 |
 | DP-PEEK-008 | 菜单、用户代码、Automation、Agent 请求 | 共享 `peek` 词汇，并经过类型化 IPC、授权、确认、审计和 Safe Mode 门禁 |
 | DP-PEEK-009 | 拖拽、重启、跨屏与系统栏变化 | 拖拽优先、重启 Idle；Surface 重新分类后不保留错误顶部投影 |
+
+## DP-SETTLE — 拖放自动边缘收敛
+
+| ID | 场景 | 预期 |
+|---|---|---|
+| DP-SETTLE-001 | Drop 到 Bottom/BottomLeft/BottomRight | 单次持久更新写入最终坐标与 `perching`，事件记录 `settleAction=perch` |
+| DP-SETTLE-002 | Drop 到 Left/Right | 单次更新收敛为 `climbing`；Top/Bottom Corner 不因同时靠侧边而选择 Climb |
+| DP-SETTLE-003 | Drop 到 Top/TopLeft/TopRight | 单次更新收敛为 `peeking`，顶部 Corner 映射稳定且唯一 |
+| DP-SETTLE-004 | Drop 到 Free 或无当前显示器 | 收敛为 Idle，不猜测主屏，不复用上一次 Surface 动作 |
+| DP-SETTLE-005 | Core 接收落点动作 | 仅允许 Idle/Perch/Climb/Peek；Walk/Sleep/Work/Celebrate/Observe 均拒绝且保持 Dragged 与原位置 |
+| DP-SETTLE-006 | Runtime 保存失败 | 坐标、状态和事件零提交，Pet 保持 Dragged，Desktop 不发布 Surface 变化 |
+| DP-SETTLE-007 | 边缘吸附后 Runtime 保存失败 | 原生窗口补偿回拖放前位置；补偿失败显式报错，不宣称事务成功 |
+| DP-SETTLE-008 | Drop 成功 | 清除 Drag 标记后只发布一次稳定 Surface 事件，Renderer 从同一 Snapshot 选择动作 |
+| DP-SETTLE-009 | 关闭 edge snap | 仍对最终实际坐标分类；仅精确位于 Surface 容差内时自动动作，否则 Idle |

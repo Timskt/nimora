@@ -192,3 +192,11 @@ Agent 任务通过版本化 `nimora.agent-companion-signal/1` 向桌宠发布思
 - 内置角色表现为好奇睁眼和缓慢探出；Sprite/glTF 优先使用 `pet.peek`，旧资源缺失时确定性回退 `pet.idle`；VRM 只使用白名单 `surprised` Preset。
 - Reduced Motion 下停止循环探出，只保留静态上缘位置和好奇表情；菜单、气泡、阴影、点击与拖拽命中区域保持原位。
 - 探头不允许角色越过 Work Area，也不授予 Renderer 移窗或桌面采集能力；Desktop Coordinator 继续负责原生几何和窗口事务。
+
+## 拖放后的自动边缘收敛
+
+- 用户完成拖拽时无需再次打开菜单：Desktop Coordinator 在最终吸附坐标上分类 Surface，并确定性映射为 Bottom/Bottom Corner → `pet.perch`、Left/Right → `pet.climb`、Top/Top Corner → `pet.peek`、Free → `pet.idle`。
+- Corner 只选择一个动作：顶部 Corner 优先探头，底部 Corner 优先栖息；不会同时播放攀爬与探头/栖息，也不会由 Renderer 猜测动作。
+- 最终坐标、Pet State、Emotion、命令和领域事件在 Runtime 的同一次持久更新中提交。Core 只接受 Idle、Perch、Climb、Peek 四种被动落点动作，拒绝 Celebrate、Work、Sleep 等主动行为。
+- 若持久化失败，Pet 继续处于 Dragged，Surface 事件不发布；若原生窗口已先发生边缘吸附，Desktop Coordinator 将其补偿回拖放前位置，避免原生窗口与领域快照分裂。
+- 无当前显示器时收敛为 Idle，而不是猜测主屏边缘；原生位置、尺寸或显示器查询失败显式返回错误，不以零尺寸继续分类。

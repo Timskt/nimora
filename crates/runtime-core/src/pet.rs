@@ -543,11 +543,31 @@ impl Pet {
     ///
     /// Returns an error when no drag is active or the final position is invalid.
     pub fn drop_at(&mut self, position: Position) -> Result<(), PetError> {
+        self.drop_at_with_action(position, PetAction::Idle)
+    }
+
+    /// Finishes an active drag with one host-resolved edge settle action.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no drag is active, the position is invalid, or
+    /// the requested action is not a passive edge-settle action.
+    pub fn drop_at_with_action(
+        &mut self,
+        position: Position,
+        action: PetAction,
+    ) -> Result<(), PetError> {
         if self.state != PetState::Dragged {
             return Err(PetError::InvalidTransition);
         }
+        if !matches!(
+            action,
+            PetAction::Idle | PetAction::Perch | PetAction::Climb | PetAction::Peek
+        ) {
+            return Err(PetError::InvalidTransition);
+        }
         self.move_to(position)?;
-        self.enter_idle();
+        self.apply_action(action);
         Ok(())
     }
 
@@ -1573,6 +1593,34 @@ mod tests {
             pet.drop_at(Position { x: 1.0, y: 2.0 }),
             Err(PetError::InvalidTransition)
         );
+    }
+
+    #[test]
+    fn drop_accepts_only_passive_surface_settle_actions() {
+        for (action, state) in [
+            (PetAction::Idle, PetState::Idle),
+            (PetAction::Perch, PetState::Perching),
+            (PetAction::Climb, PetState::Climbing),
+            (PetAction::Peek, PetState::Peeking),
+        ] {
+            let mut pet = Pet::new("Aster").expect("valid pet");
+            pet.begin_drag().expect("drag");
+            pet.drop_at_with_action(Position { x: 4.0, y: 8.0 }, action)
+                .expect("surface settle");
+            assert_eq!(pet.state, state);
+        }
+
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.begin_drag().expect("drag");
+        assert_eq!(
+            pet.drop_at_with_action(
+                Position { x: 4.0, y: 8.0 },
+                PetAction::Celebrate,
+            ),
+            Err(PetError::InvalidTransition)
+        );
+        assert_eq!(pet.state, PetState::Dragged);
+        assert_eq!(pet.position, Position { x: 0.0, y: 0.0 });
     }
 
     #[test]

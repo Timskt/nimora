@@ -283,6 +283,15 @@ fn classify_pet_surface(
     }
 }
 
+fn settle_action_for_surface(surface: PetSurface) -> PetAction {
+    match surface {
+        PetSurface::Bottom | PetSurface::BottomLeft | PetSurface::BottomRight => PetAction::Perch,
+        PetSurface::Left | PetSurface::Right => PetAction::Climb,
+        PetSurface::Top | PetSurface::TopLeft | PetSurface::TopRight => PetAction::Peek,
+        PetSurface::Free => PetAction::Idle,
+    }
+}
+
 fn monitor_work_area(monitor: &tauri::Monitor) -> PhysicalArea {
     let work_area = monitor.work_area();
     PhysicalArea {
@@ -7356,13 +7365,14 @@ fn finish_pet_drag(
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
     let position = window.outer_position()?;
+    let window_size = window.outer_size()?;
+    let monitor = window.current_monitor()?;
     let target = if active_profile_policy(&state.profiles.snapshot()?)?
         .edge_snap
         .unwrap_or(true)
     {
-        let window_size = window.outer_size()?;
-        window.current_monitor()?.map_or(position, |monitor| {
-            plan_edge_snap_position(position, window_size, monitor_work_area(&monitor))
+        monitor.as_ref().map_or(position, |monitor| {
+            plan_edge_snap_position(position, window_size, monitor_work_area(monitor))
         })
     } else {
         position
@@ -7370,10 +7380,24 @@ fn finish_pet_drag(
     if target != position {
         window.set_position(tauri::Position::Physical(target))?;
     }
-    let command = state.runtime.drop_pet(Position {
-        x: f64::from(target.x),
-        y: f64::from(target.y),
-    })?;
+    let surface = monitor.as_ref().map_or(PetSurface::Free, |monitor| {
+        classify_pet_surface(target, window_size, monitor_work_area(monitor))
+    });
+    let command = match state.runtime.drop_pet_with_action(
+        Position {
+            x: f64::from(target.x),
+            y: f64::from(target.y),
+        },
+        settle_action_for_surface(surface),
+    ) {
+        Ok(command) => command,
+        Err(error) => {
+            if target != position {
+                window.set_position(tauri::Position::Physical(position))?;
+            }
+            return Err(error.into());
+        }
+    };
     state.dragging.store(false, Ordering::Release);
     let _ = app.emit_to(PET_WINDOW_LABEL, PET_SURFACE_CHANGED_EVENT, ());
     Ok(command)
@@ -11778,7 +11802,8 @@ mod tests {
         resume_auto_mode_turn_inner, run_live_automation, run_live_automation_event,
         run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
         screen_coordinate, serve_asset_protocol, skill_capability_names, skill_event_types,
-        stage_creator_package, stop_skill_event_sessions, test_automation, user_program_input,
+        settle_action_for_surface, stage_creator_package, stop_skill_event_sessions,
+        test_automation, user_program_input,
         valid_asset_identifier, validate_model_source, validate_package_source,
         validate_requested_animation_map, verify_capability_gap,
     };
@@ -14265,6 +14290,19 @@ mod tests {
             classify_pet_surface(tauri::PhysicalPosition::new(500, 300), window, monitor),
             PetSurface::Free
         );
+    }
+
+    #[test]
+    fn surface_settle_mapping_keeps_edge_actions_disjoint() {
+        assert_eq!(settle_action_for_surface(PetSurface::Free), PetAction::Idle);
+        assert_eq!(settle_action_for_surface(PetSurface::Left), PetAction::Climb);
+        assert_eq!(settle_action_for_surface(PetSurface::Right), PetAction::Climb);
+        assert_eq!(settle_action_for_surface(PetSurface::Top), PetAction::Peek);
+        assert_eq!(settle_action_for_surface(PetSurface::TopLeft), PetAction::Peek);
+        assert_eq!(settle_action_for_surface(PetSurface::TopRight), PetAction::Peek);
+        assert_eq!(settle_action_for_surface(PetSurface::Bottom), PetAction::Perch);
+        assert_eq!(settle_action_for_surface(PetSurface::BottomLeft), PetAction::Perch);
+        assert_eq!(settle_action_for_surface(PetSurface::BottomRight), PetAction::Perch);
     }
 
     #[test]

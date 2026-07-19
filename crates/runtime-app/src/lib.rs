@@ -849,12 +849,26 @@ impl<R: PetRepository> RuntimeService<R> {
     /// Returns an error when no drag is active, the position is invalid, or
     /// the durable update fails.
     pub fn drop_pet(&self, position: Position) -> Result<Command, RuntimeError> {
+        self.drop_pet_with_action(position, PetAction::Idle)
+    }
+
+    /// Drops a dragged pet and atomically applies a host-resolved edge action.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the transition, position, action, or durable
+    /// update fails.
+    pub fn drop_pet_with_action(
+        &self,
+        position: Position,
+        action: PetAction,
+    ) -> Result<Command, RuntimeError> {
         self.update(
-            |pet| pet.drop_at(position),
+            |pet| pet.drop_at_with_action(position, action),
             || {
                 Command::new(
                     "pet.window.drag.end",
-                    serde_json::json!({ "position": position }),
+                    serde_json::json!({ "position": position, "settleAction": action }),
                     CommandRisk::Safe,
                 )
             },
@@ -865,6 +879,7 @@ impl<R: PetRepository> RuntimeService<R> {
                     "to": after.position,
                     "beforeState": before.state,
                     "afterState": after.state,
+                    "settleAction": action,
                 })
             },
         )
@@ -1722,6 +1737,22 @@ mod tests {
         assert_eq!(events[0].trace_id, begin.trace_id);
         assert_eq!(events[1].event_type, "pet.window.dragged");
         assert_eq!(events[1].trace_id, drop.trace_id);
+    }
+
+    #[test]
+    fn edge_settle_is_atomic_with_the_drop() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        service.begin_drag().expect("begin drag");
+        service
+            .drop_pet_with_action(Position { x: 12.0, y: 24.0 }, PetAction::Peek)
+            .expect("drop and settle");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.position, Position { x: 12.0, y: 24.0 });
+        assert_eq!(snapshot.state, PetState::Peeking);
+        let event = service.drain_events().expect("events").pop().expect("drop event");
+        assert_eq!(event.data["settleAction"], "peek");
+        assert_eq!(event.data["afterState"], "peeking");
     }
 
     #[test]
