@@ -11,7 +11,8 @@ pub const DEFAULT_SAMPLE_TIMEOUT: Duration = Duration::from_secs(2);
 pub const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 pub const SIGNAL_LEASE: Duration = Duration::from_secs(15);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SensorDescriptor {
     pub kind: ContextKind,
     pub source: SensorSource,
@@ -83,6 +84,7 @@ pub enum SensorAvailability {
 #[serde(rename_all = "camelCase")]
 pub struct SensorHealth {
     pub spec: &'static str,
+    pub descriptor: SensorDescriptor,
     pub availability: SensorAvailability,
     pub consecutive_failures: u32,
     pub last_success_at_ms: Option<u64>,
@@ -114,6 +116,7 @@ impl SensorController {
             schedule,
             health: SensorHealth {
                 spec: SENSOR_HEALTH_SPEC,
+                descriptor,
                 availability: SensorAvailability::Unavailable,
                 consecutive_failures: 0,
                 last_success_at_ms: None,
@@ -257,5 +260,25 @@ mod tests {
             ..SensorSchedule::default()
         };
         assert_eq!(schedule.validate(), Err(SensorScheduleError::LeaseTooShort));
+    }
+
+    #[test]
+    fn health_serialization_preserves_the_desktop_contract() {
+        let health = controller(42).health().clone();
+        assert_eq!(
+            serde_json::to_value(health).unwrap(),
+            serde_json::json!({
+                "spec": "nimora.system-context-sensor-health/1",
+                "descriptor": {
+                    "kind": "fullscreen",
+                    "source": "operating_system"
+                },
+                "availability": "unavailable",
+                "consecutiveFailures": 0,
+                "lastSuccessAtMs": null,
+                "lastErrorCode": null,
+                "nextSampleAtMs": 42
+            })
+        );
     }
 }

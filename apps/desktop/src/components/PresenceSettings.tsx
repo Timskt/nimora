@@ -25,8 +25,14 @@ interface PresenceSettingsProps {
   onNotice(message: string): void;
 }
 
+export function fullscreenSensorStatus(snapshot: DesktopSnapshot): string {
+  const sensor = snapshot.systemContextSensors.find((candidate) => candidate.descriptor.kind === "fullscreen");
+  return sensor?.availability === "available" ? "全屏感知正常" : sensor?.availability === "degraded" ? "全屏感知暂时降级" : sensor?.availability === "stopped" ? "全屏感知已停止" : "全屏感知不可用";
+}
+
 export function PresenceSettings({ snapshot, disabled, onChanged, onNotice }: PresenceSettingsProps) {
   const [busy, setBusy] = useState(false);
+  const sensorStatus = fullscreenSensorStatus(snapshot);
 
   async function update(value: PresenceOverride) {
     if (busy || disabled || value === snapshot.presenceOverride) return;
@@ -44,7 +50,7 @@ export function PresenceSettings({ snapshot, disabled, onChanged, onNotice }: Pr
 
   return <section className="presence-settings" aria-labelledby="presence-settings-heading">
     <div><p className="card-label">桌面呈现</p><h2 id="presence-settings-heading">什么时候陪在桌面</h2><span className={snapshot.presenceDecision.visible ? "visible" : "hidden"}>{snapshot.presenceDecision.visible ? "正在显示" : "当前隐藏"}</span></div>
-    <p>当前依据：{reasonLabels[snapshot.presenceDecision.reason]}。系统感知只处理布尔状态，不读取窗口标题、屏幕内容或会议信息。</p>
+    <p>当前依据：{reasonLabels[snapshot.presenceDecision.reason]}。{sensorStatus}；系统感知只处理布尔状态，不读取窗口标题、屏幕内容或会议信息。</p>
     <div className="presence-options" role="radiogroup" aria-label="桌宠呈现策略">
       {options.map((option) => <button type="button" role="radio" aria-checked={snapshot.presenceOverride === option.value} disabled={busy || disabled} key={option.value} onClick={() => void update(option.value)}><strong>{option.label}</strong><small>{option.detail}</small></button>)}
     </div>

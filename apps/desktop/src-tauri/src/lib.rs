@@ -7,6 +7,7 @@ mod creator_workspace;
 mod diagnostic_report;
 mod fail_closed_convergence;
 mod reversible_transition;
+mod system_context_sensor;
 
 #[cfg(test)]
 use asset_protocol::parse_asset_protocol_path;
@@ -143,7 +144,12 @@ use nimora_skill_runtime::{
     SkillAgentToolEffect, SkillCapability, SkillError, SkillGrant, SkillHost, SkillManifest,
     SkillStatus,
 };
-use nimora_system_context::{PresenceDecision, PresenceOverride, SystemContextPolicy};
+use nimora_system_context::{
+    ContextKind, PresenceDecision, PresenceOverride, SensorSource, SystemContextPolicy,
+};
+use nimora_system_context_sensor::{
+    SensorController, SensorDescriptor, SensorHealth, SensorSchedule,
+};
 use nimora_user_code_gateway::{
     CapabilityBackend, CapabilityGateway, CapabilityRequest, CapabilityResponse, GatewayEnvelope,
     GatewayError, ModuleGatewayPolicy,
@@ -363,6 +369,8 @@ struct DesktopState {
     system_context: Mutex<SystemContextPolicy>,
     presence_override: Mutex<PresenceOverride>,
     presence_decision: Mutex<PresenceDecision>,
+    presence_transition: Mutex<()>,
+    system_context_sensor_health: Mutex<Vec<SensorHealth>>,
     policy_before_safe_mode: Mutex<Option<WindowPolicy>>,
     position_revision: AtomicU64,
     dragging: AtomicBool,
@@ -828,6 +836,8 @@ impl DesktopState {
             system_context: Mutex::new(system_context),
             presence_override: Mutex::new(presence_override),
             presence_decision: Mutex::new(presence_decision),
+            presence_transition: Mutex::new(()),
+            system_context_sensor_health: Mutex::new(Vec::new()),
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
@@ -920,6 +930,8 @@ impl DesktopState {
             system_context: Mutex::new(system_context),
             presence_override: Mutex::new(presence_override),
             presence_decision: Mutex::new(presence_decision),
+            presence_transition: Mutex::new(()),
+            system_context_sensor_health: Mutex::new(Vec::new()),
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
@@ -1027,6 +1039,7 @@ struct DesktopSnapshot {
     window_policy: WindowPolicy,
     presence_override: PresenceOverride,
     presence_decision: PresenceDecision,
+    system_context_sensors: Vec<SensorHealth>,
     safety: SafetySnapshot,
     startup: StartupStatus,
 }
@@ -3332,12 +3345,18 @@ fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, D
         .presence_decision
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?;
+    let system_context_sensors = state
+        .system_context_sensor_health
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .clone();
     Ok(DesktopSnapshot {
         pet,
         pet_relationship,
         window_policy,
         presence_override,
         presence_decision,
+        system_context_sensors,
         safety,
         startup: state.startup.clone(),
     })
@@ -6533,6 +6552,10 @@ fn switch_profile_inner(
     profile_id: ProfileId,
 ) -> Result<Command, DesktopError> {
     ensure_normal_mode(state)?;
+    let _transition = state
+        .presence_transition
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
     let snapshot = state.profiles.snapshot()?;
     let target = snapshot
         .profiles
@@ -6582,6 +6605,96 @@ fn set_presence_decision(
     Ok(())
 }
 
+fn reconcile_system_context_presence(app: &AppHandle, now_ms: u64) -> Result<(), DesktopError> {
+    let state = app.state::<DesktopState>();
+    let _transition = state
+        .presence_transition
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    state
+        .system_context
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .prune_expired(now_ms);
+    let base_policy = active_window_policy(&state.profiles.snapshot()?)?;
+    let safe_mode = state.safety.snapshot()?.mode == RuntimeMode::Safe;
+    let decision = decide_presence(&state, base_policy.visible, safe_mode, now_ms)?;
+    let previous = current_window_policy(&state)?;
+    let target = WindowPolicy {
+        visible: decision.visible,
+        ..previous
+    };
+    if target == previous {
+        return set_presence_decision(&state, decision);
+    }
+    run_window_policy_transition(app, previous, target, || {
+        set_presence_decision(&state, decision)
+    })?;
+    set_current_window_policy(&state, target)
+}
+
+#[cfg(target_os = "macos")]
+fn start_system_context_sensors(app: AppHandle) {
+    std::thread::spawn(move || {
+        let schedule = SensorSchedule::default();
+        let Ok(now_ms) = current_time_ms() else {
+            return;
+        };
+        let Ok(mut fullscreen) = SensorController::new(
+            SensorDescriptor {
+                kind: ContextKind::Fullscreen,
+                source: SensorSource::OperatingSystem,
+            },
+            schedule,
+            now_ms,
+        ) else {
+            return;
+        };
+        while let Some(state) = app.try_state::<DesktopState>() {
+            if let Ok(mut health) = state.system_context_sensor_health.lock() {
+                health.clear();
+                health.push(fullscreen.health().clone());
+            }
+            if state.autonomy_stop.load(Ordering::Acquire) {
+                fullscreen.stop();
+                if let Ok(mut health) = state.system_context_sensor_health.lock() {
+                    health.clear();
+                    health.push(fullscreen.health().clone());
+                }
+                break;
+            }
+            let Ok(now_ms) = current_time_ms() else {
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            };
+            if fullscreen.is_due(now_ms) {
+                match system_context_sensor::sample_fullscreen(schedule.sample_timeout) {
+                    Ok(active) => {
+                        if let Ok(signal) = fullscreen.record_success(active, now_ms)
+                            && state
+                                .system_context
+                                .lock()
+                                .is_ok_and(|mut policy| policy.observe(signal).is_ok())
+                        {
+                            let _ = reconcile_system_context_presence(&app, now_ms);
+                        }
+                    }
+                    Err(_) => fullscreen.record_failure("fullscreen-sample-failed", now_ms),
+                }
+                if let Ok(mut health) = state.system_context_sensor_health.lock() {
+                    health.clear();
+                    health.push(fullscreen.health().clone());
+                }
+            }
+            let _ = reconcile_system_context_presence(&app, now_ms);
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn start_system_context_sensors(_app: AppHandle) {}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SetPresenceOverrideRequest {
@@ -6600,6 +6713,10 @@ fn set_presence_override(
         return Err(DesktopError::WindowForbidden);
     }
     ensure_normal_mode(&state)?;
+    let _transition = state
+        .presence_transition
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
     let base_policy = active_window_policy(&state.profiles.snapshot()?)?;
     let decision = state
         .system_context
@@ -6637,6 +6754,10 @@ fn enter_safe_mode(
     app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<Command, DesktopError> {
+    let _transition = state
+        .presence_transition
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
     let previous_policy = current_window_policy(&state)?;
     let command = run_window_policy_transition(&app, previous_policy, WindowPolicy::SAFE, || {
         state.safety.enter(SafeModeReason::Manual)
@@ -6785,6 +6906,10 @@ fn quiesce_auto_mode_jobs(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn exit_safe_mode(app: AppHandle, state: State<'_, DesktopState>) -> Result<Command, DesktopError> {
+    let _transition = state
+        .presence_transition
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
     let previous_policy = current_window_policy(&state)?;
     let base_policy = active_window_policy(&state.profiles.snapshot()?)?;
     let decision = decide_presence(&state, base_policy.visible, false, current_time_ms()?)?;
@@ -10735,6 +10860,10 @@ fn open_control_center(
 
 fn restore_pet_interaction(app: &AppHandle) -> Result<Command, DesktopError> {
     let state = app.state::<DesktopState>();
+    let _transition = state
+        .presence_transition
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
     let previous = current_window_policy(&state)?;
     let base_policy = active_window_policy(&state.profiles.snapshot()?)?;
     let decision = state
@@ -11162,6 +11291,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
     create_pet_window(app.handle())?;
     if schedule_backups {
         start_pet_autonomy(app.handle().clone());
+        start_system_context_sensors(app.handle().clone());
     }
     create_tray(app.handle())?;
     Ok(())

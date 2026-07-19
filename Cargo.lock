@@ -2537,6 +2537,7 @@ dependencies = [
  "nimora-skill-package",
  "nimora-skill-runtime",
  "nimora-system-context",
+ "nimora-system-context-sensor",
  "nimora-user-code-gateway",
  "nimora-user-code-host",
  "nimora-user-code-package",
@@ -2550,6 +2551,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "thiserror 2.0.18",
  "uuid",
+ "wait-timeout",
  "zeroize",
 ]
 
@@ -2690,6 +2692,7 @@ version = "0.1.0"
 dependencies = [
  "nimora-system-context",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 

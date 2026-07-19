@@ -1,5 +1,14 @@
 # Nimora 里程碑回顾
 
+## 2026-07-19 — macOS Fullscreen Presence Adapter
+
+- 结果：macOS Adapter 已通过 Accessibility `AXFullScreen` 采样前台全屏事实，接入 15 秒续租、指数退避、过期清理和 Desktop Presence Coordinator。
+- 隐私与稳定性：只读取布尔属性，不读取窗口标题、描述或内容；每次调用 2 秒硬超时，超时后杀死并回收子进程。
+- 并发：新增 Presence Transition 串行门，Profile、三档覆盖、Safe Mode、托盘恢复和后台 Sensor 共用同一可逆窗口事务。
+- 可观察性：Desktop Snapshot 暴露版本化 Sensor Health，控制中心明确显示正常、降级、不可用或停止，权限缺失不再静默。
+- 证据：Sensor Host 4 项、macOS Adapter 2 项、Desktop Host 153 项和前端 74 项测试通过；生产构建、Clippy、Format 与架构门禁通过。
+- 剩余：macOS 屏幕共享、游戏、免打扰和全部 Windows Adapter 尚未实现，不宣称完整跨平台情境感知。
+
 ## 2026-07-19 — System Context Sensor Host Contract
 
 - 结果：新增宿主无关 `nimora-system-context-sensor`，统一采样间隔、单次超时、15 秒续租、最高 30 秒指数退避、停止语义和可序列化健康快照。

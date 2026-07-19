@@ -54,6 +54,7 @@ export interface DesktopSnapshot {
   };
   presenceOverride: PresenceOverride;
   presenceDecision: PresenceDecision;
+  systemContextSensors: SystemContextSensorHealth[];
   safety: SafetySnapshot;
   startup: {
     mode: "normal" | "recovery";
@@ -68,6 +69,18 @@ export interface PresenceDecision {
   suppressAutonomy: boolean;
   reason: PresenceDecisionReason;
   decidedAtMs: number;
+}
+export interface SystemContextSensorHealth {
+  spec: "nimora.system-context-sensor-health/1";
+  descriptor: {
+    kind: "do_not_disturb" | "fullscreen" | "game" | "screen_share";
+    source: "operating_system" | "screen_capture" | "foreground_application";
+  };
+  availability: "available" | "degraded" | "unavailable" | "stopped";
+  consecutiveFailures: number;
+  lastSuccessAtMs: number | null;
+  lastErrorCode: string | null;
+  nextSampleAtMs: number | null;
 }
 
 export interface OutboxSnapshot {
@@ -1132,6 +1145,7 @@ const previewSnapshot: DesktopSnapshot = {
   windowPolicy: { visible: true, alwaysOnTop: true, clickThrough: false },
   presenceOverride: "automatic",
   presenceDecision: { spec: "nimora.system-context-decision/1", visible: true, suppressAutonomy: false, reason: "base_policy", decidedAtMs: Date.now() },
+  systemContextSensors: [{ spec: "nimora.system-context-sensor-health/1", descriptor: { kind: "fullscreen", source: "operating_system" }, availability: "available", consecutiveFailures: 0, lastSuccessAtMs: Date.now(), lastErrorCode: null, nextSampleAtMs: Date.now() + 5_000 }],
   safety: { mode: "normal", reason: null },
   startup: previewRecoveryMode
     ? { mode: "recovery", reason: "database-unavailable" }
