@@ -1,5 +1,15 @@
 # Nimora 功能测试计划
 
+## 桌面边缘 Surface Semantic
+
+1. 在带左侧 80px 与顶部 30px 系统保留区的 Work Area 上，分别验证 Free、Left、Right、Top、Bottom 和四个 Corner；分类边界必须叠加 16/24/48px 生命体安全边距，而不是使用整屏边界。
+2. 验证 ±2px 原生坐标取整仍命中目标 Surface，3px 及更远保持 Free；负坐标副屏与混合原点不得被归一到主屏。
+3. 当前显示器不可用时 IPC 返回 `surface: null`；外层位置或尺寸读取失败必须返回错误，控制中心窗口调用必须被 `WindowForbidden` 拒绝。
+4. 12 帧自主漫游期间只在最后一次 Position Revision 稳定且持久成功后发布事件；持久失败不发布，旧 Revision 不发布，拖拽中不发布。
+5. Drop 成功清除 Drag 后立即发布一次 Surface 变化；Drop 持久失败继续保持 Drag，不得发布虚假栖息状态。回家、程序移动和离屏恢复沿窗口移动防抖路径收敛。
+6. Overlay 必须通过 Platform Port 查询 Surface；内置、Sprite、glTF、VRM 使用同一角色舞台贴边位移，气泡、径向菜单、阴影、点击与拖拽命中区保持不动。
+7. macOS/Windows 真机分别覆盖 Dock/任务栏四向布局、自动隐藏、混合 DPI、多屏插拔和跨屏拖拽；Surface 与肉眼所见工作区边缘一致，事件无抖动或高频循环。
+
 ## 自主漫游方向反馈
 
 1. 当 Autonomy Sequence 为奇数且 Pet State 为 Walking 时，统一角色舞台必须投影为 Left；偶数必须投影为 Right，并与 Desktop 原生 Wander Target 的水平增量一致。

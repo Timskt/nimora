@@ -22,6 +22,11 @@ export const petItemIds = ["berry_bite", "star_ball", "bubble_soap"] as const;
 export type PetItemId = (typeof petItemIds)[number];
 export type ControlCenterDestination = "agent_chat" | "agent_task" | "settings";
 export type AgentCompanionStatus = "thinking" | "running" | "waiting_for_confirmation" | "completed" | "failed" | "cancelled";
+export type PetSurface = "free" | "left" | "right" | "top" | "bottom" | "top_left" | "top_right" | "bottom_left" | "bottom_right";
+export interface PetSurfaceSnapshot {
+  spec: "nimora.pet-surface/1";
+  surface: PetSurface | null;
+}
 export interface AgentCompanionSignal {
   spec: "nimora.agent-companion-signal/1";
   status: AgentCompanionStatus;
@@ -994,11 +999,13 @@ export interface DesktopApi {
   onCharacterRendererChanged(handler: () => void): Promise<() => void>;
   onPetAutonomyChanged(handler: () => void): Promise<() => void>;
   onPetVitalsChanged(handler: () => void): Promise<() => void>;
+  onPetSurfaceChanged(handler: () => void): Promise<() => void>;
   onControlCenterNavigate(handler: (destination: ControlCenterDestination) => void): Promise<() => void>;
   onAgentCompanionSignal(handler: (signal: AgentCompanionSignal) => void): Promise<() => void>;
   publishAgentCompanionSignal(signal: AgentCompanionSignal): Promise<void>;
   openControlCenter(destination: ControlCenterDestination): Promise<void>;
   snapshot(): Promise<DesktopSnapshot>;
+  petSurface(): Promise<PetSurfaceSnapshot>;
   drainEvents(): Promise<NimoraEvent[]>;
   outboxSnapshot(): Promise<OutboxSnapshot>;
   testAutomation(definition: AutomationDefinition, eventType: string, eventData: unknown): Promise<AutomationRun>;
@@ -1244,6 +1251,7 @@ export function createDesktopApi(
       async onCharacterRendererChanged() { return () => undefined; },
       async onPetAutonomyChanged() { return () => undefined; },
       async onPetVitalsChanged() { return () => undefined; },
+      async onPetSurfaceChanged() { return () => undefined; },
       async onControlCenterNavigate() { return () => undefined; },
       async onAgentCompanionSignal(handler) {
         const listener = (event: Event) => {
@@ -1261,6 +1269,7 @@ export function createDesktopApi(
         window.location.assign(`/?section=${encodeURIComponent(section)}&intent=${destination}`);
       },
       async snapshot() { refreshPreviewRelationship(); return structuredClone(previewSnapshot); },
+      async petSurface() { return { spec: "nimora.pet-surface/1", surface: "free" }; },
       async drainEvents() { return []; },
       async outboxSnapshot() { return { pending: 0, leased: 0, delivered: 0, deadLetter: 0 }; },
       async testAutomation(definition, eventType, eventData) {
@@ -1697,6 +1706,9 @@ export function createDesktopApi(
     async onPetVitalsChanged(handler) {
       return await listen("nimora://pet-vitals-changed", handler);
     },
+    async onPetSurfaceChanged(handler) {
+      return await listen("nimora://pet-surface-changed", handler);
+    },
     async onControlCenterNavigate(handler) {
       return await listen<ControlCenterDestination>("nimora://control-center-navigate", (event) => handler(event.payload));
     },
@@ -1710,6 +1722,7 @@ export function createDesktopApi(
     },
     openControlCenter: async (destination) => { await invokeCommand("open_control_center", { request: { destination } }); },
     snapshot: async () => await invokeCommand("desktop_snapshot") as DesktopSnapshot,
+    petSurface: async () => await invokeCommand("pet_surface_snapshot") as PetSurfaceSnapshot,
     drainEvents: async () => await invokeCommand("drain_runtime_events") as NimoraEvent[],
     outboxSnapshot: async () => await invokeCommand("outbox_snapshot") as OutboxSnapshot,
     testAutomation: async (definition, eventType, eventData) => await invokeCommand("test_automation", { request: { definition, eventType, eventData } }) as AutomationRun,

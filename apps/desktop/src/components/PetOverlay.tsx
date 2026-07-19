@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction, PetCareAction, PetItemId } from "../platform/desktop";
+import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction, PetCareAction, PetItemId, PetSurface } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 import { RendererErrorBoundary } from "./RendererErrorBoundary";
 import { petFacing, petStatusMessage } from "./petPresentation";
@@ -26,6 +26,7 @@ export function PetOverlay() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [renderer, setRenderer] = useState<CharacterRendererSnapshot | null>(null);
   const [rendererFailed, setRendererFailed] = useState(false);
+  const [surface, setSurface] = useState<PetSurface | null>(null);
   const [message, setMessage] = useState("正在醒来…");
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPage, setMenuPage] = useState<"root" | "more" | "inventory" | "rename">("root");
@@ -102,7 +103,18 @@ export function PetOverlay() {
       }).catch(() => {
         if (!disposed) setMessage("生命状态更新监听不可用");
       });
+      void desktopApi.onPetSurfaceChanged(() => {
+        void desktopApi.petSurface().then((value) => {
+          if (!disposed) setSurface(value.surface);
+        });
+      }).then((disposeListener) => {
+        if (disposed) disposeListener();
+        else listeners.push(disposeListener);
+      }).catch(() => undefined);
     }
+    void desktopApi.petSurface().then((value) => {
+      if (!disposed) setSurface(value.surface);
+    }).catch(() => undefined);
     void desktopApi.onAgentCompanionSignal((signal) => {
       if (disposed) return;
       const presentation = agentCompanionPresentation(signal.status);
@@ -392,7 +404,7 @@ export function PetOverlay() {
         aria-expanded={menuOpen}
       >
         <span className="overlay-status">{message}</span>
-        <span className={`pet-character-stage facing-${facing}`}>
+        <span className={`pet-character-stage facing-${facing} surface-${surface ?? "free"}`}>
           {renderer && renderer.backend !== "built-in" && !rendererFailed ? (
             ["gltf", "vrm"].includes(renderer.backend) ? (
               <RendererErrorBoundary resetKey={renderer.assetId} onFailure={handleRendererFailure}>

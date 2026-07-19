@@ -19,6 +19,16 @@ describe("desktop platform adapter", () => {
     expect(invoke).toHaveBeenCalledWith("use_pet_item", { itemId: "berry_bite" });
   });
 
+  it("exposes surface semantics through the platform port", async () => {
+    const preview = createDesktopApi(false);
+    await expect(preview.petSurface()).resolves.toEqual({ spec: "nimora.pet-surface/1", surface: "free" });
+
+    const invoke = vi.fn(async () => ({ spec: "nimora.pet-surface/1", surface: "bottom_left" }));
+    const native = createDesktopApi(true, invoke);
+    await expect(native.petSurface()).resolves.toEqual({ spec: "nimora.pet-surface/1", surface: "bottom_left" });
+    expect(invoke).toHaveBeenCalledWith("pet_surface_snapshot");
+  });
+
   it("keeps preview home separate and maps native home commands", async () => {
     const preview = createDesktopApi(false);
     const original = await preview.snapshot();

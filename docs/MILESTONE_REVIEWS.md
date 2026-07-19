@@ -1,5 +1,16 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-19 桌面边缘 Surface Semantic
+
+- 范围：建立 QQ 宠物式边缘栖息的正式环境语义，而不是直接为某个 Renderer 堆叠不可扩展的攀爬 CSS。
+- 结果：Desktop Coordinator 权威分类 Free、四边和四角；版本化 IPC 与防抖事件经 Platform Port 进入统一角色舞台，现有四类 Renderer 获得一致低幅度贴边表现。
+- 鲁棒性：无显示器返回 Unknown/null，原生几何失败显式报错；2px 容差有界，拖拽中抑制事件，Drop 成功后立即收敛，Position Revision 避免旧移动覆盖新位置。
+- 证据：纯 Rust 测试覆盖系统保留区、负坐标、边角、自由区域与容差；Desktop 编译、Clippy、前端 82 项测试、生产构建和 Bundle Budget 通过。
+- 安全/隐私/离线：不采集桌面内容、不新增权限或网络；Renderer、AI、Skill、Program 不获得显示器或窗口能力，离线行为完整。
+- UI：只移动角色视觉，不移动气泡、菜单、阴影或交互命中区；Reduced Motion 沿用统一舞台过渡关闭规则。
+- 缺口：当前不是窗口/图标表面感知，也未实现 `pet.perch`、`pet.climb`、`pet.peek` 动作；这些能力必须基于本契约继续完整纵切并通过签名真机视觉门禁。
+- Actions：全程本地门禁，不消耗高频 GitHub Actions 分钟。
+
 ## M-2026-07-19 自主漫游方向反馈
 
 - 范围：修正 QQ 宠物式自主漫游中“窗口移动但角色固定朝向”的视觉割裂，建立 Renderer 无关的左右朝向投影。

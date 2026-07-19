@@ -1,5 +1,12 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 桌面边缘 Surface Semantic
+
+- Desktop Coordinator 新增版本化 `nimora.pet-surface/1` 投影，基于当前显示器原生 Work Area 与统一生命体安全边距，把位置分类为 Free、四条边或四个角；Renderer、AI、Skill 和用户代码不读取显示器或窗口句柄。
+- Surface 查询只允许宠物窗口调用；无当前显示器时明确返回 `null`，几何读取失败显式报错，不使用零尺寸或主屏坐标猜测。2px 容差只吸收原生取整误差，附近自由空间不会被误判成边缘。
+- 窗口移动沿用 200ms Revision 防抖，在位置持久成功后发布一次 `pet-surface-changed`；拖拽途中不发布，Drop 原子成功并清除 Drag 后立即发布，避免漫游帧事件风暴和拖拽视觉抖动。
+- Overlay 通过 Platform Port 消费 Surface，并在统一角色舞台施加轻量边缘贴合位移；内置、Sprite、glTF 与 VRM 共用表现，不镜像气泡、菜单、阴影和命中区。当前仅完成表面感知与栖息基线，不宣称攀爬、探头或窗口边缘识别已实现。
+
 ## 2026-07-19 — 自主漫游方向反馈
 
 - 原生桌宠的 12 帧平滑漫游现与角色朝向保持一致，不再出现角色面向固定方向却横向滑动的割裂感；朝向由 Core 已持久化的 Autonomy Sequence 确定性投影，和 Desktop Coordinator 的左右目标规划使用同一奇偶规则。

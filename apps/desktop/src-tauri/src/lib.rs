@@ -195,6 +195,7 @@ const PET_WINDOW_LABEL: &str = "pet";
 const CHARACTER_RENDERER_CHANGED_EVENT: &str = "nimora://character-renderer-changed";
 const PET_AUTONOMY_CHANGED_EVENT: &str = "nimora://pet-autonomy-changed";
 const PET_VITALS_CHANGED_EVENT: &str = "nimora://pet-vitals-changed";
+const PET_SURFACE_CHANGED_EVENT: &str = "nimora://pet-surface-changed";
 const PET_VITALS_INTERVAL_MS: u64 = 10 * 60 * 1_000;
 const PET_VITALS_MAX_OFFLINE_INTERVALS: u64 = 24 * 60 / 10;
 const PET_CARE_COOLDOWN_MS: u64 = 30_000;
@@ -233,6 +234,53 @@ struct PhysicalArea {
     y: i32,
     width: u32,
     height: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PetSurface {
+    Free,
+    Left,
+    Right,
+    Top,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PetSurfaceSnapshot {
+    spec: &'static str,
+    surface: Option<PetSurface>,
+}
+
+fn classify_pet_surface(
+    position: tauri::PhysicalPosition<i32>,
+    window_size: tauri::PhysicalSize<u32>,
+    monitor: PhysicalArea,
+) -> PetSurface {
+    const TOLERANCE: i64 = 2;
+    let (minimum_x, minimum_y, maximum_x, maximum_y) = safe_position_bounds(window_size, monitor);
+    let x = i64::from(position.x);
+    let y = i64::from(position.y);
+    let left = (x - minimum_x).abs() <= TOLERANCE;
+    let right = (x - maximum_x).abs() <= TOLERANCE;
+    let top = (y - minimum_y).abs() <= TOLERANCE;
+    let bottom = (y - maximum_y).abs() <= TOLERANCE;
+    match (left, right, top, bottom) {
+        (true, _, true, _) => PetSurface::TopLeft,
+        (_, true, true, _) => PetSurface::TopRight,
+        (true, _, _, true) => PetSurface::BottomLeft,
+        (_, true, _, true) => PetSurface::BottomRight,
+        (true, _, _, _) => PetSurface::Left,
+        (_, true, _, _) => PetSurface::Right,
+        (_, _, true, _) => PetSurface::Top,
+        (_, _, _, true) => PetSurface::Bottom,
+        _ => PetSurface::Free,
+    }
 }
 
 fn monitor_work_area(monitor: &tauri::Monitor) -> PhysicalArea {
@@ -7327,6 +7375,7 @@ fn finish_pet_drag(
         y: f64::from(target.y),
     })?;
     state.dragging.store(false, Ordering::Release);
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_SURFACE_CHANGED_EVENT, ());
     Ok(command)
 }
 
@@ -11057,10 +11106,33 @@ fn schedule_position_persistence(app: AppHandle) {
             .position_revision
             .load(Ordering::Relaxed)
             == revision
+            && !app.state::<DesktopState>().dragging.load(Ordering::Acquire)
+            && persist_pet_window_position(&app).is_ok()
         {
-            let _ = persist_pet_window_position(&app);
+            let _ = app.emit_to(PET_WINDOW_LABEL, PET_SURFACE_CHANGED_EVENT, ());
         }
     });
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn pet_surface_snapshot(window: WebviewWindow) -> Result<PetSurfaceSnapshot, DesktopError> {
+    if window.label() != PET_WINDOW_LABEL {
+        return Err(DesktopError::WindowForbidden);
+    }
+    let surface = if let Some(monitor) = window.current_monitor()? {
+        Some(classify_pet_surface(
+            window.outer_position()?,
+            window.outer_size()?,
+            monitor_work_area(&monitor),
+        ))
+    } else {
+        None
+    };
+    Ok(PetSurfaceSnapshot {
+        spec: "nimora.pet-surface/1",
+        surface,
+    })
 }
 
 fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
@@ -11239,6 +11311,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             desktop_snapshot,
+            pet_surface_snapshot,
             agent_catalog,
             test_automation,
             automation_catalog,
@@ -11679,7 +11752,7 @@ mod tests {
         DesktopCapabilityBackend, DesktopError, DesktopProviderCredentialResolver,
         DesktopResolveAutoModeAttemptRequest, DesktopSecretStore, DesktopState,
         ExecutionCancellation, LocalAgentRequest, PendingCreatorApproval, PendingSkillExecution,
-        PetAction, PhysicalArea, PrepareAgentToolRequest, ProfileMode, ProfilePolicy,
+        PetAction, PetSurface, PhysicalArea, PrepareAgentToolRequest, ProfileMode, ProfilePolicy,
         ResolveAgentToolRequest, ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest,
         SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
         UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
@@ -11688,8 +11761,8 @@ mod tests {
         auto_mode_control_center_inner, automation_agent_messages,
         automation_governance_catalog_inner, cancel_agent_task_inner,
         cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
-        cancel_skill_execution_inner, capability_set_diff, confirm_agent_tool_inner,
-        confirm_agent_tool_with_registry, consume_creator_approval_from,
+        cancel_skill_execution_inner, capability_set_diff, classify_pet_surface,
+        confirm_agent_tool_inner, confirm_agent_tool_with_registry, consume_creator_approval_from,
         creator_capability_catalog, creator_capability_risk, creator_composition_graph,
         current_time_ms, default_agent_model, default_agent_provider_id,
         delete_openai_provider_inner, desktop_provider_registry, desktop_tool_registry,
@@ -14161,6 +14234,56 @@ mod tests {
             },
         );
         assert_eq!(target, tauri::PhysicalPosition::new(-1904, -90));
+    }
+
+    #[test]
+    fn surface_semantics_cover_edges_corners_and_free_space() {
+        let monitor = PhysicalArea {
+            x: 80,
+            y: 30,
+            width: 1120,
+            height: 820,
+        };
+        let window = tauri::PhysicalSize::new(260, 300);
+        assert_eq!(
+            classify_pet_surface(tauri::PhysicalPosition::new(96, 54), window, monitor),
+            PetSurface::TopLeft
+        );
+        assert_eq!(
+            classify_pet_surface(tauri::PhysicalPosition::new(924, 502), window, monitor),
+            PetSurface::BottomRight
+        );
+        assert_eq!(
+            classify_pet_surface(tauri::PhysicalPosition::new(96, 300), window, monitor),
+            PetSurface::Left
+        );
+        assert_eq!(
+            classify_pet_surface(tauri::PhysicalPosition::new(500, 502), window, monitor),
+            PetSurface::Bottom
+        );
+        assert_eq!(
+            classify_pet_surface(tauri::PhysicalPosition::new(500, 300), window, monitor),
+            PetSurface::Free
+        );
+    }
+
+    #[test]
+    fn surface_semantics_tolerate_native_rounding_without_guessing_nearby_space() {
+        let monitor = PhysicalArea {
+            x: -1920,
+            y: -120,
+            width: 1920,
+            height: 1080,
+        };
+        let window = tauri::PhysicalSize::new(260, 300);
+        assert_eq!(
+            classify_pet_surface(tauri::PhysicalPosition::new(-1902, 200), window, monitor),
+            PetSurface::Left
+        );
+        assert_eq!(
+            classify_pet_surface(tauri::PhysicalPosition::new(-1901, 200), window, monitor),
+            PetSurface::Free
+        );
     }
 
     #[test]
