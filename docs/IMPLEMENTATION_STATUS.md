@@ -7,7 +7,7 @@
 - Runtime 以 `pet.interaction.notice` / `pet.interaction.noticed` 原子记录有界屏幕坐标与前后表现状态；保存失败不发布事件、不改变 Pet。
 - Desktop Host 在 900ms 后调用专用 `finish_notice`，只有回应仍活跃时才恢复 Idle，不覆盖期间发生的点击、拖拽、睡眠或其它新状态。
 - Preview 与 Tauri Typed Port 保持同构；能力完全离线，不读取桌面内容，不授予 Renderer、AI、Skill 或用户代码窗口权限。
-- 自动化覆盖无成长、Dragged 拒绝、原子失败和精确 IPC；真实原生窗口的鼠标进入连续性、触控笔与 Reduced Motion 仍保留真机门禁。
+- 自动化覆盖首启立即响应、8 秒含边界冷却、触摸/菜单/手势/拖拽冲突、无成长、Dragged 拒绝、原子失败和精确 IPC；真实原生窗口的鼠标进入连续性、触控笔与 Reduced Motion 仍保留真机门禁。
 
 ## 2026-07-19 — QQ 宠物式正式双击互动
 

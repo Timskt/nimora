@@ -5,6 +5,7 @@ import {
   exceedsPetDragThreshold,
   isPetStroke,
   petClickResolution,
+  shouldNoticePet,
   PET_DRAG_THRESHOLD_PX,
 } from "./petGesture";
 
@@ -15,6 +16,34 @@ describe("pet gesture arbitration", () => {
     expect(petClickResolution(2)).toBe("double");
     expect(petClickResolution(3)).toBe("ignore");
     expect(petClickResolution(4)).toBe("ignore");
+  });
+
+  it("allows the first pointer notice and enforces its inclusive cooldown", () => {
+    const base = {
+      pointerType: "mouse",
+      menuOpen: false,
+      gestureActive: false,
+      dragging: false,
+      nowMs: 1_000,
+    };
+    expect(shouldNoticePet({ ...base, lastNoticeAtMs: Number.NEGATIVE_INFINITY })).toBe(true);
+    expect(shouldNoticePet({ ...base, lastNoticeAtMs: -6_999 })).toBe(false);
+    expect(shouldNoticePet({ ...base, lastNoticeAtMs: -7_000 })).toBe(true);
+  });
+
+  it("suppresses pointer notice during touch and competing interactions", () => {
+    const base = {
+      pointerType: "mouse",
+      menuOpen: false,
+      gestureActive: false,
+      dragging: false,
+      lastNoticeAtMs: 0,
+      nowMs: 8_000,
+    };
+    expect(shouldNoticePet({ ...base, pointerType: "touch" })).toBe(false);
+    expect(shouldNoticePet({ ...base, menuOpen: true })).toBe(false);
+    expect(shouldNoticePet({ ...base, gestureActive: true })).toBe(false);
+    expect(shouldNoticePet({ ...base, dragging: true })).toBe(false);
   });
 
   it("keeps small pointer jitter as a click", () => {

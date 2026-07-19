@@ -3,12 +3,30 @@ export const PET_LONG_PRESS_MS = 500;
 export const PET_SINGLE_CLICK_DELAY_MS = 220;
 export const PET_STROKE_MIN_DISTANCE_PX = 32;
 export const PET_STROKE_MIN_DURATION_MS = 160;
+export const PET_NOTICE_COOLDOWN_MS = 8_000;
 
 export type PetClickResolution = "single" | "double" | "ignore";
 
 export function petClickResolution(detail: number): PetClickResolution {
   if (detail === 2) return "double";
   return detail > 2 ? "ignore" : "single";
+}
+
+export interface PetNoticeContext {
+  pointerType: string;
+  menuOpen: boolean;
+  gestureActive: boolean;
+  dragging: boolean;
+  lastNoticeAtMs: number;
+  nowMs: number;
+}
+
+export function shouldNoticePet(context: PetNoticeContext): boolean {
+  return context.pointerType !== "touch"
+    && !context.menuOpen
+    && !context.gestureActive
+    && !context.dragging
+    && context.nowMs - context.lastNoticeAtMs >= PET_NOTICE_COOLDOWN_MS;
 }
 
 export interface PointerOrigin {

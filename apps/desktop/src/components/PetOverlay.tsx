@@ -9,6 +9,7 @@ import {
   exceedsPetDragThreshold,
   isPetStroke,
   petClickResolution,
+  shouldNoticePet,
   PET_LONG_PRESS_MS,
   PET_SINGLE_CLICK_DELAY_MS,
   type PetGestureTrail,
@@ -204,9 +205,15 @@ export function PetOverlay() {
   }
 
   function notice(event: React.PointerEvent<HTMLButtonElement>) {
-    if (event.pointerType === "touch" || menuOpen || gestureTrail.current || dragging.current) return;
     const now = performance.now();
-    if (now - lastNoticeAt.current < 8_000) return;
+    if (!shouldNoticePet({
+      pointerType: event.pointerType,
+      menuOpen,
+      gestureActive: gestureTrail.current != null,
+      dragging: dragging.current,
+      lastNoticeAtMs: lastNoticeAt.current,
+      nowMs: now,
+    })) return;
     lastNoticeAt.current = now;
     setMessage("我看到你啦");
     void desktopApi.noticePet(event.screenX, event.screenY)
