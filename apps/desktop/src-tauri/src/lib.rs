@@ -11515,6 +11515,11 @@ fn persist_pet_window_position(app: &AppHandle) -> Result<(), DesktopError> {
     Ok(())
 }
 
+fn begin_desktop_shutdown(state: &DesktopState) {
+    state.pet_window_recovery.begin_shutdown();
+    state.autonomy_stop.store(true, Ordering::Release);
+}
+
 fn schedule_position_persistence(app: AppHandle) {
     let revision = app
         .state::<DesktopState>()
@@ -11666,6 +11671,7 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
                 publish_tray_failure(app, action, &error);
             }
             if action == TrayAction::Quit {
+                begin_desktop_shutdown(&app.state::<DesktopState>());
                 app.exit(0);
             }
         })
@@ -11879,8 +11885,7 @@ pub fn run() {
     application.run(|app, event| match event {
         RunEvent::ExitRequested { .. } => {
             let state = app.state::<DesktopState>();
-            state.pet_window_recovery.begin_shutdown();
-            state.autonomy_stop.store(true, Ordering::Release);
+            begin_desktop_shutdown(&state);
             let _ = quiesce_auto_mode_jobs(&state, AUTO_MODE_SHUTDOWN_TIMEOUT, "shutdown-timeout");
             let _ = stop_automation_event_sessions(&state);
         }

@@ -1,5 +1,11 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 明确退出与桌宠恢复竞态收敛
+
+- 托盘退出在请求 Tauri 终止前立即发布 shutdown intent，同时停止自主循环并禁止 Pet Window Recovery 接纳新 worker，消除窗口销毁事件反向重建桌宠的竞态。
+- 最终位置仍先同步尽力保存；保存失败保留托盘失败事件但不阻塞退出。全局 `ExitRequested` 幂等复用同一关停入口，并继续有界静默 Auto Mode 与 Automation Event Session。
+- 恢复宿主单元测试证明 shutdown 后不再启动 worker；真实窗口销毁顺序、进程树清理和最终落点仍要求 macOS/Windows 签名包真机门禁。
+
 ## 2026-07-19 — macOS Dock 重开恢复
 
 - 原生应用事件循环现处理 Tauri `RunEvent::Reopen`；无论其他窗口是否可见，均复用统一事务显示、取消最小化并聚焦既有控制中心。
