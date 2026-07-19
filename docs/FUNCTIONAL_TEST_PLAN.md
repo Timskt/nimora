@@ -1,5 +1,12 @@
 # Nimora 功能测试计划
 
+## 自主张望语义
+
+- 让确定性自主序列进入 Observe，确认领域状态为 `observing`、动作目录为 `observe`、气泡表达好奇张望，不能播放庆祝跳跃或用户点击反馈。
+- 内置角色验证低幅度左右张望；Sprite、glTF 与 VRM 分别验证专用 `pet.observe`、Manifest 回退链和缺动作回退 `pet.idle`，减少动态效果时不得持续位移。
+- 用户代码、Agent Tool 与 Automation 读取动作目录应获得同一有序词表；调用 `observe` 必须通过 Capability Gateway、风险计算和标准 Command/Event，不允许直接指定 Renderer 私有动画名。
+- 在 Observe 中触发拖拽、安静时段、Focus、Safe Mode 和重启，确认高优先级操作立即抢占，异常恢复 Idle，不残留庆祝情绪或活动截止时间。
+
 ## 原生桌面工作区边界
 
 - 在 macOS 分别把 Dock 放在左、右、下方，并切换自动隐藏；拖拽吸附、自主漫游、回家和显示器恢复均不得把桌宠停入菜单栏或当前系统报告的 Dock 保留区。

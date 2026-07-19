@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { petStatusMessage } from "./petPresentation";
 
 describe("petStatusMessage", () => {
+  it("describes autonomous observation without pretending it is celebration", () => {
+    expect(petStatusMessage({ state: "observing", energy: 100, mood: 100, satiety: 100, cleanliness: 100 })).toBe("正好奇地看看桌面");
+  });
+
   it("prioritizes active behavior over vitals", () => {
     expect(petStatusMessage({ state: "sleeping", energy: 10, mood: 10, satiety: 10, cleanliness: 10 })).toBe("正在安静恢复体力");
     expect(petStatusMessage({ state: "walking", energy: 100, mood: 100, satiety: 100, cleanliness: 100 })).toBe("去桌面上走走看看");

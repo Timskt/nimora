@@ -1,5 +1,12 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 自主张望语义纵切
+
+- 自主 Observe 不再错误复用 Celebrate：Core 新增稳定的 `PetAction::Observe` 与 `PetState::Observing`，公开 JSON 为 `observe`，情绪保持 Neutral，结束和重启恢复继续遵守可取消瞬时状态规则。
+- 统一 Renderer Semantic 为 `pet.observe`；内置角色提供低幅度左右张望，Sprite 与 glTF 缺少专用动作时沿既有有限回退链落到 `pet.idle`，VRM 只使用低权重固定 `surprised` Preset，不允许任意表情注入。
+- Creator Studio 的模型动作映射新增“张望”及受限别名；Pet Action Catalog、用户代码 Gateway、Agent Tool 和 Automation 通过同一 `PetAction::ALL` 权威词表暴露能力，避免模块各自复制不一致动作列表。
+- Schema、领域、Desktop IPC、状态文案和渲染测试覆盖新状态；旧快照不含新枚举值时保持完全兼容，持久化中的 Observing 属于瞬时状态，异常重启后安全恢复 Idle。
+
 ## 2026-07-19 — 原生桌面工作区安全边界
 
 - 桌宠拖拽吸附、自主漫游、回家与低频离屏恢复现统一使用 Tauri 原生 Monitor Work Area，而非整块显示器分辨率；macOS 菜单栏/Dock、Windows 任务栏及支持该协议的 Linux Panel 占用区域不会再被当作可停留桌面。

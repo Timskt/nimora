@@ -10,6 +10,7 @@ const clips: SpriteClips["clips"] = {
 describe("SpriteRenderer helpers", () => {
   it("maps every runtime state to its canonical sprite action", () => {
     expect(petStateAction("idle")).toBe("pet.idle");
+    expect(petStateAction("observing")).toBe("pet.observe");
     expect(petStateAction("walking")).toBe("pet.walk");
     expect(petStateAction("sleeping")).toBe("pet.sleep");
     expect(petStateAction("dragged")).toBe("pet.drag");
@@ -25,6 +26,7 @@ describe("SpriteRenderer helpers", () => {
       "pet.run": "pet.jog",
       "pet.jog": "pet.walk",
     })).toBe("pet.walk");
+    expect(resolveSpriteAction("pet.observe", clips, {})).toBe("pet.idle");
   });
 
   it("stops fallback cycles and returns idle for unknown actions", () => {

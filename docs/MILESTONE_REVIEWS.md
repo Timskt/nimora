@@ -1,5 +1,12 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-19 自主张望语义纵切
+
+- 结果：桌宠“观察”从庆祝动作中拆分，建立 `Observe → Observing → pet.observe` 的完整语义链，避免角色无缘无故跳跃庆祝，让 QQ 宠物式自主生命感更自然。
+- 生态：Core 的唯一动作词表同时驱动 Desktop、用户代码、Agent 与 Creator；Sprite/glTF 使用 Manifest 回退，VRM 使用封闭低权重 Preset，第三方资源可渐进支持而不破坏旧角色。
+- 鲁棒性：Observe 是可取消瞬时状态，拖拽、安静策略、Focus 和 Safe Mode 继续拥有更高优先级；重启恢复 Idle，旧 Snapshot 与旧资源包无需迁移。
+- 验证：领域状态/情绪、Schema、动作目录、Sprite 回退、VRM 表情、状态文案与生产构建均纳入自动化；真实角色动作质量仍由原生尺寸 Preview 和签名桌面包视觉门禁验收。
+
 ## M-2026-07-19 原生桌面工作区安全边界
 
 - 结果：QQ 宠物式桌面生命体的吸附、漫游、回家和可见性恢复不再把整块显示器误当可用桌面，统一避开系统原生 Work Area 报告的菜单栏、Dock、任务栏与 Panel。

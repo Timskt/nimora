@@ -2,6 +2,7 @@ import type { Pet } from "@nimora/schemas";
 
 export function petStatusMessage(pet: Pick<Pet, "state" | "energy" | "mood" | "satiety" | "cleanliness">): string {
   switch (pet.state) {
+    case "observing": return "正好奇地看看桌面";
     case "sleeping": return "正在安静恢复体力";
     case "walking": return "去桌面上走走看看";
     case "working": return "正在专心陪你工作";

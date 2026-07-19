@@ -19,6 +19,7 @@ export interface VrmExpressionController {
 }
 
 const ACTION_EXPRESSIONS: Readonly<Record<string, VrmExpressionBinding>> = {
+  "pet.observe": { name: "surprised", weight: 0.22 },
   "pet.click": { name: "happy", weight: 0.85 },
   "pet.celebrate": { name: "happy", weight: 1 },
   "pet.drag": { name: "surprised", weight: 0.55 },

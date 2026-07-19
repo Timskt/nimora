@@ -14,6 +14,7 @@ const checks = [
 
 const modelActions = [
   { action: "pet.idle", label: "待机", looped: true, aliases: ["idle", "stand", "breath"] },
+  { action: "pet.observe", label: "张望", looped: true, aliases: ["observe", "look", "curious"] },
   { action: "pet.walk", label: "行走", looped: true, aliases: ["walk", "locomotion"] },
   { action: "pet.click", label: "互动", looped: false, aliases: ["click", "wave", "greet", "happy"] },
   { action: "pet.drag", label: "拖拽", looped: true, aliases: ["drag", "grab", "hold"] },

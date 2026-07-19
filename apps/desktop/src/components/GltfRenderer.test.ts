@@ -46,6 +46,7 @@ describe("resolveModelAnimation", () => {
 
 describe("VRM expression semantics", () => {
   it("maps public actions only to fixed VRM presets", () => {
+    expect(resolveVrmExpression("pet.observe")).toEqual({ name: "surprised", weight: 0.22 });
     expect(resolveVrmExpression("pet.click")).toEqual({ name: "happy", weight: 0.85 });
     expect(resolveVrmExpression("pet.celebrate")).toEqual({ name: "happy", weight: 1 });
     expect(resolveVrmExpression("pet.drag")).toEqual({ name: "surprised", weight: 0.55 });
@@ -108,7 +109,7 @@ describe("VRM expression semantics", () => {
   });
 
   it("keeps every declared weight within the normalized range", () => {
-    for (const action of ["pet.click", "pet.celebrate", "pet.drag", "pet.sleep", "pet.error"]) {
+    for (const action of ["pet.observe", "pet.click", "pet.celebrate", "pet.drag", "pet.sleep", "pet.error"]) {
       const binding = resolveVrmExpression(action);
       expect(binding?.weight).toBeGreaterThanOrEqual(0);
       expect(binding?.weight).toBeLessThanOrEqual(1);

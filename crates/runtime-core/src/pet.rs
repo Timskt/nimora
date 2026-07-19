@@ -23,6 +23,7 @@ impl Default for PetId {
 #[serde(rename_all = "snake_case")]
 pub enum PetState {
     Idle,
+    Observing,
     Walking,
     Sleeping,
     Dragged,
@@ -47,6 +48,7 @@ pub enum Emotion {
 #[serde(rename_all = "snake_case")]
 pub enum PetAction {
     Idle,
+    Observe,
     Walk,
     Sleep,
     Work,
@@ -208,8 +210,9 @@ pub enum PetAutonomyDecision {
 }
 
 impl PetAction {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Idle,
+        Self::Observe,
         Self::Walk,
         Self::Sleep,
         Self::Work,
@@ -588,6 +591,7 @@ impl Pet {
         }
         (self.state, self.emotion) = match action {
             PetAction::Idle => unreachable!("idle action returned above"),
+            PetAction::Observe => (PetState::Observing, Emotion::Neutral),
             PetAction::Walk => (PetState::Walking, Emotion::Happy),
             PetAction::Sleep => (PetState::Sleeping, Emotion::Sleepy),
             PetAction::Work => (PetState::Working, Emotion::Focused),
@@ -763,7 +767,7 @@ impl Pet {
     pub fn recover_transient_state(&mut self) -> bool {
         if matches!(
             self.state,
-            PetState::Dragged | PetState::Interacting | PetState::Recovering
+            PetState::Observing | PetState::Dragged | PetState::Interacting | PetState::Recovering
         ) {
             self.enter_idle();
             return true;
@@ -775,7 +779,7 @@ impl Pet {
     pub fn autonomy_decision(&self, policy: PetAutonomyPolicy, now_ms: u64) -> PetAutonomyDecision {
         if let Some(active_until_ms) = self.autonomy.active_until_ms {
             let expected_state = match self.autonomy.active_intent {
-                Some(PetIntent::Observe) => PetState::Interacting,
+                Some(PetIntent::Observe) => PetState::Observing,
                 Some(PetIntent::Explore) => PetState::Walking,
                 Some(PetIntent::Rest) => PetState::Sleeping,
                 None => return PetAutonomyDecision::Interrupt,
@@ -812,10 +816,10 @@ impl Pet {
             || self.satiety <= Self::LOW_VITAL_THRESHOLD
             || self.cleanliness <= Self::LOW_VITAL_THRESHOLD
         {
-            (PetIntent::Observe, PetAction::Celebrate)
+            (PetIntent::Observe, PetAction::Observe)
         } else {
             match self.autonomy.sequence % 3 {
-                0 => (PetIntent::Observe, PetAction::Celebrate),
+                0 => (PetIntent::Observe, PetAction::Observe),
                 1 => (PetIntent::Explore, PetAction::Walk),
                 _ => (PetIntent::Rest, PetAction::Sleep),
             }
@@ -925,11 +929,11 @@ mod tests {
             started,
             PetAutonomyDecision::Start {
                 intent: PetIntent::Observe,
-                action: PetAction::Celebrate,
+                action: PetAction::Observe,
             }
         );
         pet.apply_autonomy_decision(started, policy, 110);
-        assert_eq!(pet.state, PetState::Interacting);
+        assert_eq!(pet.state, PetState::Observing);
         let finished = pet.autonomy_decision(policy, 115);
         assert_eq!(finished, PetAutonomyDecision::Finish);
         pet.apply_autonomy_decision(finished, policy, 115);
@@ -960,7 +964,7 @@ mod tests {
             unhappy.autonomy_decision(policy, 100),
             PetAutonomyDecision::Start {
                 intent: PetIntent::Observe,
-                action: PetAction::Celebrate,
+                action: PetAction::Observe,
             }
         );
     }
@@ -1517,6 +1521,9 @@ mod tests {
     #[test]
     fn maps_actions_to_semantic_state() {
         let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.apply_action(PetAction::Observe);
+        assert_eq!(pet.state, PetState::Observing);
+        assert_eq!(pet.emotion, Emotion::Neutral);
         pet.apply_action(PetAction::Work);
         assert_eq!(pet.state, PetState::Working);
         assert_eq!(pet.emotion, Emotion::Focused);

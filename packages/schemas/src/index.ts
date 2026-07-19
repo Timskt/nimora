@@ -42,6 +42,7 @@ export const commandSchema = z.object({
 
 export const petStateSchema = z.enum([
   "idle",
+  "observing",
   "walking",
   "sleeping",
   "dragged",

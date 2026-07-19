@@ -8,6 +8,7 @@ type AtlasDocument = Extract<SpriteClips, { backend: "sprite-atlas" }>;
 export function petStateAction(state: string): string {
   return ({
     idle: "pet.idle",
+    observing: "pet.observe",
     walking: "pet.walk",
     sleeping: "pet.sleep",
     dragged: "pet.drag",
