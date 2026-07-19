@@ -12,6 +12,7 @@ import type {
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 export const petActions = ["idle", "observe", "walk", "perch", "climb", "peek", "stretch", "sleep", "work", "celebrate"] as const;
@@ -996,6 +997,8 @@ export interface AutomationAgentJournalEntry {
 
 export interface DesktopApi {
   readonly native: boolean;
+  loginLaunchEnabled(): Promise<boolean>;
+  setLoginLaunchEnabled(enabled: boolean): Promise<boolean>;
   pickFile(options: { title: string; name: string; extensions: string[] }): Promise<string | null>;
   pickDirectory(title: string): Promise<string | null>;
   saveFile(options: { title: string; defaultPath: string; name: string; extensions: string[] }): Promise<string | null>;
@@ -1232,6 +1235,8 @@ export function isNativeDesktop(scope?: Window): boolean {
   return browserWindow !== undefined && "__TAURI_INTERNALS__" in browserWindow;
 }
 
+let previewLoginLaunchEnabled = false;
+
 export function createDesktopApi(
   native: boolean,
   invokeCommand: Invoke = invoke,
@@ -1267,6 +1272,11 @@ export function createDesktopApi(
     };
     return {
       native: false,
+      async loginLaunchEnabled() { return previewLoginLaunchEnabled; },
+      async setLoginLaunchEnabled(enabled) {
+        previewLoginLaunchEnabled = enabled;
+        return previewLoginLaunchEnabled;
+      },
       async pickFile() { return null; },
       async pickDirectory() { return null; },
       async saveFile() { return null; },
@@ -1722,6 +1732,12 @@ export function createDesktopApi(
 
   return {
     native: true,
+    async loginLaunchEnabled() { return await isAutostartEnabled(); },
+    async setLoginLaunchEnabled(enabled) {
+      if (enabled) await enableAutostart();
+      else await disableAutostart();
+      return await isAutostartEnabled();
+    },
     async pickFile(options) {
       const selected = await open({
         directory: false,

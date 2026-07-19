@@ -1,5 +1,12 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 登录后自动陪伴
+
+- 已接入 Tauri 官方 Autostart 插件；macOS 明确使用 LaunchAgent，控制中心拥有查询、开启、关闭的最小权限，Pet Window 无权限。
+- 已增加 typed Desktop API 与控制中心设置卡片；写入后复查系统权威状态，异常不乐观伪装成功，Browser Preview 仅作离线内存模拟。
+- 默认关闭，自动启动不联动 AI、Provider、Agent、Auto Mode、Automation、Skill、用户程序或网络请求；Safe/Recovery Mode 可继续撤销系统偏好。
+- 自动化覆盖前端状态语义与 Preview 可逆性；macOS/Windows 重登、系统策略、卸载清理和视觉细节保留为真机发布门禁。
+
 ## 2026-07-19 — macOS 专注模式低打扰感知
 
 - macOS 原生 Adapter 通过系统 Darwin Notification 状态 `com.apple.donotdisturb.status` 获取单一布尔事实，不读取 Focus 名称、通知内容、用户数据库、窗口标题或屏幕像素。

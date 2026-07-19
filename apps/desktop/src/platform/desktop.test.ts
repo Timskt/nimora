@@ -2,6 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import { createDesktopApi, type UserProgramExecutionReceipt } from "./desktop";
 
 describe("desktop platform adapter", () => {
+  it("keeps login launch inert and reversible in browser preview", async () => {
+    const api = createDesktopApi(false);
+    await api.setLoginLaunchEnabled(false);
+    await expect(api.loginLaunchEnabled()).resolves.toBe(false);
+    await expect(api.setLoginLaunchEnabled(true)).resolves.toBe(true);
+    await expect(api.loginLaunchEnabled()).resolves.toBe(true);
+    await expect(api.setLoginLaunchEnabled(false)).resolves.toBe(false);
+  });
+
   it("consumes owned items in the offline browser preview", async () => {
     const api = createDesktopApi(false);
     const before = await api.snapshot();

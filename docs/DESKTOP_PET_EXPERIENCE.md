@@ -1,5 +1,11 @@
 # Nimora 原生桌面宠物体验规范
 
+## 登录后常驻陪伴
+
+Nimora 提供默认关闭、由用户明确开启的“登录后自动陪伴”。控制中心是唯一管理入口，使用 Tauri 官方 Autostart 插件读取和修改操作系统登录项；写入后必须重新查询权威状态，系统拒绝、权限故障或只读环境不得被乐观 UI 伪装为成功。macOS 使用 LaunchAgent，Windows 使用系统登录启动机制；Pet Window、Renderer、AI、Agent、Skill、Automation 与用户程序均不持有该权限。
+
+自动启动只恢复离线桌宠宿主，不自动运行 Provider、Agent Task、Auto Mode、Automation、Skill、用户代码或网络请求。浏览器 Preview 只能模拟开关交互并明确标注不会修改系统。卸载、便携运行、系统策略限制和登录项被外部修改时，以系统查询为准；用户始终可以在 Safe/Recovery Mode 中关闭该能力。
+
 > 状态：产品与工程基线  
 > 更新日期：2026-07-19  
 > 目标：实现类似经典 QQ 宠物“生活在桌面上”的持续陪伴体验，而不是把聊天窗口伪装成宠物。

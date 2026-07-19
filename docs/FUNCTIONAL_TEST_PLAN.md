@@ -1,5 +1,14 @@
 # Nimora 功能测试计划
 
+## DESKTOP-LOGIN-001 登录后自动陪伴
+
+- 全新安装默认关闭；控制中心首次加载读取系统权威状态，不以本地缓存猜测。
+- 开启和关闭后分别复查系统状态为 `true` / `false`；系统拒绝、权限撤销、只读环境或插件失败时不乐观显示成功，并保留或重读原状态。
+- Browser Preview 仅在内存中可逆模拟，明确不会修改系统；Pet Window 不具备查询、开启或关闭权限。
+- 自动启动后验证桌宠、托盘与控制中心可离线运行，Provider、Agent、Auto Mode、Automation、Skill、用户程序和网络请求均未被自动触发。
+- macOS 真机验证 LaunchAgent 的开启、重登启动、关闭、外部删除与卸载清理；Windows 真机验证对应登录项、重登、策略拒绝与卸载行为。Linux 仅按官方插件实际支持范围声明，不用 Preview 代替。
+- 验证 Safe/Recovery Mode 仍可关闭登录启动；系统状态读取失败时提供可访问错误信息，键盘、读屏、200% 缩放、窄窗口和 Forced Colors 下开关状态可辨认。
+
 ## 桌面边缘 Surface Semantic
 
 1. 在带左侧 80px 与顶部 30px 系统保留区的 Work Area 上，分别验证 Free、Left、Right、Top、Bottom 和四个 Corner；分类边界必须叠加 16/24/48px 生命体安全边距，而不是使用整屏边界。

@@ -11630,7 +11630,12 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
     reason = "desktop bootstrap enumerates the complete audited Tauri command surface"
 )]
 pub fn run() {
+    let autostart_builder = tauri_plugin_autostart::Builder::new();
+    #[cfg(target_os = "macos")]
+    let autostart_builder =
+        autostart_builder.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
     let application = tauri::Builder::default()
+        .plugin(autostart_builder.build())
         .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol(ASSET_PROTOCOL, |context, request| {
             let state = context.app_handle().state::<DesktopState>();
