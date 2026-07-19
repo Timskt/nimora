@@ -702,4 +702,4 @@ Actions 分钟：
 - 偏差：领域状态已按时恢复，但 Host 未发布恢复后的 Vitals 事件，导致 Overlay 与控制中心可能保留旧 Snapshot，视觉上永久停在互动姿态。
 - 修正：六条直接互动统一进入 Host 调度器；只有领域 Finish 原子成功才广播双窗口更新，失败关闭时保持当前新状态。
 - 架构：Renderer 继续被动消费 Snapshot，Desktop Coordinator 保持唯一原生事件执行者，未把计时或窗口能力下放到资源包。
-- 后续风险：不同状态抢占已严格保护；相同 Interacting 的高频连续动作仍需领域代次令牌消除旧计时器提前收敛的可能。
+- 鲁棒性闭环：不同状态抢占由状态机保护；相同 Interacting/Observing 的连续反馈由持久领域代次隔离。Host Timer 只携带启动 Command 的代次，旧 Finish 失败关闭且不广播伪 Idle。

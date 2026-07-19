@@ -289,6 +289,10 @@ pub struct Pet {
     #[serde(default)]
     pub last_item_use_ms: u64,
     #[serde(default)]
+    pub feedback_sequence: u64,
+    #[serde(default)]
+    pub active_feedback_sequence: Option<u64>,
+    #[serde(default)]
     pub autonomy: PetAutonomyState,
 }
 
@@ -319,6 +323,17 @@ impl Pet {
     fn enter_idle(&mut self) {
         self.state = PetState::Idle;
         self.emotion = self.idle_emotion();
+        self.active_feedback_sequence = None;
+    }
+
+    fn begin_feedback(&mut self, state: PetState, emotion: Emotion) {
+        self.feedback_sequence = self.feedback_sequence.saturating_add(1);
+        if self.feedback_sequence > Self::MAX_BOND_POINTS {
+            self.feedback_sequence = 1;
+        }
+        self.active_feedback_sequence = Some(self.feedback_sequence);
+        self.state = state;
+        self.emotion = emotion;
     }
 
     /// Creates a pet with safe default state and vitals.
@@ -347,6 +362,8 @@ impl Pet {
             last_vitals_update_ms: 0,
             last_care_ms: 0,
             last_item_use_ms: 0,
+            feedback_sequence: 0,
+            active_feedback_sequence: None,
             autonomy: PetAutonomyState::default(),
         })
     }
@@ -432,8 +449,7 @@ impl Pet {
         if self.state == PetState::Dragged {
             return Err(PetError::InvalidTransition);
         }
-        self.state = PetState::Interacting;
-        self.emotion = Emotion::Happy;
+        self.begin_feedback(PetState::Interacting, Emotion::Happy);
         self.mood = self.mood.saturating_add(2).min(100);
         self.add_bond_points(1);
         self.affinity = self.affinity.saturating_add(1).min(100);
@@ -449,8 +465,7 @@ impl Pet {
         if self.state == PetState::Dragged {
             return Err(PetError::InvalidTransition);
         }
-        self.state = PetState::Interacting;
-        self.emotion = Emotion::Happy;
+        self.begin_feedback(PetState::Interacting, Emotion::Happy);
         self.mood = self.mood.saturating_add(5).min(100);
         self.add_bond_points(3);
         self.affinity = self.affinity.saturating_add(2).min(100);
@@ -466,8 +481,7 @@ impl Pet {
         if self.state == PetState::Dragged {
             return Err(PetError::InvalidTransition);
         }
-        self.state = PetState::Interacting;
-        self.emotion = Emotion::Happy;
+        self.begin_feedback(PetState::Interacting, Emotion::Happy);
         self.mood = self.mood.saturating_add(4).min(100);
         self.add_bond_points(2);
         self.affinity = self.affinity.saturating_add(2).min(100);
@@ -483,8 +497,7 @@ impl Pet {
         if self.state == PetState::Dragged {
             return Err(PetError::InvalidTransition);
         }
-        self.state = PetState::Observing;
-        self.emotion = Emotion::Surprised;
+        self.begin_feedback(PetState::Observing, Emotion::Surprised);
         Ok(())
     }
 
@@ -556,6 +569,19 @@ impl Pet {
         Ok(())
     }
 
+    /// Finishes only the exact interaction feedback generation started by the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PetError::InvalidTransition`] when the generation is stale or
+    /// the pet is no longer interacting.
+    pub fn finish_interaction_if(&mut self, sequence: u64) -> Result<(), PetError> {
+        if self.active_feedback_sequence != Some(sequence) {
+            return Err(PetError::InvalidTransition);
+        }
+        self.finish_interaction()
+    }
+
     /// Returns a pointer-presence acknowledgement to idle without replacing a newer state.
     ///
     /// # Errors
@@ -567,6 +593,19 @@ impl Pet {
         }
         self.enter_idle();
         Ok(())
+    }
+
+    /// Finishes only the exact pointer notice generation started by the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PetError::InvalidTransition`] when the generation is stale or
+    /// the pet is no longer observing pointer presence.
+    pub fn finish_notice_if(&mut self, sequence: u64) -> Result<(), PetError> {
+        if self.active_feedback_sequence != Some(sequence) {
+            return Err(PetError::InvalidTransition);
+        }
+        self.finish_notice()
     }
 
     /// Enters the highest-priority drag state.
@@ -640,6 +679,7 @@ impl Pet {
             || self.cleanliness > 100
             || self.affinity > 100
             || self.bond_points > Self::MAX_BOND_POINTS
+            || self.feedback_sequence > Self::MAX_BOND_POINTS
         {
             return Err(PetError::InvalidVitals);
         }
@@ -649,6 +689,12 @@ impl Pet {
                     action,
                     PetAction::Perch | PetAction::Climb | PetAction::Peek
                 )
+        }) {
+            return Err(PetError::InvalidTransition);
+        }
+        if self.active_feedback_sequence.is_some_and(|sequence| {
+            sequence != self.feedback_sequence
+                || !matches!(self.state, PetState::Interacting | PetState::Observing)
         }) {
             return Err(PetError::InvalidTransition);
         }
@@ -670,6 +716,7 @@ impl Pet {
     }
 
     pub fn apply_action(&mut self, action: PetAction) {
+        self.active_feedback_sequence = None;
         if action == PetAction::Idle {
             self.enter_idle();
             return;
@@ -789,8 +836,7 @@ impl Pet {
                 self.affinity = self.affinity.saturating_add(3).min(100);
             }
         }
-        self.state = PetState::Interacting;
-        self.emotion = Emotion::Happy;
+        self.begin_feedback(PetState::Interacting, Emotion::Happy);
         self.autonomy.active_intent = None;
         self.autonomy.active_until_ms = None;
         self.last_care_ms = now_ms;
@@ -847,8 +893,7 @@ impl Pet {
             self.inventory.remove(index);
         }
         self.last_item_use_ms = now_ms;
-        self.state = PetState::Interacting;
-        self.emotion = Emotion::Happy;
+        self.begin_feedback(PetState::Interacting, Emotion::Happy);
         Ok(())
     }
 
@@ -1814,6 +1859,47 @@ mod tests {
         assert_eq!(pet.finish_interaction(), Err(PetError::InvalidTransition));
         assert_eq!(pet.state, PetState::Working);
         assert_eq!(pet.emotion, Emotion::Focused);
+    }
+
+    #[test]
+    fn feedback_generations_isolate_consecutive_interactions() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.interact().expect("first interaction");
+        let first = pet.active_feedback_sequence.expect("first sequence");
+        pet.interact().expect("second interaction");
+        let second = pet.active_feedback_sequence.expect("second sequence");
+
+        assert_ne!(first, second);
+        assert_eq!(
+            pet.finish_interaction_if(first),
+            Err(PetError::InvalidTransition)
+        );
+        assert_eq!(pet.state, PetState::Interacting);
+        pet.finish_interaction_if(second)
+            .expect("finish current interaction");
+        assert_eq!(pet.state, PetState::Idle);
+        assert_eq!(pet.active_feedback_sequence, None);
+    }
+
+    #[test]
+    fn feedback_generations_wrap_within_json_safe_integer_range() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.feedback_sequence = Pet::MAX_BOND_POINTS;
+        pet.notice_presence().expect("notice");
+        assert_eq!(pet.feedback_sequence, 1);
+        assert_eq!(pet.active_feedback_sequence, Some(1));
+    }
+
+    #[test]
+    fn legacy_snapshot_defaults_feedback_generation_to_inactive() {
+        let pet = Pet::new("Aster").expect("valid pet");
+        let mut value = serde_json::to_value(pet).expect("serialize pet");
+        let object = value.as_object_mut().expect("pet object");
+        object.remove("feedbackSequence");
+        object.remove("activeFeedbackSequence");
+        let restored: Pet = serde_json::from_value(value).expect("legacy pet");
+        assert_eq!(restored.feedback_sequence, 0);
+        assert_eq!(restored.active_feedback_sequence, None);
     }
 
     #[test]

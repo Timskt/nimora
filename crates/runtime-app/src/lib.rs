@@ -878,6 +878,21 @@ impl<R: PetRepository> RuntimeService<R> {
         )
     }
 
+    /// Ends only the exact pointer-presence feedback generation requested by the host.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the generation is stale, the acknowledgement is
+    /// no longer active, or persistence fails.
+    pub fn finish_notice_if(&self, sequence: u64) -> Result<Command, RuntimeError> {
+        self.update(
+            |pet| pet.finish_notice_if(sequence),
+            || Command::new("pet.interaction.notice-finish", serde_json::json!({ "feedbackSequence": sequence }), CommandRisk::Safe),
+            "pet.interaction.notice-finished",
+            |before, after| serde_json::json!({ "feedbackSequence": sequence, "beforeState": before.state, "afterState": after.state }),
+        )
+    }
+
     /// Returns an interaction animation to idle without overriding newer states.
     ///
     /// # Errors
@@ -900,6 +915,21 @@ impl<R: PetRepository> RuntimeService<R> {
                     "afterState": after.state,
                 })
             },
+        )
+    }
+
+    /// Ends only the exact interaction feedback generation requested by the host.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the generation is stale, the pet is no longer
+    /// interacting, or persistence fails.
+    pub fn finish_interaction_if(&self, sequence: u64) -> Result<Command, RuntimeError> {
+        self.update(
+            |pet| pet.finish_interaction_if(sequence),
+            || Command::new("pet.interaction.finish", serde_json::json!({ "feedbackSequence": sequence }), CommandRisk::Safe),
+            "pet.interaction.finished",
+            |before, after| serde_json::json!({ "feedbackSequence": sequence, "beforeState": before.state, "afterState": after.state }),
         )
     }
 
@@ -992,7 +1022,13 @@ impl<R: PetRepository> RuntimeService<R> {
         let mut candidate = current.clone();
         mutate(&mut candidate)?;
         candidate.validate()?;
-        let command = command()?;
+        let mut command = command()?;
+        if candidate.active_feedback_sequence != current.active_feedback_sequence
+            && let Some(sequence) = candidate.active_feedback_sequence
+            && let Some(arguments) = command.arguments.as_object_mut()
+        {
+            arguments.insert("feedbackSequence".to_owned(), serde_json::json!(sequence));
+        }
         let event = Event::with_trace_id(
             event_type,
             EventSource::Core,
@@ -1767,6 +1803,44 @@ mod tests {
         assert_eq!(event.data["before"]["bondPoints"], 0);
         assert_eq!(event.data["after"]["bondPoints"], 1);
         assert_eq!(event.data["after"]["relationshipLevel"], 1);
+        assert_eq!(command.arguments["feedbackSequence"], 1);
+    }
+
+    #[test]
+    fn feedback_generation_prevents_an_old_finish_from_ending_a_new_click() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let first = service
+            .click_pet(Position { x: 12.0, y: 24.0 }, PointerButton::Left)
+            .expect("first click");
+        let second = service
+            .click_pet(Position { x: 18.0, y: 30.0 }, PointerButton::Left)
+            .expect("second click");
+        let first_sequence = first.arguments["feedbackSequence"]
+            .as_u64()
+            .expect("first sequence");
+        let second_sequence = second.arguments["feedbackSequence"]
+            .as_u64()
+            .expect("second sequence");
+
+        assert_ne!(first_sequence, second_sequence);
+        assert!(service.finish_interaction_if(first_sequence).is_err());
+        assert_eq!(
+            service.snapshot().expect("new interaction remains").state,
+            PetState::Interacting
+        );
+        let finish = service
+            .finish_interaction_if(second_sequence)
+            .expect("finish current interaction");
+        assert_eq!(finish.arguments["feedbackSequence"], second_sequence);
+        assert_eq!(service.snapshot().expect("idle").state, PetState::Idle);
+        let event = service
+            .drain_events()
+            .expect("events")
+            .pop()
+            .expect("finish event");
+        assert_eq!(event.event_type, "pet.interaction.finished");
+        assert_eq!(event.data["feedbackSequence"], second_sequence);
     }
 
     #[test]

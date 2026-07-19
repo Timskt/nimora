@@ -1145,6 +1145,8 @@ const previewSnapshot: DesktopSnapshot = {
     cleanliness: 91,
     affinity: 34,
     bondPoints: 84,
+    feedbackSequence: 0,
+    activeFeedbackSequence: null,
     keepsakes: ["first_hello", "caring_hands", "trusted_companion"],
     inventory: [
       { itemId: "berry_bite", quantity: 3 },

@@ -219,18 +219,29 @@ fn emit_pet_vitals_changed(app: &AppHandle) {
     let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
 }
 
-fn schedule_pet_feedback_finish(app: AppHandle, duration: Duration, finish: PetFeedbackFinish) {
+fn schedule_pet_feedback_finish(
+    app: AppHandle,
+    duration: Duration,
+    finish: PetFeedbackFinish,
+    sequence: u64,
+) {
     tauri::async_runtime::spawn_blocking(move || {
         std::thread::sleep(duration);
         let runtime = &app.state::<DesktopState>().runtime;
         let finished = match finish {
-            PetFeedbackFinish::Interaction => runtime.finish_interaction(),
-            PetFeedbackFinish::Notice => runtime.finish_notice(),
+            PetFeedbackFinish::Interaction => runtime.finish_interaction_if(sequence),
+            PetFeedbackFinish::Notice => runtime.finish_notice_if(sequence),
         };
         if finished.is_ok() {
             emit_pet_vitals_changed(&app);
         }
     });
+}
+
+fn feedback_sequence(command: &Command) -> Result<u64, DesktopError> {
+    command.arguments["feedbackSequence"]
+        .as_u64()
+        .ok_or(DesktopError::FeedbackSequenceMissing)
 }
 const MAX_USER_PROGRAM_OPERATIONS: usize = 32;
 const MAX_USER_PROGRAM_EVENT_SESSIONS: usize = 32;
@@ -1659,6 +1670,8 @@ impl From<&str> for TrayAction {
 enum DesktopError {
     #[error("pet state is unavailable")]
     StatePoisoned,
+    #[error("pet feedback sequence is missing from a trusted runtime command")]
+    FeedbackSequenceMissing,
     #[error("operation is unavailable while safe mode is active")]
     SafeModeActive,
     #[error("safe mode entered but isolation did not fully converge: {failed_steps}")]
@@ -7305,11 +7318,13 @@ fn care_pet_inner(
     let command = state
         .runtime
         .care_pet(action, current_time_ms()?, PET_CARE_COOLDOWN_MS)?;
+    let sequence = feedback_sequence(&command)?;
     emit_pet_vitals_changed(app);
     schedule_pet_feedback_finish(
         app.clone(),
         CLICK_FEEDBACK_DURATION,
         PetFeedbackFinish::Interaction,
+        sequence,
     );
     Ok(command)
 }
@@ -7325,8 +7340,14 @@ fn use_pet_item(
     let command = state
         .runtime
         .use_pet_item(item_id, current_time_ms()?, PET_ITEM_COOLDOWN_MS)?;
+    let sequence = feedback_sequence(&command)?;
     emit_pet_vitals_changed(&app);
-    schedule_pet_feedback_finish(app, CLICK_FEEDBACK_DURATION, PetFeedbackFinish::Interaction);
+    schedule_pet_feedback_finish(
+        app,
+        CLICK_FEEDBACK_DURATION,
+        PetFeedbackFinish::Interaction,
+        sequence,
+    );
     Ok(command)
 }
 
@@ -7379,8 +7400,14 @@ fn click_pet(
         },
         request.button,
     )?;
+    let sequence = feedback_sequence(&command)?;
     emit_pet_vitals_changed(&app);
-    schedule_pet_feedback_finish(app, CLICK_FEEDBACK_DURATION, PetFeedbackFinish::Interaction);
+    schedule_pet_feedback_finish(
+        app,
+        CLICK_FEEDBACK_DURATION,
+        PetFeedbackFinish::Interaction,
+        sequence,
+    );
     Ok(command)
 }
 
@@ -7399,8 +7426,14 @@ fn double_click_pet(
         },
         request.button,
     )?;
+    let sequence = feedback_sequence(&command)?;
     emit_pet_vitals_changed(&app);
-    schedule_pet_feedback_finish(app, CLICK_FEEDBACK_DURATION, PetFeedbackFinish::Interaction);
+    schedule_pet_feedback_finish(
+        app,
+        CLICK_FEEDBACK_DURATION,
+        PetFeedbackFinish::Interaction,
+        sequence,
+    );
     Ok(command)
 }
 
@@ -7423,8 +7456,14 @@ fn stroke_pet(
         state
             .runtime
             .stroke_pet(request.distance_px, request.duration_ms, request.reversals)?;
+    let sequence = feedback_sequence(&command)?;
     emit_pet_vitals_changed(&app);
-    schedule_pet_feedback_finish(app, CLICK_FEEDBACK_DURATION, PetFeedbackFinish::Interaction);
+    schedule_pet_feedback_finish(
+        app,
+        CLICK_FEEDBACK_DURATION,
+        PetFeedbackFinish::Interaction,
+        sequence,
+    );
     Ok(command)
 }
 
@@ -7440,8 +7479,14 @@ fn notice_pet(
         x: request.x,
         y: request.y,
     })?;
+    let sequence = feedback_sequence(&command)?;
     emit_pet_vitals_changed(&app);
-    schedule_pet_feedback_finish(app, NOTICE_FEEDBACK_DURATION, PetFeedbackFinish::Notice);
+    schedule_pet_feedback_finish(
+        app,
+        NOTICE_FEEDBACK_DURATION,
+        PetFeedbackFinish::Notice,
+        sequence,
+    );
     Ok(command)
 }
 

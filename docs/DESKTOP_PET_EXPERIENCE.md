@@ -96,6 +96,7 @@ Pet Identity 必须贯穿领域快照、原生窗口标题、控制中心、Over
 - 单击、双击、右击、长按、抚摸轨迹和拖拽采用明确的手势仲裁，避免点击误判为拖拽。
 - 鼠标悬停进入角色命中区时，宠物以短暂注视回应主人的靠近；该回应有 8 秒冷却、不增加成长、不读取桌面内容，并在新交互抢占后不得把状态强制改回 Idle。
 - 所有瞬时互动结束必须由 Desktop Host 在领域提交成功后广播双窗口状态变化；Renderer 不得依赖私有计时器猜测结束，也不得在领域拒绝恢复时伪造 Idle。
+- 每次瞬时反馈必须分配非零 `feedbackSequence`，并限制在 JavaScript 安全整数范围内以保证 Rust、JSON 与 TypeScript 精确往返。Host Timer 只能提交自己启动时取得的代次；Finish 同时校验活跃状态与代次，连续两次同为 Interacting/Observing 时，前一计时器不得结束后一反馈。进入其它动作或 Idle 时清空活跃代次，旧快照缺字段迁移为 `0 / null`。
 - 单击等待 220ms 双击窗口后才结算；第二击取消待处理单击并只提交一次正式双击互动，第三击及更高 Click Detail 被忽略，防止一次多连击重复发放成长。双击进入 Interacting/Happy，Mood +5、Affinity +2、BondPoints +3，并以 `pet.interaction.double-click` / `pet.interaction.double-clicked` 原子记录有界屏幕坐标、按键和前后关系投影；它不再借用无审计的 Celebrate 动画。
 - 双击反馈使用同一统一角色舞台和 420ms 有界互动收敛，不新增 Renderer 私有状态。持久化失败时成长、Snapshot 和 Event 全部不变；Drag、Safe/Recovery 失败关闭。Preview 只模拟同一数值契约，真实 Tauri Host 才能提交领域事件，整个路径完全离线且不读取其它应用内容。
 - 抚摸是独立语义而不是连续 Click：按住后在 12px 安全半径内完成至少 32px、160ms 且含方向反转的往返轨迹才成立；向外达到 12px 立即让位于原生拖拽。合法抚摸增加 Mood 4、Affinity 2 与 BondPoints 2，并发布含有界距离、时长和反转次数的 `pet.interaction.stroked` 事件；原始逐点轨迹不持久化。

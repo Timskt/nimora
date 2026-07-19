@@ -6,7 +6,8 @@
 - Overlay 继续通过唯一 Typed Port 监听并重读权威 Snapshot，因此内置、Sprite、glTF 与 VRM Renderer 都会从 Interacting/Observing 回到真实领域姿态，不维护私有结束计时器。
 - 若延迟任务到期前状态已被拖拽、睡眠、自主行为或其它不同状态抢占，领域 Finish 失败关闭且 Host 不广播伪恢复，不覆盖新动作。
 - 600ms 互动反馈与 900ms 悬停反馈使用封闭枚举和统一调度器；Renderer、Sensor、AI、Skill 与用户代码仍不拥有窗口事件发布能力。
-- Runtime 测试覆盖成功恢复和不同状态抢占拒绝；Host 163 项与 Clippy 验证统一调度编译接线。相同 Interacting 状态的连续高频操作仍需后续引入领域代次令牌后才能证明严格先后隔离。
+- Pet 持久快照现持有 JSON 安全整数范围内的反馈代次；每次 Interacting/Observing 反馈原子递增并随 Command 交给 Host Timer。Finish 必须同时匹配状态与代次，因此旧计时器不能提前结束同为 Interacting 的新点击、照料或抚摸；旧快照缺字段默认无活跃反馈。
+- Core 与 Runtime 测试覆盖连续同状态反馈、旧代次失败关闭、当前代次成功收敛、事件关联、迁移和上限回绕；Host 继续通过统一调度器广播双窗口权威状态。
 
 ## 2026-07-19 — 桌宠悬停注视回应
 

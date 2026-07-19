@@ -112,6 +112,8 @@ export const petSchema = z.object({
   lastVitalsUpdateMs: z.number().int().nonnegative().optional(),
   lastCareMs: z.number().int().nonnegative().optional(),
   lastItemUseMs: z.number().int().nonnegative().optional(),
+  feedbackSequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).default(0),
+  activeFeedbackSequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable().optional(),
   autonomy: z.object({
     sequence: z.number().int().nonnegative(),
     nextDueMs: z.number().int().nonnegative(),
