@@ -135,8 +135,8 @@
 
 - 结果：Windows 前台窗口通过 Win32 Window/Monitor 边界进行全屏判断，并接入与 macOS 相同的 Sensor Controller、Presence Coordinator、租约、退避和健康状态通路。
 - 隐私与正确性：不读取标题、进程名或像素；最小化、不可见及桌面 Shell 表面失败关闭，多屏负坐标与 2px 原生边框舍入由平台无关测试覆盖。
-- 架构：Adapter 只返回布尔事实，不持有 Tauri Window；Desktop Coordinator 仍是唯一原生窗口执行者，Windows 不形成第二套策略。
-- 证据边界：macOS 本机测试和共享几何测试通过；Windows 交叉检查被本机缺少 MinGW C 编译器阻断于 `ring` 构建脚本，尚未到应用链接和真机运行阶段，签名 Windows 包仍需发布门禁。
+- 架构：Adapter 只返回布尔事实，不持有 Tauri Window；七处 Win32 FFI 被收口到最小 `nimora-system-context-windows` crate，Desktop Host 继续执行 `unsafe_code = forbid`，Desktop Coordinator 仍是唯一窗口执行者。
+- 证据边界：安装 MinGW、构建四个真实 Windows Sidecar 后，完整 Desktop Windows GNU 目标交叉检查通过；这证明平台分支可编译，但签名 Windows 包与真机运行仍需发布门禁。
 - 剩余：Windows 屏幕共享、游戏和免打扰 Sensor，以及真实多屏/DPI/独占全屏切换测试。
 
 ## 2026-07-19 — System Context Sensor Host Contract

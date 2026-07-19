@@ -55,11 +55,7 @@ zeroize.workspace = true
 wait-timeout.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61", features = [
-  "Win32_Foundation",
-  "Win32_Graphics_Gdi",
-  "Win32_UI_WindowsAndMessaging",
-] }
+nimora-system-context-windows = { path = "../../../crates/system-context-windows" }
 
 [lints]
 workspace = true

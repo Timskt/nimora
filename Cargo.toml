@@ -24,6 +24,7 @@ members = [
   "crates/model-importer",
   "crates/system-context",
   "crates/system-context-sensor",
+  "crates/system-context-windows",
   "crates/user-code-policy",
   "crates/user-code-host",
   "crates/user-code-gateway",

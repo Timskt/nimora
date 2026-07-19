@@ -5,7 +5,7 @@
 - Windows 原生 Adapter 使用 `GetForegroundWindow`、窗口/显示器边界和 2px 原生框架舍入容差判断前台全屏，不读取窗口标题、进程命令行、屏幕像素或用户内容。
 - 最小化、不可见窗口以及 `Progman`、`WorkerW`、`Shell_TrayWnd` 系统表面不会被误报为全屏；多显示器与负坐标按前台窗口所在 Monitor 判断。
 - Windows 与 macOS 现复用同一 Sensor Controller、15 秒租约、有界退避、Health Snapshot 和 Desktop Presence Coordinator；Sensor 仍只产生布尔事实，不能直接控制桌宠窗口。
-- 本机纯几何、macOS Adapter 与 Desktop Host 测试通过；Windows Rust 目标已安装，交叉检查推进至 Tauri 依赖后因本机缺少 `x86_64-w64-mingw32-gcc` 停止，因此签名 Windows 构建与真机前台切换仍保持发布门禁，不将源代码审查冒充运行证据。
+- Win32 FFI 已隔离进最小 `nimora-system-context-windows` 审计 crate，Desktop Host 继续全局禁止 Unsafe；本机安装 MinGW 并构建四个真实 Windows Sidecar 后，`cargo check -p nimora-desktop --target x86_64-pc-windows-gnu` 完整通过。签名 Windows 包与真机前台切换仍保持发布门禁，不把交叉编译冒充运行证据。
 
 ## 2026-07-19 — 原生桌宠菜单有界可达性
 

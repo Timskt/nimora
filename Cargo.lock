@@ -2538,6 +2538,7 @@ dependencies = [
  "nimora-skill-runtime",
  "nimora-system-context",
  "nimora-system-context-sensor",
+ "nimora-system-context-windows",
  "nimora-user-code-gateway",
  "nimora-user-code-host",
  "nimora-user-code-package",
@@ -2553,7 +2554,6 @@ dependencies = [
  "time",
  "uuid",
  "wait-timeout",
- "windows-sys 0.61.2",
  "zeroize",
 ]
 
@@ -2696,6 +2696,14 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "nimora-system-context-windows"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
