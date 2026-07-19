@@ -26,6 +26,7 @@ pub enum PetState {
     Observing,
     Walking,
     Perching,
+    Climbing,
     Sleeping,
     Dragged,
     Interacting,
@@ -52,6 +53,7 @@ pub enum PetAction {
     Observe,
     Walk,
     Perch,
+    Climb,
     Sleep,
     Work,
     Celebrate,
@@ -212,11 +214,12 @@ pub enum PetAutonomyDecision {
 }
 
 impl PetAction {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Idle,
         Self::Observe,
         Self::Walk,
         Self::Perch,
+        Self::Climb,
         Self::Sleep,
         Self::Work,
         Self::Celebrate,
@@ -597,6 +600,7 @@ impl Pet {
             PetAction::Observe => (PetState::Observing, Emotion::Neutral),
             PetAction::Walk => (PetState::Walking, Emotion::Happy),
             PetAction::Perch => (PetState::Perching, Emotion::Neutral),
+            PetAction::Climb => (PetState::Climbing, Emotion::Focused),
             PetAction::Sleep => (PetState::Sleeping, Emotion::Sleepy),
             PetAction::Work => (PetState::Working, Emotion::Focused),
             PetAction::Celebrate => (PetState::Interacting, Emotion::Happy),
@@ -1531,6 +1535,9 @@ mod tests {
         pet.apply_action(PetAction::Perch);
         assert_eq!(pet.state, PetState::Perching);
         assert_eq!(pet.emotion, Emotion::Neutral);
+        pet.apply_action(PetAction::Climb);
+        assert_eq!(pet.state, PetState::Climbing);
+        assert_eq!(pet.emotion, Emotion::Focused);
         pet.apply_action(PetAction::Work);
         assert_eq!(pet.state, PetState::Working);
         assert_eq!(pet.emotion, Emotion::Focused);

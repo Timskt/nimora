@@ -1021,3 +1021,17 @@ ID / 标题 / 优先级 / 前置条件
 | DP-PERCH-007 | 开启 Reduced Motion | 无循环位移动画，保留可识别的静态栖息姿态 |
 | DP-PERCH-008 | 用户代码/Automation/Agent 请求 | 从共同 Action Catalog 发现 `perch`，沿既有授权、确认、审计和 Safe Mode 门禁执行 |
 | DP-PERCH-009 | 拖拽、Safe/Recovery 或重启 | 拖拽优先；受限模式拒绝写动作；恢复后为 Idle，不持久化瞬时姿态 |
+
+## DP-CLIMB — 侧边攀爬
+
+| ID | 场景 | 预期 |
+|---|---|---|
+| DP-CLIMB-001 | Runtime 播放 `climb` | 状态为 `climbing`、情绪为 `focused`，Action Catalog 精确包含一次 `climb` |
+| DP-CLIMB-002 | 桌宠位于 Left/TopLeft/BottomLeft | 统一角色舞台使用左侧支点、向墙轻倾并播放有界上下攀爬反馈 |
+| DP-CLIMB-003 | 桌宠位于 Right/TopRight/BottomRight | 使用镜像后的右侧支点和相反倾角，菜单、气泡与命中区不镜像或旋转 |
+| DP-CLIMB-004 | 桌宠位于 Free/Top/Bottom | 不施加侧边倾角，不把攀爬冒充顶部探头或底边栖息，不移动原生窗口 |
+| DP-CLIMB-005 | Sprite/glTF 缺少 `pet.climb` | 按 Manifest 回退链稳定落到 `pet.idle`，Renderer 不白屏、不冻结 |
+| DP-CLIMB-006 | VRM 播放 `pet.climb` | 只请求白名单低权重 `surprised`，缺失 Preset 时安全无表情降级 |
+| DP-CLIMB-007 | 开启 Reduced Motion | 停止上下循环，保留静态侧边倾角、支点和动作可识别性 |
+| DP-CLIMB-008 | 菜单、用户代码、Automation、Agent 请求 | 共享 `climb` 词汇并沿类型化 IPC、授权、确认、审计和 Safe Mode 门禁执行 |
+| DP-CLIMB-009 | 拖拽、重启、Renderer 切换 | 拖拽优先；重启恢复 Idle；所有 Renderer 对同一 Snapshot 产生一致动作选择 |

@@ -1,5 +1,14 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-19 QQ 宠物式侧边攀爬纵切
+
+- 结果：新增 `Climb → Climbing → pet.climb` 正式语义，桌宠菜单和受控扩展能力面可统一触发，不再用通用 Walking 或 Renderer 私有动画冒充攀爬。
+- 空间边界：Left/Right 与对应 Corner 获得镜像支点和贴墙姿态；Free、Top、Bottom 不伪装攀爬，顶部探头仍保留独立动作边界。
+- 生态：Core 动作词表驱动 Desktop、用户代码、Automation、Agent 与 Creator；Sprite/glTF 使用 Manifest 回退，VRM 只用封闭 Preset。
+- 鲁棒性：Reduced Motion 使用静态姿态；旧资源回退 Idle；拖拽、Safe/Recovery、重启恢复和 Desktop Coordinator 唯一移窗边界保持不变。
+- 验证：Runtime、Gateway、Agent、前端状态映射、VRM 表情、TypeScript 与生产 Bundle 均纳入本地门禁；签名 macOS/Windows 侧边视觉仍需真机验收。
+- Actions：继续使用本地门禁并集中里程碑推送，避免浪费 GitHub Actions 2000 分钟/月预算。
+
 ## M-2026-07-19 桌面边缘 Surface Semantic
 
 - 范围：建立 QQ 宠物式边缘栖息的正式环境语义，而不是直接为某个 Renderer 堆叠不可扩展的攀爬 CSS。

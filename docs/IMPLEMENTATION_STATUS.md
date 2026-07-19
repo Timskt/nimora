@@ -347,6 +347,15 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - Bottom、BottomLeft、BottomRight Surface 会应用更低的栖息锚点；左右边缘不冒充攀爬，顶部不冒充探头。
 - Reduced Motion 停止持续姿态动画但保留静态栖息位置。重启仍恢复 Idle；Safe/Recovery、拖拽抢占和窗口唯一执行者边界保持不变。
 - 当前未宣称支持攀爬、顶部探头、应用窗口或桌面图标表面；这些能力必须分别建立可测试语义和平台适配器。
+
+## 2026-07-19 — QQ 宠物式侧边攀爬动作
+
+- 已建立 `Climb → Climbing → pet.climb` 完整领域链路，动作进入 Runtime 唯一词表，并自动出现在 Desktop、用户代码、Automation 与 Agent Action Catalog。
+- 桌宠“更多”菜单可直接触发攀爬；Left/Right 与对应 Corner 使用相反侧支点、贴墙倾角和有界上下反馈，Free/Top/Bottom 不冒充攀爬。
+- Creator Studio 已公开标准动作；Sprite/glTF 缺动作时确定性回退 `pet.idle`，VRM 只使用封闭低权重 `surprised` Preset。
+- Reduced Motion 停止循环位移但保留静态空间语义；气泡、菜单、阴影、命中区不参与角色变换。
+- Desktop Coordinator 仍是唯一原生窗口执行者，攀爬不新增桌面捕获、网络、显示器或窗口权限，离线运行路径不变。
+- 当前仍未宣称顶部探头、沿边自动位移、应用窗口或桌面图标攀附；后续必须分别建立宿主协调语义和真机门禁。
 ## 2026-07-18 — Indeterminate Attempt reconciliation
 
 - Added a parameter-bound manual reconciliation contract for indeterminate Auto Mode attempts.

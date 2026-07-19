@@ -48,6 +48,7 @@ describe("VRM expression semantics", () => {
   it("maps public actions only to fixed VRM presets", () => {
     expect(resolveVrmExpression("pet.observe")).toEqual({ name: "surprised", weight: 0.22 });
     expect(resolveVrmExpression("pet.perch")).toEqual({ name: "relaxed", weight: 0.28 });
+    expect(resolveVrmExpression("pet.climb")).toEqual({ name: "surprised", weight: 0.18 });
     expect(resolveVrmExpression("pet.click")).toEqual({ name: "happy", weight: 0.85 });
     expect(resolveVrmExpression("pet.celebrate")).toEqual({ name: "happy", weight: 1 });
     expect(resolveVrmExpression("pet.drag")).toEqual({ name: "surprised", weight: 0.55 });

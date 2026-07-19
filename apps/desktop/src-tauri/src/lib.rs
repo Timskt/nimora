@@ -13338,7 +13338,7 @@ mod tests {
         assert_eq!(value["spec"], "nimora.pet-action-catalog/1");
         assert_eq!(
             value["actions"],
-            json!(["idle", "observe", "walk", "perch", "sleep", "work", "celebrate"])
+            json!(["idle", "observe", "walk", "perch", "climb", "sleep", "work", "celebrate"])
         );
         assert_eq!(value["commandTool"], "pet.animation.play");
     }
@@ -15862,6 +15862,7 @@ mod tests {
     fn action_contract_uses_snake_case_values() {
         assert_eq!(serde_json::to_value(PetAction::Observe).unwrap(), "observe");
         assert_eq!(serde_json::to_value(PetAction::Perch).unwrap(), "perch");
+        assert_eq!(serde_json::to_value(PetAction::Climb).unwrap(), "climb");
         assert_eq!(
             serde_json::to_value(PetAction::Celebrate).unwrap(),
             "celebrate"
