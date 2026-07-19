@@ -12052,6 +12052,19 @@ fn pet_window_heartbeat(
     Ok(())
 }
 
+fn complete_window_initialization<E>(
+    initialize: impl FnOnce() -> Result<(), E>,
+    cleanup: impl FnOnce(),
+) -> Result<(), E> {
+    match initialize() {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            cleanup();
+            Err(error)
+        }
+    }
+}
+
 fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
     let policy = current_window_policy(&app.state::<DesktopState>())?;
     let snapshot = app.state::<DesktopState>().runtime.snapshot()?;
@@ -12068,18 +12081,23 @@ fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
             .skip_taskbar(true)
             .shadow(false)
             .build()?;
-    let position = snapshot.position;
-    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-        screen_coordinate(position.x)?,
-        screen_coordinate(position.y)?,
-    )))?;
-    if policy.visible
-        && let Err(error) = ensure_pet_window_visible(app)
-    {
-        let _ = window.destroy();
-        return Err(error);
-    }
-    window.set_ignore_cursor_events(policy.click_through)?;
+    complete_window_initialization(
+        || {
+            let position = snapshot.position;
+            window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+                screen_coordinate(position.x)?,
+                screen_coordinate(position.y)?,
+            )))?;
+            if policy.visible {
+                let _ = ensure_pet_window_visible(app)?;
+            }
+            window.set_ignore_cursor_events(policy.click_through)?;
+            Ok::<(), DesktopError>(())
+        },
+        || {
+            let _ = window.destroy();
+        },
+    )?;
     app.state::<DesktopState>()
         .lifecycle
         .pet_window_recovery
@@ -12822,9 +12840,9 @@ mod tests {
         automation_governance_catalog_inner, cancel_agent_task_inner,
         cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
         cancel_skill_execution_inner, capability_set_diff, classify_pet_surface,
-        confirm_agent_tool_inner, confirm_agent_tool_with_registry, consume_creator_approval_from,
-        creator_capability_catalog, creator_capability_risk, creator_composition_graph,
-        current_time_ms, default_agent_model, default_agent_provider_id,
+        complete_window_initialization, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
+        consume_creator_approval_from, creator_capability_catalog, creator_capability_risk,
+        creator_composition_graph, current_time_ms, default_agent_model, default_agent_provider_id,
         delete_openai_provider_inner, desktop_provider_registry, desktop_tool_registry,
         diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
@@ -17321,6 +17339,28 @@ mod tests {
             plan_pet_interaction_restore(false),
             PetInteractionRestorePlan::RecoverMissing
         );
+    }
+
+    #[test]
+    fn failed_pet_window_initialization_always_cleans_up_the_half_built_window() {
+        let cleaned = AtomicBool::new(false);
+        let result = complete_window_initialization(
+            || Err::<(), _>("native configuration failed"),
+            || cleaned.store(true, Ordering::Release),
+        );
+        assert_eq!(result, Err("native configuration failed"));
+        assert!(cleaned.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn successful_pet_window_initialization_keeps_the_window() {
+        let cleaned = AtomicBool::new(false);
+        let result = complete_window_initialization(
+            || Ok::<(), &'static str>(()),
+            || cleaned.store(true, Ordering::Release),
+        );
+        assert_eq!(result, Ok(()));
+        assert!(!cleaned.load(Ordering::Acquire));
     }
 
     #[test]

@@ -18,6 +18,8 @@
 | DP-TRAY-RECALL-012 | 缺失窗口的持久坐标已离屏 | 重建后、启用交互前先夹回有效 Work Area；不得出现“窗口已恢复但仍找不到宠物” |
 | DP-TRAY-RECALL-013 | 重建后 Work Area 复验失败 | 销毁半构建窗口并进入下一次有界退避；不得留下无心跳的幽灵窗口或误报恢复完成 |
 | DP-TRAY-RECALL-014 | Shutdown 与托盘恢复并发 | Lifecycle Gate 或 Recovery Host 永久拒绝新 Worker，明确退出后宠物不得复活 |
+| DP-TRAY-RECALL-015 | 初始坐标、Work Area 或点击穿透配置失败 | build 后任一失败都销毁半成品窗口且不记录心跳；Worker 可继续下一次有界重试 |
+| DP-TRAY-RECALL-016 | 所有原生初始化步骤成功 | 保留唯一 Pet Window、记录新心跳且不执行清理，不产生重复窗口 |
 
 ## ACTIVITY-REFRESH — 活动健康自动刷新
 

@@ -121,7 +121,7 @@ Profile 具有严格且可扩展的场景类型：`companion`、`work`、`focus`
 
 Desktop Host 持有独立的 `DesktopLifecycleGate`，而不是把应用生命周期混入 Pet Window Recovery。所有运行期控制中心激活在 gate 的互斥准入区内完成；`begin_shutdown` 等待已准入的原生窗口操作返回，随后永久拒绝 Dock Reopen、第二实例、托盘、桌宠入口和恢复降级入口。关停 gate 先于 Pet Window Recovery 与自主循环停止标记关闭，形成“关停返回后不会再开始窗口激活”的 happens-before 边界；Renderer、Sensor、AI 与扩展均不能访问该 gate。
 
-托盘不是绕过应用层的特权入口。打开控制中心和恢复宠物交互在原生副作用成功后分别发布 `desktop.window.control-center-opened` 与 `pet.window.interaction-restored`；失败发布 `desktop.tray.action-failed` 诊断事件。恢复交互必须通过 Presence Transition 恢复强制可见、关闭原生鼠标穿透并解除最小化，再由 Desktop Coordinator 使用所有显示器 Work Area 复验位置；离屏窗口夹回可见安全边界，随后沿统一 Moved 防抖链写回 Runtime。若 Pet WebView 已缺失，则在 Lifecycle Gate 内提交相同恢复意图并发布 `pet.window.interaction-restore-requested`，随后复用唯一有界 Recovery Worker；重建窗口在开放鼠标交互前复验 Work Area，复验失败销毁半成品并重试。事件只记录恢复阶段和是否发生位置纠正，不记录显示器身份、窗口标题或桌面内容。
+托盘不是绕过应用层的特权入口。打开控制中心和恢复宠物交互在原生副作用成功后分别发布 `desktop.window.control-center-opened` 与 `pet.window.interaction-restored`；失败发布 `desktop.tray.action-failed` 诊断事件。恢复交互必须通过 Presence Transition 恢复强制可见、关闭原生鼠标穿透并解除最小化，再由 Desktop Coordinator 使用所有显示器 Work Area 复验位置；离屏窗口夹回可见安全边界，随后沿统一 Moved 防抖链写回 Runtime。若 Pet WebView 已缺失，则在 Lifecycle Gate 内提交相同恢复意图并发布 `pet.window.interaction-restore-requested`，随后复用唯一有界 Recovery Worker。原生 `build()` 后的坐标、Work Area 和点击穿透配置属于统一初始化清理边界：全部成功后才记录心跳，任一步失败都销毁半成品并重试，不能让已占用窗口标签冒充恢复完成。事件只记录恢复阶段和是否发生位置纠正，不记录显示器身份、窗口标题或桌面内容。
 
 Pet 交互状态转换由 Core 定义，而不是由 React 动画反推。点击进入 `interacting` 并发布 `pet.interaction.clicked`，600ms 后仅在状态仍未被新操作替换时回到 `idle`；拖拽进入最高优先级 `dragged`，原生拖拽结束后以一次持久化更新最终位置并回到 `idle`，发布 `pet.window.drag.started` 与 `pet.window.dragged`。Command 与对应 Event 共享 Trace ID，失败不得留下假事件。
 

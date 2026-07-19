@@ -6,6 +6,7 @@
 - 召回复用 Desktop Coordinator 的原生窗口路径；Renderer、AI、Skill、Automation 和用户程序仍不能直接读取显示器或设置窗口。原生 Moved 事件继续以 200ms 防抖把纠正坐标写回权威 Runtime，避免下次启动再次走失。
 - `pet.window.interaction-restored` 新增布尔审计事实 `positionRecovered`，只说明是否发生纠正，不记录显示器名称、窗口标题、桌面内容或屏幕截图。
 - 宠物 WebView 完全缺失时，同一托盘入口先在生命周期与 Presence 串行门禁内写入强制可见、取消穿透的恢复意图，发布 `pet.window.interaction-restore-requested`，再复用既有单 Worker 有界退避重建；新窗口创建后立即复验 Work Area，旧离屏坐标不会让重建后的宠物再次走失。
+- `create_pet_window` 的持久坐标应用、Work Area 复验和鼠标穿透配置现处于统一失败清理边界；任一 build 后步骤失败都会销毁刚创建的原生窗口，再由 Recovery Worker 有界重试，窗口标签不会被半成品占用。
 - 已验证：主屏召回、最大重叠显示器、分辨率缩小、无显示器信息与托盘 ID 契约的 Rust 聚焦测试通过；动态热插拔、混合 DPI 与签名原生窗口视觉仍保留为 macOS/Windows 发布门禁。
 
 ## 2026-07-19 — 活动健康可见时自动刷新
