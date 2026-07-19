@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -10,6 +10,8 @@ use std::{
 const RECOVERY_WINDOW_MS: u64 = 60_000;
 const MAX_RECOVERY_ATTEMPTS: usize = 3;
 const BASE_RETRY_DELAY: Duration = Duration::from_secs(1);
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+pub const HEARTBEAT_TIMEOUT_MS: u64 = 90_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecoveryDecision {
@@ -27,6 +29,29 @@ pub struct PetWindowRecoveryHost {
     policy: Mutex<PetWindowRecovery>,
     active: AtomicBool,
     shutting_down: AtomicBool,
+    last_heartbeat_ms: AtomicU64,
+}
+
+#[derive(Debug, Default)]
+pub struct PetWindowWatchdog {
+    was_visible: bool,
+}
+
+impl PetWindowWatchdog {
+    pub fn should_recover(
+        &mut self,
+        host: &PetWindowRecoveryHost,
+        visible: bool,
+        now_ms: u64,
+    ) -> bool {
+        let became_visible = visible && !self.was_visible;
+        self.was_visible = visible;
+        if became_visible {
+            host.record_heartbeat(now_ms);
+            return false;
+        }
+        visible && host.heartbeat_is_stale(now_ms)
+    }
 }
 
 impl PetWindowRecoveryHost {
@@ -57,6 +82,15 @@ impl PetWindowRecoveryHost {
 
     pub fn is_shutting_down(&self) -> bool {
         self.shutting_down.load(Ordering::Acquire)
+    }
+
+    pub fn record_heartbeat(&self, now_ms: u64) {
+        self.last_heartbeat_ms.fetch_max(now_ms, Ordering::AcqRel);
+    }
+
+    pub fn heartbeat_is_stale(&self, now_ms: u64) -> bool {
+        let last = self.last_heartbeat_ms.load(Ordering::Acquire);
+        last > 0 && now_ms.saturating_sub(last) >= HEARTBEAT_TIMEOUT_MS
     }
 }
 
@@ -125,5 +159,29 @@ mod tests {
         host.begin_shutdown();
         host.finish();
         assert!(!host.try_start());
+    }
+
+    #[test]
+    fn heartbeat_ignores_clock_rollback_and_detects_bounded_staleness() {
+        let host = PetWindowRecoveryHost::default();
+        assert!(!host.heartbeat_is_stale(100_000));
+        host.record_heartbeat(100_000);
+        assert!(!host.heartbeat_is_stale(99_000));
+        assert!(!host.heartbeat_is_stale(189_999));
+        assert!(host.heartbeat_is_stale(190_000));
+        host.record_heartbeat(200_000);
+        host.record_heartbeat(150_000);
+        assert!(!host.heartbeat_is_stale(289_999));
+    }
+
+    #[test]
+    fn watchdog_pauses_hidden_windows_and_rearms_before_recovery() {
+        let host = PetWindowRecoveryHost::default();
+        let mut watchdog = PetWindowWatchdog::default();
+        assert!(!watchdog.should_recover(&host, true, 100_000));
+        assert!(!watchdog.should_recover(&host, false, 300_000));
+        assert!(!watchdog.should_recover(&host, true, 400_000));
+        assert!(!watchdog.should_recover(&host, true, 489_999));
+        assert!(watchdog.should_recover(&host, true, 490_000));
     }
 }

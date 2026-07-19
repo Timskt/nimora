@@ -25,6 +25,7 @@ const GltfRenderer = lazy(async () => {
   const module = await import("./GltfRenderer");
   return { default: module.GltfRenderer };
 });
+const PET_WINDOW_HEARTBEAT_INTERVAL_MS = 15_000;
 
 export function PetOverlay() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
@@ -52,6 +53,14 @@ export function PetOverlay() {
   const applySnapshot = useCallback((value: DesktopSnapshot) => {
     setSnapshot(value);
     setStatusBubblesEnabled(value.petPresentation.statusBubblesEnabled);
+  }, []);
+
+  useEffect(() => {
+    if (!desktopApi.native) return;
+    const beat = () => void desktopApi.petWindowHeartbeat().catch(() => undefined);
+    beat();
+    const timer = window.setInterval(beat, PET_WINDOW_HEARTBEAT_INTERVAL_MS);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {

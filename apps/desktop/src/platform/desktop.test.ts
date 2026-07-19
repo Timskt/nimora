@@ -2,6 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { createDesktopApi, type UserProgramExecutionReceipt } from "./desktop";
 
 describe("desktop platform adapter", () => {
+  it("maps the pet heartbeat without exposing recovery controls", async () => {
+    const invoke = vi.fn(async () => undefined);
+    const api = createDesktopApi(true, invoke);
+
+    await api.petWindowHeartbeat();
+    expect(invoke).toHaveBeenCalledWith("pet_window_heartbeat");
+  });
+
   it("maps attention requests to the host authority", async () => {
     const decision = { spec: "nimora.attention-decision/1", allowed: true, reason: "granted", retryAfterMs: null, remainingTokens: 10, decidedAtMs: 42 } as const;
     const invoke = vi.fn(async () => decision);

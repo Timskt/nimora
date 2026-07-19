@@ -1029,6 +1029,7 @@ export interface DesktopApi {
   publishAgentCompanionSignal(signal: AgentCompanionSignal): Promise<void>;
   openControlCenter(destination: ControlCenterDestination): Promise<void>;
   snapshot(): Promise<DesktopSnapshot>;
+  petWindowHeartbeat(): Promise<void>;
   requestAttention(source: AttentionSource, channel: AttentionChannel, priority: AttentionPriority): Promise<AttentionDecision>;
   petSurface(): Promise<PetSurfaceSnapshot>;
   drainEvents(): Promise<NimoraEvent[]>;
@@ -1324,6 +1325,7 @@ export function createDesktopApi(
         window.location.assign(`/?section=${encodeURIComponent(section)}&intent=${destination}`);
       },
       async snapshot() { refreshPreviewRelationship(); return structuredClone(previewSnapshot); },
+      async petWindowHeartbeat() {},
       async requestAttention() {
         return { spec: "nimora.attention-decision/1", allowed: true, reason: "granted", retryAfterMs: null, remainingTokens: 12, decidedAtMs: Date.now() };
       },
@@ -1811,6 +1813,7 @@ export function createDesktopApi(
     },
     openControlCenter: async (destination) => { await invokeCommand("open_control_center", { request: { destination } }); },
     snapshot: async () => await invokeCommand("desktop_snapshot") as DesktopSnapshot,
+    petWindowHeartbeat: async () => { await invokeCommand("pet_window_heartbeat"); },
     requestAttention: async (source, channel, priority) => await invokeCommand("request_attention", {
       request: { spec: "nimora.attention-request/1", source, channel, priority },
     }) as AttentionDecision,

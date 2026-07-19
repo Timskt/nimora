@@ -33,7 +33,9 @@ use diagnostic_report::{
     DiagnosticReportFacts, DiagnosticSafetyMode, DiagnosticStartupMode, build_diagnostic_report,
 };
 use fail_closed_convergence::{SafeModeConvergenceOperations, converge_safe_mode};
-use pet_window_recovery::{PetWindowRecoveryHost, RecoveryDecision};
+use pet_window_recovery::{
+    HEARTBEAT_INTERVAL, PetWindowRecoveryHost, PetWindowWatchdog, RecoveryDecision,
+};
 use reversible_transition::{ReversibleTransitionError, run_reversible_transition};
 
 use auto_mode_jobs::{
@@ -11956,6 +11958,22 @@ fn pet_surface_snapshot(window: WebviewWindow) -> Result<PetSurfaceSnapshot, Des
     })
 }
 
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn pet_window_heartbeat(
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+) -> Result<(), DesktopError> {
+    if window.label() != PET_WINDOW_LABEL {
+        return Err(DesktopError::WindowForbidden);
+    }
+    state
+        .lifecycle
+        .pet_window_recovery
+        .record_heartbeat(current_time_ms()?);
+    Ok(())
+}
+
 fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
     let policy = current_window_policy(&app.state::<DesktopState>())?;
     let snapshot = app.state::<DesktopState>().runtime.snapshot()?;
@@ -11978,7 +11996,33 @@ fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
         screen_coordinate(position.y)?,
     )))?;
     window.set_ignore_cursor_events(policy.click_through)?;
+    app.state::<DesktopState>()
+        .lifecycle
+        .pet_window_recovery
+        .record_heartbeat(current_time_ms()?);
     Ok(())
+}
+
+fn start_pet_window_watchdog(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut watchdog = PetWindowWatchdog::default();
+        loop {
+            std::thread::sleep(HEARTBEAT_INTERVAL);
+            let Some(state) = app.try_state::<DesktopState>() else {
+                return;
+            };
+            if state.lifecycle.pet_window_recovery.is_shutting_down() {
+                return;
+            }
+            let visible = current_window_policy(&state).is_ok_and(|policy| policy.visible);
+            let now_ms = current_time_ms().unwrap_or(u64::MAX);
+            if watchdog.should_recover(&state.lifecycle.pet_window_recovery, visible, now_ms)
+                && let Some(window) = app.get_webview_window(PET_WINDOW_LABEL)
+            {
+                let _ = window.destroy();
+            }
+        }
+    });
 }
 
 fn schedule_pet_window_recovery(app: AppHandle) {
@@ -12151,6 +12195,7 @@ pub fn run() {
             desktop_snapshot,
             request_attention,
             pet_surface_snapshot,
+            pet_window_heartbeat,
             agent_catalog,
             test_automation,
             automation_catalog,
@@ -12390,6 +12435,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
         });
     }
     create_pet_window(app.handle())?;
+    start_pet_window_watchdog(app.handle().clone());
     if schedule_backups {
         start_pet_autonomy(app.handle().clone());
         start_system_context_sensors(app.handle().clone());
