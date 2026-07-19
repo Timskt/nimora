@@ -1,5 +1,13 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 瞬时互动双窗口收敛通知
+
+- 照料、道具、单击、双击、抚摸与悬停不再只在 Runtime 内延迟恢复；Desktop Host 统一调度反馈结束，并在原子恢复成功后向 Pet Overlay 与 Control Center 同时发布生命状态变化。
+- Overlay 继续通过唯一 Typed Port 监听并重读权威 Snapshot，因此内置、Sprite、glTF 与 VRM Renderer 都会从 Interacting/Observing 回到真实领域姿态，不维护私有结束计时器。
+- 若延迟任务到期前状态已被拖拽、睡眠、自主行为或其它不同状态抢占，领域 Finish 失败关闭且 Host 不广播伪恢复，不覆盖新动作。
+- 600ms 互动反馈与 900ms 悬停反馈使用封闭枚举和统一调度器；Renderer、Sensor、AI、Skill 与用户代码仍不拥有窗口事件发布能力。
+- Runtime 测试覆盖成功恢复和不同状态抢占拒绝；Host 163 项与 Clippy 验证统一调度编译接线。相同 Interacting 状态的连续高频操作仍需后续引入领域代次令牌后才能证明严格先后隔离。
+
 ## 2026-07-19 — 桌宠悬停注视回应
 
 - Overlay 在非触摸指针进入角色命中区时触发正式 Presence Notice；8 秒冷却、菜单/手势/拖拽门禁避免事件风暴和交互冲突。

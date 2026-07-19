@@ -206,6 +206,32 @@ const DEFAULT_AGENT_MODEL: &str = "model:echo-v1";
 const AUTO_MODE_CONTEXT_CACHE_SECRET: &str = "secret:cache:auto-mode-context-v1";
 const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
+const NOTICE_FEEDBACK_DURATION: Duration = Duration::from_millis(900);
+
+#[derive(Clone, Copy)]
+enum PetFeedbackFinish {
+    Interaction,
+    Notice,
+}
+
+fn emit_pet_vitals_changed(app: &AppHandle) {
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
+}
+
+fn schedule_pet_feedback_finish(app: AppHandle, duration: Duration, finish: PetFeedbackFinish) {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(duration);
+        let runtime = &app.state::<DesktopState>().runtime;
+        let finished = match finish {
+            PetFeedbackFinish::Interaction => runtime.finish_interaction(),
+            PetFeedbackFinish::Notice => runtime.finish_notice(),
+        };
+        if finished.is_ok() {
+            emit_pet_vitals_changed(&app);
+        }
+    });
+}
 const MAX_USER_PROGRAM_OPERATIONS: usize = 32;
 const MAX_USER_PROGRAM_EVENT_SESSIONS: usize = 32;
 const MAX_MODEL_BYTES: u64 = 80 * 1024 * 1024;
@@ -7279,13 +7305,12 @@ fn care_pet_inner(
     let command = state
         .runtime
         .care_pet(action, current_time_ms()?, PET_CARE_COOLDOWN_MS)?;
-    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
-    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        std::thread::sleep(CLICK_FEEDBACK_DURATION);
-        let _ = app.state::<DesktopState>().runtime.finish_interaction();
-    });
+    emit_pet_vitals_changed(app);
+    schedule_pet_feedback_finish(
+        app.clone(),
+        CLICK_FEEDBACK_DURATION,
+        PetFeedbackFinish::Interaction,
+    );
     Ok(command)
 }
 
@@ -7300,13 +7325,8 @@ fn use_pet_item(
     let command = state
         .runtime
         .use_pet_item(item_id, current_time_ms()?, PET_ITEM_COOLDOWN_MS)?;
-    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
-    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        std::thread::sleep(CLICK_FEEDBACK_DURATION);
-        let _ = app.state::<DesktopState>().runtime.finish_interaction();
-    });
+    emit_pet_vitals_changed(&app);
+    schedule_pet_feedback_finish(app, CLICK_FEEDBACK_DURATION, PetFeedbackFinish::Interaction);
     Ok(command)
 }
 
@@ -7359,12 +7379,8 @@ fn click_pet(
         },
         request.button,
     )?;
-    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
-    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
-    tauri::async_runtime::spawn_blocking(move || {
-        std::thread::sleep(CLICK_FEEDBACK_DURATION);
-        let _ = app.state::<DesktopState>().runtime.finish_interaction();
-    });
+    emit_pet_vitals_changed(&app);
+    schedule_pet_feedback_finish(app, CLICK_FEEDBACK_DURATION, PetFeedbackFinish::Interaction);
     Ok(command)
 }
 
@@ -7383,12 +7399,8 @@ fn double_click_pet(
         },
         request.button,
     )?;
-    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
-    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
-    tauri::async_runtime::spawn_blocking(move || {
-        std::thread::sleep(CLICK_FEEDBACK_DURATION);
-        let _ = app.state::<DesktopState>().runtime.finish_interaction();
-    });
+    emit_pet_vitals_changed(&app);
+    schedule_pet_feedback_finish(app, CLICK_FEEDBACK_DURATION, PetFeedbackFinish::Interaction);
     Ok(command)
 }
 
@@ -7411,12 +7423,8 @@ fn stroke_pet(
         state
             .runtime
             .stroke_pet(request.distance_px, request.duration_ms, request.reversals)?;
-    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
-    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
-    tauri::async_runtime::spawn_blocking(move || {
-        std::thread::sleep(CLICK_FEEDBACK_DURATION);
-        let _ = app.state::<DesktopState>().runtime.finish_interaction();
-    });
+    emit_pet_vitals_changed(&app);
+    schedule_pet_feedback_finish(app, CLICK_FEEDBACK_DURATION, PetFeedbackFinish::Interaction);
     Ok(command)
 }
 
@@ -7432,11 +7440,8 @@ fn notice_pet(
         x: request.x,
         y: request.y,
     })?;
-    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
-    tauri::async_runtime::spawn_blocking(move || {
-        std::thread::sleep(Duration::from_millis(900));
-        let _ = app.state::<DesktopState>().runtime.finish_notice();
-    });
+    emit_pet_vitals_changed(&app);
+    schedule_pet_feedback_finish(app, NOTICE_FEEDBACK_DURATION, PetFeedbackFinish::Notice);
     Ok(command)
 }
 

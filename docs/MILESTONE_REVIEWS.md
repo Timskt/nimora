@@ -697,3 +697,9 @@ Actions 分钟：
 - 边界：Renderer 只消费既有 Observing 状态；领域层决定无成长，Desktop Host 只负责有界时序，Sensor 与资产无窗口控制权。
 - 鲁棒性：8 秒 UI 冷却抑制风暴，原子 Repository 防止半提交，专用 Finish 采用状态比较避免延迟任务覆盖新动作。
 - 遗留：正式 macOS/Windows 需验证系统 Pointer Enter 序列、触控笔和多 Renderer 视觉；未取得真机证据前不标记视觉验收完成。
+# 2026-07-19 瞬时互动收敛链路回顾
+
+- 偏差：领域状态已按时恢复，但 Host 未发布恢复后的 Vitals 事件，导致 Overlay 与控制中心可能保留旧 Snapshot，视觉上永久停在互动姿态。
+- 修正：六条直接互动统一进入 Host 调度器；只有领域 Finish 原子成功才广播双窗口更新，失败关闭时保持当前新状态。
+- 架构：Renderer 继续被动消费 Snapshot，Desktop Coordinator 保持唯一原生事件执行者，未把计时或窗口能力下放到资源包。
+- 后续风险：不同状态抢占已严格保护；相同 Interacting 的高频连续动作仍需领域代次令牌消除旧计时器提前收敛的可能。
