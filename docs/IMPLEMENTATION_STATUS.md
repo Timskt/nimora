@@ -549,6 +549,13 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - OpenAI-compatible Worker 只把已验证 `provider_value` 写入 `reasoning_effort`；真实 loopback 测试证明无 Mapping 时不发送字段，且 Mapping Version 不越过 Worker 网络边界。
 - 桌面 Provider 管理器提供明确风险提示和具体等级选择，浏览器预览仍不伪造本机配置或能力。Agent Run/Auto Mode 的策略选择与映射生成仍是后续可信纵切，当前不得宣称已经自动应用推理等级。
 
+## 2026-07-19 — 控制中心中等视口视觉修正
+
+- 已完成：在 860px 中间断点重新平衡 Hero 文本列与角色列，避免 810×607 控制中心出现中文标题末字孤行。
+- 已完成：保留五个操作的语义顺序与自然换行，角色缩放至 90% 但不隐藏，维持 QQ 宠物式视觉存在感。
+- 已验证：真实浏览器 810×607 截图中标题为单行，正文、按钮和角色无重叠；Frontend 101 项测试、生产构建、Bundle Budget、架构边界和 `git diff --check` 通过。
+- 证据边界：本次浏览器证据仅覆盖响应式排版；原生透明合成、置顶、DPI 和 Work Area 不在此结论内。
+
 ## 2026-07-19 Profile 级照料压力策略
 
 - 已完成：领域层 `PetVitalsPolicy` 提供 Full、Simple、Off 三档确定性演化；Off 推进时间基线，重新启用不会追赶关闭期。
