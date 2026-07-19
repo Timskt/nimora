@@ -257,6 +257,7 @@ export function App() {
               key={item}
               onClick={() => setActive(item)}
               type="button"
+              aria-current={active === item ? "page" : undefined}
             >
               <span className="nav-dot" aria-hidden="true" />
               {item}
@@ -294,7 +295,7 @@ export function App() {
               </span>
               安静模式
             </button>
-            <button className="avatar" type="button" aria-label="打开个人设置">SK</button>
+            <button className="avatar" type="button" aria-label="打开个人设置" onClick={() => setActive("设置")}>SK</button>
           </div>
         </header>
 
@@ -307,7 +308,7 @@ export function App() {
           </div>
         </section>}
 
-        {active === "角色" ? <LazyWorkspace loader={loadCreatorStudio} name="角色工作室" componentProps={{ onThemeChange: setActiveTheme }} /> : active === "扩展" ? <LazyWorkspace loader={loadAiCreatorWorkspace} name="AI 扩展工坊" componentProps={{ disabled: safeMode || recoveryMode }} /> : active === "Agent" ? <LazyWorkspace loader={loadAgentWorkspace} name="Agent 工作区" componentProps={{ safeMode, recoveryMode, initialView: agentView, onNotice: updateNotice }} /> : active === "自动化" ? <LazyWorkspace loader={loadAutomationWorkspace} name="自动化工作区" componentProps={{ disabled: safeMode || recoveryMode, onNotice: updateNotice }} /> : active === "设置" ? <LazyWorkspace loader={loadDataProtection} name={recoveryMode ? "数据恢复中心" : "设置与数据保护"} componentProps={{ recoveryMode, onNotice: updateNotice }} /> : <div className="dashboard-grid">
+        {active === "角色" ? <LazyWorkspace loader={loadCreatorStudio} name="角色工作室" componentProps={{ onThemeChange: setActiveTheme }} /> : active === "扩展" ? <LazyWorkspace loader={loadAiCreatorWorkspace} name="AI 扩展工坊" componentProps={{ disabled: safeMode || recoveryMode }} /> : active === "Agent" ? <LazyWorkspace loader={loadAgentWorkspace} name="Agent 工作区" componentProps={{ safeMode, recoveryMode, initialView: agentView, onNotice: updateNotice }} /> : active === "自动化" ? <LazyWorkspace loader={loadAutomationWorkspace} name="自动化工作区" componentProps={{ disabled: safeMode || recoveryMode, onNotice: updateNotice }} /> : active === "活动" ? <ActivityWorkspace outbox={outbox} /> : active === "设置" ? <LazyWorkspace loader={loadDataProtection} name={recoveryMode ? "数据恢复中心" : "设置与数据保护"} componentProps={{ recoveryMode, onNotice: updateNotice }} /> : <div className="dashboard-grid">
           <section className="pet-stage" aria-labelledby="pet-heading">
             <div className="stage-copy">
               <span className="pill">{notice}</span>
@@ -375,7 +376,7 @@ export function App() {
           <section className="activity-card">
             <div className="section-heading">
               <div><p className="card-label">最近活动</p><h2>一切运行良好</h2></div>
-              <button className="text-button" type="button">查看全部</button>
+              <button className="text-button" type="button" onClick={() => setActive("活动")}>查看全部</button>
             </div>
             <ul>
               {runtimeActivities(outbox).map((activity) => (
@@ -412,6 +413,44 @@ export function App() {
         </div>}
       </section>
     </main>
+  );
+}
+
+function ActivityWorkspace({ outbox }: { outbox: OutboxSnapshot | null }) {
+  const activities = runtimeActivities(outbox);
+  const queueHealthy = outbox?.deadLetter === 0;
+  return (
+    <section className="activity-workspace" aria-labelledby="activity-workspace-heading">
+      <header className="activity-workspace-hero">
+        <div>
+          <p className="eyebrow">LOCAL ACTIVITY</p>
+          <h2 id="activity-workspace-heading">运行记录，一眼看清</h2>
+          <p>这里只展示本地运行健康与有界计数，不显示对话正文、提示词、文件路径或桌面内容。</p>
+        </div>
+        <span className={queueHealthy ? "healthy" : "attention"}>{outbox ? queueHealthy ? "运行健康" : "需要查看" : "正在读取"}</span>
+      </header>
+      <div className="activity-summary" aria-label="本地事件队列摘要">
+        <article><strong>{outbox?.pending ?? "—"}</strong><span>待投递</span></article>
+        <article><strong>{outbox?.leased ?? "—"}</strong><span>处理中</span></article>
+        <article><strong>{outbox?.delivered ?? "—"}</strong><span>已投递</span></article>
+        <article className={outbox?.deadLetter ? "attention" : ""}><strong>{outbox?.deadLetter ?? "—"}</strong><span>需处理</span></article>
+      </div>
+      <section className="activity-timeline" aria-labelledby="activity-health-heading">
+        <div className="section-heading">
+          <div><p className="card-label">本地健康摘要</p><h3 id="activity-health-heading">核心能力状态</h3></div>
+          <span>自动更新</span>
+        </div>
+        <ul>
+          {activities.map((activity) => (
+            <li key={activity.title}>
+              <span className={`activity-icon ${activity.tone}`} aria-hidden="true" />
+              <div><strong>{activity.title}</strong><p>{activity.meta}</p></div>
+              <span className="activity-local-badge">仅本地</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </section>
   );
 }
 
