@@ -42,6 +42,7 @@ export function PetOverlay() {
   const [stroking, setStroking] = useState(false);
   const [companionAction, setCompanionAction] = useState<PetAction | null>(null);
   const companionResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastNoticeAt = useRef(Number.NEGATIVE_INFINITY);
   const facing = snapshot ? petFacing(snapshot.pet) : "neutral";
 
   const refreshRenderer = useCallback(async () => {
@@ -200,6 +201,17 @@ export function PetOverlay() {
     );
     setSnapshot(await desktopApi.snapshot());
     window.setTimeout(() => setStroking(false), 420);
+  }
+
+  function notice(event: React.PointerEvent<HTMLButtonElement>) {
+    if (event.pointerType === "touch" || menuOpen || gestureTrail.current || dragging.current) return;
+    const now = performance.now();
+    if (now - lastNoticeAt.current < 8_000) return;
+    lastNoticeAt.current = now;
+    setMessage("我看到你啦");
+    void desktopApi.noticePet(event.screenX, event.screenY)
+      .then(async () => setSnapshot(await desktopApi.snapshot()))
+      .catch(() => undefined);
   }
 
   async function care(action: PetCareAction) {
@@ -397,6 +409,7 @@ export function PetOverlay() {
         ref={petButton}
         className={`overlay-drag-region${stroking ? " is-stroking" : ""}`}
         type="button"
+        onPointerEnter={notice}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={finishPointerGesture}

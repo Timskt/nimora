@@ -837,6 +837,47 @@ impl<R: PetRepository> RuntimeService<R> {
         )
     }
 
+    /// Records a bounded pointer-presence acknowledgement without relationship growth.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid coordinates, forbidden transitions, or a failed durable update.
+    pub fn notice_pet(&self, position: Position) -> Result<Command, RuntimeError> {
+        position.validate()?;
+        self.update(
+            Pet::notice_presence,
+            || {
+                Command::new(
+                    "pet.interaction.notice",
+                    serde_json::json!({ "position": position }),
+                    CommandRisk::Safe,
+                )
+            },
+            "pet.interaction.noticed",
+            |before, after| {
+                serde_json::json!({
+                    "position": position,
+                    "before": { "state": before.state, "emotion": before.emotion },
+                    "after": { "state": after.state, "emotion": after.emotion },
+                })
+            },
+        )
+    }
+
+    /// Ends a pointer-presence acknowledgement without overriding a newer action.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the acknowledgement is no longer active or persistence fails.
+    pub fn finish_notice(&self) -> Result<Command, RuntimeError> {
+        self.update(
+            Pet::finish_notice,
+            || Command::new("pet.interaction.notice-finish", serde_json::json!({}), CommandRisk::Safe),
+            "pet.interaction.notice-finished",
+            |before, after| serde_json::json!({ "beforeState": before.state, "afterState": after.state }),
+        )
+    }
+
     /// Returns an interaction animation to idle without overriding newer states.
     ///
     /// # Errors
@@ -1810,6 +1851,41 @@ mod tests {
             (70, 0, 0)
         );
         assert!(service.drain_events().expect("events").is_empty());
+    }
+
+    #[test]
+    fn notice_publishes_presence_without_growth_atomically() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let before = service.snapshot().expect("before");
+        let command = service
+            .notice_pet(Position { x: 24.0, y: 48.0 })
+            .expect("notice");
+        let after = service.snapshot().expect("after");
+        assert_eq!(after.state, PetState::Observing);
+        assert_eq!(after.emotion, nimora_runtime_core::Emotion::Surprised);
+        assert_eq!(
+            (after.mood, after.affinity, after.bond_points),
+            (before.mood, before.affinity, before.bond_points)
+        );
+        let event = service
+            .drain_events()
+            .expect("events")
+            .pop()
+            .expect("event");
+        assert_eq!(command.command_id.to_string(), "pet.interaction.notice");
+        assert_eq!(event.event_type, "pet.interaction.noticed");
+        assert_eq!(event.trace_id, command.trace_id);
+        assert_eq!(event.data["position"]["x"], 24.0);
+        service.finish_notice().expect("finish notice");
+        assert_eq!(service.snapshot().expect("idle").state, PetState::Idle);
+
+        let failed = RuntimeService::initialize(MemoryRepository::default(), "Aster")
+            .expect("failed runtime");
+        failed.repository.fail_save.store(true, Ordering::Relaxed);
+        assert!(failed.notice_pet(Position { x: 24.0, y: 48.0 }).is_err());
+        assert_eq!(failed.snapshot().expect("snapshot").state, PetState::Idle);
+        assert!(failed.drain_events().expect("events").is_empty());
     }
 
     #[test]

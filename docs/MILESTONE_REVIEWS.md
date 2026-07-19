@@ -691,3 +691,9 @@ Actions 分钟：
 - 体验：底边和底角使用专属低重心锚点；左右攀爬与顶部探头未被混入本动作；Reduced Motion 保留静态姿态。
 - 风险：签名 macOS/Windows 包仍需验证 Bottom Surface、混合 DPI、任务栏/Dock 变化及第三方角色视觉质量；不得用 Browser Preview 替代原生窗口证据。
 - Actions：继续只运行本地门禁，避免无价值 GitHub Actions 触发并保护每月 2000 分钟预算。
+# 2026-07-19 桌宠悬停注视纵切回顾
+
+- 对齐：增强 QQ 宠物式“看见主人靠近”的生命感，同时保持 AI 非必需、离线可用和低压力成长。
+- 边界：Renderer 只消费既有 Observing 状态；领域层决定无成长，Desktop Host 只负责有界时序，Sensor 与资产无窗口控制权。
+- 鲁棒性：8 秒 UI 冷却抑制风暴，原子 Repository 防止半提交，专用 Finish 采用状态比较避免延迟任务覆盖新动作。
+- 遗留：正式 macOS/Windows 需验证系统 Pointer Enter 序列、触控笔和多 Renderer 视觉；未取得真机证据前不标记视觉验收完成。

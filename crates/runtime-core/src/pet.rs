@@ -474,6 +474,20 @@ impl Pet {
         Ok(())
     }
 
+    /// Acknowledges the nearby pointer without granting companionship growth.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PetError::InvalidTransition`] while a drag is active.
+    pub fn notice_presence(&mut self) -> Result<(), PetError> {
+        if self.state == PetState::Dragged {
+            return Err(PetError::InvalidTransition);
+        }
+        self.state = PetState::Observing;
+        self.emotion = Emotion::Surprised;
+        Ok(())
+    }
+
     #[must_use]
     pub fn effective_bond_points(&self) -> u64 {
         self.bond_points.max(u64::from(self.affinity))
@@ -536,6 +550,19 @@ impl Pet {
     /// Returns [`PetError::InvalidTransition`] after a newer state replaced it.
     pub fn finish_interaction(&mut self) -> Result<(), PetError> {
         if self.state != PetState::Interacting {
+            return Err(PetError::InvalidTransition);
+        }
+        self.enter_idle();
+        Ok(())
+    }
+
+    /// Returns a pointer-presence acknowledgement to idle without replacing a newer state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PetError::InvalidTransition`] after a newer state replaced it.
+    pub fn finish_notice(&mut self) -> Result<(), PetError> {
+        if self.state != PetState::Observing || self.emotion != Emotion::Surprised {
             return Err(PetError::InvalidTransition);
         }
         self.enter_idle();
@@ -1455,6 +1482,24 @@ mod tests {
         pet.begin_drag().expect("drag");
         assert_eq!(pet.stroke(), Err(PetError::InvalidTransition));
         assert_eq!(pet.bond_points, 2);
+    }
+
+    #[test]
+    fn pointer_presence_is_expressive_but_grants_no_growth() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        let before_growth = (pet.mood, pet.affinity, pet.bond_points);
+        pet.notice_presence().expect("notice presence");
+        assert_eq!(pet.state, PetState::Observing);
+        assert_eq!(pet.emotion, Emotion::Surprised);
+        assert_eq!((pet.mood, pet.affinity, pet.bond_points), before_growth);
+        pet.finish_notice().expect("finish notice");
+        assert_eq!(pet.state, PetState::Idle);
+        assert_eq!(pet.finish_notice(), Err(PetError::InvalidTransition));
+
+        pet.begin_drag().expect("drag");
+        let before = pet.clone();
+        assert_eq!(pet.notice_presence(), Err(PetError::InvalidTransition));
+        assert_eq!(pet, before);
     }
 
     #[test]

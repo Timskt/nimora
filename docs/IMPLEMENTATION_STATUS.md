@@ -1,5 +1,14 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 桌宠悬停注视回应
+
+- Overlay 在非触摸指针进入角色命中区时触发正式 Presence Notice；8 秒冷却、菜单/手势/拖拽门禁避免事件风暴和交互冲突。
+- Core 使用独立 Observing/Surprised 回应，不增加 Mood、Affinity 或 BondPoints；Dragged 拒绝且零副作用，悬停不能刷成长。
+- Runtime 以 `pet.interaction.notice` / `pet.interaction.noticed` 原子记录有界屏幕坐标与前后表现状态；保存失败不发布事件、不改变 Pet。
+- Desktop Host 在 900ms 后调用专用 `finish_notice`，只有回应仍活跃时才恢复 Idle，不覆盖期间发生的点击、拖拽、睡眠或其它新状态。
+- Preview 与 Tauri Typed Port 保持同构；能力完全离线，不读取桌面内容，不授予 Renderer、AI、Skill 或用户代码窗口权限。
+- 自动化覆盖无成长、Dragged 拒绝、原子失败和精确 IPC；真实原生窗口的鼠标进入连续性、触控笔与 Reduced Motion 仍保留真机门禁。
+
 ## 2026-07-19 — QQ 宠物式正式双击互动
 
 - Overlay 的双击不再绕过领域层直接播放 Celebrate；第二击取消 220ms 待处理单击并调用正式 `double_click_pet`，第三击及更高 Detail 被忽略，避免一次多连击重复成长。

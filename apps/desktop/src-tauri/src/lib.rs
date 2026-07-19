@@ -7422,6 +7422,26 @@ fn stroke_pet(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn notice_pet(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    request: ClickPetRequest,
+) -> Result<Command, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let command = state.runtime.notice_pet(Position {
+        x: request.x,
+        y: request.y,
+    })?;
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(Duration::from_millis(900));
+        let _ = app.state::<DesktopState>().runtime.finish_notice();
+    });
+    Ok(command)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn begin_pet_drag(state: State<'_, DesktopState>) -> Result<Command, DesktopError> {
     ensure_normal_mode(&state)?;
     let command = state.runtime.begin_drag()?;
@@ -11489,6 +11509,7 @@ pub fn run() {
             click_pet,
             double_click_pet,
             stroke_pet,
+            notice_pet,
             begin_pet_drag,
             finish_pet_drag,
             set_click_through,
