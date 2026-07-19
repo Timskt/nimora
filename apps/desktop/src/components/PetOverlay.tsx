@@ -16,7 +16,7 @@ import {
 } from "./petGesture";
 import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
 import { petInventoryQuantity, petItemPresentation } from "./petItems";
-import { focusMenuItem, nextMenuItemIndex } from "./petMenu";
+import { focusMenuItem, isPetMenuShortcut, nextMenuItemIndex } from "./petMenu";
 import { agentCompanionPresentation } from "./agentCompanion";
 import { canPresentPetBubble, usePetBubble } from "./petBubble";
 import { subscribeReducedMotion } from "./reducedMotion";
@@ -466,6 +466,12 @@ export function PetOverlay() {
         onPointerUp={finishPointerGesture}
         onPointerCancel={cancelPointerGesture}
         onClick={handlePetClick}
+        onKeyDown={(event) => {
+          if (!isPetMenuShortcut(event.key, event.shiftKey)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          openPetMenu();
+        }}
         onContextMenu={(event) => {
           event.preventDefault();
           clearLongPress();

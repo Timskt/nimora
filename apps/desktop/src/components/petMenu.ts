@@ -7,6 +7,10 @@ export function nextMenuItemIndex(current: number, count: number, key: string): 
   return null;
 }
 
+export function isPetMenuShortcut(key: string, shiftKey: boolean): boolean {
+  return key === "ContextMenu" || (key === "F10" && shiftKey);
+}
+
 export function focusMenuItem(item: Pick<HTMLElement, "focus" | "scrollIntoView"> | undefined) {
   if (!item) return;
   item.focus();

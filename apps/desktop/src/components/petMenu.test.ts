@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { focusMenuItem, nextMenuItemIndex } from "./petMenu";
+import { focusMenuItem, isPetMenuShortcut, nextMenuItemIndex } from "./petMenu";
 
 describe("nextMenuItemIndex", () => {
   it("wraps directional navigation in both directions", () => {
@@ -14,6 +14,19 @@ describe("nextMenuItemIndex", () => {
     expect(nextMenuItemIndex(3, 6, "End")).toBe(5);
     expect(nextMenuItemIndex(3, 6, "Enter")).toBeNull();
     expect(nextMenuItemIndex(0, 0, "ArrowRight")).toBeNull();
+  });
+});
+
+describe("isPetMenuShortcut", () => {
+  it("supports the platform menu key and Shift+F10", () => {
+    expect(isPetMenuShortcut("ContextMenu", false)).toBe(true);
+    expect(isPetMenuShortcut("F10", true)).toBe(true);
+  });
+
+  it("does not capture ordinary interaction keys", () => {
+    expect(isPetMenuShortcut("F10", false)).toBe(false);
+    expect(isPetMenuShortcut("Enter", false)).toBe(false);
+    expect(isPetMenuShortcut(" ", false)).toBe(false);
   });
 });
 
