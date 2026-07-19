@@ -158,6 +158,13 @@ Primitive Token → Semantic Token → Component Token → Theme Override
 - 角色艺术与系统图标分层维护，角色包不能替换安全警告图标。
 - 声音与视觉反馈同步，不可成为唯一反馈；相同提示有冷却和独立音量控制。
 
+### 桌宠短对白气泡
+
+- 使用真实对白轮廓而非状态 Badge：14px 圆角主体、居中向下尾巴、克制阴影，视觉指向角色但不参与角色变换。
+- 260×300 原生窗口内保留双侧 12px 安全区，正文最多 42 个 Unicode 字符并允许任意长词换行；更长内容必须进入非模态面板。
+- `--pet-bubble-background`、`--pet-bubble-border`、`--pet-bubble-text`、`--pet-bubble-shadow` 是宿主拥有的受控 Token；主题只能通过验证后的 Theme Adapter 映射。
+- Forced Colors 使用系统 Canvas 与 CanvasText，Reduced Motion 取消位移过渡；气泡始终 `pointer-events:none`，不能改变桌宠命中区。
+
 ## 9. 响应式与跨平台
 
 - 验收宽度至少覆盖 720、960、1280、1440、1920 px 和 200% 缩放。

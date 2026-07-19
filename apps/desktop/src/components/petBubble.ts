@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export const PET_BUBBLE_DURATION_MS = 4200;
 export const PET_STATUS_COOLDOWN_MS = 8000;
+export const PET_BUBBLE_MAX_CHARACTERS = 42;
 
 export type PetBubbleChannel = "status" | "feedback" | "error";
 
@@ -39,7 +40,14 @@ export function shouldAcceptPetBubble(history: PetBubbleHistory, request: PetBub
 }
 
 export function nextPetBubblePresentation(current: PetBubblePresentation, message: string): PetBubblePresentation {
-  return { message, revision: current.revision + 1, visible: true };
+  return { message: normalizePetBubbleText(message), revision: current.revision + 1, visible: true };
+}
+
+export function normalizePetBubbleText(message: string): string {
+  const normalized = message.trim().replace(/\s+/gu, " ");
+  const characters = [...normalized];
+  if (characters.length <= PET_BUBBLE_MAX_CHARACTERS) return normalized;
+  return `${characters.slice(0, PET_BUBBLE_MAX_CHARACTERS - 1).join("")}…`;
 }
 
 export function usePetBubble(initialMessage: string) {

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   canPresentPetBubble,
   PET_BUBBLE_DURATION_MS,
+  PET_BUBBLE_MAX_CHARACTERS,
   PET_STATUS_COOLDOWN_MS,
   nextPetBubblePresentation,
+  normalizePetBubbleText,
   shouldAcceptPetBubble,
 } from "./petBubble";
 
@@ -45,5 +47,13 @@ describe("pet bubble presentation", () => {
       revision: 5,
       visible: true,
     });
+  });
+
+  it("bounds long Unicode text without splitting code points", () => {
+    const text = "  以后就叫我  " + "星".repeat(50) + "🌟🌟  ";
+    const normalized = normalizePetBubbleText(text);
+    expect([...normalized]).toHaveLength(PET_BUBBLE_MAX_CHARACTERS);
+    expect(normalized.endsWith("…")).toBe(true);
+    expect(normalized).not.toContain("  ");
   });
 });
