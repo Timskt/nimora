@@ -11935,6 +11935,10 @@ fn pet_vitals_policy(profile: &ProfilePolicy) -> PetVitalsPolicy {
     }
 }
 
+fn profile_cursor_approach_enabled(profile: &ProfilePolicy) -> bool {
+    profile.cursor_approach_enabled.unwrap_or(true)
+}
+
 fn local_minute_of_day(now_ms: u64) -> Option<u16> {
     let timestamp = i64::try_from(now_ms / 1_000).ok()?;
     let utc = OffsetDateTime::from_unix_timestamp(timestamp).ok()?;
@@ -12017,7 +12021,10 @@ fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
         .sequence;
     let work_area = monitor_work_area(&monitor);
     let surface = classify_pet_surface(current, window_size, work_area);
-    let target = if surface == PetSurface::Free {
+    let profile_snapshot = app.state::<DesktopState>().profiles.snapshot()?;
+    let cursor_approach_enabled =
+        profile_cursor_approach_enabled(active_profile_policy(&profile_snapshot)?);
+    let target = if surface == PetSurface::Free && cursor_approach_enabled {
         app.cursor_position()
             .ok()
             .and_then(|cursor| plan_cursor_approach_target(current, window_size, work_area, cursor))
@@ -12105,17 +12112,17 @@ mod tests {
         parse_asset_protocol_path, parse_user_program_plan, pause_auto_mode_job_inner,
         permission_grant, persist_asset_selection, pet_autonomy_policy,
         plan_cursor_approach_target, plan_edge_snap_position, plan_surface_wander_target,
-        plan_wander_target, prepare_agent_tool_inner, quiesce_auto_mode_jobs,
-        recover_visible_position, reject_agent_tool_inner, reject_automation_run_inner,
-        resolve_active_character, resolve_active_theme, resolve_active_voice,
-        resolve_asset_selection, resolve_auto_mode_attempt_inner, resolve_character_renderer,
-        resume_auto_mode_turn_inner, run_live_automation, run_live_automation_event,
-        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
-        screen_coordinate, sensor_health_snapshot, serve_asset_protocol, settle_action_for_surface,
-        skill_capability_names, skill_event_types, stage_creator_package,
-        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
-        validate_model_source, validate_package_source, validate_requested_animation_map,
-        verify_capability_gap,
+        plan_wander_target, prepare_agent_tool_inner, profile_cursor_approach_enabled,
+        quiesce_auto_mode_jobs, recover_visible_position, reject_agent_tool_inner,
+        reject_automation_run_inner, resolve_active_character, resolve_active_theme,
+        resolve_active_voice, resolve_asset_selection, resolve_auto_mode_attempt_inner,
+        resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
+        run_live_automation_event, run_local_agent_inner, run_skill_agent_task,
+        run_user_program_agent_task, screen_coordinate, sensor_health_snapshot,
+        serve_asset_protocol, settle_action_for_surface, skill_capability_names, skill_event_types,
+        stage_creator_package, stop_skill_event_sessions, test_automation, user_program_input,
+        valid_asset_identifier, validate_model_source, validate_package_source,
+        validate_requested_animation_map, verify_capability_gap,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -16479,6 +16486,7 @@ mod tests {
             edge_snap: None,
             sound_enabled: None,
             proactive_frequency: None,
+            cursor_approach_enabled: None,
             care_needs_mode: None,
             quiet_hours: None,
         };
@@ -16898,6 +16906,17 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair[0].cooldown_ms >= pair[1].cooldown_ms)
         );
+    }
+
+    #[test]
+    fn cursor_approach_profile_policy_is_backward_compatible_and_independent() {
+        let mut policy = ProfilePolicy::standard();
+        assert!(profile_cursor_approach_enabled(&policy));
+        policy.cursor_approach_enabled = None;
+        assert!(profile_cursor_approach_enabled(&policy));
+        policy.cursor_approach_enabled = Some(false);
+        assert!(!profile_cursor_approach_enabled(&policy));
+        assert!(pet_autonomy_policy(&policy, None).enabled);
     }
 
     #[test]

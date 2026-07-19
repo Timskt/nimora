@@ -167,6 +167,7 @@ export function ProfileDraftPreview({ profile }: { profile: Extract<NonNullable<
     ["置顶", profile.policy.alwaysOnTop],
     ["点击穿透", profile.policy.clickThrough],
     ["声音", profile.policy.soundEnabled],
+    ["靠近鼠标", profile.policy.cursorApproachEnabled],
   ] as const;
   return <section className="ai-profile-preview">
     <header><div><small>PROFILE POLICY PREVIEW</small><h4>{profile.name}</h4></div><strong>{profile.policy.mode}</strong></header>

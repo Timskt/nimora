@@ -1132,6 +1132,11 @@ ID / 标题 / 优先级 / 前置条件
 | DP-CURSOR-APPROACH-011 | 断网、Provider 全禁用、控制中心关闭 | 行为仍完整可用，不启动 AI、Agent、Skill、User Program 或权限确认 |
 | DP-CURSOR-APPROACH-012 | 隐私与能力边界审计 | 光标坐标不持久化、不上传、不写 Runtime Event/诊断，不暴露给 Renderer、Sensor、AI、Agent、Skill 或 User Program |
 | DP-CURSOR-APPROACH-013 | macOS/Windows 真机多屏、混合 DPI、快速移动光标 | 原生透明窗口平滑有界移动且不跳屏；Browser Preview 不得用于替代此证据 |
+| DP-CURSOR-APPROACH-014 | 旧 Profile 缺失 `cursorApproachEnabled` | Schema 与 Rust Merge 均解析为开启，重启后行为保持兼容且不要求迁移写回 |
+| DP-CURSOR-APPROACH-015 | 活动 Profile 关闭鼠标关注 | Host 在调用全局光标 API 前分支，Free Surface 使用原确定性 Wander，其它自主动作保持启用 |
+| DP-CURSOR-APPROACH-016 | Profile 创建、编辑、切换与 Browser Preview | 复选框、摘要和持久值一致；切换后下一轮自主 Explore 使用新策略，不需重启 |
+| DP-CURSOR-APPROACH-017 | AI Creator 生成关闭靠近的 Profile | 严格契约接受布尔值，隔离预览显示关闭；创建不激活、不授予光标或窗口能力 |
+| DP-CURSOR-APPROACH-018 | 键盘、读屏、200% 缩放和窄控制中心 | 控件名称、隐私说明、勾选状态和保存操作完整可达且不被裁切 |
 
 ## DP-DOUBLE-CLICK — 正式双击互动
 

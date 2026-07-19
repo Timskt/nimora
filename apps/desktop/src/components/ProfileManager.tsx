@@ -9,6 +9,7 @@ const initialPolicy: ProfilePolicy = {
   edgeSnap: true,
   soundEnabled: true,
   proactiveFrequency: 25,
+  cursorApproachEnabled: true,
   careNeedsMode: "full",
   quietHours: { enabled: false, startMinute: 1_320, endMinute: 420 },
 };
@@ -33,6 +34,10 @@ export function proactiveFrequencyLabel(value: number): string {
 
 export function careNeedsModeLabel(mode: CareNeedsMode | undefined): string {
   return ({ full: "低压力完整照料", simple: "简化照料", off: "生命衰减关闭" } as const)[mode ?? "full"];
+}
+
+export function cursorApproachLabel(enabled: boolean | undefined): string {
+  return enabled === false ? "不靠近鼠标" : "偶尔靠近鼠标";
 }
 
 export function minuteToTime(value: number): string {
@@ -191,6 +196,7 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
                   {profile.policy.edgeSnap === false ? " · 自由摆放" : " · 桌边吸附"}
                   {profile.policy.mode === "presentation" ? " · 桌宠隐藏" : ""}
                   {` · ${proactiveFrequencyLabel(profile.policy.proactiveFrequency ?? 25)}`}
+                  {` · ${cursorApproachLabel(profile.policy.cursorApproachEnabled)}`}
                   {` · ${careNeedsModeLabel(profile.policy.careNeedsMode)}`}
                   {` · ${quietHoursLabel(profile.policy)}`}
                 </p>
@@ -279,6 +285,15 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
               onChange={(event) => setPolicy({ ...policy, proactiveFrequency: Number(event.target.value) })}
             />
             {profileModeGuidance(policy.mode) && <small>{profileModeGuidance(policy.mode)}</small>}
+          </label>
+          <label className="profile-check">
+            <input
+              type="checkbox"
+              checked={policy.cursorApproachEnabled ?? true}
+              onChange={(event) => setPolicy({ ...policy, cursorApproachEnabled: event.target.checked })}
+            />
+            自主探索时偶尔靠近鼠标
+            <small>每轮只读取一次当前位置，不记录轨迹；关闭后仍会观察、漫游、伸懒腰和栖息。</small>
           </label>
           <fieldset className="profile-quiet-hours">
             <legend>安静时段</legend>

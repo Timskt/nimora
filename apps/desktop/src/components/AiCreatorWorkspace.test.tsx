@@ -96,13 +96,15 @@ describe("ProfileDraftPreview", () => {
   it("renders bounded policy values and the non-activation boundary", () => {
     const markup = renderToStaticMarkup(<ProfileDraftPreview profile={{
       name: "深度专注",
-      policy: { mode: "focus", alwaysOnTop: true, clickThrough: false, edgeSnap: true, soundEnabled: false, proactiveFrequency: 5, careNeedsMode: "full" },
+      policy: { mode: "focus", alwaysOnTop: true, clickThrough: false, edgeSnap: true, soundEnabled: false, proactiveFrequency: 5, cursorApproachEnabled: false, careNeedsMode: "full" },
     }} />);
 
     expect(markup).toContain("深度专注");
     expect(markup).toContain("focus");
     expect(markup).toContain("主动互动频率");
     expect(markup).toContain("5%");
+    expect(markup).toContain("靠近鼠标");
+    expect(markup).toContain("关闭");
     expect(markup).toContain("创建后不会自动切换");
   });
 });

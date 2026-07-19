@@ -1208,6 +1208,7 @@ const previewProfiles: ProfileSnapshot = {
       edgeSnap: true,
       soundEnabled: true,
       proactiveFrequency: 25,
+      cursorApproachEnabled: true,
       careNeedsMode: "full",
     },
   }],

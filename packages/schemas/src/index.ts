@@ -151,6 +151,7 @@ export const profilePolicySchema = z.object({
   edgeSnap: z.boolean().nullable().optional(),
   soundEnabled: z.boolean().nullable(),
   proactiveFrequency: z.number().int().min(0).max(100).nullable(),
+  cursorApproachEnabled: z.boolean().default(true),
   careNeedsMode: careNeedsModeSchema.default("full"),
   quietHours: quietHoursSchema.nullable().optional(),
 });

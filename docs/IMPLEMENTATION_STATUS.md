@@ -537,3 +537,12 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - 隐私与离线：不记录、持久化、上传或向 Runtime Event 暴露光标轨迹；行为无需 Provider、网络或控制中心。
 - 保持不变：Perch/Climb/Peek 继续严格沿所在 Surface 漫游；拖拽、Safe/Recovery、Quiet/Focus/Presentation 与 Walking 状态抢占继续使用既有门禁。
 - 待真机验收：macOS/Windows 多显示器、负坐标、混合 DPI、快速移动光标、任务栏/Dock Work Area 与原生透明窗口合成；Browser Preview 不能作为全局光标或原生移窗证据。
+
+## 2026-07-19 Profile 级鼠标关注控制
+
+- 已完成：Profile Policy 新增向后兼容的 `cursorApproachEnabled`；旧 Profile 和缺失字段统一解析为开启，不制造迁移阻断。
+- 已完成：关闭后 Free Surface 直接使用原有确定性 Wander，宿主不会调用全局光标采样；观察、漫游、伸懒腰、休息和沿边行为继续可用。
+- 已完成：Profile 创建/编辑表单提供独立复选框、隐私说明和摘要状态；用户无需把主动互动频率降为零来关闭靠近行为。
+- 已完成：共享 Schema、Browser Preview、Typed IPC、AI Creator Profile 契约与隔离预览使用同一字段；Creator 创建后仍不自动切换活动 Profile。
+- 边界：这是行为偏好，不授予任何能力；AI、Creator、Renderer、Skill 与 User Program 仍不能读取光标或直接移动窗口。
+- 已验证：Rust 领域迁移/合并与宿主策略、Schema 默认值、Profile UI 标签、Creator 预览和 TypeScript 类型门禁覆盖该字段。

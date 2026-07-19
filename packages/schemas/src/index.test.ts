@@ -230,6 +230,27 @@ describe("profileSnapshotSchema", () => {
     }).success).toBe(true);
   });
 
+  it("migrates cursor approach to enabled without rewriting legacy profiles", () => {
+    const id = "019bf2c6-4d40-7000-8000-000000000010";
+    const parsed = profileSnapshotSchema.parse({
+      schemaVersion: 1,
+      activeProfileId: id,
+      profiles: [{
+        id,
+        name: "Legacy",
+        policy: {
+          mode: "companion",
+          alwaysOnTop: true,
+          clickThrough: false,
+          soundEnabled: true,
+          proactiveFrequency: 25,
+        },
+      }],
+    });
+
+    expect(parsed.profiles[0]?.policy.cursorApproachEnabled).toBe(true);
+  });
+
   it("rejects policy values outside the domain range", () => {
     const id = "019bf2c6-4d40-7000-8000-000000000010";
     expect(profileSnapshotSchema.safeParse({

@@ -496,7 +496,7 @@ const fn artifact_contract(kind: CreatorArtifactKind) -> &'static str {
             "artifact={kind:'theme',metadata:{id:'theme.local.<name>',version:<semver>,name:<locale-to-name>,publisher:<namespaced-id>,license:<SPDX-or-LicenseRef>,theme:{spec:'nimora.theme/1',mode:'light'|'dark',colors:{surface,surfaceElevated,text,textMuted,accent,accentSoft,border,success,danger},cornerStyle:'soft'|'rounded'|'compact',motion:'full'|'reduced'}}}; colors must be #RRGGBB or #RRGGBBAA and permissionExplanations must be []"
         }
         CreatorArtifactKind::Profile => {
-            "artifact={kind:'profile',profile:{name:'1-64 character display name',policy:{mode:'companion'|'work'|'focus'|'creator'|'developer'|'presentation'|'offline',alwaysOnTop:boolean|null,clickThrough:boolean|null,soundEnabled:boolean|null,proactiveFrequency:integer 0..100|null}}}; permissionExplanations must be []; host creates the UUID and does not activate the profile"
+            "artifact={kind:'profile',profile:{name:'1-64 character display name',policy:{mode:'companion'|'work'|'focus'|'creator'|'developer'|'presentation'|'offline',alwaysOnTop:boolean|null,clickThrough:boolean|null,edgeSnap:boolean|null,soundEnabled:boolean|null,proactiveFrequency:integer 0..100|null,cursorApproachEnabled:boolean|null,careNeedsMode:'full'|'simple'|'off',quietHours:{enabled:boolean,startMinute:integer 0..1439,endMinute:integer 0..1439}|null}}}; permissionExplanations must be []; host creates the UUID and does not activate the profile"
         }
     }
 }

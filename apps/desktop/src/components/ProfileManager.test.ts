@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { careNeedsModeLabel, minuteToTime, normalizedProfileName, proactiveFrequencyLabel, profileModeGuidance, quietHoursLabel, timeToMinute } from "./ProfileManager";
+import { careNeedsModeLabel, cursorApproachLabel, minuteToTime, normalizedProfileName, proactiveFrequencyLabel, profileModeGuidance, quietHoursLabel, timeToMinute } from "./ProfileManager";
 
 describe("normalizedProfileName", () => {
   it("trims valid names at the UI boundary", () => {
@@ -24,6 +24,14 @@ describe("careNeedsModeLabel", () => {
     expect(careNeedsModeLabel(undefined)).toBe("低压力完整照料");
     expect(careNeedsModeLabel("simple")).toBe("简化照料");
     expect(careNeedsModeLabel("off")).toBe("生命衰减关闭");
+  });
+});
+
+describe("cursorApproachLabel", () => {
+  it("keeps legacy profiles enabled and makes opt-out explicit", () => {
+    expect(cursorApproachLabel(undefined)).toBe("偶尔靠近鼠标");
+    expect(cursorApproachLabel(true)).toBe("偶尔靠近鼠标");
+    expect(cursorApproachLabel(false)).toBe("不靠近鼠标");
   });
 });
 
@@ -55,6 +63,7 @@ function initialPolicyForTest() {
     clickThrough: false,
     soundEnabled: true,
     proactiveFrequency: 25,
+    cursorApproachEnabled: true,
     careNeedsMode: "full" as const,
   };
 }
