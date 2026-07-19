@@ -1,5 +1,11 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — Reduced Motion 原生窗口闭环
+
+- Pet Overlay 通过独立可清理订阅器同步系统 `prefers-reduced-motion`，Tauri/Preview Typed Port 保持同构；运行期偏好变化无需重启。
+- Desktop Host 使用瞬态原子偏好阻止新自主漫游，并在进行中平滑移动的下一帧停止；Renderer 仍无窗口句柄，用户主动拖拽与明确位置命令不受影响。
+- 前端测试覆盖初值、动态变化、监听器清理与精确 IPC；真实系统偏好、Sprite/3D 视觉和原生窗口坐标仍需 macOS/Windows 签名包联合验收。
+
 ## 2026-07-19 — 系统唤醒后的桌宠原生恢复
 
 - Tauri `RunEvent::Resumed` 已接入 Desktop Lifecycle Gate；唤醒只在运行期准入区重放当前置顶、点击穿透与可见策略，退出开始后永久拒绝迟到 Resume。

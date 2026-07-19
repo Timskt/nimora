@@ -19,6 +19,7 @@ import { petInventoryQuantity, petItemPresentation } from "./petItems";
 import { focusMenuItem, nextMenuItemIndex } from "./petMenu";
 import { agentCompanionPresentation } from "./agentCompanion";
 import { canPresentPetBubble, usePetBubble } from "./petBubble";
+import { subscribeReducedMotion } from "./reducedMotion";
 
 const GltfRenderer = lazy(async () => {
   const module = await import("./GltfRenderer");
@@ -51,6 +52,14 @@ export function PetOverlay() {
   const applySnapshot = useCallback((value: DesktopSnapshot) => {
     setSnapshot(value);
     setStatusBubblesEnabled(value.petPresentation.statusBubblesEnabled);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    return subscribeReducedMotion(preference, (enabled) => {
+      void desktopApi.setReducedMotion(enabled).catch(() => undefined);
+    });
   }, []);
 
   const refreshRenderer = useCallback(async () => {

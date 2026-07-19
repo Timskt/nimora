@@ -1,5 +1,14 @@
 # Nimora 功能测试计划
 
+## ACCESSIBILITY-MOTION-001 跨层减少动态效果
+
+- 启动时系统偏好为 Reduce，确认 Pet Overlay 立即上报 `set_reduced_motion(true)`；Sprite、glTF/VRM、气泡、菜单及控制中心非必要动画停止，原生自主漫游不设置窗口位置。
+- 在 12 帧原生自主移动中切换为 Reduce；最多允许当前帧完成，后续帧停止，不得跳到目标位置或继续后台移动。
+- 运行时切回 No Preference，下一次合规自主 Explore 可恢复平滑移动；不得重放被取消的旧路径。
+- 卸载或重建 Pet WebView 后确认旧媒体查询监听器移除，新监听器只上报一次初值，不形成重复 IPC 风暴。
+- Reduced Motion 下验证单击、双击、抚摸、照料、键盘菜单、用户拖拽和明确回家仍可用；不得把无障碍偏好误解释为点击穿透或隐藏宠物。
+- Browser Preview 可验证媒体查询与视觉降级，但原生窗口是否停止移动必须用签名 macOS/Windows 构建和坐标追踪证明。
+
 ## DESKTOP-LIFECYCLE-004 系统休眠与唤醒恢复
 
 - 在宠物可见、置顶开启/关闭、点击穿透开启/关闭的组合下休眠并唤醒 macOS 与 Windows；恢复后必须重新施加权威策略，不能短暂获得错误交互能力。

@@ -624,6 +624,7 @@ struct DesktopState {
     policy_before_safe_mode: Mutex<Option<WindowPolicy>>,
     position_revision: AtomicU64,
     dragging: AtomicBool,
+    reduced_motion: AtomicBool,
     lifecycle: DesktopLifecycleCoordinator,
     asset_store: PathBuf,
     active_asset_selection_write: Mutex<()>,
@@ -1107,6 +1108,7 @@ impl DesktopState {
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
+            reduced_motion: AtomicBool::new(false),
             lifecycle: DesktopLifecycleCoordinator::default(),
             asset_store,
             active_asset_selection_write: Mutex::new(()),
@@ -1201,6 +1203,7 @@ impl DesktopState {
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
+            reduced_motion: AtomicBool::new(false),
             lifecycle: DesktopLifecycleCoordinator::default(),
             asset_store,
             active_asset_selection_write: Mutex::new(()),
@@ -7783,6 +7786,12 @@ fn set_click_through(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn set_reduced_motion(state: State<'_, DesktopState>, enabled: bool) {
+    state.reduced_motion.store(enabled, Ordering::Release);
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn install_asset(
     state: State<'_, DesktopState>,
     request: InstallAssetRequest,
@@ -11977,6 +11986,7 @@ pub fn run() {
             begin_pet_drag,
             finish_pet_drag,
             set_click_through,
+            set_reduced_motion,
             asset_catalog,
             active_character,
             active_character_renderer,
@@ -12289,6 +12299,13 @@ fn visible_position_for_window(
 }
 
 fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
+    if app
+        .state::<DesktopState>()
+        .reduced_motion
+        .load(Ordering::Acquire)
+    {
+        return Ok(());
+    }
     let window = app
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
@@ -12318,7 +12335,8 @@ fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
     };
     for frame in 1..=PET_WANDER_FRAMES {
         let state = app.state::<DesktopState>();
-        if state.dragging.load(Ordering::Acquire)
+        if state.reduced_motion.load(Ordering::Acquire)
+            || state.dragging.load(Ordering::Acquire)
             || state.safety.snapshot()?.mode != RuntimeMode::Normal
             || state.runtime.snapshot()?.state != nimora_runtime_core::PetState::Walking
         {

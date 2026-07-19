@@ -1100,6 +1100,7 @@ export interface DesktopApi {
   noticePet(x: number, y: number): Promise<NimoraCommand | null>;
   dragPet(): Promise<NimoraCommand | null>;
   setClickThrough(enabled: boolean): Promise<void>;
+  setReducedMotion(enabled: boolean): Promise<void>;
   assetCatalog(): Promise<AssetCatalogSnapshot>;
   activeCharacter(): Promise<ActiveCharacterSnapshot>;
   activeCharacterRenderer(): Promise<CharacterRendererSnapshot>;
@@ -1679,6 +1680,7 @@ export function createDesktopApi(
       },
       async dragPet() { return null; },
       async setClickThrough() {},
+      async setReducedMotion() {},
       async assetCatalog() { return { assets: [], rejected: [] }; },
       async activeCharacter() { return { assetId: "builtin.aster", source: "built-in", fallbackReason: null }; },
       async activeCharacterRenderer() {
@@ -1909,6 +1911,7 @@ export function createDesktopApi(
       return await invokeCommand("finish_pet_drag") as NimoraCommand;
     },
     setClickThrough: async (enabled) => { await invokeCommand("set_click_through", { enabled }); },
+    setReducedMotion: async (enabled) => { await invokeCommand("set_reduced_motion", { enabled }); },
     assetCatalog: async () => await invokeCommand("asset_catalog") as AssetCatalogSnapshot,
     activeCharacter: async () => await invokeCommand("active_character") as ActiveCharacterSnapshot,
     activeCharacterRenderer: async () => await invokeCommand("active_character_renderer") as CharacterRendererSnapshot,

@@ -1,5 +1,12 @@
 # Nimora 无障碍、国际化与本地化规范
 
+## 统一减少动态效果
+
+- Pet Overlay 订阅操作系统 `prefers-reduced-motion`，通过版本内 Typed Port 只向 Desktop Host 上报布尔偏好；Renderer 不持有窗口句柄，也不能直接改变原生窗口。
+- Desktop Coordinator 在偏好开启时禁止新的原生自主漫游，并在正在执行的 12 帧移动的下一帧边界停止；Sprite、glTF/VRM、气泡、菜单和控制中心继续使用各自既有的 Reduced Motion 表现。
+- 偏好变化运行时生效，无需重启；订阅卸载必须移除监听器。IPC 失败保持无崩溃，且不能回退为 Renderer 直接操作窗口。
+- Reduced Motion 不关闭照料、点击、键盘菜单、状态演进或离线生命值，只减少非必要空间运动；用户主动拖拽与明确“回家”命令仍按直接意图执行。
+
 > 版本：0.1.0-draft  
 > 更新日期：2026-07-17
 

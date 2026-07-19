@@ -1,5 +1,7 @@
 # Nimora 系统架构
 
+Reduced Motion 采用 Preference Intent 模式：WebView 负责读取标准媒体查询并发送有界布尔意图，Desktop Host 持有瞬态权威值并在原生自主移动每帧检查。该通路不持久化设备偏好、不授予 Renderer Window Capability，也不让 Theme 元数据覆盖操作系统无障碍偏好。
+
 桌面生命周期协调器同时约束应用 Resume 与 Shutdown：Resume 只能在激活 gate 内重放权威 Window Policy、纠正可见位置或请求 Pet Window Recovery；Shutdown 关闭 gate 后，任何迟到的系统唤醒事件都不能显示或重建窗口。该协议位于 Desktop Host，不向 Renderer、Sensor、Agent、Skill、Automation 或用户程序暴露原生句柄。
 
 > 版本：0.1.0-draft  

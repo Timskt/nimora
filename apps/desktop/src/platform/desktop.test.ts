@@ -404,6 +404,7 @@ describe("desktop platform adapter", () => {
     await api.noticePet(12, 24);
     await api.dragPet();
     await api.setClickThrough(true);
+    await api.setReducedMotion(true);
     await api.assetCatalog();
     await api.activeCharacter();
     await api.activeCharacterRenderer();
@@ -549,6 +550,7 @@ describe("desktop platform adapter", () => {
       ["begin_pet_drag"],
       ["finish_pet_drag"],
       ["set_click_through", { enabled: true }],
+      ["set_reduced_motion", { enabled: true }],
       ["asset_catalog"],
       ["active_character"],
       ["active_character_renderer"],
