@@ -49,6 +49,7 @@ sha2.workspace = true
 tauri = { version = "2.11", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-autostart = "2.5"
 tauri-plugin-dialog = "2.6"
+tauri-plugin-single-instance = "2.3"
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true

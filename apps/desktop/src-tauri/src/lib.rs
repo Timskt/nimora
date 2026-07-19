@@ -11336,6 +11336,22 @@ fn publish_tray_failure(app: &AppHandle, action: TrayAction, error: &DesktopErro
     );
 }
 
+fn publish_second_instance_failure(app: &AppHandle, error: &DesktopError) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    let _ = state.events.publish(
+        Event::new(
+            "desktop.single-instance.activation-failed",
+            EventSource::System("desktop".to_owned()),
+            serde_json::json!({ "error": error.to_string() }),
+        )
+        .unwrap_or_else(|event_error| {
+            unreachable!("static single-instance failure event contract is invalid: {event_error}")
+        }),
+    );
+}
+
 fn show_control_center(app: &AppHandle, source: &'static str) -> Result<Command, DesktopError> {
     let window = app
         .get_webview_window(CONTROL_CENTER_LABEL)
@@ -11635,6 +11651,13 @@ pub fn run() {
     let autostart_builder =
         autostart_builder.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
     let application = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(
+            |app, _arguments, _working_directory| {
+                if let Err(error) = show_control_center(app, "second-instance") {
+                    publish_second_instance_failure(app, &error);
+                }
+            },
+        ))
         .plugin(autostart_builder.build())
         .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol(ASSET_PROTOCOL, |context, request| {

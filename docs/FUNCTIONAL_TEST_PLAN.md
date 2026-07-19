@@ -9,6 +9,14 @@
 - macOS 真机验证 LaunchAgent 的开启、重登启动、关闭、外部删除与卸载清理；Windows 真机验证对应登录项、重登、策略拒绝与卸载行为。Linux 仅按官方插件实际支持范围声明，不用 Preview 代替。
 - 验证 Safe/Recovery Mode 仍可关闭登录启动；系统状态读取失败时提供可访问错误信息，键盘、读屏、200% 缩放、窄窗口和 Forced Colors 下开关状态可辨认。
 
+## DESKTOP-INSTANCE-001 单实例与重复启动恢复
+
+- 在控制中心显示、隐藏、最小化以及桌宠点击穿透时分别重复启动 Nimora；只保留一个进程级宿主、一个托盘和一个桌宠窗口，既有控制中心被显示、取消最小化并聚焦。
+- 并发启动 10 次、登录项与用户点击竞争、应用启动尚未完成时再次启动；不得出现两个数据库写入者、重复 Tick、重复 Agent/Automation/Skill Host 或第二套窗口。
+- 从终端传入超长参数、未知 URL、文件路径、控制字符与不同工作目录；当前版本全部忽略，事件和诊断不得记录参数、路径或工作目录，也不得触发站内导航和任何 Capability。
+- 主实例控制中心异常不可用时，第二实例退出且主实例记录 `desktop.single-instance.activation-failed`；不得为恢复焦点创建未审计窗口或启动第二个 Runtime。
+- macOS 与 Windows 安装包真机验证用户会话隔离、快速重复点击、登录重登和升级后稳定性；Browser Preview 不宣称提供进程互斥证据。
+
 ## 桌面边缘 Surface Semantic
 
 1. 在带左侧 80px 与顶部 30px 系统保留区的 Work Area 上，分别验证 Free、Left、Right、Top、Bottom 和四个 Corner；分类边界必须叠加 16/24/48px 生命体安全边距，而不是使用整屏边界。
