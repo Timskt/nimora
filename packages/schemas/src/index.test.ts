@@ -201,6 +201,7 @@ describe("profileSnapshotSchema", () => {
           clickThrough: false,
           soundEnabled: true,
           proactiveFrequency: 25,
+          quietHours: { enabled: true, startMinute: 1320, endMinute: 420 },
         },
       }],
     }).success).toBe(true);
@@ -220,6 +221,26 @@ describe("profileSnapshotSchema", () => {
           clickThrough: null,
           soundEnabled: null,
           proactiveFrequency: 101,
+        },
+      }],
+    }).success).toBe(false);
+  });
+
+  it("rejects invalid quiet-hour minutes", () => {
+    const id = "019bf2c6-4d40-7000-8000-000000000010";
+    expect(profileSnapshotSchema.safeParse({
+      schemaVersion: 1,
+      activeProfileId: id,
+      profiles: [{
+        id,
+        name: "Night",
+        policy: {
+          mode: "companion",
+          alwaysOnTop: true,
+          clickThrough: false,
+          soundEnabled: false,
+          proactiveFrequency: 25,
+          quietHours: { enabled: true, startMinute: 1440, endMinute: 420 },
         },
       }],
     }).success).toBe(false);

@@ -10,6 +10,7 @@ const initialPolicy: ProfilePolicy = {
   soundEnabled: true,
   proactiveFrequency: 25,
   careNeedsMode: "full",
+  quietHours: { enabled: false, startMinute: 1_320, endMinute: 420 },
 };
 
 const profileModes: ReadonlyArray<{ value: ProfileMode; label: string }> = [
@@ -32,6 +33,26 @@ export function proactiveFrequencyLabel(value: number): string {
 
 export function careNeedsModeLabel(mode: CareNeedsMode | undefined): string {
   return ({ full: "低压力完整照料", simple: "简化照料", off: "生命衰减关闭" } as const)[mode ?? "full"];
+}
+
+export function minuteToTime(value: number): string {
+  const minute = Math.max(0, Math.min(1_439, Math.trunc(value)));
+  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+}
+
+export function timeToMinute(value: string): number | null {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  return hour < 24 && minute < 60 ? hour * 60 + minute : null;
+}
+
+export function quietHoursLabel(policy: ProfilePolicy): string {
+  const quiet = policy.quietHours;
+  return quiet?.enabled
+    ? `安静时段 ${minuteToTime(quiet.startMinute)}–${minuteToTime(quiet.endMinute)}`
+    : "无安静时段";
 }
 
 export function profileModeGuidance(mode: ProfileMode): string | null {
@@ -69,6 +90,10 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
     const normalizedName = normalizedProfileName(name);
     if (!normalizedName) {
       onNotice("Profile 名称需要 1–64 个字符");
+      return;
+    }
+    if (policy.quietHours?.enabled && policy.quietHours.startMinute === policy.quietHours.endMinute) {
+      onNotice("安静时段的开始与结束时间不能相同");
       return;
     }
     setBusy(true);
@@ -126,6 +151,7 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
                   {profile.policy.mode === "presentation" ? " · 桌宠隐藏" : ""}
                   {` · ${proactiveFrequencyLabel(profile.policy.proactiveFrequency ?? 25)}`}
                   {` · ${careNeedsModeLabel(profile.policy.careNeedsMode)}`}
+                  {` · ${quietHoursLabel(profile.policy)}`}
                 </p>
               </div>
               <button
@@ -199,6 +225,53 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
             />
             {profileModeGuidance(policy.mode) && <small>{profileModeGuidance(policy.mode)}</small>}
           </label>
+          <fieldset className="profile-quiet-hours">
+            <legend>安静时段</legend>
+            <label className="profile-check">
+              <input
+                type="checkbox"
+                checked={policy.quietHours?.enabled ?? false}
+                onChange={(event) => setPolicy({
+                  ...policy,
+                  quietHours: {
+                    enabled: event.target.checked,
+                    startMinute: policy.quietHours?.startMinute ?? 1_320,
+                    endMinute: policy.quietHours?.endMinute ?? 420,
+                  },
+                })}
+              />
+              在指定时间暂停自主互动
+            </label>
+            <div className="profile-time-grid">
+              <label>
+                <span>开始</span>
+                <input
+                  aria-label="安静时段开始"
+                  type="time"
+                  value={minuteToTime(policy.quietHours?.startMinute ?? 1_320)}
+                  disabled={!policy.quietHours?.enabled}
+                  onChange={(event) => {
+                    const minute = timeToMinute(event.target.value);
+                    if (minute !== null) setPolicy({ ...policy, quietHours: { enabled: true, startMinute: minute, endMinute: policy.quietHours?.endMinute ?? 420 } });
+                  }}
+                />
+              </label>
+              <label>
+                <span>结束</span>
+                <input
+                  aria-label="安静时段结束"
+                  type="time"
+                  value={minuteToTime(policy.quietHours?.endMinute ?? 420)}
+                  disabled={!policy.quietHours?.enabled}
+                  onChange={(event) => {
+                    const minute = timeToMinute(event.target.value);
+                    if (minute !== null) setPolicy({ ...policy, quietHours: { enabled: true, startMinute: policy.quietHours?.startMinute ?? 1_320, endMinute: minute } });
+                  }}
+                />
+              </label>
+            </div>
+            <small>支持跨午夜；只暂停桌宠主动走动和提醒，不影响手动互动、照料与生命状态。</small>
+          </fieldset>
           <label className="profile-name">
             <span>照料强度</span>
             <select

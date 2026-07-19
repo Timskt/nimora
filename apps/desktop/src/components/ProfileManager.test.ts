@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { careNeedsModeLabel, normalizedProfileName, proactiveFrequencyLabel, profileModeGuidance } from "./ProfileManager";
+import { careNeedsModeLabel, minuteToTime, normalizedProfileName, proactiveFrequencyLabel, profileModeGuidance, quietHoursLabel, timeToMinute } from "./ProfileManager";
 
 describe("normalizedProfileName", () => {
   it("trims valid names at the UI boundary", () => {
@@ -34,3 +34,27 @@ describe("profileModeGuidance", () => {
     expect(profileModeGuidance("companion")).toBeNull();
   });
 });
+
+describe("quiet-hour presentation", () => {
+  it("converts HTML time values without timezone ambiguity", () => {
+    expect(minuteToTime(1_320)).toBe("22:00");
+    expect(timeToMinute("07:00")).toBe(420);
+    expect(timeToMinute("24:00")).toBeNull();
+  });
+
+  it("summarizes enabled and migrated policies", () => {
+    expect(quietHoursLabel(initialPolicyForTest())).toBe("无安静时段");
+    expect(quietHoursLabel({ ...initialPolicyForTest(), quietHours: { enabled: true, startMinute: 1_320, endMinute: 420 } })).toBe("安静时段 22:00–07:00");
+  });
+});
+
+function initialPolicyForTest() {
+  return {
+    mode: "companion" as const,
+    alwaysOnTop: true,
+    clickThrough: false,
+    soundEnabled: true,
+    proactiveFrequency: 25,
+    careNeedsMode: "full" as const,
+  };
+}

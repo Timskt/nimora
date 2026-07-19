@@ -185,6 +185,7 @@ use tauri::{
     tray::{TrayIconBuilder, TrayIconEvent},
 };
 use thiserror::Error;
+use time::{OffsetDateTime, UtcOffset};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -11376,9 +11377,10 @@ fn start_pet_autonomy(app: AppHandle) {
                     .iter()
                     .find(|profile| profile.id == profile_snapshot.active_profile_id)
                 && matches!(
-                    state
-                        .runtime
-                        .tick_autonomy(pet_autonomy_policy(&active_profile.policy), now_ms),
+                    state.runtime.tick_autonomy(
+                        pet_autonomy_policy(&active_profile.policy, local_minute_of_day(now_ms),),
+                        now_ms,
+                    ),
                     Ok(Some(_))
                 )
             {
@@ -11425,7 +11427,15 @@ fn pet_vitals_policy(profile: &ProfilePolicy) -> PetVitalsPolicy {
     }
 }
 
-fn pet_autonomy_policy(profile: &ProfilePolicy) -> PetAutonomyPolicy {
+fn local_minute_of_day(now_ms: u64) -> Option<u16> {
+    let timestamp = i64::try_from(now_ms / 1_000).ok()?;
+    let utc = OffsetDateTime::from_unix_timestamp(timestamp).ok()?;
+    let local = utc.to_offset(UtcOffset::local_offset_at(utc).ok()?);
+    let minute = u16::from(local.hour()) * 60 + u16::from(local.minute());
+    Some(minute)
+}
+
+fn pet_autonomy_policy(profile: &ProfilePolicy, local_minute: Option<u16>) -> PetAutonomyPolicy {
     let frequency = profile.proactive_frequency.unwrap_or(25).min(100);
     let (idle_delay_ms, cooldown_ms) = match frequency {
         0..=20 => (120_000, 300_000),
@@ -11437,7 +11447,12 @@ fn pet_autonomy_policy(profile: &ProfilePolicy) -> PetAutonomyPolicy {
     };
     PetAutonomyPolicy {
         enabled: frequency > 0,
-        quiet: profile.mode == ProfileMode::Presentation,
+        quiet: profile.mode == ProfileMode::Presentation
+            || local_minute.is_some_and(|minute| {
+                profile
+                    .quiet_hours
+                    .is_some_and(|quiet| quiet.contains(minute))
+            }),
         focus: profile.mode == ProfileMode::Focus,
         idle_delay_ms,
         action_duration_ms: 8_000,
@@ -15620,6 +15635,7 @@ mod tests {
             sound_enabled: None,
             proactive_frequency: None,
             care_needs_mode: None,
+            quiet_hours: None,
         };
         assert_eq!(
             WindowPolicy::from_profile(&policy),
@@ -16025,7 +16041,7 @@ mod tests {
             ..ProfilePolicy::standard()
         };
         let frequencies = [1, 20, 21, 40, 41, 60, 61, 80, 81, 100];
-        let mapped = frequencies.map(|frequency| pet_autonomy_policy(&policy(frequency)));
+        let mapped = frequencies.map(|frequency| pet_autonomy_policy(&policy(frequency), None));
         assert!(mapped.iter().all(|item| item.enabled));
         assert!(
             mapped
@@ -16046,12 +16062,26 @@ mod tests {
             proactive_frequency: Some(frequency),
             ..ProfilePolicy::standard()
         };
-        assert!(!pet_autonomy_policy(&policy(ProfileMode::Companion, 0)).enabled);
-        assert!(pet_autonomy_policy(&policy(ProfileMode::Focus, 50)).focus);
-        assert!(pet_autonomy_policy(&policy(ProfileMode::Presentation, 50)).quiet);
-        let offline = pet_autonomy_policy(&policy(ProfileMode::Offline, 50));
+        assert!(!pet_autonomy_policy(&policy(ProfileMode::Companion, 0), None).enabled);
+        assert!(pet_autonomy_policy(&policy(ProfileMode::Focus, 50), None).focus);
+        assert!(pet_autonomy_policy(&policy(ProfileMode::Presentation, 50), None).quiet);
+        let offline = pet_autonomy_policy(&policy(ProfileMode::Offline, 50), None);
         assert!(offline.enabled);
         assert!(!offline.quiet);
         assert!(!offline.focus);
+    }
+
+    #[test]
+    fn pet_autonomy_policy_respects_profile_quiet_hours() {
+        let mut policy = ProfilePolicy::standard();
+        policy.quiet_hours = Some(nimora_runtime_core::QuietHours {
+            enabled: true,
+            start_minute: 1_320,
+            end_minute: 420,
+        });
+        assert!(pet_autonomy_policy(&policy, Some(1_380)).quiet);
+        assert!(pet_autonomy_policy(&policy, Some(300)).quiet);
+        assert!(!pet_autonomy_policy(&policy, Some(720)).quiet);
+        assert!(!pet_autonomy_policy(&policy, None).quiet);
     }
 }

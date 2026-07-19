@@ -39,6 +39,28 @@ pub enum CareNeedsMode {
     Off,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuietHours {
+    pub enabled: bool,
+    pub start_minute: u16,
+    pub end_minute: u16,
+}
+
+impl QuietHours {
+    #[must_use]
+    pub const fn contains(self, minute_of_day: u16) -> bool {
+        if !self.enabled || self.start_minute == self.end_minute || minute_of_day >= 1_440 {
+            return false;
+        }
+        if self.start_minute < self.end_minute {
+            minute_of_day >= self.start_minute && minute_of_day < self.end_minute
+        } else {
+            minute_of_day >= self.start_minute || minute_of_day < self.end_minute
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfilePolicy {
@@ -51,6 +73,8 @@ pub struct ProfilePolicy {
     pub proactive_frequency: Option<u8>,
     #[serde(default)]
     pub care_needs_mode: Option<CareNeedsMode>,
+    #[serde(default)]
+    pub quiet_hours: Option<QuietHours>,
 }
 
 impl ProfilePolicy {
@@ -64,6 +88,7 @@ impl ProfilePolicy {
             sound_enabled: Some(true),
             proactive_frequency: Some(25),
             care_needs_mode: Some(CareNeedsMode::Full),
+            quiet_hours: None,
         }
     }
 
@@ -80,6 +105,7 @@ impl ProfilePolicy {
                 .or(defaults.proactive_frequency)
                 .map(|value| value.min(100)),
             care_needs_mode: override_policy.care_needs_mode.or(defaults.care_needs_mode),
+            quiet_hours: override_policy.quiet_hours.or(defaults.quiet_hours),
         }
     }
 }
@@ -125,6 +151,13 @@ impl Profile {
         {
             return Err(ProfileError::InvalidProactiveFrequency);
         }
+        if self.policy.quiet_hours.is_some_and(|quiet| {
+            quiet.start_minute >= 1_440
+                || quiet.end_minute >= 1_440
+                || (quiet.enabled && quiet.start_minute == quiet.end_minute)
+        }) {
+            return Err(ProfileError::InvalidQuietHours);
+        }
         Ok(())
     }
 }
@@ -135,6 +168,8 @@ pub enum ProfileError {
     InvalidName,
     #[error("profile proactive frequency must be between 0 and 100")]
     InvalidProactiveFrequency,
+    #[error("profile quiet-hour minutes must be between 0 and 1439")]
+    InvalidQuietHours,
 }
 
 #[cfg(test)]
@@ -151,6 +186,7 @@ mod tests {
             sound_enabled: Some(true),
             proactive_frequency: Some(25),
             care_needs_mode: Some(CareNeedsMode::Full),
+            quiet_hours: None,
         };
         let overrides = ProfilePolicy {
             mode: ProfileMode::Work,
@@ -160,6 +196,11 @@ mod tests {
             sound_enabled: None,
             proactive_frequency: Some(200),
             care_needs_mode: Some(CareNeedsMode::Simple),
+            quiet_hours: Some(QuietHours {
+                enabled: true,
+                start_minute: 1_320,
+                end_minute: 420,
+            }),
         };
         let merged = ProfilePolicy::merge(&defaults, &overrides);
         assert_eq!(merged.always_on_top, Some(true));
@@ -168,6 +209,34 @@ mod tests {
         assert_eq!(merged.edge_snap, Some(true));
         assert_eq!(merged.proactive_frequency, Some(100));
         assert_eq!(merged.care_needs_mode, Some(CareNeedsMode::Simple));
+        assert_eq!(merged.quiet_hours, overrides.quiet_hours);
+    }
+
+    #[test]
+    fn quiet_hours_support_daytime_and_cross_midnight_windows() {
+        let daytime = QuietHours {
+            enabled: true,
+            start_minute: 540,
+            end_minute: 1_020,
+        };
+        assert!(daytime.contains(600));
+        assert!(!daytime.contains(1_100));
+        let overnight = QuietHours {
+            enabled: true,
+            start_minute: 1_320,
+            end_minute: 420,
+        };
+        assert!(overnight.contains(1_400));
+        assert!(overnight.contains(300));
+        assert!(!overnight.contains(800));
+        assert!(
+            !QuietHours {
+                enabled: true,
+                start_minute: 600,
+                end_minute: 600
+            }
+            .contains(600)
+        );
     }
 
     #[test]
@@ -181,6 +250,16 @@ mod tests {
         assert_eq!(
             Profile::new("Work", policy),
             Err(ProfileError::InvalidProactiveFrequency)
+        );
+        let mut policy = ProfilePolicy::standard();
+        policy.quiet_hours = Some(QuietHours {
+            enabled: true,
+            start_minute: 600,
+            end_minute: 600,
+        });
+        assert_eq!(
+            Profile::new("Quiet", policy),
+            Err(ProfileError::InvalidQuietHours)
         );
     }
 

@@ -1,5 +1,12 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-19 Profile 安静时段
+
+- 结果：QQ 宠物式自主生命循环新增 Profile 级本地安静时段，支持日内与跨午夜，不需要用户切换整个 Focus/Profile 才能在夜间降扰。
+- 边界：安静时段只控制自主行为；手动互动、照料、生命值与离线 Core 保持可用。缺失字段兼容旧 Profile，非法等时区间三层拒绝。
+- 架构裁决：领域只接收分钟并执行确定性区间判断，Desktop Host 是系统本地时间的唯一提供者；Renderer、AI、Program 和 Skill 不获得时区或自主窗口控制权。
+- 验证：Runtime Core、Desktop Host、Schema 与 Frontend 自动化覆盖规则和迁移；系统时区/DST 与睡眠唤醒保留为签名双平台真机门禁，不用浏览器预览替代。
+
 ## 2026-07-19 — Native-size Pet Visual Harness
 
 - 结果：Browser Preview 现在用 260×300 验收框呈现桌宠，不再因标签页尺寸让径向菜单和角色比例产生误导性截图。

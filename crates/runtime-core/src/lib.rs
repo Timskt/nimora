@@ -14,5 +14,7 @@ pub use pet::{
     PetRelationshipSnapshot, PetRelationshipStage, PetState, PetVitalsPolicy, PointerButton,
     Position,
 };
-pub use profile::{CareNeedsMode, Profile, ProfileError, ProfileId, ProfileMode, ProfilePolicy};
+pub use profile::{
+    CareNeedsMode, Profile, ProfileError, ProfileId, ProfileMode, ProfilePolicy, QuietHours,
+};
 pub use safety::{RuntimeMode, SafeModeReason, SafetySnapshot};

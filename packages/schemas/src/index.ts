@@ -131,6 +131,14 @@ export const profileModeSchema = z.enum([
 
 export const careNeedsModeSchema = z.enum(["full", "simple", "off"]);
 
+export const quietHoursSchema = z.object({
+  enabled: z.boolean(),
+  startMinute: z.number().int().min(0).max(1439),
+  endMinute: z.number().int().min(0).max(1439),
+}).refine((quiet) => !quiet.enabled || quiet.startMinute !== quiet.endMinute, {
+  message: "enabled quiet hours require different start and end times",
+});
+
 export const profilePolicySchema = z.object({
   mode: profileModeSchema,
   alwaysOnTop: z.boolean().nullable(),
@@ -139,6 +147,7 @@ export const profilePolicySchema = z.object({
   soundEnabled: z.boolean().nullable(),
   proactiveFrequency: z.number().int().min(0).max(100).nullable(),
   careNeedsMode: careNeedsModeSchema.default("full"),
+  quietHours: quietHoursSchema.nullable().optional(),
 });
 
 export const profileSchema = z.object({
