@@ -113,7 +113,7 @@ Profile 激活属于“持久状态 + 原生窗口副作用”的复合操作。
 
 Profile 具有严格且可扩展的场景类型：`companion`、`work`、`focus`、`creator`、`developer`、`presentation` 与 `offline`。类型表达用户意图并为导航、动效、通知和资源预算提供默认值，但不是 Capability 黑名单；实际文件、网络、代码和模块访问仍由独立权限网关判断。用户可继续覆盖窗口、声音和主动频率，未来临时授权及自动切换规则也必须叠加在 Profile 之上，而不能由 `work` 等标签永久删减功能。只有独立的全局安全模式可以强制终止高风险能力。场景类型是当前契约的必填字段，未知值必须拒绝，避免隐式降级。
 
-原生窗口移动事件不得逐帧写入 SQLite。桌面适配器使用单调递增 revision 对连续移动进行 200ms trailing-edge 合并，仅在窗口稳定后读取最终原生坐标并持久化；相同坐标不产生重复 Command/Event。托盘退出会在进程终止前同步刷新最终位置，兼顾拖拽流畅度、SSD 写放大控制和落点恢复可靠性。
+原生窗口移动事件不得逐帧写入 SQLite。桌面适配器使用单调递增 revision 对连续移动进行 200ms trailing-edge 合并，仅在窗口稳定后读取最终原生坐标并持久化；相同坐标不产生重复 Command/Event。位置写入使用显式 `DebouncedMove` 与 `ShutdownFlush` 意图：前者在拖拽中失败关闭以控制 SSD 写放大，后者在托盘退出前强制读取最终原生坐标；若 Core 仍处于瞬态 `Dragged`，则以同一 Profile 边缘吸附和 Surface Semantic 原子执行最终 Drop，避免重启恢复成永久拖拽状态。
 
 托盘不是绕过应用层的特权入口。打开控制中心和恢复宠物交互在原生副作用成功后分别发布 `desktop.window.control-center-opened` 与 `pet.window.interaction-restored`；失败发布 `desktop.tray.action-failed` 诊断事件。恢复交互必须先显示窗口并关闭原生鼠标穿透，再提交内存窗口策略，不能仅修改 UI 或缓存状态。
 

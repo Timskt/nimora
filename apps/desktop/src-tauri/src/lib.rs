@@ -7702,36 +7702,21 @@ fn finish_pet_drag(
     let window = app
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
-    let position = window.outer_position()?;
-    let window_size = window.outer_size()?;
-    let monitor = window.current_monitor()?;
-    let target = if active_profile_policy(&state.profiles.snapshot()?)?
-        .edge_snap
-        .unwrap_or(true)
-    {
-        monitor.as_ref().map_or(position, |monitor| {
-            plan_edge_snap_position(position, window_size, monitor_work_area(monitor))
-        })
-    } else {
-        position
-    };
-    if target != position {
-        window.set_position(tauri::Position::Physical(target))?;
+    let drop = resolve_pet_drop(&window, &state)?;
+    if drop.target != drop.original {
+        window.set_position(tauri::Position::Physical(drop.target))?;
     }
-    let surface = monitor.as_ref().map_or(PetSurface::Free, |monitor| {
-        classify_pet_surface(target, window_size, monitor_work_area(monitor))
-    });
     let command = match state.runtime.drop_pet_with_action(
         Position {
-            x: f64::from(target.x),
-            y: f64::from(target.y),
+            x: f64::from(drop.target.x),
+            y: f64::from(drop.target.y),
         },
-        settle_action_for_surface(surface),
+        settle_action_for_surface(drop.surface),
     ) {
         Ok(command) => command,
         Err(error) => {
-            if target != position {
-                window.set_position(tauri::Position::Physical(position))?;
+            if drop.target != drop.original {
+                window.set_position(tauri::Position::Physical(drop.original))?;
             }
             return Err(error.into());
         }
@@ -11496,21 +11481,79 @@ fn restore_pet_interaction(app: &AppHandle) -> Result<Command, DesktopError> {
     )
 }
 
-fn persist_pet_window_position(app: &AppHandle) -> Result<(), DesktopError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PositionPersistenceMode {
+    DebouncedMove,
+    ShutdownFlush,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PetDropResolution {
+    original: tauri::PhysicalPosition<i32>,
+    target: tauri::PhysicalPosition<i32>,
+    surface: PetSurface,
+}
+
+fn resolve_pet_drop(
+    window: &WebviewWindow,
+    state: &DesktopState,
+) -> Result<PetDropResolution, DesktopError> {
+    let original = window.outer_position()?;
+    let window_size = window.outer_size()?;
+    let monitor = window.current_monitor()?;
+    let target = if active_profile_policy(&state.profiles.snapshot()?)?
+        .edge_snap
+        .unwrap_or(true)
+    {
+        monitor.as_ref().map_or(original, |monitor| {
+            plan_edge_snap_position(original, window_size, monitor_work_area(monitor))
+        })
+    } else {
+        original
+    };
+    let surface = monitor.as_ref().map_or(PetSurface::Free, |monitor| {
+        classify_pet_surface(target, window_size, monitor_work_area(monitor))
+    });
+    Ok(PetDropResolution {
+        original,
+        target,
+        surface,
+    })
+}
+
+fn persist_pet_window_position(
+    app: &AppHandle,
+    mode: PositionPersistenceMode,
+) -> Result<(), DesktopError> {
     let window = app
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
     let position = window.outer_position()?;
-    let next = Position {
+    let state = app.state::<DesktopState>();
+    if mode == PositionPersistenceMode::DebouncedMove && state.dragging.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let snapshot = state.runtime.snapshot()?;
+    if mode == PositionPersistenceMode::ShutdownFlush
+        && snapshot.state == nimora_runtime_core::PetState::Dragged
+    {
+        let drop = resolve_pet_drop(&window, &state)?;
+        state.runtime.drop_pet_with_action(
+            Position {
+                x: f64::from(drop.target.x),
+                y: f64::from(drop.target.y),
+            },
+            settle_action_for_surface(drop.surface),
+        )?;
+        state.dragging.store(false, Ordering::Release);
+        return Ok(());
+    }
+    let target = Position {
         x: f64::from(position.x),
         y: f64::from(position.y),
     };
-    let state = app.state::<DesktopState>();
-    if state.dragging.load(Ordering::Acquire) {
-        return Ok(());
-    }
-    if state.runtime.snapshot()?.position != next {
-        state.runtime.move_pet(next)?;
+    if snapshot.position != target {
+        state.runtime.move_pet(target)?;
     }
     Ok(())
 }
@@ -11534,7 +11577,7 @@ fn schedule_position_persistence(app: AppHandle) {
             .load(Ordering::Relaxed)
             == revision
             && !app.state::<DesktopState>().dragging.load(Ordering::Acquire)
-            && persist_pet_window_position(&app).is_ok()
+            && persist_pet_window_position(&app, PositionPersistenceMode::DebouncedMove).is_ok()
         {
             let _ = app.emit_to(PET_WINDOW_LABEL, PET_SURFACE_CHANGED_EVENT, ());
         }
@@ -11664,7 +11707,9 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
                         Err(DesktopError::StatePoisoned)
                     }
                 }
-                TrayAction::Quit => persist_pet_window_position(app),
+                TrayAction::Quit => {
+                    persist_pet_window_position(app, PositionPersistenceMode::ShutdownFlush)
+                }
                 TrayAction::Unknown => return,
             };
             if let Err(error) = result {

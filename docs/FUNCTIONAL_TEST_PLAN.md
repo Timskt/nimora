@@ -30,7 +30,7 @@
 
 ## DESKTOP-LIFECYCLE-002 明确退出与恢复竞态
 
-- 移动桌宠后立即从托盘选择“退出 Nimora”；进程退出前同步保存最终原生位置，重启后恢复该落点，退出期间不得重新创建 Pet Window。
+- 移动桌宠后立即从托盘选择“退出 Nimora”；进程退出前同步保存最终原生位置，重启后恢复该落点，退出期间不得重新创建 Pet Window。拖拽尚未收到结束事件时退出，必须按 Profile 吸附策略原子收敛为 Idle/Perch/Climb/Peek，重启不得保持 `Dragged`。
 - 在 Pet Window Recovery 已排队、正在退避和刚开始创建窗口的三个时点触发托盘退出；shutdown intent 一经发布，所有后续恢复尝试必须停止且不能消耗新的恢复预算。
 - 模拟最终位置读取或持久化失败；记录 `desktop.tray.action-failed` 后仍完成退出，不因诊断、AI、网络或用户确认无限等待。
 - 验证系统退出、托盘退出和快速连续退出均幂等停止自主循环，并有界静默 Auto Mode 与 Automation Event Session；不得遗留 Worker、托盘、数据库写入者或孤立桌宠窗口。
