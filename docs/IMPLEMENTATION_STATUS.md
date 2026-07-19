@@ -1,5 +1,12 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — Windows 前台全屏情境适配器
+
+- Windows 原生 Adapter 使用 `GetForegroundWindow`、窗口/显示器边界和 2px 原生框架舍入容差判断前台全屏，不读取窗口标题、进程命令行、屏幕像素或用户内容。
+- 最小化、不可见窗口以及 `Progman`、`WorkerW`、`Shell_TrayWnd` 系统表面不会被误报为全屏；多显示器与负坐标按前台窗口所在 Monitor 判断。
+- Windows 与 macOS 现复用同一 Sensor Controller、15 秒租约、有界退避、Health Snapshot 和 Desktop Presence Coordinator；Sensor 仍只产生布尔事实，不能直接控制桌宠窗口。
+- 本机纯几何、macOS Adapter 与 Desktop Host 测试通过；Windows Rust 目标已安装，交叉检查推进至 Tauri 依赖后因本机缺少 `x86_64-w64-mingw32-gcc` 停止，因此签名 Windows 构建与真机前台切换仍保持发布门禁，不将源代码审查冒充运行证据。
+
 ## 2026-07-19 — 原生桌宠菜单有界可达性
 
 - 260×300 QQ 宠物式原生 Overlay 的背包、改名与“更多”子页统一限制在窗口内容区内；长菜单使用纵向有界滚动、滚动链隔离和低干扰细滚动条，不删除聊天、任务、动作、家位置、穿透或设置能力。

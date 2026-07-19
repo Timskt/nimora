@@ -129,7 +129,15 @@
 - 并发：新增 Presence Transition 串行门，Profile、三档覆盖、Safe Mode、托盘恢复和后台 Sensor 共用同一可逆窗口事务。
 - 可观察性：Desktop Snapshot 暴露版本化 Sensor Health，控制中心明确显示正常、降级、不可用或停止，权限缺失不再静默。
 - 证据：Sensor Host 4 项、macOS Adapter 2 项、Desktop Host 153 项和前端 74 项测试通过；生产构建、Clippy、Format 与架构门禁通过。
-- 剩余：macOS 屏幕共享、游戏、免打扰和全部 Windows Adapter 尚未实现，不宣称完整跨平台情境感知。
+- 后续：Windows 前台全屏 Adapter 已在独立里程碑完成；macOS/Windows 屏幕共享、游戏和免打扰仍未实现，不宣称完整跨平台情境感知。
+
+## 2026-07-19 — Windows Fullscreen Presence Adapter
+
+- 结果：Windows 前台窗口通过 Win32 Window/Monitor 边界进行全屏判断，并接入与 macOS 相同的 Sensor Controller、Presence Coordinator、租约、退避和健康状态通路。
+- 隐私与正确性：不读取标题、进程名或像素；最小化、不可见及桌面 Shell 表面失败关闭，多屏负坐标与 2px 原生边框舍入由平台无关测试覆盖。
+- 架构：Adapter 只返回布尔事实，不持有 Tauri Window；Desktop Coordinator 仍是唯一原生窗口执行者，Windows 不形成第二套策略。
+- 证据边界：macOS 本机测试和共享几何测试通过；Windows 交叉检查被本机缺少 MinGW C 编译器阻断于 `ring` 构建脚本，尚未到应用链接和真机运行阶段，签名 Windows 包仍需发布门禁。
+- 剩余：Windows 屏幕共享、游戏和免打扰 Sensor，以及真实多屏/DPI/独占全屏切换测试。
 
 ## 2026-07-19 — System Context Sensor Host Contract
 

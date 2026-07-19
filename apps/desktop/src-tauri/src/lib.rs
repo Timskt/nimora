@@ -6905,7 +6905,7 @@ fn reconcile_system_context_presence(app: &AppHandle, now_ms: u64) -> Result<(),
     set_current_window_policy(&state, target)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn start_system_context_sensors(app: AppHandle) {
     std::thread::spawn(move || {
         let schedule = SensorSchedule::default();
@@ -6964,7 +6964,7 @@ fn start_system_context_sensors(app: AppHandle) {
     });
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn start_system_context_sensors(_app: AppHandle) {}
 
 #[derive(Debug, Deserialize)]
