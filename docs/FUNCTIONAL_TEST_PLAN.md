@@ -14,6 +14,10 @@
 | DP-TRAY-RECALL-008 | Presence 原本隐藏宠物 | 托盘显式恢复使用既有 ForceVisible 决策；屏幕共享隐私等更高优先级规则仍按统一协调器裁决 |
 | DP-TRAY-RECALL-009 | Renderer、Agent、Skill 或用户代码尝试召回 | 无原生窗口句柄；只能通过受控 Capability 请求，不能绕过 Desktop Coordinator |
 | DP-TRAY-RECALL-010 | macOS/Windows 热插拔、混合 DPI 与自动隐藏系统栏 | 使用签名 Tauri 包检查窗口完整可见、无跳屏和坐标持久一致，Browser Preview 不得替代证据 |
+| DP-TRAY-RECALL-011 | Pet WebView 已销毁或崩溃 | 一次托盘操作写入 ForceVisible 与取消穿透意图，发布恢复请求并启动唯一有界 Recovery Worker，不要求用户重复点击 |
+| DP-TRAY-RECALL-012 | 缺失窗口的持久坐标已离屏 | 重建后、启用交互前先夹回有效 Work Area；不得出现“窗口已恢复但仍找不到宠物” |
+| DP-TRAY-RECALL-013 | 重建后 Work Area 复验失败 | 销毁半构建窗口并进入下一次有界退避；不得留下无心跳的幽灵窗口或误报恢复完成 |
+| DP-TRAY-RECALL-014 | Shutdown 与托盘恢复并发 | Lifecycle Gate 或 Recovery Host 永久拒绝新 Worker，明确退出后宠物不得复活 |
 
 ## ACTIVITY-REFRESH — 活动健康自动刷新
 

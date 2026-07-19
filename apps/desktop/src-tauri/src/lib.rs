@@ -1019,6 +1019,20 @@ enum PetResumePlan {
     RecoverMissing,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PetInteractionRestorePlan {
+    RestoreExisting,
+    RecoverMissing,
+}
+
+fn plan_pet_interaction_restore(has_window: bool) -> PetInteractionRestorePlan {
+    if has_window {
+        PetInteractionRestorePlan::RestoreExisting
+    } else {
+        PetInteractionRestorePlan::RecoverMissing
+    }
+}
+
 fn plan_pet_resume(has_window: bool, policy: WindowPolicy) -> PetResumePlan {
     if has_window {
         PetResumePlan::RestoreExisting {
@@ -11836,6 +11850,67 @@ fn restore_pet_interaction(app: &AppHandle) -> Result<Command, DesktopError> {
     )
 }
 
+fn request_pet_interaction_restore(app: &AppHandle) -> Result<(), DesktopError> {
+    match plan_pet_interaction_restore(app.get_webview_window(PET_WINDOW_LABEL).is_some()) {
+        PetInteractionRestorePlan::RestoreExisting => {
+            restore_pet_interaction(app)?;
+            return Ok(());
+        }
+        PetInteractionRestorePlan::RecoverMissing => {}
+    }
+    let state = app.state::<DesktopState>();
+    state
+        .lifecycle
+        .activation
+        .run_if_active(|| {
+            let _transition = state
+                .presence_transition
+                .lock()
+                .map_err(|_| DesktopError::StatePoisoned)?;
+            let previous = current_window_policy(&state)?;
+            let base_policy = active_window_policy(&state.profiles.snapshot()?)?;
+            let decision = state
+                .system_context
+                .lock()
+                .map_err(|_| DesktopError::StatePoisoned)?
+                .decide(
+                    base_policy.visible,
+                    PresenceOverride::ForceVisible,
+                    false,
+                    current_time_ms()?,
+                );
+            let next_policy = WindowPolicy {
+                click_through: false,
+                visible: decision.visible,
+                ..previous
+            };
+            *state
+                .presence_override
+                .lock()
+                .map_err(|_| DesktopError::StatePoisoned)? = PresenceOverride::ForceVisible;
+            set_presence_decision(&state, decision)?;
+            set_current_window_policy(&state, next_policy)?;
+            publish_desktop_action(
+                &state,
+                "pet.window.interaction.restore.request",
+                "pet.window.interaction-restore-requested",
+                serde_json::json!({
+                    "previousClickThrough": previous.click_through,
+                    "clickThrough": false,
+                    "previousVisible": previous.visible,
+                    "visible": decision.visible,
+                    "presenceReason": decision.reason,
+                    "windowRecoveryRequested": true,
+                    "source": "tray",
+                }),
+            )?;
+            Ok::<(), DesktopError>(())
+        })
+        .ok_or(DesktopError::ShutdownInProgress)??;
+    schedule_pet_window_recovery(app.clone());
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PositionPersistenceMode {
     DebouncedMove,
@@ -11998,6 +12073,12 @@ fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
         screen_coordinate(position.x)?,
         screen_coordinate(position.y)?,
     )))?;
+    if policy.visible
+        && let Err(error) = ensure_pet_window_visible(app)
+    {
+        let _ = window.destroy();
+        return Err(error);
+    }
     window.set_ignore_cursor_events(policy.click_through)?;
     app.state::<DesktopState>()
         .lifecycle
@@ -12091,7 +12172,7 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
             let action = TrayAction::from(event.id.as_ref());
             let result = match action {
                 TrayAction::OpenControlCenter => show_control_center(app, "tray").map(|_| ()),
-                TrayAction::RestoreInteraction => restore_pet_interaction(app).map(|_| ()),
+                TrayAction::RestoreInteraction => request_pet_interaction_restore(app),
                 TrayAction::EnterSafeMode => {
                     if let Some(state) = app.try_state::<DesktopState>() {
                         enter_safe_mode(app.clone(), state).map(|_| ())
@@ -12730,10 +12811,10 @@ mod tests {
         DesktopCapabilityBackend, DesktopError, DesktopProviderCredentialResolver,
         DesktopResolveAutoModeAttemptRequest, DesktopSecretStore, DesktopState,
         ExecutionCancellation, LocalAgentRequest, PendingCreatorApproval, PendingSkillExecution,
-        Pet, PetAction, PetResumePlan, PetSurface, PhysicalArea, PrepareAgentToolRequest,
-        ProfileMode, ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest,
-        ResumeAutoModeTurnRequest, SensorController, SensorDescriptor, SensorSchedule,
-        SensorSource, SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
+        Pet, PetAction, PetInteractionRestorePlan, PetResumePlan, PetSurface, PhysicalArea,
+        PrepareAgentToolRequest, ProfileMode, ProfilePolicy, ResolveAgentToolRequest,
+        ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SensorController, SensorDescriptor,
+        SensorSchedule, SensorSource, SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
         UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
         VOICE_SELECTION, WindowPolicy, agent_catalog_inner, agent_provider_status_inner,
         append_program_scope_diff, approve_automation_run_inner, approve_skill_execution_inner,
@@ -12750,8 +12831,8 @@ mod tests {
         install_generated_theme, install_gltf_character, open_diagnostic_journal,
         parse_asset_protocol_path, parse_user_program_plan, pause_auto_mode_job_inner,
         permission_grant, persist_asset_selection, pet_autonomy_policy,
-        plan_cursor_approach_target, plan_edge_snap_position, plan_pet_resume,
-        plan_surface_wander_target, plan_wander_target, prepare_agent_tool_inner,
+        plan_cursor_approach_target, plan_edge_snap_position, plan_pet_interaction_restore,
+        plan_pet_resume, plan_surface_wander_target, plan_wander_target, prepare_agent_tool_inner,
         profile_cursor_approach_enabled, quiesce_auto_mode_jobs, recover_visible_position,
         reject_agent_tool_inner, reject_automation_run_inner, resolve_active_character,
         resolve_active_theme, resolve_active_voice, resolve_asset_selection,
@@ -17228,6 +17309,18 @@ mod tests {
         assert_eq!(TrayAction::from("normal-mode"), TrayAction::ExitSafeMode);
         assert_eq!(TrayAction::from("quit"), TrayAction::Quit);
         assert_eq!(TrayAction::from("future-action"), TrayAction::Unknown);
+    }
+
+    #[test]
+    fn tray_interaction_restore_recovers_a_missing_pet_window() {
+        assert_eq!(
+            plan_pet_interaction_restore(true),
+            PetInteractionRestorePlan::RestoreExisting
+        );
+        assert_eq!(
+            plan_pet_interaction_restore(false),
+            PetInteractionRestorePlan::RecoverMissing
+        );
     }
 
     #[test]
