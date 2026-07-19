@@ -556,6 +556,14 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - 已验证：真实浏览器 810×607 截图中标题为单行，正文、按钮和角色无重叠；Frontend 101 项测试、生产构建、Bundle Budget、架构边界和 `git diff --check` 通过。
 - 证据边界：本次浏览器证据仅覆盖响应式排版；原生透明合成、置顶、DPI 和 Work Area 不在此结论内。
 
+## 2026-07-19 — Agent 任务协作成长
+
+- 已完成：宿主核验的 `Desktop + desktop:local-user + Succeeded` Agent 任务成功后，Pet 原子获得 2 陪伴点、1 亲密和 3 心情；Agent 工作区展示明确的成长反馈。
+- 已完成：Pet 快照新增向后兼容、有界、排序唯一的 256 条 Task UUID 收据；重复结果返回 `already_awarded`，成长、收据、纪念与 `pet.relationship.collaborated` Event 使用同一 Repository 事务。
+- 已完成：等待确认、失败、模块 Agent、Skill、Automation、用户程序与可伪造的 Renderer Companion Signal 均无领取资格；Browser Preview 显式为 `companionGrowth: null`。
+- 已完成：Pet 保存失败不会篡改已经完成的 Agent 结果，而是返回 `unavailable` 并保持 Pet 状态和事件零副作用；成功后向 Overlay 与控制中心广播快照刷新。
+- 已验证：Desktop 175、Runtime App 39、Runtime Core 59、Frontend 101 项测试，生产构建、Bundle Budget、严格 Clippy、架构边界和差异检查全部通过。
+
 ## 2026-07-19 Profile 级照料压力策略
 
 - 已完成：领域层 `PetVitalsPolicy` 提供 Full、Simple、Off 三档确定性演化；Off 推进时间基线，重新启用不会追赶关闭期。

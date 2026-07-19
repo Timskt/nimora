@@ -12,6 +12,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use thiserror::Error;
+use uuid::Uuid;
 
 pub trait PetRepository: Send + Sync + std::fmt::Debug {
     /// Loads the current pet snapshot, or `None` on first launch.
@@ -636,6 +637,42 @@ impl<R: PetRepository> RuntimeService<R> {
                         "mood": after.mood,
                         "satiety": after.satiety,
                         "cleanliness": after.cleanliness,
+                        "affinity": after.affinity,
+                        "bondPoints": after.effective_bond_points(),
+                        "relationshipLevel": after.relationship_level(),
+                    },
+                })
+            },
+        )
+    }
+
+    /// Rewards one host-verified Agent task through the Pet's durable idempotency ledger.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the task was already rewarded or the atomic snapshot/event save fails.
+    pub fn reward_agent_collaboration(&self, task_id: Uuid) -> Result<Command, RuntimeError> {
+        self.update(
+            |pet| pet.record_collaboration(task_id),
+            || {
+                Command::new(
+                    "pet.relationship.collaborate",
+                    serde_json::json!({ "taskId": task_id }),
+                    CommandRisk::Safe,
+                )
+            },
+            "pet.relationship.collaborated",
+            |before, after| {
+                serde_json::json!({
+                    "taskId": task_id,
+                    "before": {
+                        "mood": before.mood,
+                        "affinity": before.affinity,
+                        "bondPoints": before.effective_bond_points(),
+                        "relationshipLevel": before.relationship_level(),
+                    },
+                    "after": {
+                        "mood": after.mood,
                         "affinity": after.affinity,
                         "bondPoints": after.effective_bond_points(),
                         "relationshipLevel": after.relationship_level(),
@@ -1727,6 +1764,33 @@ mod tests {
         service.repository.fail_save.store(true, Ordering::Relaxed);
         assert!(service.rename_pet("Mochi").is_err());
         assert_eq!(service.snapshot().expect("snapshot").name, "Aster");
+        assert!(service.drain_events().expect("events").is_empty());
+    }
+
+    #[test]
+    fn agent_collaboration_is_atomic_correlated_and_duplicate_safe() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let task_id = Uuid::now_v7();
+        let command = service
+            .reward_agent_collaboration(task_id)
+            .expect("collaboration reward");
+        let event = service.drain_events().expect("events").remove(0);
+        assert_eq!(event.event_type, "pet.relationship.collaborated");
+        assert_eq!(event.trace_id, command.trace_id);
+        assert_eq!(event.data["taskId"], task_id.to_string());
+        assert_eq!(event.data["after"]["bondPoints"], 2);
+        assert!(matches!(
+            service.reward_agent_collaboration(task_id),
+            Err(RuntimeError::Pet(PetError::DuplicateCollaboration))
+        ));
+        assert!(service.drain_events().expect("events").is_empty());
+
+        service.repository.fail_save.store(true, Ordering::Relaxed);
+        assert!(service.reward_agent_collaboration(Uuid::now_v7()).is_err());
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.bond_points, 2);
+        assert_eq!(snapshot.collaboration_receipts, [task_id]);
         assert!(service.drain_events().expect("events").is_empty());
     }
 

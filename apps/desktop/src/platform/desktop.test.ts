@@ -152,7 +152,8 @@ describe("desktop platform adapter", () => {
         content: "summary",
         finishReason: "stop",
         usage: { inputTokens: 8, outputTokens: 2, costMicrounits: 0 },
-        pendingTools: [],
+      pendingTools: [],
+      companionGrowth: null,
       }],
     };
     expect(receipt.agentResults[0]?.pendingTools).toEqual([]);

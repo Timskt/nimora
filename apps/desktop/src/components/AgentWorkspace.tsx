@@ -180,7 +180,9 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
         next.task.id,
       )).catch(() => undefined);
       if (next.status === "completed") await refreshHistory();
-      onNotice(allowNetwork ? "网络 Agent 任务已完成" : "离线 Agent 任务已完成");
+      onNotice(next.companionGrowth?.status === "awarded"
+        ? `任务已完成，与伙伴的陪伴点 +${next.companionGrowth.bondPointsAwarded}`
+        : allowNetwork ? "网络 Agent 任务已完成" : "离线 Agent 任务已完成");
     } catch {
       await desktopApi.publishAgentCompanionSignal(createAgentCompanionSignal("failed")).catch(() => undefined);
       onNotice("Agent 任务失败，未执行任何模块操作");
@@ -203,7 +205,9 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
           next.task.id,
         )).catch(() => undefined);
         if (next.status === "completed") await refreshHistory();
-        onNotice(next.status === "completed" ? "模块结果已返回 Provider，任务已完成" : "批准已记录，整轮工具仍等待确认");
+        onNotice(next.companionGrowth?.status === "awarded"
+          ? `任务已完成，与伙伴的陪伴点 +${next.companionGrowth.bondPointsAwarded}`
+          : next.status === "completed" ? "模块结果已返回 Provider，任务已完成" : "批准已记录，整轮工具仍等待确认");
       } else {
         await desktopApi.rejectAgentTool(invocationId);
         setResult(null);

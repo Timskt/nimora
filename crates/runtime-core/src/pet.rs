@@ -284,6 +284,8 @@ pub struct Pet {
     pub bond_points: u64,
     #[serde(default)]
     pub keepsakes: Vec<PetKeepsake>,
+    #[serde(default)]
+    pub collaboration_receipts: Vec<Uuid>,
     #[serde(default = "starter_inventory")]
     pub inventory: Vec<PetInventoryStack>,
     #[serde(default)]
@@ -310,6 +312,7 @@ impl Pet {
     const SLEEP_ENERGY_GAIN_PER_INTERVAL: u64 = 2;
     pub const MAX_BOND_POINTS: u64 = 9_007_199_254_740_991;
     pub const BOND_POINTS_PER_LEVEL: u64 = 50;
+    pub const MAX_COLLABORATION_RECEIPTS: usize = 256;
 
     fn idle_emotion(&self) -> Emotion {
         if self.energy <= Self::LOW_VITAL_THRESHOLD {
@@ -362,6 +365,7 @@ impl Pet {
             affinity: 0,
             bond_points: 0,
             keepsakes: Vec::new(),
+            collaboration_receipts: Vec::new(),
             inventory: starter_inventory(),
             last_vitals_update_ms: 0,
             last_care_ms: 0,
@@ -560,6 +564,26 @@ impl Pet {
         self.keepsakes.sort_unstable();
     }
 
+    /// Records one host-verified Agent collaboration exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PetError::DuplicateCollaboration`] when the task was already rewarded.
+    pub fn record_collaboration(&mut self, task_id: Uuid) -> Result<(), PetError> {
+        if self.collaboration_receipts.binary_search(&task_id).is_ok() {
+            return Err(PetError::DuplicateCollaboration);
+        }
+        self.collaboration_receipts.push(task_id);
+        self.collaboration_receipts.sort_unstable();
+        if self.collaboration_receipts.len() > Self::MAX_COLLABORATION_RECEIPTS {
+            self.collaboration_receipts.remove(0);
+        }
+        self.mood = self.mood.saturating_add(3).min(100);
+        self.add_bond_points(2);
+        self.affinity = self.affinity.saturating_add(1).min(100);
+        Ok(())
+    }
+
     /// Returns an active interaction to the neutral idle state.
     ///
     /// # Errors
@@ -704,6 +728,14 @@ impl Pet {
         }
         if self.keepsakes.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err(PetError::InvalidCollection);
+        }
+        if self.collaboration_receipts.len() > Self::MAX_COLLABORATION_RECEIPTS
+            || self
+                .collaboration_receipts
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+        {
+            return Err(PetError::InvalidCollaborationReceipts);
         }
         if self
             .inventory
@@ -1038,6 +1070,10 @@ pub enum PetError {
     InvalidTransition,
     #[error("pet keepsake collection must be sorted and unique")]
     InvalidCollection,
+    #[error("pet collaboration receipts must be bounded, sorted, and unique")]
+    InvalidCollaborationReceipts,
+    #[error("pet collaboration was already rewarded")]
+    DuplicateCollaboration,
     #[error("pet inventory must be sorted, unique, and contain quantities between 1 and 999")]
     InvalidInventory,
     #[error("pet item is not available")]
@@ -1618,6 +1654,31 @@ mod tests {
     }
 
     #[test]
+    fn agent_collaboration_is_bounded_and_idempotent() {
+        let mut pet = Pet::new("Aster").expect("pet");
+        let task_id = Uuid::now_v7();
+
+        pet.record_collaboration(task_id).expect("first reward");
+        assert_eq!((pet.mood, pet.affinity, pet.bond_points), (73, 1, 2));
+        assert_eq!(pet.collaboration_receipts, [task_id]);
+        assert_eq!(
+            pet.record_collaboration(task_id),
+            Err(PetError::DuplicateCollaboration)
+        );
+        assert_eq!((pet.mood, pet.affinity, pet.bond_points), (73, 1, 2));
+
+        for _ in 0..Pet::MAX_COLLABORATION_RECEIPTS {
+            pet.record_collaboration(Uuid::now_v7())
+                .expect("bounded receipt");
+        }
+        assert_eq!(
+            pet.collaboration_receipts.len(),
+            Pet::MAX_COLLABORATION_RECEIPTS
+        );
+        pet.validate().expect("valid bounded ledger");
+    }
+
+    #[test]
     fn relationship_stage_uses_stable_bond_boundaries() {
         let mut pet = Pet::new("Mori").expect("pet");
         for (points, stage, next_stage, next_stage_at) in [
@@ -1751,10 +1812,15 @@ mod tests {
             .as_object_mut()
             .expect("pet object")
             .remove("bondPoints");
+        value
+            .as_object_mut()
+            .expect("pet object")
+            .remove("collaborationReceipts");
         value["affinity"] = serde_json::json!(34);
 
         let restored: Pet = serde_json::from_value(value).expect("legacy snapshot");
         assert_eq!(restored.bond_points, 0);
+        assert!(restored.collaboration_receipts.is_empty());
         assert_eq!(restored.effective_bond_points(), 34);
         assert_eq!(restored.relationship_level(), 1);
     }

@@ -129,8 +129,9 @@ use nimora_runtime_app::{
 };
 use nimora_runtime_core::{
     CareNeedsMode, Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction,
-    PetAutonomyPolicy, PetCareAction, PetItemId, PetVitalsPolicy, PointerButton, Position, Profile,
-    ProfileId, ProfileMode, ProfilePolicy, RuntimeMode, SafeModeReason, SafetySnapshot,
+    PetAutonomyPolicy, PetCareAction, PetError, PetItemId, PetVitalsPolicy, PointerButton,
+    Position, Profile, ProfileId, ProfileMode, ProfilePolicy, RuntimeMode, SafeModeReason,
+    SafetySnapshot,
 };
 use nimora_secret_store::{
     MemorySecretStore, SecretPresence, SecretReference, SecretStore, SecretStoreError,
@@ -3552,6 +3553,23 @@ struct DesktopAgentRunResult {
     finish_reason: Option<nimora_agent_runtime::ProviderFinishReason>,
     usage: Option<nimora_agent_runtime::ProviderUsage>,
     pending_tools: Vec<AgentToolResult>,
+    companion_growth: Option<DesktopCompanionGrowth>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopCompanionGrowth {
+    status: DesktopCompanionGrowthStatus,
+    bond_points_awarded: u8,
+    bond_points: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DesktopCompanionGrowthStatus {
+    Awarded,
+    AlreadyAwarded,
+    Unavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -3980,10 +3998,18 @@ fn delete_agent_history(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn run_local_agent(
+    app: AppHandle,
     request: LocalAgentRequest,
     state: State<'_, DesktopState>,
 ) -> Result<DesktopAgentRunResult, DesktopError> {
-    run_local_agent_inner(request, &state)
+    let result = run_local_agent_inner(request, &state)?;
+    if result
+        .companion_growth
+        .is_some_and(|growth| growth.status == DesktopCompanionGrowthStatus::Awarded)
+    {
+        emit_pet_vitals_changed(&app);
+    }
+    Ok(result)
 }
 
 fn run_local_agent_inner(
@@ -4031,7 +4057,9 @@ fn run_local_agent_inner(
         tool_allowlist,
         cancellation,
     )?;
-    Ok(desktop_agent_run_result(outcome))
+    let mut result = desktop_agent_run_result(outcome);
+    apply_desktop_agent_collaboration(state, &mut result);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -5539,6 +5567,7 @@ fn desktop_agent_run_result(outcome: ProviderAgentOutcome) -> DesktopAgentRunRes
             finish_reason: Some(response.finish_reason),
             usage: Some(response.usage),
             pending_tools: Vec::new(),
+            companion_growth: None,
         },
         ProviderAgentOutcome::Waiting { task, pending } => DesktopAgentRunResult {
             spec: "nimora.desktop-agent-result/1",
@@ -5548,8 +5577,36 @@ fn desktop_agent_run_result(outcome: ProviderAgentOutcome) -> DesktopAgentRunRes
             finish_reason: None,
             usage: None,
             pending_tools: pending,
+            companion_growth: None,
         },
     }
+}
+
+fn apply_desktop_agent_collaboration(state: &DesktopState, result: &mut DesktopAgentRunResult) {
+    if result.status != DesktopAgentRunStatus::Completed
+        || result.task.origin != AgentTaskOrigin::Desktop
+        || result.task.requester != "desktop:local-user"
+        || result.task.status != AgentTaskStatus::Succeeded
+    {
+        return;
+    }
+    let status = match state.runtime.reward_agent_collaboration(result.task.id) {
+        Ok(_) => DesktopCompanionGrowthStatus::Awarded,
+        Err(RuntimeError::Pet(PetError::DuplicateCollaboration)) => {
+            DesktopCompanionGrowthStatus::AlreadyAwarded
+        }
+        Err(_) => DesktopCompanionGrowthStatus::Unavailable,
+    };
+    let bond_points = state
+        .runtime
+        .snapshot()
+        .ok()
+        .map(|pet| pet.effective_bond_points());
+    result.companion_growth = Some(DesktopCompanionGrowth {
+        status,
+        bond_points_awarded: u8::from(status == DesktopCompanionGrowthStatus::Awarded) * 2,
+        bond_points,
+    });
 }
 
 fn admit_desktop_agent_task(
@@ -6034,12 +6091,20 @@ fn confirm_agent_tool(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn confirm_agent_run_tool(
+    app: AppHandle,
     request: ResolveAgentToolRequest,
     state: State<'_, DesktopState>,
 ) -> Result<DesktopAgentRunResult, DesktopError> {
     let providers = desktop_provider_registry(&state)?;
     let (resolved, continuation) = confirm_agent_tool_with_registry(&request, &state, &providers)?;
-    desktop_agent_confirmation_result(&state, resolved, continuation)
+    let result = desktop_agent_confirmation_result(&state, resolved, continuation)?;
+    if result
+        .companion_growth
+        .is_some_and(|growth| growth.status == DesktopCompanionGrowthStatus::Awarded)
+    {
+        emit_pet_vitals_changed(&app);
+    }
+    Ok(result)
 }
 
 fn desktop_agent_confirmation_result(
@@ -6048,7 +6113,9 @@ fn desktop_agent_confirmation_result(
     continuation: Option<ProviderAgentOutcome>,
 ) -> Result<DesktopAgentRunResult, DesktopError> {
     if let Some(outcome) = continuation {
-        return Ok(desktop_agent_run_result(outcome));
+        let mut result = desktop_agent_run_result(outcome);
+        apply_desktop_agent_collaboration(state, &mut result);
+        return Ok(result);
     }
     let pending_tools = pending_agent_tools_for_task(state, &resolved.task)?;
     let status = if pending_tools.is_empty() {
@@ -6056,7 +6123,7 @@ fn desktop_agent_confirmation_result(
     } else {
         DesktopAgentRunStatus::WaitingForConfirmation
     };
-    Ok(DesktopAgentRunResult {
+    let mut result = DesktopAgentRunResult {
         spec: "nimora.desktop-agent-result/1",
         status,
         task: resolved.task,
@@ -6064,7 +6131,10 @@ fn desktop_agent_confirmation_result(
         finish_reason: None,
         usage: None,
         pending_tools,
-    })
+        companion_growth: None,
+    };
+    apply_desktop_agent_collaboration(state, &mut result);
+    Ok(result)
 }
 
 fn pending_agent_tools_for_task(
@@ -14104,7 +14174,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_local_agent_runs_offline_without_cost_or_side_effects() {
+    fn desktop_local_agent_runs_offline_with_bounded_companion_growth() {
         let (root, state) = normal_desktop_state();
         let result = run_local_agent_inner(
             LocalAgentRequest {
@@ -14123,6 +14193,38 @@ mod tests {
         assert_eq!(result.task.status, AgentTaskStatus::Succeeded);
         assert_eq!(result.usage.expect("completed usage").cost_microunits, 0);
         assert!(result.pending_tools.is_empty());
+        assert_eq!(
+            result.companion_growth.expect("companion growth").status,
+            super::DesktopCompanionGrowthStatus::Awarded
+        );
+        let pet = state.runtime.snapshot().expect("pet snapshot");
+        assert_eq!(pet.effective_bond_points(), 2);
+        assert_eq!(pet.collaboration_receipts, [result.task.id]);
+
+        let mut duplicate = result.clone();
+        duplicate.companion_growth = None;
+        super::apply_desktop_agent_collaboration(&state, &mut duplicate);
+        assert_eq!(
+            duplicate
+                .companion_growth
+                .expect("duplicate outcome")
+                .status,
+            super::DesktopCompanionGrowthStatus::AlreadyAwarded
+        );
+        assert_eq!(
+            state
+                .runtime
+                .snapshot()
+                .expect("duplicate snapshot")
+                .effective_bond_points(),
+            2
+        );
+
+        let mut module_result = result.clone();
+        module_result.task.requester = "skill:test".to_owned();
+        module_result.companion_growth = None;
+        super::apply_desktop_agent_collaboration(&state, &mut module_result);
+        assert!(module_result.companion_growth.is_none());
         let history = state.agent_history.list(None, 10).expect("agent history");
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].task.id, result.task.id);

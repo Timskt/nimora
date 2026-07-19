@@ -181,6 +181,11 @@ export interface LocalAgentResult {
   finishReason: string | null;
   usage: { inputTokens: number; outputTokens: number; costMicrounits: number } | null;
   pendingTools: AgentToolResult[];
+  companionGrowth: {
+    status: "awarded" | "already_awarded" | "unavailable";
+    bondPointsAwarded: number;
+    bondPoints: number | null;
+  } | null;
 }
 
 export type CreatorArtifactKind = "user-program" | "skill" | "automation" | "theme" | "profile";
@@ -1425,14 +1430,14 @@ export function createDesktopApi(
             { spec: "nimora.desktop-agent-tool-result/1", task: previewAgentTask, invocation: { invocationId: crypto.randomUUID(), taskId: previewAgentTask.id, traceId: crypto.randomUUID(), toolId: "pet.animation.play", arguments: { action: "celebrate" } }, effectiveRisk: "low", requiresConfirmation: true, expiresAtMs, output: null },
             { spec: "nimora.desktop-agent-tool-result/1", task: previewAgentTask, invocation: { invocationId: crypto.randomUUID(), taskId: previewAgentTask.id, traceId: crypto.randomUUID(), toolId: "pet.position.move", arguments: { x: 240, y: 160 } }, effectiveRisk: "low", requiresConfirmation: true, expiresAtMs, output: null },
           ];
-          return { spec: "nimora.desktop-agent-result/1", status: "waitingForConfirmation", task: previewAgentTask, content: null, finishReason: null, usage: null, pendingTools: structuredClone(previewAgentPendingTools) };
+          return { spec: "nimora.desktop-agent-result/1", status: "waitingForConfirmation", task: previewAgentTask, content: null, finishReason: null, usage: null, pendingTools: structuredClone(previewAgentPendingTools), companionGrowth: null };
         }
         previewAgentPendingTools = [];
         const task = { id: crypto.randomUUID(), status: "succeeded", providerId };
         const content = `[${model}] ${prompt}`;
         const usage = { inputTokens: Math.max(1, Math.ceil(prompt.length / 4)), outputTokens: Math.max(1, Math.ceil(prompt.length / 4)), costMicrounits: 0 };
         const historyRecord = recordPreviewAgentHistory(task, prompt, model, content, "stop", usage);
-        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: historyRecord.task, content, finishReason: "stop", usage, pendingTools: [] };
+        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: historyRecord.task, content, finishReason: "stop", usage, pendingTools: [], companionGrowth: null };
       },
       async generateCreatorDraft() {
         throw new Error("desktop-host-required");
@@ -1516,13 +1521,13 @@ export function createDesktopApi(
       async confirmAgentRunTool(invocationId) {
         previewAgentPendingTools = previewAgentPendingTools.filter((tool) => tool.invocation.invocationId !== invocationId);
         if (previewAgentPendingTools.length > 0) {
-          return { spec: "nimora.desktop-agent-result/1", status: "waitingForConfirmation", task: previewAgentTask, content: null, finishReason: null, usage: null, pendingTools: structuredClone(previewAgentPendingTools) };
+          return { spec: "nimora.desktop-agent-result/1", status: "waitingForConfirmation", task: previewAgentTask, content: null, finishReason: null, usage: null, pendingTools: structuredClone(previewAgentPendingTools), companionGrowth: null };
         }
         previewAgentTask = { ...previewAgentTask, status: "succeeded" };
         const content = "模块操作已经安全完成。";
         const usage = { inputTokens: 12, outputTokens: 8, costMicrounits: 0 };
         const historyRecord = recordPreviewAgentHistory(previewAgentTask, previewAgentPrompt, previewAgentModel, content, "completed", usage);
-        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: structuredClone(historyRecord.task), content, finishReason: "completed", usage, pendingTools: [] };
+        return { spec: "nimora.desktop-agent-result/1", status: "completed", task: structuredClone(historyRecord.task), content, finishReason: "completed", usage, pendingTools: [], companionGrowth: null };
       },
       async rejectAgentTool() { previewAgentPendingTools = []; },
       async backupHealth() {
