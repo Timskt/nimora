@@ -129,9 +129,9 @@ use nimora_runtime_app::{
 };
 use nimora_runtime_core::{
     CareNeedsMode, Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction,
-    PetAutonomyPolicy, PetCareAction, PetError, PetItemId, PetVitalsPolicy, PointerButton,
-    Position, Profile, ProfileId, ProfileMode, ProfilePolicy, RuntimeMode, SafeModeReason,
-    SafetySnapshot,
+    PetAutonomyDecision, PetAutonomyPolicy, PetCareAction, PetError, PetItemId, PetVitalsPolicy,
+    PointerButton, Position, Profile, ProfileId, ProfileMode, ProfilePolicy, RuntimeMode,
+    SafeModeReason, SafetySnapshot,
 };
 use nimora_secret_store::{
     MemorySecretStore, SecretPresence, SecretReference, SecretStore, SecretStoreError,
@@ -596,6 +596,7 @@ struct DesktopLifecycleCoordinator {
     activation: DesktopLifecycleGate,
     pet_window_recovery: PetWindowRecoveryHost,
     autonomy_stop: AtomicBool,
+    attention_budget: Mutex<AttentionBudget>,
 }
 
 impl Default for DesktopLifecycleCoordinator {
@@ -604,6 +605,7 @@ impl Default for DesktopLifecycleCoordinator {
             activation: DesktopLifecycleGate::default(),
             pet_window_recovery: PetWindowRecoveryHost::default(),
             autonomy_stop: AtomicBool::new(false),
+            attention_budget: Mutex::new(AttentionBudget::new(0)),
         }
     }
 }
@@ -1315,6 +1317,153 @@ struct DesktopSnapshot {
     startup: StartupStatus,
 }
 
+const ATTENTION_WINDOW_MS: u64 = 60_000;
+const ATTENTION_CAPACITY: u8 = 12;
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AttentionSource {
+    User,
+    Autonomy,
+    Agent,
+    Automation,
+    Skill,
+    UserProgram,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AttentionChannel {
+    Motion,
+    Bubble,
+    Sound,
+    Notification,
+    Suggestion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AttentionPriority {
+    Ambient,
+    Feedback,
+    Safety,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AttentionRequest {
+    spec: String,
+    source: AttentionSource,
+    channel: AttentionChannel,
+    priority: AttentionPriority,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum AttentionDecisionReason {
+    Granted,
+    UserInitiated,
+    SafetyCritical,
+    ContextSuppressed,
+    BudgetExhausted,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AttentionDecision {
+    spec: &'static str,
+    allowed: bool,
+    reason: AttentionDecisionReason,
+    retry_after_ms: Option<u64>,
+    remaining_tokens: u8,
+    decided_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AttentionBudget {
+    tokens: u8,
+    window_started_at_ms: u64,
+}
+
+impl AttentionBudget {
+    fn new(now_ms: u64) -> Self {
+        Self {
+            tokens: ATTENTION_CAPACITY,
+            window_started_at_ms: now_ms,
+        }
+    }
+
+    fn decide(
+        &mut self,
+        request: &AttentionRequest,
+        context_suppressed: bool,
+        now_ms: u64,
+    ) -> AttentionDecision {
+        if now_ms
+            >= self
+                .window_started_at_ms
+                .saturating_add(ATTENTION_WINDOW_MS)
+        {
+            self.tokens = ATTENTION_CAPACITY;
+            self.window_started_at_ms = now_ms;
+        }
+        let privileged = match request.priority {
+            AttentionPriority::Safety => Some(AttentionDecisionReason::SafetyCritical),
+            AttentionPriority::Feedback if matches!(request.source, AttentionSource::User) => {
+                Some(AttentionDecisionReason::UserInitiated)
+            }
+            _ => None,
+        };
+        if let Some(reason) = privileged {
+            return self.result(true, reason, None, now_ms);
+        }
+        if context_suppressed && request.priority == AttentionPriority::Ambient {
+            return self.result(
+                false,
+                AttentionDecisionReason::ContextSuppressed,
+                None,
+                now_ms,
+            );
+        }
+        let cost = match request.channel {
+            AttentionChannel::Motion => 1,
+            AttentionChannel::Bubble | AttentionChannel::Suggestion => 2,
+            AttentionChannel::Sound | AttentionChannel::Notification => 3,
+        };
+        if self.tokens < cost {
+            let retry_after_ms = self
+                .window_started_at_ms
+                .saturating_add(ATTENTION_WINDOW_MS)
+                .saturating_sub(now_ms);
+            return self.result(
+                false,
+                AttentionDecisionReason::BudgetExhausted,
+                Some(retry_after_ms),
+                now_ms,
+            );
+        }
+        self.tokens -= cost;
+        self.result(true, AttentionDecisionReason::Granted, None, now_ms)
+    }
+
+    fn result(
+        &self,
+        allowed: bool,
+        reason: AttentionDecisionReason,
+        retry_after_ms: Option<u64>,
+        decided_at_ms: u64,
+    ) -> AttentionDecision {
+        AttentionDecision {
+            spec: "nimora.attention-decision/1",
+            allowed,
+            reason,
+            retry_after_ms,
+            remaining_tokens: self.tokens,
+            decided_at_ms,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PetPresentationPolicy {
@@ -1812,6 +1961,8 @@ enum DesktopError {
     InvalidPosition,
     #[error("pet stroke evidence is outside the trusted gesture bounds")]
     InvalidStrokeGesture,
+    #[error("invalid desktop request: {0}")]
+    InvalidRequest(String),
     #[error(transparent)]
     Runtime(#[from] RuntimeError),
     #[error(transparent)]
@@ -3663,6 +3814,31 @@ fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, D
         safety,
         startup: state.startup.clone(),
     })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn request_attention(
+    state: State<'_, DesktopState>,
+    request: AttentionRequest,
+) -> Result<AttentionDecision, DesktopError> {
+    if request.spec != "nimora.attention-request/1" {
+        return Err(DesktopError::InvalidRequest(
+            "attention request spec is unsupported".to_owned(),
+        ));
+    }
+    let now_ms = current_time_ms()?;
+    let context_suppressed = state
+        .presence_decision
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .suppress_autonomy;
+    state
+        .lifecycle
+        .attention_budget
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)
+        .map(|mut budget| budget.decide(&request, context_suppressed, now_ms))
 }
 
 #[tauri::command]
@@ -11973,6 +12149,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             desktop_snapshot,
+            request_attention,
             pet_surface_snapshot,
             agent_catalog,
             test_automation,
@@ -12249,8 +12426,9 @@ fn start_pet_autonomy(app: AppHandle) {
                     .iter()
                     .find(|profile| profile.id == profile_snapshot.active_profile_id)
                 && matches!(
-                    state.runtime.tick_autonomy(
-                        pet_autonomy_policy(&active_profile.policy, local_minute_of_day(now_ms),),
+                    tick_pet_autonomy_with_attention(
+                        &state,
+                        pet_autonomy_policy(&active_profile.policy, local_minute_of_day(now_ms)),
                         now_ms,
                     ),
                     Ok(Some(_))
@@ -12289,6 +12467,41 @@ fn start_pet_autonomy(app: AppHandle) {
             std::thread::sleep(Duration::from_secs(1));
         }
     });
+}
+
+fn tick_pet_autonomy_with_attention(
+    state: &DesktopState,
+    mut policy: PetAutonomyPolicy,
+    now_ms: u64,
+) -> Result<Option<Command>, DesktopError> {
+    let decision = state.runtime.snapshot()?.autonomy_decision(policy, now_ms);
+    if matches!(decision, PetAutonomyDecision::Start { .. }) {
+        let context_suppressed = state
+            .presence_decision
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?
+            .suppress_autonomy;
+        let request = AttentionRequest {
+            spec: "nimora.attention-request/1".to_owned(),
+            source: AttentionSource::Autonomy,
+            channel: AttentionChannel::Motion,
+            priority: AttentionPriority::Ambient,
+        };
+        let allowed = state
+            .lifecycle
+            .attention_budget
+            .lock()
+            .map_err(|_| DesktopError::StatePoisoned)?
+            .decide(&request, context_suppressed, now_ms)
+            .allowed;
+        if !allowed {
+            policy.quiet = true;
+        }
+    }
+    state
+        .runtime
+        .tick_autonomy(policy, now_ms)
+        .map_err(Into::into)
 }
 
 fn pet_vitals_policy(profile: &ProfilePolicy) -> PetVitalsPolicy {
@@ -12458,17 +12671,19 @@ fn discover_agent_provider_worker(app: &AppHandle) -> Option<PathBuf> {
 mod tests {
     use super::{
         ACTIVE_CHARACTER_FILE, ACTIVE_THEME_FILE, ACTIVE_VOICE_FILE, ActiveAgentTask,
-        ActiveSkillExecution, AgentProviderStatusRequest, AssetInstallReceipt, AutoModeJobStatus,
-        AutomationEventMetrics, AutomationRun, AutomationRunOrigin, AutomationTestRequest,
-        BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID, BUILTIN_VOICE_ID, CHARACTER_SELECTION,
-        CapabilityBackend, ContextKind, DETERMINISTIC_PROVIDER_ID, DeleteProviderRequest,
-        DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
-        DesktopProviderCredentialResolver, DesktopResolveAutoModeAttemptRequest,
-        DesktopSecretStore, DesktopState, ExecutionCancellation, LocalAgentRequest,
-        PendingCreatorApproval, PendingSkillExecution, Pet, PetAction, PetResumePlan, PetSurface,
-        PhysicalArea, PrepareAgentToolRequest, ProfileMode, ProfilePolicy, ResolveAgentToolRequest,
-        ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SensorController, SensorDescriptor,
-        SensorSchedule, SensorSource, SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
+        ActiveSkillExecution, AgentProviderStatusRequest, AssetInstallReceipt, AttentionBudget,
+        AttentionChannel, AttentionDecisionReason, AttentionPriority, AttentionRequest,
+        AttentionSource, AutoModeJobStatus, AutomationEventMetrics, AutomationRun,
+        AutomationRunOrigin, AutomationTestRequest, BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID,
+        BUILTIN_VOICE_ID, CHARACTER_SELECTION, CapabilityBackend, ContextKind,
+        DETERMINISTIC_PROVIDER_ID, DeleteProviderRequest, DesktopAgentRunStatus,
+        DesktopCapabilityBackend, DesktopError, DesktopProviderCredentialResolver,
+        DesktopResolveAutoModeAttemptRequest, DesktopSecretStore, DesktopState,
+        ExecutionCancellation, LocalAgentRequest, PendingCreatorApproval, PendingSkillExecution,
+        Pet, PetAction, PetResumePlan, PetSurface, PhysicalArea, PrepareAgentToolRequest,
+        ProfileMode, ProfilePolicy, ResolveAgentToolRequest, ResolveSkillApprovalRequest,
+        ResumeAutoModeTurnRequest, SensorController, SensorDescriptor, SensorSchedule,
+        SensorSource, SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
         UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
         VOICE_SELECTION, WindowPolicy, agent_catalog_inner, agent_provider_status_inner,
         append_program_scope_diff, approve_automation_run_inner, approve_skill_execution_inner,
@@ -12570,6 +12785,70 @@ mod tests {
         )
         .expect("normal desktop state");
         (root, state)
+    }
+
+    #[test]
+    fn attention_budget_prioritizes_user_and_safety_requests() {
+        let mut budget = AttentionBudget::new(1_000);
+        let user = AttentionRequest {
+            spec: "nimora.attention-request/1".to_owned(),
+            source: AttentionSource::User,
+            channel: AttentionChannel::Sound,
+            priority: AttentionPriority::Feedback,
+        };
+        let safety = AttentionRequest {
+            spec: "nimora.attention-request/1".to_owned(),
+            source: AttentionSource::Agent,
+            channel: AttentionChannel::Notification,
+            priority: AttentionPriority::Safety,
+        };
+
+        let user_decision = budget.decide(&user, true, 1_001);
+        let safety_decision = budget.decide(&safety, true, 1_002);
+
+        assert!(user_decision.allowed);
+        assert_eq!(user_decision.reason, AttentionDecisionReason::UserInitiated);
+        assert!(safety_decision.allowed);
+        assert_eq!(
+            safety_decision.reason,
+            AttentionDecisionReason::SafetyCritical
+        );
+        assert_eq!(safety_decision.remaining_tokens, 12);
+    }
+
+    #[test]
+    fn attention_budget_suppresses_ambient_context_and_bounds_shared_channels() {
+        let mut budget = AttentionBudget::new(2_000);
+        let request = AttentionRequest {
+            spec: "nimora.attention-request/1".to_owned(),
+            source: AttentionSource::Autonomy,
+            channel: AttentionChannel::Bubble,
+            priority: AttentionPriority::Ambient,
+        };
+
+        let suppressed = budget.decide(&request, true, 2_001);
+        assert!(!suppressed.allowed);
+        assert_eq!(
+            suppressed.reason,
+            AttentionDecisionReason::ContextSuppressed
+        );
+        assert_eq!(suppressed.remaining_tokens, 12);
+
+        for offset in 0..6 {
+            assert!(budget.decide(&request, false, 2_010 + offset).allowed);
+        }
+        let rollback = budget.decide(&request, false, 1_000);
+        assert!(!rollback.allowed);
+        assert_eq!(rollback.reason, AttentionDecisionReason::BudgetExhausted);
+        assert_eq!(rollback.remaining_tokens, 0);
+        let exhausted = budget.decide(&request, false, 2_020);
+        assert!(!exhausted.allowed);
+        assert_eq!(exhausted.reason, AttentionDecisionReason::BudgetExhausted);
+        assert_eq!(exhausted.retry_after_ms, Some(59_980));
+
+        let refilled = budget.decide(&request, false, 62_000);
+        assert!(refilled.allowed);
+        assert_eq!(refilled.remaining_tokens, 10);
     }
 
     #[test]

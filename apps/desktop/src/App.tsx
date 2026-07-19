@@ -64,6 +64,8 @@ export function normalizedPetName(value: string): string | null {
 
 async function playVoiceCue(cue: "pet.celebrate" | "pet.work", quiet: boolean): Promise<void> {
   if (quiet) return;
+  const attention = await desktopApi.requestAttention("user", "sound", "feedback");
+  if (!attention.allowed) return;
   const clip = await desktopApi.activeVoiceClip(cue);
   if (!clip) return;
   await playVerifiedAudio(clip);

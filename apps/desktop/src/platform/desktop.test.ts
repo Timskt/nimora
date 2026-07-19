@@ -2,6 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import { createDesktopApi, type UserProgramExecutionReceipt } from "./desktop";
 
 describe("desktop platform adapter", () => {
+  it("maps attention requests to the host authority", async () => {
+    const decision = { spec: "nimora.attention-decision/1", allowed: true, reason: "granted", retryAfterMs: null, remainingTokens: 10, decidedAtMs: 42 } as const;
+    const invoke = vi.fn(async () => decision);
+    const api = createDesktopApi(true, invoke);
+
+    await expect(api.requestAttention("agent", "bubble", "ambient")).resolves.toEqual(decision);
+    expect(invoke).toHaveBeenCalledWith("request_attention", {
+      request: { spec: "nimora.attention-request/1", source: "agent", channel: "bubble", priority: "ambient" },
+    });
+  });
+
   it("keeps login launch inert and reversible in browser preview", async () => {
     const api = createDesktopApi(false);
     await api.setLoginLaunchEnabled(false);

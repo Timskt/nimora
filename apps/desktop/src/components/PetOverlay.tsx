@@ -100,7 +100,9 @@ export function PetOverlay() {
         void desktopApi.snapshot().then((value) => {
           if (!disposed) {
             applySnapshot(value);
-            presentBubble(petStatusMessage(value.pet), "status");
+            void desktopApi.requestAttention("autonomy", "bubble", "ambient").then((attention) => {
+              if (!disposed && attention.allowed) presentBubble(petStatusMessage(value.pet), "status");
+            }).catch(() => undefined);
           }
         });
       }).then((disposeListener) => {
@@ -147,18 +149,22 @@ export function PetOverlay() {
     void desktopApi.onAgentCompanionSignal((signal) => {
       if (disposed) return;
       const presentation = agentCompanionPresentation(signal.status);
-      if (companionResetTimer.current) clearTimeout(companionResetTimer.current);
-      setCompanionAction(presentation.action);
-      presentBubble(presentation.message);
-      if (!presentation.persistent) {
-        companionResetTimer.current = setTimeout(() => {
-          if (disposed) return;
-          setCompanionAction(null);
-          void desktopApi.snapshot().then((value) => {
-            if (!disposed) presentBubble(petStatusMessage(value.pet), "status");
-          });
-        }, 4200);
-      }
+      const priority = signal.status === "failed" || signal.status === "waiting_for_confirmation" ? "feedback" : "ambient";
+      void desktopApi.requestAttention("agent", "bubble", priority).then((attention) => {
+        if (disposed || !attention.allowed) return;
+        if (companionResetTimer.current) clearTimeout(companionResetTimer.current);
+        setCompanionAction(presentation.action);
+        presentBubble(presentation.message);
+        if (!presentation.persistent) {
+          companionResetTimer.current = setTimeout(() => {
+            if (disposed) return;
+            setCompanionAction(null);
+            void desktopApi.snapshot().then((value) => {
+              if (!disposed) presentBubble(petStatusMessage(value.pet), "status");
+            });
+          }, 4200);
+        }
+      }).catch(() => undefined);
     }).then((disposeListener) => {
       if (disposed) disposeListener();
       else listeners.push(disposeListener);
