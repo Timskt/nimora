@@ -1,5 +1,20 @@
 # Nimora 功能测试计划
 
+## ACTIVITY-REFRESH — 活动健康自动刷新
+
+| ID | 场景 | 预期结果 |
+|---|---|---|
+| ACTIVITY-REFRESH-001 | 首次进入活动工作区 | 立即读取一次权威本地 Outbox Snapshot，不等待首个定时周期 |
+| ACTIVITY-REFRESH-002 | 活动页保持前台可见 | 每 10 秒最多发起一次刷新，计数由最新成功快照更新 |
+| ACTIVITY-REFRESH-003 | 文档进入 hidden 状态 | 周期触发不读取数据库、不发起网络请求、不修改现有结果 |
+| ACTIVITY-REFRESH-004 | hidden 恢复 visible | 立即刷新，不额外等待 10 秒 |
+| ACTIVITY-REFRESH-005 | 离开活动工作区 | 清理 interval 与 visibilitychange listener，后台不继续刷新 |
+| ACTIVITY-REFRESH-006 | 上一次读取超过 10 秒 | 单次飞行保护拒绝重入，不堆积并发读取 |
+| ACTIVITY-REFRESH-007 | Outbox Snapshot 读取失败 | 保留上次成功计数并展示降级提示，不把失败伪装成全零 |
+| ACTIVITY-REFRESH-008 | 完全离线且无 AI Provider | 刷新完整可用，不访问网络、不启动 Agent |
+| ACTIVITY-REFRESH-009 | 活动页隐私检查 | 只显示有界计数和固定健康描述，不显示事件正文、Prompt、路径或桌面内容 |
+| ACTIVITY-REFRESH-010 | 810px 与窄宽度布局 | 刷新说明可读、摘要不横向溢出、当前导航通过语义状态暴露 |
+
 ## ACCESSIBILITY-MOTION-001 跨层减少动态效果
 
 - 启动时系统偏好为 Reduce，确认 Pet Overlay 立即上报 `set_reduced_motion(true)`；Sprite、glTF/VRM、气泡、菜单及控制中心非必要动画停止，原生自主漫游不设置窗口位置。

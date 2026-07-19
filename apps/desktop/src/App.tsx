@@ -13,6 +13,7 @@ const loadAgentWorkspace = () => import("./components/AgentWorkspace").then((mod
 const loadAutomationWorkspace = () => import("./components/AutomationWorkspace").then((module) => ({ default: module.AutomationWorkspace }));
 const loadAiCreatorWorkspace = () => import("./components/AiCreatorWorkspace").then((module) => ({ default: module.AiCreatorWorkspace }));
 const loadDataProtection = () => import("./components/DataProtection").then((module) => ({ default: module.DataProtection }));
+const ACTIVITY_REFRESH_INTERVAL_MS = 10_000;
 
 export const navigation = ["概览", "角色", "Agent", "自动化", "扩展", "活动", "设置"] as const;
 type NavigationItem = (typeof navigation)[number];
@@ -28,6 +29,10 @@ export function requestedAgentView(search: string): "run" | "control" {
 
 export function navItemClassName(isActive: boolean): string {
   return isActive ? "nav-item active" : "nav-item";
+}
+
+export function shouldRefreshActivity(active: NavigationItem, visibilityState: DocumentVisibilityState): boolean {
+  return active === "活动" && visibilityState === "visible";
 }
 
 export function voiceGain(gainDb: number): number {
@@ -178,6 +183,33 @@ export function App() {
       listeners.forEach((unlisten) => unlisten());
     };
   }, []);
+
+  useEffect(() => {
+    if (active !== "活动") return;
+    let disposed = false;
+    let refreshing = false;
+    const refreshActivity = async () => {
+      if (disposed || refreshing || !shouldRefreshActivity(active, document.visibilityState)) return;
+      refreshing = true;
+      try {
+        const next = await desktopApi.outboxSnapshot();
+        if (!disposed) setOutbox(next);
+      } catch {
+        if (!disposed) setNotice("活动健康暂时无法刷新，正在保留上次结果");
+      } finally {
+        refreshing = false;
+      }
+    };
+    const handleVisibilityChange = () => void refreshActivity();
+    void refreshActivity();
+    const timer = window.setInterval(() => void refreshActivity(), ACTIVITY_REFRESH_INTERVAL_MS);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [active]);
 
   async function runAction(action: "celebrate" | "work") {
     if (recoveryMode) {
@@ -438,7 +470,7 @@ function ActivityWorkspace({ outbox }: { outbox: OutboxSnapshot | null }) {
       <section className="activity-timeline" aria-labelledby="activity-health-heading">
         <div className="section-heading">
           <div><p className="card-label">本地健康摘要</p><h3 id="activity-health-heading">核心能力状态</h3></div>
-          <span>自动更新</span>
+          <span>可见时每 10 秒刷新</span>
         </div>
         <ul>
           {activities.map((activity) => (

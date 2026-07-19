@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { itemPresentation, keepsakePresentation, navigation, navItemClassName, normalizedPetName, requestedAgentView, requestedNavigation, runtimeActivities, voiceGain } from "./App";
+import { itemPresentation, keepsakePresentation, navigation, navItemClassName, normalizedPetName, requestedAgentView, requestedNavigation, runtimeActivities, shouldRefreshActivity, voiceGain } from "./App";
 import { petInventoryQuantity, petItemPresentation } from "./components/petItems";
 
 describe("navItemClassName", () => {
   it("adds the active state only to the selected destination", () => {
     expect(navItemClassName(true)).toBe("nav-item active");
     expect(navItemClassName(false)).toBe("nav-item");
+  });
+});
+
+describe("shouldRefreshActivity", () => {
+  it("refreshes only while the activity workspace is visible", () => {
+    expect(shouldRefreshActivity("活动", "visible")).toBe(true);
+    expect(shouldRefreshActivity("活动", "hidden")).toBe(false);
+    expect(shouldRefreshActivity("概览", "visible")).toBe(false);
   });
 });
 
