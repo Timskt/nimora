@@ -235,6 +235,16 @@ struct PhysicalArea {
     height: u32,
 }
 
+fn monitor_work_area(monitor: &tauri::Monitor) -> PhysicalArea {
+    let work_area = monitor.work_area();
+    PhysicalArea {
+        x: work_area.position.x,
+        y: work_area.position.y,
+        width: work_area.size.width,
+        height: work_area.size.height,
+    }
+}
+
 fn safe_position_bounds(
     window_size: tauri::PhysicalSize<u32>,
     monitor: PhysicalArea,
@@ -7304,16 +7314,7 @@ fn finish_pet_drag(
     {
         let window_size = window.outer_size()?;
         window.current_monitor()?.map_or(position, |monitor| {
-            plan_edge_snap_position(
-                position,
-                window_size,
-                PhysicalArea {
-                    x: monitor.position().x,
-                    y: monitor.position().y,
-                    width: monitor.size().width,
-                    height: monitor.size().height,
-                },
-            )
+            plan_edge_snap_position(position, window_size, monitor_work_area(&monitor))
         })
     } else {
         position
@@ -11592,23 +11593,13 @@ fn visible_position_for_window(
     let window_size = window.outer_size()?;
     let mut monitors = Vec::new();
     if let Some(primary) = window.primary_monitor()? {
-        monitors.push(PhysicalArea {
-            x: primary.position().x,
-            y: primary.position().y,
-            width: primary.size().width,
-            height: primary.size().height,
-        });
+        monitors.push(monitor_work_area(&primary));
     }
     monitors.extend(
         window
             .available_monitors()?
             .into_iter()
-            .map(|monitor| PhysicalArea {
-                x: monitor.position().x,
-                y: monitor.position().y,
-                width: monitor.size().width,
-                height: monitor.size().height,
-            }),
+            .map(|monitor| monitor_work_area(&monitor)),
     );
     Ok(recover_visible_position(position, window_size, &monitors))
 }
@@ -11622,25 +11613,13 @@ fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
     let monitor = window
         .current_monitor()?
         .ok_or_else(|| DesktopError::WindowUnavailable("current-monitor".to_owned()))?;
-    let monitor_position = monitor.position();
-    let monitor_size = monitor.size();
     let sequence = app
         .state::<DesktopState>()
         .runtime
         .snapshot()?
         .autonomy
         .sequence;
-    let target = plan_wander_target(
-        current,
-        window_size,
-        PhysicalArea {
-            x: monitor_position.x,
-            y: monitor_position.y,
-            width: monitor_size.width,
-            height: monitor_size.height,
-        },
-        sequence,
-    );
+    let target = plan_wander_target(current, window_size, monitor_work_area(&monitor), sequence);
     for frame in 1..=PET_WANDER_FRAMES {
         let state = app.state::<DesktopState>();
         if state.dragging.load(Ordering::Acquire)
@@ -14182,6 +14161,32 @@ mod tests {
             },
         );
         assert_eq!(target, tauri::PhysicalPosition::new(-1904, -90));
+    }
+
+    #[test]
+    fn desktop_work_area_keeps_pet_clear_of_system_reserved_edges() {
+        let work_area = PhysicalArea {
+            x: 80,
+            y: 30,
+            width: 1120,
+            height: 820,
+        };
+        let window = tauri::PhysicalSize::new(260, 300);
+        let snapped =
+            plan_edge_snap_position(tauri::PhysicalPosition::new(2, 700), window, work_area);
+        assert_eq!(snapped, tauri::PhysicalPosition::new(96, 502));
+
+        let wandered = plan_wander_target(
+            tauri::PhysicalPosition::new(1_000, 700),
+            window,
+            work_area,
+            2,
+        );
+        assert_eq!(wandered, tauri::PhysicalPosition::new(924, 502));
+
+        let recovered =
+            recover_visible_position(tauri::PhysicalPosition::new(20, 880), window, &[work_area]);
+        assert_eq!(recovered, Some(tauri::PhysicalPosition::new(96, 502)));
     }
 
     #[test]
