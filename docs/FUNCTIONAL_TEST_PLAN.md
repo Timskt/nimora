@@ -1115,6 +1115,24 @@ ID / 标题 / 优先级 / 前置条件
 | DP-EDGE-WANDER-011 | 持久快照包含非法恢复动作或无活动 Intent 的恢复点 | Core 校验拒绝恢复，不执行 Work/Sleep/Celebrate 等越权姿态 |
 | DP-EDGE-WANDER-012 | 重启与旧快照迁移 | 缺失 `resumeAction` 默认 `null`；瞬时自主状态沿启动恢复规则收敛，不伪造边缘移动完成 |
 
+## DP-CURSOR-APPROACH — 鼠标关注靠近
+
+| ID | 场景 | 预期 |
+|---|---|---|
+| DP-CURSOR-APPROACH-001 | Free Surface 进入自主 Walking，光标在同一 Work Area 远处 | 本轮只采样一次全局光标，宠物向光标方向移动且不持续追踪 |
+| DP-CURSOR-APPROACH-002 | 光标在宠物左/右/上/下方向 | 单次水平位移不超过 140px、垂直位移不超过 96px，目标始终位于安全 Work Area |
+| DP-CURSOR-APPROACH-003 | 规划后的宠物接近光标 | 窗口中心至少保持“窗口半对角线 + 96px”距离，不覆盖或抢占当前点击点 |
+| DP-CURSOR-APPROACH-004 | 光标已经靠近 | 不产生抖动式微移，回退既有确定性 Wander 或保持当前自主调度语义 |
+| DP-CURSOR-APPROACH-005 | 光标位于其它显示器、Work Area 外或采样失败 | 不跨显示器追逐，不报错中断自主循环，确定性回退既有 Wander |
+| DP-CURSOR-APPROACH-006 | 全局坐标为 NaN、Infinity 或极端值 | 规划器失败关闭，不产生非法转换、越界位置、日志或事件泄漏 |
+| DP-CURSOR-APPROACH-007 | 负坐标副屏与多显示器 Work Area | 只在当前宠物 Work Area 内靠近，目标兼容负坐标并保留系统边缘安全区 |
+| DP-CURSOR-APPROACH-008 | 宠物处于 Top/Bottom/Left/Right/Corner Surface | 不采样光标；继续使用沿边 Wander，Perch/Climb/Peek 不脱离 Surface |
+| DP-CURSOR-APPROACH-009 | 移动中开始拖拽、进入 Safe/Recovery 或状态离开 Walking | 下一动画帧停止原生移动，不覆盖用户拖拽或更新状态 |
+| DP-CURSOR-APPROACH-010 | Quiet/Focus/Presentation 或低生命值策略抑制自主行为 | 不进入鼠标采样和靠近路径，不绕过现有 Profile 与健康门禁 |
+| DP-CURSOR-APPROACH-011 | 断网、Provider 全禁用、控制中心关闭 | 行为仍完整可用，不启动 AI、Agent、Skill、User Program 或权限确认 |
+| DP-CURSOR-APPROACH-012 | 隐私与能力边界审计 | 光标坐标不持久化、不上传、不写 Runtime Event/诊断，不暴露给 Renderer、Sensor、AI、Agent、Skill 或 User Program |
+| DP-CURSOR-APPROACH-013 | macOS/Windows 真机多屏、混合 DPI、快速移动光标 | 原生透明窗口平滑有界移动且不跳屏；Browser Preview 不得用于替代此证据 |
+
 ## DP-DOUBLE-CLICK — 正式双击互动
 
 | ID | 场景 | 预期 |

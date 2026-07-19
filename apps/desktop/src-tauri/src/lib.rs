@@ -464,6 +464,76 @@ fn plan_wander_target(
     )
 }
 
+#[allow(clippy::cast_possible_truncation)]
+fn rounded_bounded_step(value: f64, maximum_magnitude: i32) -> i32 {
+    value
+        .round()
+        .clamp(-f64::from(maximum_magnitude), f64::from(maximum_magnitude)) as i32
+}
+
+fn plan_cursor_approach_target(
+    current: tauri::PhysicalPosition<i32>,
+    window_size: tauri::PhysicalSize<u32>,
+    monitor: PhysicalArea,
+    cursor: tauri::PhysicalPosition<f64>,
+) -> Option<tauri::PhysicalPosition<i32>> {
+    const HORIZONTAL_STEP: i32 = 140;
+    const VERTICAL_STEP: i32 = 96;
+    const CURSOR_CLEARANCE: f64 = 96.0;
+    const ARRIVAL_TOLERANCE: f64 = 24.0;
+
+    if !cursor.x.is_finite() || !cursor.y.is_finite() {
+        return None;
+    }
+    let monitor_right = f64::from(monitor.x) + f64::from(monitor.width);
+    let monitor_bottom = f64::from(monitor.y) + f64::from(monitor.height);
+    if cursor.x < f64::from(monitor.x)
+        || cursor.x >= monitor_right
+        || cursor.y < f64::from(monitor.y)
+        || cursor.y >= monitor_bottom
+    {
+        return None;
+    }
+
+    let half_width = f64::from(window_size.width) / 2.0;
+    let half_height = f64::from(window_size.height) / 2.0;
+    let current_center_x = f64::from(current.x) + half_width;
+    let current_center_y = f64::from(current.y) + half_height;
+    let delta_x = cursor.x - current_center_x;
+    let delta_y = cursor.y - current_center_y;
+    let distance = delta_x.hypot(delta_y);
+    let safe_center_distance = half_width.hypot(half_height) + CURSOR_CLEARANCE;
+    if !distance.is_finite() || distance <= safe_center_distance + ARRIVAL_TOLERANCE {
+        return None;
+    }
+
+    let remaining_distance = distance - safe_center_distance;
+    let movement_ratio = (remaining_distance / distance).clamp(0.0, 1.0);
+    let movement_x =
+        (delta_x * movement_ratio).clamp(-f64::from(HORIZONTAL_STEP), f64::from(HORIZONTAL_STEP));
+    let movement_y =
+        (delta_y * movement_ratio).clamp(-f64::from(VERTICAL_STEP), f64::from(VERTICAL_STEP));
+    let (minimum_x, minimum_y, maximum_x, maximum_y) = safe_position_bounds(window_size, monitor);
+    let movement_x = rounded_bounded_step(movement_x, HORIZONTAL_STEP);
+    let movement_y = rounded_bounded_step(movement_y, VERTICAL_STEP);
+    let target_x = i64::from(current.x)
+        .saturating_add(i64::from(movement_x))
+        .clamp(minimum_x, maximum_x);
+    let target_y = i64::from(current.y)
+        .saturating_add(i64::from(movement_y))
+        .clamp(minimum_y, maximum_y);
+    let target =
+        tauri::PhysicalPosition::new(i32::try_from(target_x).ok()?, i32::try_from(target_y).ok()?);
+    if target == current {
+        return None;
+    }
+
+    let target_center_x = f64::from(target.x) + half_width;
+    let target_center_y = f64::from(target.y) + half_height;
+    ((cursor.x - target_center_x).hypot(cursor.y - target_center_y) >= safe_center_distance)
+        .then_some(target)
+}
+
 fn bounded_axis_step(current: i64, minimum: i64, maximum: i64, step: i64, direction: i64) -> i64 {
     let preferred = current
         .saturating_add(step.saturating_mul(direction))
@@ -11947,7 +12017,14 @@ fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
         .sequence;
     let work_area = monitor_work_area(&monitor);
     let surface = classify_pet_surface(current, window_size, work_area);
-    let target = plan_surface_wander_target(current, window_size, work_area, surface, sequence);
+    let target = if surface == PetSurface::Free {
+        app.cursor_position()
+            .ok()
+            .and_then(|cursor| plan_cursor_approach_target(current, window_size, work_area, cursor))
+            .unwrap_or_else(|| plan_wander_target(current, window_size, work_area, sequence))
+    } else {
+        plan_surface_wander_target(current, window_size, work_area, surface, sequence)
+    };
     for frame in 1..=PET_WANDER_FRAMES {
         let state = app.state::<DesktopState>();
         if state.dragging.load(Ordering::Acquire)
@@ -12026,18 +12103,19 @@ mod tests {
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
         install_generated_theme, install_gltf_character, open_diagnostic_journal,
         parse_asset_protocol_path, parse_user_program_plan, pause_auto_mode_job_inner,
-        permission_grant, persist_asset_selection, pet_autonomy_policy, plan_edge_snap_position,
-        plan_surface_wander_target, plan_wander_target, prepare_agent_tool_inner,
-        quiesce_auto_mode_jobs, recover_visible_position, reject_agent_tool_inner,
-        reject_automation_run_inner, resolve_active_character, resolve_active_theme,
-        resolve_active_voice, resolve_asset_selection, resolve_auto_mode_attempt_inner,
-        resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
-        run_live_automation_event, run_local_agent_inner, run_skill_agent_task,
-        run_user_program_agent_task, screen_coordinate, sensor_health_snapshot,
-        serve_asset_protocol, settle_action_for_surface, skill_capability_names, skill_event_types,
-        stage_creator_package, stop_skill_event_sessions, test_automation, user_program_input,
-        valid_asset_identifier, validate_model_source, validate_package_source,
-        validate_requested_animation_map, verify_capability_gap,
+        permission_grant, persist_asset_selection, pet_autonomy_policy,
+        plan_cursor_approach_target, plan_edge_snap_position, plan_surface_wander_target,
+        plan_wander_target, prepare_agent_tool_inner, quiesce_auto_mode_jobs,
+        recover_visible_position, reject_agent_tool_inner, reject_automation_run_inner,
+        resolve_active_character, resolve_active_theme, resolve_active_voice,
+        resolve_asset_selection, resolve_auto_mode_attempt_inner, resolve_character_renderer,
+        resume_auto_mode_turn_inner, run_live_automation, run_live_automation_event,
+        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
+        screen_coordinate, sensor_health_snapshot, serve_asset_protocol, settle_action_for_surface,
+        skill_capability_names, skill_event_types, stage_creator_package,
+        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
+        validate_model_source, validate_package_source, validate_requested_animation_map,
+        verify_capability_gap,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -14504,6 +14582,121 @@ mod tests {
             3,
         );
         assert_eq!(left, tauri::PhysicalPosition::new(16, 24));
+    }
+
+    #[test]
+    fn cursor_approach_moves_toward_cursor_without_reaching_it() {
+        let current = tauri::PhysicalPosition::new(200, 300);
+        let window = tauri::PhysicalSize::new(260, 300);
+        let target = plan_cursor_approach_target(
+            current,
+            window,
+            PhysicalArea {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            tauri::PhysicalPosition::new(1_200.0, 450.0),
+        )
+        .expect("cursor approach target");
+
+        assert!(target.x > current.x);
+        assert!(target.x - current.x <= 140);
+        assert!((target.y - current.y).abs() <= 96);
+        let target_center_x = f64::from(target.x) + f64::from(window.width) / 2.0;
+        let target_center_y = f64::from(target.y) + f64::from(window.height) / 2.0;
+        let half_diagonal = (f64::from(window.width) / 2.0).hypot(f64::from(window.height) / 2.0);
+        assert!((1_200.0 - target_center_x).hypot(450.0 - target_center_y) >= half_diagonal + 96.0);
+    }
+
+    #[test]
+    fn cursor_approach_supports_negative_coordinate_displays() {
+        let current = tauri::PhysicalPosition::new(-500, 300);
+        let target = plan_cursor_approach_target(
+            current,
+            tauri::PhysicalSize::new(260, 300),
+            PhysicalArea {
+                x: -1920,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            tauri::PhysicalPosition::new(-1_500.0, 450.0),
+        )
+        .expect("negative-coordinate cursor approach target");
+
+        assert!(target.x < current.x);
+        assert!(target.x >= -1904);
+        assert!(target.y >= 24);
+    }
+
+    #[test]
+    fn cursor_approach_ignores_unsafe_or_irrelevant_samples() {
+        let current = tauri::PhysicalPosition::new(300, 300);
+        let window = tauri::PhysicalSize::new(260, 300);
+        let monitor = PhysicalArea {
+            x: 0,
+            y: 0,
+            width: 1200,
+            height: 900,
+        };
+
+        assert_eq!(
+            plan_cursor_approach_target(
+                current,
+                window,
+                monitor,
+                tauri::PhysicalPosition::new(450.0, 450.0),
+            ),
+            None
+        );
+        assert_eq!(
+            plan_cursor_approach_target(
+                current,
+                window,
+                monitor,
+                tauri::PhysicalPosition::new(1_500.0, 450.0),
+            ),
+            None
+        );
+        assert_eq!(
+            plan_cursor_approach_target(
+                current,
+                window,
+                monitor,
+                tauri::PhysicalPosition::new(f64::NAN, 450.0),
+            ),
+            None
+        );
+        assert_eq!(
+            plan_cursor_approach_target(
+                current,
+                window,
+                monitor,
+                tauri::PhysicalPosition::new(450.0, f64::INFINITY),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn cursor_approach_stays_inside_work_area_at_edges() {
+        let target = plan_cursor_approach_target(
+            tauri::PhysicalPosition::new(850, 500),
+            tauri::PhysicalSize::new(260, 300),
+            PhysicalArea {
+                x: 80,
+                y: 30,
+                width: 1120,
+                height: 820,
+            },
+            tauri::PhysicalPosition::new(1_190.0, 200.0),
+        )
+        .expect("bounded cursor approach target");
+
+        assert!(target.x >= 96 && target.x <= 924);
+        assert!(target.y >= 54 && target.y <= 502);
     }
 
     #[test]

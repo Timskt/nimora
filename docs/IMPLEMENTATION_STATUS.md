@@ -527,3 +527,13 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - 已完成：道具展示元数据由控制中心与 Overlay 共享，避免名称、图形和效果文案漂移；点击继续复用 Typed IPC 与 Runtime 原子事务。
 - 已完成：二级页保留实时数量、空态、首项焦点和两级 Esc 返回语义，不扩大 260×300 原生窗口、不打开网页弹窗。
 - 已验收：Chrome Preview 中右键进入、背包 `8` 总数、星星球 `×2→×1` 和 Esc 返回主菜单均通过；正式跨平台原生 DPI 门禁仍保留。
+
+## 2026-07-19 QQ 宠物式鼠标关注靠近
+
+- 已完成：自由表面的自主 Explore/Walking 每轮最多采样一次原生全局光标，安全时向主人方向有界靠近；这不是持续追踪，也不会抢占鼠标。
+- 已完成：纯规划器限制单次水平 140px、垂直 96px，保留窗口半对角线外加 96px 的光标安全距离，并约束到当前 Work Area。
+- 已完成：其它显示器、NaN/Infinity、已经靠近、无法形成安全目标或原生采样失败时确定性回退既有 Wander；负坐标显示器受自动化覆盖。
+- 架构边界：只有 Desktop Coordinator 读取光标并执行原生移窗；Renderer、Sensor、AI、Agent、Skill 与 User Program 均不获得光标坐标或窗口控制能力。
+- 隐私与离线：不记录、持久化、上传或向 Runtime Event 暴露光标轨迹；行为无需 Provider、网络或控制中心。
+- 保持不变：Perch/Climb/Peek 继续严格沿所在 Surface 漫游；拖拽、Safe/Recovery、Quiet/Focus/Presentation 与 Walking 状态抢占继续使用既有门禁。
+- 待真机验收：macOS/Windows 多显示器、负坐标、混合 DPI、快速移动光标、任务栏/Dock Work Area 与原生透明窗口合成；Browser Preview 不能作为全局光标或原生移窗证据。

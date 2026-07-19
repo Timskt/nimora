@@ -741,3 +741,12 @@ Actions 分钟：
 - 生态：普通用户菜单、用户代码、Automation、Agent、Creator Studio、Sprite、glTF 与 VRM 使用同一动作目录；旧资源无需迁移并回退 Idle。
 - 安全：动作离线、无成长收益、不读取桌面、不授予 Renderer 或扩展窗口能力，VRM 表情继续限制在白名单和有界权重内。
 - 验证边界：自动化证明状态、调度、目录和回退；真实签名桌面仍需检查不同模型骨架的舒展幅度与透明窗口合成质量。
+
+# 2026-07-19 QQ 宠物式鼠标关注靠近纵切回顾
+
+- 对齐：补充经典桌宠“偶尔靠近主人看看”的生命感，而不是把窗口实现为高频追逐鼠标的干扰工具。
+- 决策：只在 Free Surface 的自主 Walking 开始时采样一次；已靠近、跨 Work Area、异常坐标或采样失败均回退确定性 Wander。
+- 安全：目标同时受单次步长、Work Area 和光标安全半径约束，避免覆盖点击点；边缘 Perch/Climb/Peek 完全保留沿边运动语义。
+- 架构：Desktop Coordinator 仍是唯一光标采样和移窗执行者；坐标不进入领域快照、事件、日志、Provider 上下文、Skill 或用户代码能力面。
+- 稳定性：行为完全离线，继续服从拖拽、Runtime Mode、Walking 状态和 Profile 降扰门禁，不增加权限请求或后台高频轮询。
+- 证据边界：纯规划测试覆盖方向、距离、负坐标、异常样本和工作区边界；真实 macOS/Windows 多屏混合 DPI 仍是发布门禁，Browser Preview 不可替代。
