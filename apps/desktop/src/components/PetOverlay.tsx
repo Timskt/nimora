@@ -18,7 +18,7 @@ import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
 import { petInventoryQuantity, petItemPresentation } from "./petItems";
 import { focusMenuItem, nextMenuItemIndex } from "./petMenu";
 import { agentCompanionPresentation } from "./agentCompanion";
-import { canPresentPetBubble, PET_BUBBLE_DURATION_MS } from "./petBubble";
+import { canPresentPetBubble, usePetBubble } from "./petBubble";
 
 const GltfRenderer = lazy(async () => {
   const module = await import("./GltfRenderer");
@@ -30,8 +30,7 @@ export function PetOverlay() {
   const [renderer, setRenderer] = useState<CharacterRendererSnapshot | null>(null);
   const [rendererFailed, setRendererFailed] = useState(false);
   const [surface, setSurface] = useState<PetSurface | null>(null);
-  const [message, setMessage] = useState("正在醒来…");
-  const [bubbleVisible, setBubbleVisible] = useState(true);
+  const { message, visible: bubbleVisible, presentBubble } = usePetBubble("正在醒来…");
   const [pointerActive, setPointerActive] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPage, setMenuPage] = useState<"root" | "more" | "inventory" | "rename">("root");
@@ -46,18 +45,8 @@ export function PetOverlay() {
   const [stroking, setStroking] = useState(false);
   const [companionAction, setCompanionAction] = useState<PetAction | null>(null);
   const companionResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const bubbleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNoticeAt = useRef(Number.NEGATIVE_INFINITY);
   const facing = snapshot ? petFacing(snapshot.pet) : "neutral";
-
-  useEffect(() => {
-    if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
-    setBubbleVisible(true);
-    bubbleTimer.current = setTimeout(() => setBubbleVisible(false), PET_BUBBLE_DURATION_MS);
-    return () => {
-      if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
-    };
-  }, [message]);
 
   const refreshRenderer = useCallback(async () => {
     const descriptor = await desktopApi.activeCharacterRenderer();
@@ -74,50 +63,50 @@ export function PetOverlay() {
       setNameDraft(value.pet.name);
       setRenderer(descriptor);
       setRendererFailed(false);
-      setMessage(desktopApi.native ? petStatusMessage(value.pet) : "浏览器预览");
+      presentBubble(desktopApi.native ? petStatusMessage(value.pet) : "浏览器预览", "status");
     }).catch(() => {
       if (disposed) return;
-      setMessage("角色资源不可用，已使用内置角色");
+      presentBubble("角色资源不可用，已使用内置角色", "error");
     });
     if (desktopApi.native) {
       void desktopApi.onCharacterRendererChanged(() => {
         void refreshRenderer().catch(() => {
           if (!disposed) {
             setRendererFailed(true);
-            setMessage("角色资源不可用，已使用内置角色");
+            presentBubble("角色资源不可用，已使用内置角色", "error");
           }
         });
       }).then((disposeListener) => {
         if (disposed) disposeListener();
         else listeners.push(disposeListener);
       }).catch(() => {
-        if (!disposed) setMessage("角色更新监听不可用");
+        if (!disposed) presentBubble("角色更新监听不可用", "error");
       });
       void desktopApi.onPetAutonomyChanged(() => {
         void desktopApi.snapshot().then((value) => {
           if (!disposed) {
             setSnapshot(value);
-            setMessage(petStatusMessage(value.pet));
+            presentBubble(petStatusMessage(value.pet), "status");
           }
         });
       }).then((disposeListener) => {
         if (disposed) disposeListener();
         else listeners.push(disposeListener);
       }).catch(() => {
-        if (!disposed) setMessage("自主行为更新监听不可用");
+        if (!disposed) presentBubble("自主行为更新监听不可用", "error");
       });
       void desktopApi.onPetVitalsChanged(() => {
         void desktopApi.snapshot().then((value) => {
           if (!disposed) {
             setSnapshot(value);
-            setMessage(petStatusMessage(value.pet));
+            presentBubble(petStatusMessage(value.pet), "status");
           }
         });
       }).then((disposeListener) => {
         if (disposed) disposeListener();
         else listeners.push(disposeListener);
       }).catch(() => {
-        if (!disposed) setMessage("生命状态更新监听不可用");
+        if (!disposed) presentBubble("生命状态更新监听不可用", "error");
       });
       void desktopApi.onPetSurfaceChanged(() => {
         void desktopApi.petSurface().then((value) => {
@@ -136,13 +125,13 @@ export function PetOverlay() {
       const presentation = agentCompanionPresentation(signal.status);
       if (companionResetTimer.current) clearTimeout(companionResetTimer.current);
       setCompanionAction(presentation.action);
-      setMessage(presentation.message);
+      presentBubble(presentation.message);
       if (!presentation.persistent) {
         companionResetTimer.current = setTimeout(() => {
           if (disposed) return;
           setCompanionAction(null);
           void desktopApi.snapshot().then((value) => {
-            if (!disposed) setMessage(petStatusMessage(value.pet));
+            if (!disposed) presentBubble(petStatusMessage(value.pet), "status");
           });
         }, 4200);
       }
@@ -155,7 +144,7 @@ export function PetOverlay() {
       listeners.forEach((unlisten) => unlisten());
       if (companionResetTimer.current) clearTimeout(companionResetTimer.current);
     };
-  }, [refreshRenderer]);
+  }, [presentBubble, refreshRenderer]);
 
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
@@ -184,30 +173,30 @@ export function PetOverlay() {
 
   const handleRendererFailure = useCallback(() => {
     setRendererFailed(true);
-    setMessage("角色渲染失败，已使用内置角色");
-  }, []);
+    presentBubble("角色渲染失败，已使用内置角色", "error");
+  }, [presentBubble]);
 
   async function play(action: PetAction) {
-    setMessage(action === "celebrate" ? "今天也很棒！" : action === "sleep" ? "晚安，我会慢慢恢复体力" : "收到");
+    presentBubble(action === "celebrate" ? "今天也很棒！" : action === "sleep" ? "晚安，我会慢慢恢复体力" : "收到");
     await desktopApi.playAction(action);
     const next = await desktopApi.snapshot();
     setSnapshot(next);
   }
 
   async function interact(x: number, y: number) {
-    setMessage("今天也很棒！");
+    presentBubble("今天也很棒！");
     await desktopApi.clickPet(x, y, "left");
     setSnapshot(await desktopApi.snapshot());
   }
 
   async function doubleInteract(x: number, y: number) {
-    setMessage("太开心了，再来一次吧！");
+    presentBubble("太开心了，再来一次吧！");
     await desktopApi.doubleClickPet(x, y, "left");
     setSnapshot(await desktopApi.snapshot());
   }
 
   async function stroke(distancePx: number, durationMs: number, reversals: number) {
-    setMessage("好舒服，再摸摸我吧");
+    presentBubble("好舒服，再摸摸我吧");
     await desktopApi.strokePet(
       Math.min(240, distancePx),
       Math.min(2_000, durationMs),
@@ -228,7 +217,7 @@ export function PetOverlay() {
       nowMs: now,
     })) return;
     lastNoticeAt.current = now;
-    setMessage("我看到你啦");
+    presentBubble("我看到你啦");
     void desktopApi.noticePet(event.screenX, event.screenY)
       .then(async () => setSnapshot(await desktopApi.snapshot()))
       .catch(() => undefined);
@@ -243,9 +232,9 @@ export function PetOverlay() {
     try {
       await desktopApi.carePet(action);
       setSnapshot(await desktopApi.snapshot());
-      setMessage(labels[action]);
+      presentBubble(labels[action]);
     } catch {
-      setMessage("让我缓一会儿再照料吧");
+      presentBubble("让我缓一会儿再照料吧", "error");
     }
   }
 
@@ -254,16 +243,16 @@ export function PetOverlay() {
       await desktopApi.usePetItem(itemId);
       const next = await desktopApi.snapshot();
       setSnapshot(next);
-      setMessage(`已使用${petItemPresentation(itemId).label}`);
+      presentBubble(`已使用${petItemPresentation(itemId).label}`);
     } catch {
-      setMessage("道具不可用或正在冷却");
+      presentBubble("道具不可用或正在冷却", "error");
     }
   }
 
   async function renamePet() {
     const name = nameDraft.trim();
     if (!name || [...name].length > 64) {
-      setMessage("名字需要 1–64 个字符");
+      presentBubble("名字需要 1–64 个字符", "error");
       return;
     }
     try {
@@ -272,26 +261,26 @@ export function PetOverlay() {
       setSnapshot(next);
       setNameDraft(next.pet.name);
       setMenuPage("root");
-      setMessage(`以后就叫我${next.pet.name}吧`);
+      presentBubble(`以后就叫我${next.pet.name}吧`);
     } catch {
-      setMessage("现在不能改名，原来的名字还在");
+      presentBubble("现在不能改名，原来的名字还在", "error");
     }
   }
 
   async function drag() {
-    setMessage("抓稳啦…");
+    presentBubble("抓稳啦…");
     await desktopApi.dragPet();
     setSnapshot(await desktopApi.snapshot());
-    setMessage("安全落地");
+    presentBubble("安全落地");
   }
 
   async function setHome() {
     try {
       await desktopApi.setPetHome();
       setSnapshot(await desktopApi.snapshot());
-      setMessage("记住啦，这里就是家");
+      presentBubble("记住啦，这里就是家");
     } catch {
-      setMessage("现在不能设置家位置");
+      presentBubble("现在不能设置家位置", "error");
     }
   }
 
@@ -299,9 +288,9 @@ export function PetOverlay() {
     try {
       await desktopApi.returnPetHome();
       setSnapshot(await desktopApi.snapshot());
-      setMessage("回到家啦");
+      presentBubble("回到家啦");
     } catch {
-      setMessage("回家路线暂时不可用");
+      presentBubble("回家路线暂时不可用", "error");
     }
   }
 
@@ -312,7 +301,7 @@ export function PetOverlay() {
       ...snapshot,
       windowPolicy: { ...snapshot.windowPolicy, clickThrough: enabled },
     });
-    setMessage(enabled ? "已开启鼠标穿透，可从托盘恢复" : "可以互动啦");
+    presentBubble(enabled ? "已开启鼠标穿透，可从托盘恢复" : "可以互动啦");
   }
 
 
@@ -324,7 +313,7 @@ export function PetOverlay() {
   function openPetMenu() {
     setMenuPage("root");
     setMenuOpen(true);
-    setMessage("想做什么呢？");
+    presentBubble("想做什么呢？");
   }
 
   function handleMenuKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
@@ -388,7 +377,7 @@ export function PetOverlay() {
         trail.reversals,
       ).catch(() => {
         setStroking(false);
-        setMessage("现在不方便抚摸，请稍后再试");
+        presentBubble("现在不方便抚摸，请稍后再试", "error");
       });
     } else if (!dragging.current) {
       setStroking(false);
