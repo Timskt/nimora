@@ -1,5 +1,12 @@
 # Nimora 里程碑回顾
 
+## 2026-07-19 — 关停激活准入竞态复盘
+
+- 不足修正：仅靠 shutdown 原子标记无法把“检查运行中”与原生 show/unminimize/focus 组成原子准入，第二实例或 Dock 事件可能在检查后、退出中反向弹窗。
+- 架构修正：新增独立 Desktop Lifecycle Gate，避免借用 Pet Window Recovery 承担应用级职责；运行期激活与关停建立可证明的互斥 happens-before 边界。
+- 权限边界：仅 Desktop Host 持有 gate 与窗口执行权，其他模块继续提交意图；关停拒绝不解释外部输入，也不启动 AI、Agent 或 Automation。
+- 证据边界：并发单元测试覆盖在途等待与永久拒绝；真实跨进程第二实例、Dock 焦点和退出视觉仍需签名双平台门禁。
+
 ## 2026-07-19 — 明确退出生命周期竞态复盘
 
 - 风险修正：此前托盘先请求退出、全局事件才设置恢复关停标记，Pet Window 的 `Destroyed` 可能在两者之间排入恢复 worker，违背明确退出意图。

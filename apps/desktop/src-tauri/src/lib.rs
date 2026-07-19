@@ -4,6 +4,7 @@ pub mod auto_mode_jobs;
 mod auto_mode_runner;
 mod backup_service;
 mod creator_workspace;
+mod desktop_lifecycle;
 mod diagnostic_report;
 mod fail_closed_convergence;
 mod pet_window_recovery;
@@ -27,6 +28,7 @@ use creator_workspace::{
     CreatorWorkspaceError, capability_proposal_governance, review_capability_proposal,
     save_capability_gap, save_creator_draft, submit_capability_proposal,
 };
+use desktop_lifecycle::DesktopLifecycleGate;
 use diagnostic_report::{
     DiagnosticReportFacts, DiagnosticSafetyMode, DiagnosticStartupMode, build_diagnostic_report,
 };
@@ -589,6 +591,23 @@ fn plan_surface_wander_target(
 }
 
 #[derive(Debug)]
+struct DesktopLifecycleCoordinator {
+    activation: DesktopLifecycleGate,
+    pet_window_recovery: PetWindowRecoveryHost,
+    autonomy_stop: AtomicBool,
+}
+
+impl Default for DesktopLifecycleCoordinator {
+    fn default() -> Self {
+        Self {
+            activation: DesktopLifecycleGate::default(),
+            pet_window_recovery: PetWindowRecoveryHost::default(),
+            autonomy_stop: AtomicBool::new(false),
+        }
+    }
+}
+
+#[derive(Debug)]
 struct DesktopState {
     native_app: Option<AppHandle>,
     database_path: Option<PathBuf>,
@@ -605,8 +624,7 @@ struct DesktopState {
     policy_before_safe_mode: Mutex<Option<WindowPolicy>>,
     position_revision: AtomicU64,
     dragging: AtomicBool,
-    pet_window_recovery: PetWindowRecoveryHost,
-    autonomy_stop: AtomicBool,
+    lifecycle: DesktopLifecycleCoordinator,
     asset_store: PathBuf,
     active_asset_selection_write: Mutex<()>,
     program_store: PathBuf,
@@ -1073,8 +1091,7 @@ impl DesktopState {
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
-            pet_window_recovery: PetWindowRecoveryHost::default(),
-            autonomy_stop: AtomicBool::new(false),
+            lifecycle: DesktopLifecycleCoordinator::default(),
             asset_store,
             active_asset_selection_write: Mutex::new(()),
             program_store,
@@ -1168,8 +1185,7 @@ impl DesktopState {
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
-            pet_window_recovery: PetWindowRecoveryHost::default(),
-            autonomy_stop: AtomicBool::new(false),
+            lifecycle: DesktopLifecycleCoordinator::default(),
             asset_store,
             active_asset_selection_write: Mutex::new(()),
             program_store,
@@ -1758,6 +1774,8 @@ enum DesktopError {
     SafeModeConvergence { failed_steps: String },
     #[error("operation is unavailable while database recovery mode is active")]
     RecoveryModeActive,
+    #[error("operation is unavailable while the desktop runtime is shutting down")]
+    ShutdownInProgress,
     #[error("desktop window is unavailable: {0}")]
     WindowUnavailable(String),
     #[error("Agent runtime failed: {0}")]
@@ -7049,7 +7067,7 @@ fn start_system_context_sensors(app: AppHandle) {
         };
         while let Some(state) = app.try_state::<DesktopState>() {
             publish_sensor_health(&state, &[&fullscreen, &do_not_disturb]);
-            if state.autonomy_stop.load(Ordering::Acquire) {
+            if state.lifecycle.autonomy_stop.load(Ordering::Acquire) {
                 fullscreen.stop();
                 do_not_disturb.stop();
                 publish_sensor_health(&state, &[&fullscreen, &do_not_disturb]);
@@ -7109,7 +7127,7 @@ fn start_system_context_sensors(app: AppHandle) {
         };
         while let Some(state) = app.try_state::<DesktopState>() {
             publish_sensor_health(&state, &[&fullscreen, &do_not_disturb, &game]);
-            if state.autonomy_stop.load(Ordering::Acquire) {
+            if state.lifecycle.autonomy_stop.load(Ordering::Acquire) {
                 fullscreen.stop();
                 do_not_disturb.stop();
                 game.stop();
@@ -11384,9 +11402,14 @@ fn restore_control_center_window(app: &AppHandle) -> Result<(), DesktopError> {
 }
 
 fn show_control_center(app: &AppHandle, source: &'static str) -> Result<Command, DesktopError> {
-    restore_control_center_window(app)?;
+    let state = app.state::<DesktopState>();
+    state
+        .lifecycle
+        .activation
+        .run_if_active(|| restore_control_center_window(app))
+        .ok_or(DesktopError::ShutdownInProgress)??;
     publish_desktop_action(
-        &app.state::<DesktopState>(),
+        &state,
         "desktop.window.control-center.open",
         "desktop.window.control-center-opened",
         serde_json::json!({ "source": source }),
@@ -11575,8 +11598,9 @@ fn persist_pet_window_position(
 }
 
 fn begin_desktop_shutdown(state: &DesktopState) {
-    state.pet_window_recovery.begin_shutdown();
-    state.autonomy_stop.store(true, Ordering::Release);
+    state.lifecycle.activation.begin_shutdown();
+    state.lifecycle.pet_window_recovery.begin_shutdown();
+    state.lifecycle.autonomy_stop.store(true, Ordering::Release);
 }
 
 fn schedule_position_persistence(app: AppHandle) {
@@ -11648,17 +11672,18 @@ fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
 
 fn schedule_pet_window_recovery(app: AppHandle) {
     let state = app.state::<DesktopState>();
-    if !state.pet_window_recovery.try_start() {
+    if !state.lifecycle.pet_window_recovery.try_start() {
         return;
     }
     std::thread::spawn(move || {
         loop {
             let state = app.state::<DesktopState>();
-            if state.pet_window_recovery.is_shutting_down() {
-                state.pet_window_recovery.finish();
+            if state.lifecycle.pet_window_recovery.is_shutting_down() {
+                state.lifecycle.pet_window_recovery.finish();
                 return;
             }
             let decision = state
+                .lifecycle
                 .pet_window_recovery
                 .next_attempt(current_time_ms().unwrap_or(u64::MAX));
             let RecoveryDecision::RetryAfter(delay) = decision else {
@@ -11668,14 +11693,14 @@ fn schedule_pet_window_recovery(app: AppHandle) {
                     DiagnosticComponent::Application,
                     DiagnosticEventCode::PetWindowRecoveryExhausted,
                 );
-                state.pet_window_recovery.finish();
+                state.lifecycle.pet_window_recovery.finish();
                 let _ = show_control_center(&app, "pet-window-recovery");
                 return;
             };
             std::thread::sleep(delay);
             let state = app.state::<DesktopState>();
-            if state.pet_window_recovery.is_shutting_down() {
-                state.pet_window_recovery.finish();
+            if state.lifecycle.pet_window_recovery.is_shutting_down() {
+                state.lifecycle.pet_window_recovery.finish();
                 return;
             }
             if app.get_webview_window(PET_WINDOW_LABEL).is_some() || create_pet_window(&app).is_ok()
@@ -11686,7 +11711,7 @@ fn schedule_pet_window_recovery(app: AppHandle) {
                     DiagnosticComponent::Application,
                     DiagnosticEventCode::PetWindowRecovered,
                 );
-                state.pet_window_recovery.finish();
+                state.lifecycle.pet_window_recovery.finish();
                 return;
             }
         }
@@ -12063,7 +12088,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
 fn start_pet_autonomy(app: AppHandle) {
     std::thread::spawn(move || {
         while let Some(state) = app.try_state::<DesktopState>() {
-            if state.autonomy_stop.load(Ordering::Acquire) {
+            if state.lifecycle.autonomy_stop.load(Ordering::Acquire) {
                 break;
             }
             let normal = state

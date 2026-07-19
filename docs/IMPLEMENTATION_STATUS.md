@@ -1,5 +1,11 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 关停期间控制中心激活准入
+
+- 新增 Tauri-free `DesktopLifecycleGate`，所有运行期控制中心显示入口在互斥准入区执行；关停等待已准入操作完成并永久拒绝后续 Dock、第二实例、托盘、桌宠与恢复降级激活。
+- gate 是 Desktop Host 独占的单向生命周期原语，先于 Pet Window Recovery 和自主循环停止标记关闭；Renderer、Sensor、AI 与扩展不获得访问权。
+- 并发单元测试证明 shutdown 会等待在途操作且返回后拒绝新操作。真实窗口焦点、退出动画和高频跨进程竞争仍需 macOS/Windows 签名包验证。
+
 ## 2026-07-19 — 明确退出与桌宠恢复竞态收敛
 
 - 托盘退出在请求 Tauri 终止前立即发布 shutdown intent，同时停止自主循环并禁止 Pet Window Recovery 接纳新 worker，消除窗口销毁事件反向重建桌宠的竞态。

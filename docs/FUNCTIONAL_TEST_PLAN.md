@@ -37,6 +37,13 @@
 - macOS 与 Windows 签名包分别观察退出时窗口销毁顺序和进程树；Browser Preview 不能作为原生销毁、恢复线程或进程退出证据。
 - macOS 分别通过 `⌘Q`、应用菜单退出和用户会话注销触发 `ExitRequested`，Windows 通过系统会话结束与原生退出请求触发；每条路径都执行 `ShutdownFlush`。注入窗口缺失或存储失败时记录 `desktop.application.shutdown-flush-failed`，不得取消系统退出或无限重试。
 
+## DESKTOP-LIFECYCLE-003 关停期间激活准入
+
+- 在控制中心原生显示操作已准入但尚未返回时触发退出；`begin_shutdown` 必须等待该有限操作结束，随后关闭 gate，不能死锁或中断到半显示状态。
+- shutdown intent 返回后并发触发 Dock Reopen、第二实例、托盘双击、桌宠入口和恢复耗尽降级入口；所有请求均返回 `ShutdownInProgress`，不得调用 show/unminimize/focus 或创建窗口。
+- 重复退出与高频激活竞争 100 次，确认 gate 单向且幂等，退出后没有控制中心闪现、焦点窃取、第二套 Runtime 或未终止线程。
+- 入口失败继续使用各自既有最小诊断事件，不记录第二实例参数、工作目录、窗口标题或用户内容；Browser Preview 不作为原生并发和焦点证据。
+
 ## 桌面边缘 Surface Semantic
 
 1. 在带左侧 80px 与顶部 30px 系统保留区的 Work Area 上，分别验证 Free、Left、Right、Top、Bottom 和四个 Corner；分类边界必须叠加 16/24/48px 生命体安全边距，而不是使用整屏边界。
