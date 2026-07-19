@@ -96,7 +96,7 @@ describe("ProfileDraftPreview", () => {
   it("renders bounded policy values and the non-activation boundary", () => {
     const markup = renderToStaticMarkup(<ProfileDraftPreview profile={{
       name: "深度专注",
-      policy: { mode: "focus", alwaysOnTop: true, clickThrough: false, edgeSnap: true, soundEnabled: false, proactiveFrequency: 5, cursorApproachEnabled: false, careNeedsMode: "full" },
+      policy: { mode: "focus", alwaysOnTop: true, clickThrough: false, edgeSnap: true, soundEnabled: false, proactiveFrequency: 5, cursorApproachEnabled: false, statusBubblesEnabled: true, careNeedsMode: "full" },
     }} />);
 
     expect(markup).toContain("深度专注");

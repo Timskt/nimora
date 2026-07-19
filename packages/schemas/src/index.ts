@@ -152,6 +152,7 @@ export const profilePolicySchema = z.object({
   soundEnabled: z.boolean().nullable(),
   proactiveFrequency: z.number().int().min(0).max(100).nullable(),
   cursorApproachEnabled: z.boolean().default(true),
+  statusBubblesEnabled: z.boolean().default(true),
   careNeedsMode: careNeedsModeSchema.default("full"),
   quietHours: quietHoursSchema.nullable().optional(),
 });

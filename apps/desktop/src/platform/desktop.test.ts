@@ -378,6 +378,7 @@ describe("desktop platform adapter", () => {
       soundEnabled: true,
       proactiveFrequency: 10,
       cursorApproachEnabled: false,
+      statusBubblesEnabled: false,
       careNeedsMode: "full" as const,
     };
     await api.createProfile("Focus", policy);

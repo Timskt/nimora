@@ -7,6 +7,7 @@ import {
   nextPetBubblePresentation,
   normalizePetBubbleText,
   shouldAcceptPetBubble,
+  shouldHidePetBubbleForPolicy,
 } from "./petBubble";
 
 describe("pet bubble presentation", () => {
@@ -41,12 +42,19 @@ describe("pet bubble presentation", () => {
   });
 
   it("creates a new revision when identical feedback repeats", () => {
-    const current = { message: "谢谢你", revision: 4, visible: false };
-    expect(nextPetBubblePresentation(current, "谢谢你")).toEqual({
+    const current = { message: "谢谢你", channel: "feedback" as const, revision: 4, visible: false };
+    expect(nextPetBubblePresentation(current, "谢谢你", "feedback")).toEqual({
       message: "谢谢你",
+      channel: "feedback",
       revision: 5,
       visible: true,
     });
+  });
+
+  it("hides only spontaneous status when the profile disables it", () => {
+    expect(shouldHidePetBubbleForPolicy({ message: "散步中", channel: "status", revision: 1, visible: true }, false)).toBe(true);
+    expect(shouldHidePetBubbleForPolicy({ message: "谢谢你", channel: "feedback", revision: 1, visible: true }, false)).toBe(false);
+    expect(shouldHidePetBubbleForPolicy({ message: "出错了", channel: "error", revision: 1, visible: true }, false)).toBe(false);
   });
 
   it("bounds long Unicode text without splitting code points", () => {

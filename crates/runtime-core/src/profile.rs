@@ -74,6 +74,8 @@ pub struct ProfilePolicy {
     #[serde(default)]
     pub cursor_approach_enabled: Option<bool>,
     #[serde(default)]
+    pub status_bubbles_enabled: Option<bool>,
+    #[serde(default)]
     pub care_needs_mode: Option<CareNeedsMode>,
     #[serde(default)]
     pub quiet_hours: Option<QuietHours>,
@@ -90,6 +92,7 @@ impl ProfilePolicy {
             sound_enabled: Some(true),
             proactive_frequency: Some(25),
             cursor_approach_enabled: Some(true),
+            status_bubbles_enabled: Some(true),
             care_needs_mode: Some(CareNeedsMode::Full),
             quiet_hours: None,
         }
@@ -110,6 +113,9 @@ impl ProfilePolicy {
             cursor_approach_enabled: override_policy
                 .cursor_approach_enabled
                 .or(defaults.cursor_approach_enabled),
+            status_bubbles_enabled: override_policy
+                .status_bubbles_enabled
+                .or(defaults.status_bubbles_enabled),
             care_needs_mode: override_policy.care_needs_mode.or(defaults.care_needs_mode),
             quiet_hours: override_policy.quiet_hours.or(defaults.quiet_hours),
         }
@@ -192,6 +198,7 @@ mod tests {
             sound_enabled: Some(true),
             proactive_frequency: Some(25),
             cursor_approach_enabled: Some(true),
+            status_bubbles_enabled: Some(true),
             care_needs_mode: Some(CareNeedsMode::Full),
             quiet_hours: None,
         };
@@ -203,6 +210,7 @@ mod tests {
             sound_enabled: None,
             proactive_frequency: Some(200),
             cursor_approach_enabled: Some(false),
+            status_bubbles_enabled: Some(false),
             care_needs_mode: Some(CareNeedsMode::Simple),
             quiet_hours: Some(QuietHours {
                 enabled: true,
@@ -217,6 +225,7 @@ mod tests {
         assert_eq!(merged.edge_snap, Some(true));
         assert_eq!(merged.proactive_frequency, Some(100));
         assert_eq!(merged.cursor_approach_enabled, Some(false));
+        assert_eq!(merged.status_bubbles_enabled, Some(false));
         assert_eq!(merged.care_needs_mode, Some(CareNeedsMode::Simple));
         assert_eq!(merged.quiet_hours, overrides.quiet_hours);
     }

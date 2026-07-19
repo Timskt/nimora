@@ -194,6 +194,7 @@ const CONTROL_CENTER_NAVIGATE_EVENT: &str = "nimora://control-center-navigate";
 const PET_WINDOW_LABEL: &str = "pet";
 const CHARACTER_RENDERER_CHANGED_EVENT: &str = "nimora://character-renderer-changed";
 const PET_AUTONOMY_CHANGED_EVENT: &str = "nimora://pet-autonomy-changed";
+const PROFILE_CHANGED_EVENT: &str = "nimora://profile-changed";
 const PET_VITALS_CHANGED_EVENT: &str = "nimora://pet-vitals-changed";
 const PET_SURFACE_CHANGED_EVENT: &str = "nimora://pet-surface-changed";
 const PET_VITALS_INTERVAL_MS: u64 = 10 * 60 * 1_000;
@@ -1267,12 +1268,19 @@ fn restore_auto_mode_jobs(
 struct DesktopSnapshot {
     pet: Pet,
     pet_relationship: nimora_runtime_core::PetRelationshipSnapshot,
+    pet_presentation: PetPresentationPolicy,
     window_policy: WindowPolicy,
     presence_override: PresenceOverride,
     presence_decision: PresenceDecision,
     system_context_sensors: Vec<SensorHealth>,
     safety: SafetySnapshot,
     startup: StartupStatus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PetPresentationPolicy {
+    status_bubbles_enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3583,9 +3591,14 @@ fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, D
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?
         .clone();
+    let profile_snapshot = state.profiles.snapshot()?;
+    let profile_policy = active_profile_policy(&profile_snapshot)?;
     Ok(DesktopSnapshot {
         pet,
         pet_relationship,
+        pet_presentation: PetPresentationPolicy {
+            status_bubbles_enabled: profile_policy.status_bubbles_enabled.unwrap_or(true),
+        },
         window_policy,
         presence_override,
         presence_decision,
@@ -6789,6 +6802,7 @@ fn update_profile_inner(
     })?;
     set_current_window_policy(state, next_policy)?;
     set_presence_decision(state, decision)?;
+    let _ = app.emit_to(PET_WINDOW_LABEL, PROFILE_CHANGED_EVENT, ());
     Ok(command)
 }
 
@@ -6848,6 +6862,7 @@ fn delete_profile_inner(
     })?;
     set_current_window_policy(state, next_policy)?;
     set_presence_decision(state, decision)?;
+    let _ = app.emit_to(PET_WINDOW_LABEL, PROFILE_CHANGED_EVENT, ());
     Ok(command)
 }
 
@@ -6916,6 +6931,7 @@ fn switch_profile_inner(
     })?;
     set_current_window_policy(state, next_policy)?;
     set_presence_decision(state, decision)?;
+    let _ = app.emit_to(PET_WINDOW_LABEL, PROFILE_CHANGED_EVENT, ());
     Ok(command)
 }
 
@@ -16487,6 +16503,7 @@ mod tests {
             sound_enabled: None,
             proactive_frequency: None,
             cursor_approach_enabled: None,
+            status_bubbles_enabled: None,
             care_needs_mode: None,
             quiet_hours: None,
         };

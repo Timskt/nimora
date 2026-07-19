@@ -546,6 +546,13 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - 已完成：共享 Schema、Browser Preview、Typed IPC、AI Creator Profile 契约与隔离预览使用同一字段；Creator 创建后仍不自动切换活动 Profile。
 - 边界：这是行为偏好，不授予任何能力；AI、Creator、Renderer、Skill 与 User Program 仍不能读取光标或直接移动窗口。
 - 已验证：Rust 领域迁移/合并与宿主策略、Schema 默认值、Profile UI 标签、Creator 预览和 TypeScript 类型门禁覆盖该字段。
+
+## 2026-07-19 Profile 级自主状态气泡控制
+
+- 已完成：Profile Policy 新增向后兼容的 `statusBubblesEnabled`，旧数据和 AI Creator 缺失字段默认开启。
+- 已完成：Desktop Snapshot 投影活动 Profile 的表现策略；更新、删除活动 Profile 和切换成功后通知 Pet Overlay 重新读取权威快照。
+- 已完成：关闭时立即撤下当前 Status，并拒绝后续自主状态；互动、照料、道具、Agent、错误和安全反馈不受影响。
+- 已完成：Profile 表单、摘要、Browser Preview 切换、Schema、Rust Core 与前端纯函数测试贯通；该设置不授予扩展任何能力。
 ## 2026-07-19 QQ 宠物式低打扰状态气泡
 
 - 已完成：启动、生命状态、自主行为、互动、照料、道具与 Agent 陪伴反馈会在桌宠窗口内主动展示短气泡，并在约 4.2 秒后自动退场。

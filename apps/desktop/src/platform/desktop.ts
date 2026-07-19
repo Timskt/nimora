@@ -52,6 +52,9 @@ export type CommandRisk = "safe" | "low" | "medium" | "high" | "critical";
 export interface DesktopSnapshot {
   pet: Pet;
   petRelationship: PetRelationshipSnapshot;
+  petPresentation: {
+    statusBubblesEnabled: boolean;
+  };
   windowPolicy: {
     visible: boolean;
     alwaysOnTop: boolean;
@@ -998,6 +1001,7 @@ export interface DesktopApi {
   saveFile(options: { title: string; defaultPath: string; name: string; extensions: string[] }): Promise<string | null>;
   onCharacterRendererChanged(handler: () => void): Promise<() => void>;
   onPetAutonomyChanged(handler: () => void): Promise<() => void>;
+  onProfileChanged(handler: () => void): Promise<() => void>;
   onPetVitalsChanged(handler: () => void): Promise<() => void>;
   onPetSurfaceChanged(handler: () => void): Promise<() => void>;
   onControlCenterNavigate(handler: (destination: ControlCenterDestination) => void): Promise<() => void>;
@@ -1155,6 +1159,7 @@ const previewSnapshot: DesktopSnapshot = {
     ],
   },
   petRelationship: { bondPoints: 84, affinity: 84, level: 2, levelProgress: 34, pointsPerLevel: 50, stage: "familiar", nextStage: "trusted", nextStageAt: 100 },
+  petPresentation: { statusBubblesEnabled: true },
   windowPolicy: { visible: true, alwaysOnTop: true, clickThrough: false },
   presenceOverride: "automatic",
   presenceDecision: { spec: "nimora.system-context-decision/1", visible: true, suppressAutonomy: false, reason: "base_policy", decidedAtMs: Date.now() },
@@ -1209,10 +1214,17 @@ const previewProfiles: ProfileSnapshot = {
       soundEnabled: true,
       proactiveFrequency: 25,
       cursorApproachEnabled: true,
+      statusBubblesEnabled: true,
       careNeedsMode: "full",
     },
   }],
 };
+
+function refreshPreviewProfilePresentation(): void {
+  const active = previewProfiles.profiles.find((profile) => profile.id === previewProfiles.activeProfileId);
+  previewSnapshot.petPresentation.statusBubblesEnabled = active?.policy.statusBubblesEnabled ?? true;
+  window.dispatchEvent(new Event("nimora:preview-profile-changed"));
+}
 
 export function isNativeDesktop(scope?: Window): boolean {
   const browserWindow = scope ?? (typeof window === "undefined" ? undefined : window);
@@ -1259,6 +1271,10 @@ export function createDesktopApi(
       async saveFile() { return null; },
       async onCharacterRendererChanged() { return () => undefined; },
       async onPetAutonomyChanged() { return () => undefined; },
+      async onProfileChanged(handler) {
+        window.addEventListener("nimora:preview-profile-changed", handler);
+        return () => window.removeEventListener("nimora:preview-profile-changed", handler);
+      },
       async onPetVitalsChanged() { return () => undefined; },
       async onPetSurfaceChanged() { return () => undefined; },
       async onControlCenterNavigate() { return () => undefined; },
@@ -1524,6 +1540,7 @@ export function createDesktopApi(
         if (!profile) throw new Error("profile-not-found");
         profile.name = name.trim();
         profile.policy = structuredClone(policy);
+        if (previewProfiles.activeProfileId === profileId) refreshPreviewProfilePresentation();
         return null;
       },
       async deleteProfile(profileId) {
@@ -1535,10 +1552,16 @@ export function createDesktopApi(
           const replacement = previewProfiles.profiles[Math.min(index, previewProfiles.profiles.length - 1)];
           if (!replacement) throw new Error("profile-replacement-missing");
           previewProfiles.activeProfileId = replacement.id;
+          refreshPreviewProfilePresentation();
         }
         return null;
       },
-      async switchProfile() { return null; },
+      async switchProfile(profileId) {
+        if (!previewProfiles.profiles.some((profile) => profile.id === profileId)) throw new Error("profile-not-found");
+        previewProfiles.activeProfileId = profileId;
+        refreshPreviewProfilePresentation();
+        return null;
+      },
       async setPresenceOverride(presenceOverride) {
         previewSnapshot.presenceOverride = presenceOverride;
         previewSnapshot.presenceDecision = {
@@ -1722,6 +1745,9 @@ export function createDesktopApi(
     },
     async onPetAutonomyChanged(handler) {
       return await listen("nimora://pet-autonomy-changed", handler);
+    },
+    async onProfileChanged(handler) {
+      return await listen("nimora://profile-changed", handler);
     },
     async onPetVitalsChanged(handler) {
       return await listen("nimora://pet-vitals-changed", handler);

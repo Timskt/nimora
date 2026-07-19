@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { careNeedsModeLabel, cursorApproachLabel, minuteToTime, normalizedProfileName, proactiveFrequencyLabel, profileModeGuidance, quietHoursLabel, timeToMinute } from "./ProfileManager";
+import { careNeedsModeLabel, cursorApproachLabel, minuteToTime, normalizedProfileName, proactiveFrequencyLabel, profileModeGuidance, quietHoursLabel, statusBubblesLabel, timeToMinute } from "./ProfileManager";
 
 describe("normalizedProfileName", () => {
   it("trims valid names at the UI boundary", () => {
@@ -35,6 +35,14 @@ describe("cursorApproachLabel", () => {
   });
 });
 
+describe("statusBubblesLabel", () => {
+  it("keeps legacy profiles enabled while making quiet profiles explicit", () => {
+    expect(statusBubblesLabel(undefined)).toBe("自主气泡开启");
+    expect(statusBubblesLabel(true)).toBe("自主气泡开启");
+    expect(statusBubblesLabel(false)).toBe("自主气泡关闭");
+  });
+});
+
 describe("profileModeGuidance", () => {
   it("distinguishes focus quieting from presentation hiding", () => {
     expect(profileModeGuidance("focus")).toContain("手动互动仍然可用");
@@ -64,6 +72,7 @@ function initialPolicyForTest() {
     soundEnabled: true,
     proactiveFrequency: 25,
     cursorApproachEnabled: true,
+    statusBubblesEnabled: true,
     careNeedsMode: "full" as const,
   };
 }

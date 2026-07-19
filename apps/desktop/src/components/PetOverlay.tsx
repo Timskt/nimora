@@ -30,7 +30,8 @@ export function PetOverlay() {
   const [renderer, setRenderer] = useState<CharacterRendererSnapshot | null>(null);
   const [rendererFailed, setRendererFailed] = useState(false);
   const [surface, setSurface] = useState<PetSurface | null>(null);
-  const { message, visible: bubbleVisible, presentBubble } = usePetBubble("正在醒来…");
+  const [statusBubblesEnabled, setStatusBubblesEnabled] = useState(true);
+  const { message, visible: bubbleVisible, presentBubble } = usePetBubble("正在醒来…", statusBubblesEnabled);
   const [pointerActive, setPointerActive] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPage, setMenuPage] = useState<"root" | "more" | "inventory" | "rename">("root");
@@ -47,6 +48,10 @@ export function PetOverlay() {
   const companionResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNoticeAt = useRef(Number.NEGATIVE_INFINITY);
   const facing = snapshot ? petFacing(snapshot.pet) : "neutral";
+  const applySnapshot = useCallback((value: DesktopSnapshot) => {
+    setSnapshot(value);
+    setStatusBubblesEnabled(value.petPresentation.statusBubblesEnabled);
+  }, []);
 
   const refreshRenderer = useCallback(async () => {
     const descriptor = await desktopApi.activeCharacterRenderer();
@@ -59,7 +64,7 @@ export function PetOverlay() {
     const listeners: Array<() => void> = [];
     void Promise.all([desktopApi.snapshot(), desktopApi.activeCharacterRenderer()]).then(([value, descriptor]) => {
       if (disposed) return;
-      setSnapshot(value);
+      applySnapshot(value);
       setNameDraft(value.pet.name);
       setRenderer(descriptor);
       setRendererFailed(false);
@@ -85,7 +90,7 @@ export function PetOverlay() {
       void desktopApi.onPetAutonomyChanged(() => {
         void desktopApi.snapshot().then((value) => {
           if (!disposed) {
-            setSnapshot(value);
+            applySnapshot(value);
             presentBubble(petStatusMessage(value.pet), "status");
           }
         });
@@ -98,7 +103,7 @@ export function PetOverlay() {
       void desktopApi.onPetVitalsChanged(() => {
         void desktopApi.snapshot().then((value) => {
           if (!disposed) {
-            setSnapshot(value);
+            applySnapshot(value);
             presentBubble(petStatusMessage(value.pet), "status");
           }
         });
@@ -107,6 +112,16 @@ export function PetOverlay() {
         else listeners.push(disposeListener);
       }).catch(() => {
         if (!disposed) presentBubble("生命状态更新监听不可用", "error");
+      });
+      void desktopApi.onProfileChanged(() => {
+        void desktopApi.snapshot().then((value) => {
+          if (!disposed) applySnapshot(value);
+        });
+      }).then((disposeListener) => {
+        if (disposed) disposeListener();
+        else listeners.push(disposeListener);
+      }).catch(() => {
+        if (!disposed) presentBubble("Profile 更新监听不可用", "error");
       });
       void desktopApi.onPetSurfaceChanged(() => {
         void desktopApi.petSurface().then((value) => {
@@ -144,7 +159,7 @@ export function PetOverlay() {
       listeners.forEach((unlisten) => unlisten());
       if (companionResetTimer.current) clearTimeout(companionResetTimer.current);
     };
-  }, [presentBubble, refreshRenderer]);
+  }, [applySnapshot, presentBubble, refreshRenderer]);
 
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {

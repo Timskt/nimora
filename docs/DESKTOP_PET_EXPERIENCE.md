@@ -157,6 +157,10 @@ Pet Identity 必须贯穿领域快照、原生窗口标题、控制中心、Over
 - 动作遵循预备、主动作、缓冲、收尾节奏；禁止无意义持续抖动和高频弹跳。
 - 不同角色资产必须共享统一交互语义、反馈时序和安全边界，避免换模型后产品行为失真。
 
+### Profile 级自主气泡控制
+
+活动 Profile 可独立关闭 `statusBubblesEnabled`。关闭只抑制启动、漫游、观察与生命状态等 `Status` 通道，并立即撤下正在展示的自主状态气泡；用户点击、照料、道具、Agent 任务确认等 `Feedback` 以及错误和安全提示继续展示。旧 Profile 缺失字段时默认开启。Desktop Host 将活动 Profile 投影为只读 `petPresentation` Snapshot，Overlay 不直接读取 Profile Repository；Profile 更新、删除活动项或切换后使用轻量事件提示重新获取权威 Snapshot。该偏好不授予 Renderer、AI、Skill 或用户代码任何窗口、Profile 或气泡写能力。
+
 ## 8. 发布验收门槛
 
 桌宠能力不能仅凭浏览器预览判定完成。发布前必须在 Windows 与 macOS 真机验证：

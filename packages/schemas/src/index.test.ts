@@ -249,6 +249,7 @@ describe("profileSnapshotSchema", () => {
     });
 
     expect(parsed.profiles[0]?.policy.cursorApproachEnabled).toBe(true);
+    expect(parsed.profiles[0]?.policy.statusBubblesEnabled).toBe(true);
   });
 
   it("rejects policy values outside the domain range", () => {
