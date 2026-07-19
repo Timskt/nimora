@@ -1158,7 +1158,11 @@ const previewSnapshot: DesktopSnapshot = {
   windowPolicy: { visible: true, alwaysOnTop: true, clickThrough: false },
   presenceOverride: "automatic",
   presenceDecision: { spec: "nimora.system-context-decision/1", visible: true, suppressAutonomy: false, reason: "base_policy", decidedAtMs: Date.now() },
-  systemContextSensors: [{ spec: "nimora.system-context-sensor-health/1", descriptor: { kind: "fullscreen", source: "operating_system" }, availability: "available", consecutiveFailures: 0, lastSuccessAtMs: Date.now(), lastErrorCode: null, nextSampleAtMs: Date.now() + 5_000 }],
+  systemContextSensors: [
+    { spec: "nimora.system-context-sensor-health/1", descriptor: { kind: "fullscreen", source: "operating_system" }, availability: "available", consecutiveFailures: 0, lastSuccessAtMs: Date.now(), lastErrorCode: null, nextSampleAtMs: Date.now() + 5_000 },
+    { spec: "nimora.system-context-sensor-health/1", descriptor: { kind: "do_not_disturb", source: "operating_system" }, availability: "available", consecutiveFailures: 0, lastSuccessAtMs: Date.now(), lastErrorCode: null, nextSampleAtMs: Date.now() + 5_000 },
+    { spec: "nimora.system-context-sensor-health/1", descriptor: { kind: "game", source: "operating_system" }, availability: "available", consecutiveFailures: 0, lastSuccessAtMs: Date.now(), lastErrorCode: null, nextSampleAtMs: Date.now() + 5_000 },
+  ],
   safety: { mode: "normal", reason: null },
   startup: previewRecoveryMode
     ? { mode: "recovery", reason: "database-unavailable" }

@@ -1,5 +1,12 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 系统情境健康可视化
+
+- 控制中心不再把系统情境压缩成单条“全屏感知”文本；Fullscreen、Do Not Disturb、Game 与未来 Screen Share 按稳定顺序独立呈现可用、降级、不可用和停止状态。
+- 每项只显示本地化能力名、安全状态与有界失败次数，不展示原始平台错误、窗口信息或用户内容；空 Sensor 集合明确显示平台未报告能力，不伪装为正常。
+- 状态同时使用文字、色点和 `data-availability`，不依赖颜色传意；列表具有可访问名称和 polite live region，窄屏从三列确定性收敛为两列和单列。
+- Browser Preview 同步提供 Windows 三 Sensor 示例；前端 87 项测试、TypeScript、生产构建与 Bundle Budget 通过。Chrome 扩展能发现本地标签但接管再次超时，因此不把 DOM/构建测试冒充视觉截图证据，真实截图与签名 Tauri 视觉仍保留为门禁。
+
 ## 2026-07-19 — Windows 活动状态低打扰感知
 
 - Windows 原生 Adapter 新增 `SHQueryUserNotificationState` 安全边界：D3D 全屏映射为 Game，Presentation、Busy 与首次登录 Quiet Time 映射为 Do Not Disturb；不读取进程名、窗口标题、注册表、通知正文或屏幕像素。

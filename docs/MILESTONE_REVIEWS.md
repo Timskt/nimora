@@ -1,5 +1,13 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-19 系统情境健康面板
+
+- 结果：Windows 新增的 Fullscreen、Do Not Disturb 与 Game Sensor 获得完整用户可见闭环，不再被旧 UI 合并成一句全屏状态；未来 Screen Share 复用同一投影契约。
+- UI：独立状态卡使用稳定排序、明确状态文字、低干扰色点、有界失败说明与响应式三/二/一列布局；正常、降级、不可用和停止均不依赖颜色辨认。
+- 可访问性与隐私：健康列表具备名称和 polite live region；UI 不展示原始错误、进程、窗口、通知或会议信息，只说明本地布尔事实与安全重试状态。
+- 验证：纯投影测试覆盖空集合、降级详情和乱序三 Sensor；前端共 87 项、TypeScript、生产 Build 与 Bundle Budget 通过。浏览器扩展接管本地 Preview 超时，本轮不声称截图或签名原生视觉通过。
+- Actions：不新增 Workflow；完成本地门禁后集中推送，继续保护每月 2000 分钟预算。
+
 ## M-2026-07-19 Windows 游戏与免打扰感知
 
 - 结果：QQ 宠物式原生陪伴在 Windows 演示、Busy、Quiet Time 与 D3D 全屏期间可通过统一 Presence Policy 收敛，不再只理解几何全屏。
