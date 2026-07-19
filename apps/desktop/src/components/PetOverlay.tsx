@@ -18,6 +18,7 @@ import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
 import { petInventoryQuantity, petItemPresentation } from "./petItems";
 import { focusMenuItem, nextMenuItemIndex } from "./petMenu";
 import { agentCompanionPresentation } from "./agentCompanion";
+import { canPresentPetBubble, PET_BUBBLE_DURATION_MS } from "./petBubble";
 
 const GltfRenderer = lazy(async () => {
   const module = await import("./GltfRenderer");
@@ -30,6 +31,8 @@ export function PetOverlay() {
   const [rendererFailed, setRendererFailed] = useState(false);
   const [surface, setSurface] = useState<PetSurface | null>(null);
   const [message, setMessage] = useState("正在醒来…");
+  const [bubbleVisible, setBubbleVisible] = useState(true);
+  const [pointerActive, setPointerActive] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPage, setMenuPage] = useState<"root" | "more" | "inventory" | "rename">("root");
   const [nameDraft, setNameDraft] = useState("");
@@ -43,8 +46,18 @@ export function PetOverlay() {
   const [stroking, setStroking] = useState(false);
   const [companionAction, setCompanionAction] = useState<PetAction | null>(null);
   const companionResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bubbleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNoticeAt = useRef(Number.NEGATIVE_INFINITY);
   const facing = snapshot ? petFacing(snapshot.pet) : "neutral";
+
+  useEffect(() => {
+    if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
+    setBubbleVisible(true);
+    bubbleTimer.current = setTimeout(() => setBubbleVisible(false), PET_BUBBLE_DURATION_MS);
+    return () => {
+      if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
+    };
+  }, [message]);
 
   const refreshRenderer = useCallback(async () => {
     const descriptor = await desktopApi.activeCharacterRenderer();
@@ -324,6 +337,7 @@ export function PetOverlay() {
   }
 
   function handlePointerDown(event: React.PointerEvent<HTMLButtonElement>) {
+    setPointerActive(true);
     if (event.button !== 0) return;
     setMenuOpen(false);
     gestureTrail.current = createPetGestureTrail(
@@ -380,6 +394,7 @@ export function PetOverlay() {
       setStroking(false);
     }
     dragging.current = false;
+    setPointerActive(false);
   }
 
   function cancelPointerGesture() {
@@ -388,6 +403,7 @@ export function PetOverlay() {
     dragging.current = false;
     suppressClick.current = true;
     setStroking(false);
+    setPointerActive(false);
   }
 
   function handlePetClick(event: React.MouseEvent<HTMLButtonElement>) {
@@ -411,7 +427,7 @@ export function PetOverlay() {
   }
 
   return (
-    <main className={`pet-overlay${companionAction ? " companion-active" : ""}`} aria-label="Nimora 桌面宠物">
+    <main className={`pet-overlay${menuOpen || pointerActive ? " bubble-suppressed" : ""}${bubbleVisible && canPresentPetBubble({ menuOpen, pointerActive }) ? " bubble-visible" : ""}`} aria-label="Nimora 桌面宠物">
       <button
         ref={petButton}
         className={`overlay-drag-region${stroking ? " is-stroking" : ""}`}
@@ -432,7 +448,7 @@ export function PetOverlay() {
         aria-haspopup="menu"
         aria-expanded={menuOpen}
       >
-        <span className="overlay-status">{message}</span>
+        <span className="overlay-status" role="status" aria-live="polite" aria-atomic="true">{message}</span>
         <span className={`pet-character-stage facing-${facing} surface-${surface ?? "free"} state-${snapshot?.pet.state ?? "idle"}`}>
           {renderer && renderer.backend !== "built-in" && !rendererFailed ? (
             ["gltf", "vrm"].includes(renderer.backend) ? (

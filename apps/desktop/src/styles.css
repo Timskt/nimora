@@ -90,7 +90,7 @@ body.pet-window.pet-browser-preview { display: grid; min-height: 100vh; place-it
 .overlay-drag-region.is-stroking::after { content: "♥"; position: absolute; top: 54px; right: 47px; color: #a984c7; font-size: 15px; text-shadow: 0 3px 9px rgba(91,60,133,.25); animation: stroke-heart 700ms ease-out infinite; }
 @keyframes stroke-heart { from { opacity: 0; transform: translateY(6px) scale(.75); } 45% { opacity: 1; } to { opacity: 0; transform: translateY(-12px) scale(1.08); } }
 .overlay-status { position: absolute; top: 19px; padding: 7px 11px; border: 1px solid rgba(255,255,255,.72); border-radius: 99px; color: #625d75; background: rgba(252,250,255,.78); box-shadow: 0 8px 24px rgba(51,41,103,.12); backdrop-filter: blur(16px); font-size: 10px; font-weight: 700; opacity: 0; transform: translateY(5px); transition: 180ms ease-out; }
-.pet-overlay:hover .overlay-status, .pet-overlay.companion-active .overlay-status, .overlay-drag-region:focus-visible .overlay-status { opacity: 1; transform: translateY(0); }
+.pet-overlay:not(.bubble-suppressed):hover .overlay-status, .pet-overlay.bubble-visible .overlay-status, .pet-overlay:not(.bubble-suppressed) .overlay-drag-region:focus-visible .overlay-status { opacity: 1; transform: translateY(0); }
 .pet-character-stage { --facing-scale: 1; --surface-x: 0; --surface-y: 0; display: grid; place-items: center; transform: translate(var(--surface-x), var(--surface-y)) scaleX(var(--facing-scale)); transform-origin: 50% 72%; transition: transform 120ms ease-out; }
 .pet-character-stage.facing-left { --facing-scale: -1; }
 .pet-character-stage.surface-left, .pet-character-stage.surface-top_left, .pet-character-stage.surface-bottom_left { --surface-x: -4px; }
