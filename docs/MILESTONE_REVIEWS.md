@@ -1,5 +1,12 @@
 # Nimora 里程碑回顾
 
+## 2026-07-19 — Native-size Pet Visual Harness
+
+- 结果：Browser Preview 现在用 260×300 验收框呈现桌宠，不再因标签页尺寸让径向菜单和角色比例产生误导性截图。
+- 隔离：纯函数明确区分 Tauri 与 Browser Body Class；原生透明窗口不包含棋盘背景、边框或 Preview 阴影。
+- 证据：路由与环境分支测试覆盖三种输入，前端测试增至 76 项，生产构建和 Bundle Budget 通过；浏览器需在热更新后补菜单截图回归。
+- 边界：本 Harness 不模拟原生拖拽、透明合成、DPI、置顶和鼠标穿透，相关发布门禁保持不变。
+
 ## 2026-07-19 — Native Pet Window Recovery
 
 - 结果：Desktop Host 已对 `pet` 窗口销毁建立有限恢复，重建继续复用统一窗口构造器、持久位置和实时 Presence 策略，桌宠不再因单次 WebView 异常永久消失。

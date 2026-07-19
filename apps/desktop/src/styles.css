@@ -81,6 +81,9 @@ button:focus-visible { outline: 3px solid rgba(92, 115, 81, 0.32); outline-offse
 body.pet-window { min-width: 0; overflow: hidden; background: transparent; user-select: none; }
 .pet-window #root { min-height: 100vh; }
 .pet-overlay { width: 100vw; height: 100vh; display: grid; place-items: center; position: relative; overflow: hidden; }
+body.pet-window.pet-browser-preview { display: grid; min-height: 100vh; place-items: center; overflow: auto; background-color: #e9e7e2; background-image: linear-gradient(45deg,rgba(255,255,255,.48) 25%,transparent 25%),linear-gradient(-45deg,rgba(255,255,255,.48) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,rgba(255,255,255,.48) 75%),linear-gradient(-45deg,transparent 75%,rgba(255,255,255,.48) 75%); background-position: 0 0,0 8px,8px -8px,-8px 0; background-size: 16px 16px; }
+.pet-browser-preview #root { width: 260px; height: 300px; min-height: 300px; overflow: hidden; border: 1px solid rgba(72,65,94,.14); border-radius: 12px; background: transparent; box-shadow: 0 24px 70px rgba(43,39,56,.2); }
+.pet-browser-preview .pet-overlay { width: 260px; height: 300px; }
 .overlay-drag-region { width: 100%; height: 100%; display: grid; place-items: center; border: 0; padding: 0; color: inherit; background: transparent; cursor: grab; }
 .overlay-drag-region:active { cursor: grabbing; }
 .overlay-drag-region.is-stroking { cursor: ew-resize; filter: drop-shadow(0 8px 14px rgba(130,101,190,.22)); }
