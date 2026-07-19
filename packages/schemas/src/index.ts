@@ -221,6 +221,16 @@ export const modelAnimationMapSchema = z.object({
     looped: z.boolean(),
   })).refine((clips) => "pet.idle" in clips, "model animation map must define pet.idle"),
 });
+export const vrmExpressionMapSchema = z.object({
+  spec: z.literal("nimora.vrm-expression-map/1"),
+  expressions: z.record(
+    z.string().regex(/^pet\.[a-z0-9-]+$/),
+    z.object({
+      preset: z.enum(["happy", "sad", "surprised", "relaxed"]),
+      weight: z.number().min(0).max(1),
+    }).strict(),
+  ).refine((expressions) => Object.keys(expressions).length <= 64, "VRM expression map exceeds 64 actions"),
+}).strict();
 const spriteDurationSchema = z.number().int().min(16).max(60_000);
 const spriteSequenceClipSchema = z.object({
   loop: z.boolean(),
@@ -274,6 +284,7 @@ export const assetManifestSchema = z.object({
   }).optional(),
   entrypoints: z.object({
     animationGraph: safeAssetPathSchema.optional(),
+    vrmExpressions: safeAssetPathSchema.optional(),
     clips: safeAssetPathSchema.optional(),
     model: safeAssetPathSchema.optional(),
     hitboxes: safeAssetPathSchema.optional(),
@@ -298,6 +309,13 @@ export const assetManifestSchema = z.object({
       code: "custom",
       message: "entrypoints.clips is only valid for sprite renderers",
       path: ["entrypoints", "clips"],
+    });
+  }
+  if (manifest.entrypoints?.vrmExpressions !== undefined && backend !== "vrm") {
+    context.addIssue({
+      code: "custom",
+      message: "entrypoints.vrmExpressions is only valid for VRM renderers",
+      path: ["entrypoints", "vrmExpressions"],
     });
   }
   const modelBackend = backend === "live2d" || backend === "vrm" || backend === "gltf";

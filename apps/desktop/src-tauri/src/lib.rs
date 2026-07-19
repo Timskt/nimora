@@ -67,12 +67,12 @@ use nimora_agent_tools::{
 use nimora_agent_workspace_host::WorkspaceScanPolicy;
 use nimora_asset_installer::{
     AssetPackageSummary, AssetPreviewAudio, AssetPreviewReport, AssetRendererDescriptor,
-    GltfCharacterMetadata, InstallError, InstallFile, ModelAnimationBinding, RenderAnchor,
-    RenderCanvas, SpriteClips, ThemeCornerStyle, ThemeDescriptor, ThemeMode, ThemeMotion,
-    VoiceDescriptor, export_asset_package, inspect_asset_package, inspect_asset_renderer,
-    inspect_asset_source_preview, inspect_asset_theme, inspect_asset_voice, install_asset_source,
-    install_generated_theme, install_gltf_character, read_asset_voice_clip, rollback_latest,
-    validate_generated_theme_metadata,
+    GltfCharacterMetadata, InstallError, InstallFile, ModelAnimationBinding, ModelAnimationMap,
+    RenderAnchor, RenderCanvas, SpriteClips, ThemeCornerStyle, ThemeDescriptor, ThemeMode,
+    ThemeMotion, VoiceDescriptor, VrmExpressionMap, export_asset_package, inspect_asset_package,
+    inspect_asset_renderer, inspect_asset_source_preview, inspect_asset_theme, inspect_asset_voice,
+    install_asset_source, install_generated_theme, install_gltf_character, read_asset_voice_clip,
+    rollback_latest, validate_generated_theme_metadata,
 };
 use nimora_automation_agent_bridge::{
     AGENT_TASK_RUN_COMMAND, AdmittedContextSegment, AgentTaskSubmissionError,
@@ -1607,6 +1607,8 @@ struct CharacterRendererSnapshot {
     fallbacks: std::collections::BTreeMap<String, String>,
     clips: Option<SpriteClips>,
     model: Option<PathBuf>,
+    animation_map: Option<ModelAnimationMap>,
+    vrm_expression_map: Option<VrmExpressionMap>,
     fallback_reason: Option<String>,
 }
 
@@ -8600,6 +8602,8 @@ fn installed_renderer(
         fallbacks: renderer.fallbacks,
         clips: renderer.clips,
         model: renderer.model,
+        animation_map: renderer.animation_map,
+        vrm_expression_map: renderer.vrm_expression_map,
         fallback_reason: None,
     }
 }
@@ -8620,6 +8624,8 @@ fn builtin_renderer(fallback_reason: Option<String>) -> CharacterRendererSnapsho
         fallbacks: std::collections::BTreeMap::new(),
         clips: None,
         model: None,
+        animation_map: None,
+        vrm_expression_map: None,
         fallback_reason,
     }
 }
@@ -12846,9 +12852,9 @@ mod tests {
         delete_openai_provider_inner, desktop_provider_registry, desktop_tool_registry,
         diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
         ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
-        install_generated_theme, install_gltf_character, open_diagnostic_journal,
-        parse_asset_protocol_path, parse_user_program_plan, pause_auto_mode_job_inner,
-        permission_grant, persist_asset_selection, pet_autonomy_policy,
+        install_generated_theme, install_gltf_character, installed_renderer,
+        open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
+        pause_auto_mode_job_inner, permission_grant, persist_asset_selection, pet_autonomy_policy,
         plan_cursor_approach_target, plan_edge_snap_position, plan_pet_interaction_restore,
         plan_pet_resume, plan_surface_wander_target, plan_wander_target, prepare_agent_tool_inner,
         profile_cursor_approach_enabled, quiesce_auto_mode_jobs, recover_visible_position,
@@ -12871,7 +12877,10 @@ mod tests {
         ProviderLocality, ProviderMessage, ProviderMessageRole, ProviderRegistry, ProviderRequest,
         ProviderResponse, ProviderToolCall, ProviderUsage,
     };
-    use nimora_asset_installer::{GltfCharacterMetadata, InstallFile, ModelAnimationBinding};
+    use nimora_asset_installer::{
+        AssetRendererDescriptor, GltfCharacterMetadata, InstallFile, ModelAnimationBinding,
+        ModelAnimationMap, RenderAnchor, RenderCanvas, VrmExpressionMap,
+    };
     use nimora_automation_agent_bridge::AdmittedContextSegment;
     use nimora_automation_agent_bridge::{
         AgentTaskSubmissionOutcome, AgentTaskSubmitter, AutomationAgentTask,
@@ -12906,6 +12915,7 @@ mod tests {
     use serde_json::json;
     use sha2::{Digest, Sha256};
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::Mutex;
     use std::{
         collections::BTreeSet,
@@ -16256,6 +16266,51 @@ mod tests {
         assert_eq!(safe.backend, "built-in");
         assert!(safe.fallback_reason.is_some());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn installed_renderer_preserves_model_and_vrm_expression_maps() {
+        let animation_map = ModelAnimationMap {
+            spec: "nimora.animation-map/1".to_owned(),
+            clips: std::collections::BTreeMap::from([(
+                "pet.idle".to_owned(),
+                ModelAnimationBinding {
+                    animation: "Idle".to_owned(),
+                    looped: true,
+                },
+            )]),
+        };
+        let vrm_expression_map = VrmExpressionMap {
+            spec: "nimora.vrm-expression-map/1".to_owned(),
+            expressions: std::collections::BTreeMap::from([(
+                "pet.click".to_owned(),
+                nimora_asset_installer::VrmExpressionBinding {
+                    preset: "surprised".to_owned(),
+                    weight: 0.4,
+                },
+            )]),
+        };
+        let snapshot = installed_renderer(
+            "character.example.vrm".to_owned(),
+            AssetRendererDescriptor {
+                backend: "vrm".to_owned(),
+                canvas: RenderCanvas {
+                    width: 512,
+                    height: 512,
+                },
+                anchor: RenderAnchor { x: 0.5, y: 1.0 },
+                default_scale: 1.0,
+                pixel_art: false,
+                fallbacks: std::collections::BTreeMap::new(),
+                clips: None,
+                model: Some(PathBuf::from("models/character.vrm")),
+                animation_map: Some(animation_map.clone()),
+                vrm_expression_map: Some(vrm_expression_map.clone()),
+            },
+        );
+
+        assert_eq!(snapshot.animation_map, Some(animation_map));
+        assert_eq!(snapshot.vrm_expression_map, Some(vrm_expression_map));
     }
 
     #[test]

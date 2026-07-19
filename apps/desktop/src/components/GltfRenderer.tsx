@@ -81,8 +81,9 @@ export function dispatchModelAction(
   expressionController: VrmExpressionController | null | undefined,
   playAnimation: ((action: string) => void) | null,
   action: string,
+  expressionOverrides?: Parameters<typeof applyVrmExpression>[2],
 ): void {
-  if (backend === "vrm") applyVrmExpression(expressionController, action);
+  if (backend === "vrm") applyVrmExpression(expressionController, action, expressionOverrides);
   playAnimation?.(action);
 }
 
@@ -232,6 +233,7 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
             vrm?.expressionManager,
             playModelAnimation,
             nextAction,
+            descriptor.vrmExpressionMap?.expressions,
           );
         };
         playActionRef.current(latestActionRef.current);

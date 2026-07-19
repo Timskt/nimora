@@ -919,3 +919,11 @@ Actions 分钟：
 - 美学：柔和紫色角色、半透明白色控件和克制阴影在棋盘 Preview 上保持清晰；焦点环不依赖颜色变化，菜单打开时气泡主动让路。
 - 风险边界：图标工具条依赖 Tooltip/ARIA 解释，后续新增动作必须控制数量并维持 44px 等效命中区；不得用常驻文字面板破坏桌面存在感。
 - 验证：Chrome `810×639` 截图覆盖默认、悬停、鼠标右键和键盘菜单状态；无页面溢出、无 Console Warning/Error。原生窗口证据继续由签名 Tauri 包验收。
+
+## 2026-07-19 — VRM 自定义表情映射复盘
+
+- 对齐：第三方二次元模型不再被迫接受唯一硬编码表情强度，同时没有把任意 BlendShape 名称或运行时控制权暴露给资产包。
+- 契约：映射文件必须在 Manifest 与 Integrity Inventory 双重声明，只接受公开 `pet.*` 动作、四个 VRM 标准 Preset、有限权重和最多 64 项。
+- 架构：Installer 是唯一信任提升点，Desktop 只投影已验证描述符，Renderer 只消费封闭值；AI、Skill、用户程序和模型文件不能直接设置 Expression Manager。
+- 修正：审计发现 `CharacterRendererSnapshot` 遗漏已有 `animationMap` 字段，导致导入 glTF/VRM 动作映射可能无法抵达 WebView；本纵切同步修复并用原生回归测试锁定。
+- 验证：正常映射、默认回退、私有动作/预设、非法权重、未知字段、Inventory 加载、IPC 保留、缺失 Preset 和损坏 Manager 均有自动化证据。

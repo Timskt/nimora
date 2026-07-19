@@ -10,6 +10,7 @@ import {
   profileSnapshotSchema,
   safetySnapshotSchema,
   spriteClipsSchema,
+  vrmExpressionMapSchema,
 } from "./index";
 
 const validAssetManifest = {
@@ -356,6 +357,25 @@ describe("assetManifestSchema", () => {
       entrypoints: { ...validAssetManifest.entrypoints, model: "models/character.glb" },
     }).success).toBe(false);
   });
+
+  it("allows VRM expression maps only on VRM renderers", () => {
+    expect(assetManifestSchema.safeParse({
+      ...validAssetManifest,
+      render: { ...validAssetManifest.render, backend: "vrm" },
+      entrypoints: {
+        model: "models/character.vrm",
+        vrmExpressions: "animations/expressions.json",
+      },
+    }).success).toBe(true);
+    expect(assetManifestSchema.safeParse({
+      ...validAssetManifest,
+      render: { ...validAssetManifest.render, backend: "gltf" },
+      entrypoints: {
+        model: "models/character.glb",
+        vrmExpressions: "animations/expressions.json",
+      },
+    }).success).toBe(false);
+  });
 });
 
 describe("spriteClipsSchema", () => {
@@ -379,6 +399,29 @@ describe("spriteClipsSchema", () => {
       backend: "sprite-sequence",
       clips: { "pet.walk": { loop: true, frames: [{ file: "../escape.png", durationMs: 1 }] } },
     }).success).toBe(false);
+  });
+});
+
+describe("vrmExpressionMapSchema", () => {
+  it("accepts bounded public action mappings to standard presets", () => {
+    expect(vrmExpressionMapSchema.safeParse({
+      spec: "nimora.vrm-expression-map/1",
+      expressions: {
+        "pet.click": { preset: "surprised", weight: 0.4 },
+        "pet.sleep": { preset: "relaxed", weight: 0.75 },
+      },
+    }).success).toBe(true);
+  });
+
+  it("rejects private actions, private presets, invalid weights, and unknown fields", () => {
+    for (const document of [
+      { spec: "nimora.vrm-expression-map/1", expressions: { "vendor.secret": { preset: "happy", weight: 1 } } },
+      { spec: "nimora.vrm-expression-map/1", expressions: { "pet.click": { preset: "blink", weight: 1 } } },
+      { spec: "nimora.vrm-expression-map/1", expressions: { "pet.click": { preset: "happy", weight: 1.1 } } },
+      { spec: "nimora.vrm-expression-map/1", expressions: { "pet.click": { preset: "happy", weight: 1, parameter: "unsafe" } } },
+    ]) {
+      expect(vrmExpressionMapSchema.safeParse(document).success).toBe(false);
+    }
   });
 });
 

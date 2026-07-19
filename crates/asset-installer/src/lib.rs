@@ -272,6 +272,7 @@ struct AssetRenderHeader {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AssetEntrypoints {
     animation_graph: Option<PathBuf>,
+    vrm_expressions: Option<PathBuf>,
     clips: Option<PathBuf>,
     model: Option<PathBuf>,
     hitboxes: Option<PathBuf>,
@@ -306,6 +307,7 @@ pub struct AssetRendererDescriptor {
     pub clips: Option<SpriteClips>,
     pub model: Option<PathBuf>,
     pub animation_map: Option<ModelAnimationMap>,
+    pub vrm_expression_map: Option<VrmExpressionMap>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -320,6 +322,20 @@ pub struct ModelAnimationMap {
 pub struct ModelAnimationBinding {
     pub animation: String,
     pub looped: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VrmExpressionMap {
+    pub spec: String,
+    pub expressions: BTreeMap<String, VrmExpressionBinding>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VrmExpressionBinding {
+    pub preset: String,
+    pub weight: f64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1382,6 +1398,7 @@ fn load_asset_renderer(
             clips: None,
             model: Some(model.to_path_buf()),
             animation_map: load_model_animation_map(source_root, manifest, inventory)?,
+            vrm_expression_map: load_vrm_expression_map(source_root, manifest, inventory)?,
         }));
     }
     if !["sprite-sequence", "sprite-atlas"].contains(&render.backend.as_str()) {
@@ -1421,7 +1438,61 @@ fn load_asset_renderer(
         clips: Some(clips),
         model: None,
         animation_map: None,
+        vrm_expression_map: None,
     }))
+}
+
+fn load_vrm_expression_map(
+    source_root: &Path,
+    manifest: &AssetManifestHeader,
+    inventory: &[AssetIntegrityFile],
+) -> Result<Option<VrmExpressionMap>, InstallError> {
+    let path = manifest
+        .entrypoints
+        .as_ref()
+        .and_then(|entrypoints| entrypoints.vrm_expressions.as_ref());
+    if manifest
+        .render
+        .as_ref()
+        .map(|render| render.backend.as_str())
+        != Some("vrm")
+    {
+        if path.is_some() {
+            return Err(InstallError::InvalidMetadata(
+                "entrypoints.vrmExpressions is only valid for VRM renderers".to_owned(),
+            ));
+        }
+        return Ok(None);
+    }
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let path = safe_relative_path(path)?;
+    require_inventory_media(inventory, path, &["application/json"])?;
+    let expression_map: VrmExpressionMap =
+        serde_json::from_slice(&read_metadata(source_root, path)?)
+            .map_err(|error| InstallError::InvalidMetadata(error.to_string()))?;
+    validate_vrm_expression_map(&expression_map)?;
+    Ok(Some(expression_map))
+}
+
+fn validate_vrm_expression_map(expression_map: &VrmExpressionMap) -> Result<(), InstallError> {
+    const PRESETS: [&str; 4] = ["happy", "sad", "surprised", "relaxed"];
+    if expression_map.spec != "nimora.vrm-expression-map/1"
+        || expression_map.expressions.len() > 64
+        || expression_map.expressions.iter().any(|(action, binding)| {
+            !action.starts_with("pet.")
+                || !valid_asset_identifier(action)
+                || !PRESETS.contains(&binding.preset.as_str())
+                || !binding.weight.is_finite()
+                || !(0.0..=1.0).contains(&binding.weight)
+        })
+    {
+        return Err(InstallError::InvalidMetadata(
+            "VRM expression map is invalid".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn load_model_animation_map(
@@ -3340,6 +3411,112 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
         write_vrm_package(&root, &minimal_glb());
         assert!(inspect_asset_renderer(&root).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn validates_bounded_vrm_expression_maps() {
+        let valid = VrmExpressionMap {
+            spec: "nimora.vrm-expression-map/1".to_owned(),
+            expressions: BTreeMap::from([(
+                "pet.click".to_owned(),
+                VrmExpressionBinding {
+                    preset: "surprised".to_owned(),
+                    weight: 0.4,
+                },
+            )]),
+        };
+        validate_vrm_expression_map(&valid).unwrap();
+
+        for invalid in [
+            VrmExpressionMap {
+                spec: "nimora.vrm-expression-map/2".to_owned(),
+                expressions: valid.expressions.clone(),
+            },
+            VrmExpressionMap {
+                spec: valid.spec.clone(),
+                expressions: BTreeMap::from([(
+                    "vendor.secret".to_owned(),
+                    VrmExpressionBinding {
+                        preset: "happy".to_owned(),
+                        weight: 1.0,
+                    },
+                )]),
+            },
+            VrmExpressionMap {
+                spec: valid.spec.clone(),
+                expressions: BTreeMap::from([(
+                    "pet.click".to_owned(),
+                    VrmExpressionBinding {
+                        preset: "blink".to_owned(),
+                        weight: 1.0,
+                    },
+                )]),
+            },
+            VrmExpressionMap {
+                spec: valid.spec,
+                expressions: BTreeMap::from([(
+                    "pet.click".to_owned(),
+                    VrmExpressionBinding {
+                        preset: "happy".to_owned(),
+                        weight: f64::NAN,
+                    },
+                )]),
+            },
+        ] {
+            assert!(validate_vrm_expression_map(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn loads_verified_vrm_expression_map_from_inventory() {
+        let root = std::env::temp_dir().join("nimora-vrm-expression-map");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("animations")).unwrap();
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "spec": "nimora.vrm-expression-map/1",
+            "expressions": { "pet.click": { "preset": "surprised", "weight": 0.4 } }
+        }))
+        .unwrap();
+        fs::write(root.join("animations/expressions.json"), &bytes).unwrap();
+        let manifest: AssetManifestHeader = serde_json::from_value(serde_json::json!({
+            "spec": "nimora.asset/1",
+            "id": "character.example.vrm",
+            "type": "character",
+            "version": "1.0.0",
+            "name": { "en": "VRM" },
+            "publisher": "publisher.example",
+            "license": "CC0-1.0",
+            "engines": { "nimora": ">=0.1.0" },
+            "render": {
+                "backend": "vrm",
+                "canvas": { "width": 512, "height": 512 },
+                "anchor": { "x": 0.5, "y": 1.0 },
+                "defaultScale": 1.0,
+                "pixelArt": false
+            },
+            "entrypoints": {
+                "model": "models/character.vrm",
+                "vrmExpressions": "animations/expressions.json"
+            },
+            "capabilities": [],
+            "fallbacks": {},
+            "locales": ["en"],
+            "integrity": { "algorithm": "sha256", "files": "integrity.json" }
+        }))
+        .unwrap();
+        let inventory = [AssetIntegrityFile {
+            path: PathBuf::from("animations/expressions.json"),
+            sha256: sha256(&bytes),
+            bytes: u64::try_from(bytes.len()).unwrap(),
+            media_type: "application/json".to_owned(),
+        }];
+
+        let loaded = load_vrm_expression_map(&root, &manifest, &inventory)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.expressions["pet.click"].preset, "surprised");
+        assert_eq!(loaded.expressions["pet.click"].weight, 0.4);
         fs::remove_dir_all(root).unwrap();
     }
 

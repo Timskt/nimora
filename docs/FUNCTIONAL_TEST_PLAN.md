@@ -1310,3 +1310,17 @@ ID / 标题 / 优先级 / 前置条件
 | DP-OVERLAY-009 | Renderer、AI、Skill 或用户程序请求移动/置顶/穿透 | 请求不能直接执行；仅 Desktop Coordinator 可在能力与策略检查后改变窗口 |
 | DP-OVERLAY-010 | Chrome Browser Preview 审计 | 只记录排版、焦点、ARIA、菜单和 Console 结果，不签署透明合成、置顶、DPI、多屏或 Work Area |
 | DP-OVERLAY-011 | Tauri 签名包真机审计 | 分别验证透明合成、置顶、桌面拖拽、点击穿透、托盘召回、离屏夹回与 WebView 自愈 |
+
+## AST-VRM-EXPR — VRM 包级表情映射
+
+| ID | 场景 | 预期结果 |
+|---|---|---|
+| AST-VRM-EXPR-001 | VRM 包声明合法映射文件 | Installer 从完整性清单复验 JSON，并把映射投影到活动 Renderer Snapshot |
+| AST-VRM-EXPR-002 | glTF、Sprite、Theme 或其它非 VRM 包声明映射 | 安装失败，不忽略错误入口、不降级成已安装包 |
+| AST-VRM-EXPR-003 | 动作为 `vendor.*`、Preset 为私有名称或存在未知字段 | Schema 与 Installer 均失败关闭，不把任意模型参数带入 Renderer |
+| AST-VRM-EXPR-004 | 权重为负数、超过 1、NaN、Infinity 或映射超过 64 项 | 安装失败，旧活动角色和上一版本保持不变 |
+| AST-VRM-EXPR-005 | 当前动作存在包级映射 | 每次先 Reset 旧 Expression，再对模型已有的标准 Preset 应用声明权重 |
+| AST-VRM-EXPR-006 | 当前动作未在包级映射中 | 使用宿主固定安全默认；无默认时回到 Neutral，不继承上一个动作表情 |
+| AST-VRM-EXPR-007 | 模型缺少目标 Preset或 Expression Manager 抛错 | 不执行替代私有参数，不破坏角色交互，安全回退 Neutral/内置角色策略 |
+| AST-VRM-EXPR-008 | 活动 3D 角色通过 Tauri Snapshot 加载 | `animationMap` 与 `vrmExpressionMap` 均完整保留，Browser Preview 不伪造第三方映射 |
+| AST-VRM-EXPR-009 | AI、Skill、Automation 或用户程序尝试直接改表情 | 只能选择公开 Pet Action；不能获得 Expression Manager、BlendShape 或 Renderer 写权限 |

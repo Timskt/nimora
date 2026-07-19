@@ -571,6 +571,11 @@ export interface ModelAnimationMap {
   clips: Record<string, ModelAnimationBinding>;
 }
 
+export interface VrmExpressionMap {
+  spec: "nimora.vrm-expression-map/1";
+  expressions: Record<string, { preset: "happy" | "sad" | "surprised" | "relaxed"; weight: number }>;
+}
+
 export interface InstallPackageFile {
   relativePath: string;
   bytes: number;
@@ -717,6 +722,7 @@ export interface CharacterRendererSnapshot {
   clips: SpriteClips | null;
   model: string | null;
   animationMap: ModelAnimationMap | null;
+  vrmExpressionMap: VrmExpressionMap | null;
   fallbackReason: string | null;
 }
 
@@ -1719,6 +1725,7 @@ export function createDesktopApi(
           clips: null,
           model: null,
           animationMap: null,
+          vrmExpressionMap: null,
           fallbackReason: null,
         };
       },

@@ -31,19 +31,29 @@ const ACTION_EXPRESSIONS: Readonly<Record<string, VrmExpressionBinding>> = {
   "pet.error": { name: "sad", weight: 0.65 },
 };
 
-export function resolveVrmExpression(action: string): VrmExpressionBinding | null {
-  return ACTION_EXPRESSIONS[action] ?? null;
+export type VrmExpressionOverrides = Readonly<Record<string, {
+  preset: VrmExpressionPreset;
+  weight: number;
+}>>;
+
+export function resolveVrmExpression(
+  action: string,
+  overrides?: VrmExpressionOverrides | null,
+): VrmExpressionBinding | null {
+  const override = overrides?.[action];
+  return override ? { name: override.preset, weight: override.weight } : ACTION_EXPRESSIONS[action] ?? null;
 }
 
 export function applyVrmExpression(
   controller: VrmExpressionController | null | undefined,
   action: string,
+  overrides?: VrmExpressionOverrides | null,
 ): boolean {
   if (!controller) return false;
 
   try {
     controller.resetValues();
-    const binding = resolveVrmExpression(action);
+    const binding = resolveVrmExpression(action, overrides);
     if (!binding) return true;
     if (!controller.getExpression(binding.name)) return false;
     controller.setValue(binding.name, Math.min(Math.max(binding.weight, 0), 1));

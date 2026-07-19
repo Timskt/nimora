@@ -61,6 +61,14 @@ describe("VRM expression semantics", () => {
     expect(VRM_EXPRESSION_PRESETS).not.toContain("vendor.private-expression");
   });
 
+  it("allows verified package mappings to override public actions only", () => {
+    const overrides = {
+      "pet.click": { preset: "surprised" as const, weight: 0.4 },
+    };
+    expect(resolveVrmExpression("pet.click", overrides)).toEqual({ name: "surprised", weight: 0.4 });
+    expect(resolveVrmExpression("pet.sleep", overrides)).toEqual({ name: "relaxed", weight: 0.7 });
+  });
+
   it("resets stale values before setting an available preset", () => {
     const calls: string[] = [];
     const controller = {
@@ -104,6 +112,19 @@ describe("VRM expression semantics", () => {
     }, null, "pet.sleep");
 
     expect(calls).toEqual(["reset", "relaxed:0.7"]);
+  });
+
+  it("dispatches a verified package expression override", () => {
+    const calls: string[] = [];
+    dispatchModelAction("vrm", {
+      getExpression: () => ({}),
+      resetValues: () => calls.push("reset"),
+      setValue: (name, weight) => calls.push(`${name}:${weight}`),
+    }, null, "pet.click", {
+      "pet.click": { preset: "sad", weight: 0.25 },
+    });
+
+    expect(calls).toEqual(["reset", "sad:0.25"]);
   });
 
   it("keeps GLTF animation dispatch independent from VRM expressions", () => {
