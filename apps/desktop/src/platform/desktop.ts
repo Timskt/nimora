@@ -1087,6 +1087,7 @@ export interface DesktopApi {
   usePetItem(itemId: PetItemId): Promise<NimoraCommand | null>;
   renamePet(name: string): Promise<NimoraCommand | null>;
   clickPet(x: number, y: number, button: PointerButton): Promise<NimoraCommand | null>;
+  doubleClickPet(x: number, y: number, button: PointerButton): Promise<NimoraCommand | null>;
   strokePet(distancePx: number, durationMs: number, reversals: number): Promise<NimoraCommand | null>;
   dragPet(): Promise<NimoraCommand | null>;
   setClickThrough(enabled: boolean): Promise<void>;
@@ -1616,6 +1617,12 @@ export function createDesktopApi(
         previewSnapshot.pet.bondPoints += 1;
         return null;
       },
+      async doubleClickPet() {
+        previewSnapshot.pet.mood = Math.min(100, previewSnapshot.pet.mood + 5);
+        previewSnapshot.pet.affinity = Math.min(100, previewSnapshot.pet.affinity + 2);
+        previewSnapshot.pet.bondPoints += 3;
+        return null;
+      },
       async strokePet() {
         previewSnapshot.pet.mood = Math.min(100, previewSnapshot.pet.mood + 4);
         previewSnapshot.pet.affinity = Math.min(100, previewSnapshot.pet.affinity + 2);
@@ -1820,6 +1827,9 @@ export function createDesktopApi(
     usePetItem: async (itemId) => await invokeCommand("use_pet_item", { itemId }) as NimoraCommand,
     renamePet: async (name) => await invokeCommand("rename_pet", { name }) as NimoraCommand,
     clickPet: async (x, y, button) => await invokeCommand("click_pet", {
+      request: { x, y, button },
+    }) as NimoraCommand,
+    doubleClickPet: async (x, y, button) => await invokeCommand("double_click_pet", {
       request: { x, y, button },
     }) as NimoraCommand,
     strokePet: async (distancePx, durationMs, reversals) => await invokeCommand("stroke_pet", {

@@ -1,5 +1,14 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-19 QQ 宠物式正式双击互动
+
+- 结果：双击从临时 Celebrate 动画升级为正式陪伴行为，具备独立成长、Command/Event、Trace、失败原子性和一致的 Preview/Tauri 入口。
+- 手势：第二击取消待处理单击并只结算一次；第三击以上忽略，键盘 Detail 0 保持单击语义，右键、长按、抚摸和拖拽仲裁不变。
+- 领域：Mood +5、Affinity +2、BondPoints +3，有界饱和；Dragged、Safe/Recovery 失败关闭，Repository 失败不产生 Snapshot/Event 分裂。
+- UI/生态：复用统一 Interacting 舞台和 420ms 收敛，所有 Renderer 共享，不新增模型格式负担；完全离线且不依赖 AI。
+- 验证：Core、Runtime、手势纯函数和 Platform Port 均有专用测试；系统双击速度设置、真实输入事件序列和签名原生视觉仍保留为真机门禁。
+- Actions：本地全量验证后集中推送，继续控制 GitHub Actions 月度分钟消耗。
+
 ## M-2026-07-19 QQ 宠物式沿边自主移动
 
 - 结果：桌宠被放到屏幕边缘后不再永久静止；它能沿上/下边水平活动、沿左/右边垂直活动，并在自主动作结束后恢复原栖息、攀爬或探头姿态。

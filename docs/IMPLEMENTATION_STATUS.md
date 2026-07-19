@@ -1,5 +1,14 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — QQ 宠物式正式双击互动
+
+- Overlay 的双击不再绕过领域层直接播放 Celebrate；第二击取消 220ms 待处理单击并调用正式 `double_click_pet`，第三击及更高 Detail 被忽略，避免一次多连击重复成长。
+- Core 新增有界双击互动：Interacting/Happy、Mood +5、Affinity +2、BondPoints +3；Dragged 拒绝且零副作用，成长继续使用既有饱和与关系派生规则。
+- Runtime App 以 `pet.interaction.double-click` / `pet.interaction.double-clicked` 原子提交 Snapshot、Command 与 Event，记录有界位置、按键、前后状态和关系投影；Repository 失败零提交。
+- Desktop Host 复用 Normal Mode、Vitals 事件和 420ms 有界反馈收敛；Platform Port 的 Preview/Tauri 两端新增同构方法，Preview 不伪造领域事件。
+- UI 继续使用统一 Interacting 角色舞台和轻量中文反馈，内置、Sprite、glTF、VRM 与未来 Live2D 无需维护私有双击状态；键盘 Click Detail 0 保持单击可达。
+- 聚焦测试覆盖 Core 数值/饱和/拖拽拒绝、Runtime Trace/失败原子性、单/双/多击仲裁和精确 Tauri 参数。真实系统双击速度偏好与签名桌面视觉连续性仍需真机验收。
+
 ## 2026-07-19 — QQ 宠物式沿边自主移动
 
 - Perching、Climbing、Peeking 现可参与完整离线自主循环；Core 用可迁移 `resumeAction` 保存动作前边缘姿态，完成或 Quiet/Focus 抑制后恢复，拖拽或外部状态抢占时清除而不覆盖用户意图。

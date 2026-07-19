@@ -742,6 +742,52 @@ impl<R: PetRepository> RuntimeService<R> {
         )
     }
 
+    /// Records a semantic double-click greeting with stronger bounded companionship growth.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid coordinates, forbidden transitions, or a failed durable update.
+    pub fn double_click_pet(
+        &self,
+        position: Position,
+        button: PointerButton,
+    ) -> Result<Command, RuntimeError> {
+        position.validate()?;
+        self.update(
+            Pet::double_interact,
+            || {
+                Command::new(
+                    "pet.interaction.double-click",
+                    serde_json::json!({ "position": position, "button": button }),
+                    CommandRisk::Safe,
+                )
+            },
+            "pet.interaction.double-clicked",
+            |before, after| {
+                serde_json::json!({
+                    "position": position,
+                    "button": button,
+                    "before": {
+                        "state": before.state,
+                        "emotion": before.emotion,
+                        "mood": before.mood,
+                        "affinity": before.affinity,
+                        "bondPoints": before.effective_bond_points(),
+                        "relationshipLevel": before.relationship_level(),
+                    },
+                    "after": {
+                        "state": after.state,
+                        "emotion": after.emotion,
+                        "mood": after.mood,
+                        "affinity": after.affinity,
+                        "bondPoints": after.effective_bond_points(),
+                        "relationshipLevel": after.relationship_level(),
+                    },
+                })
+            },
+        )
+    }
+
     /// Records a deliberate host-recognized petting gesture.
     ///
     /// # Errors
@@ -1683,6 +1729,55 @@ mod tests {
     }
 
     #[test]
+    fn double_click_publishes_distinct_growth_atomically() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let command = service
+            .double_click_pet(Position { x: 18.0, y: 36.0 }, PointerButton::Left)
+            .expect("double click");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(
+            (
+                snapshot.state,
+                snapshot.mood,
+                snapshot.affinity,
+                snapshot.bond_points
+            ),
+            (PetState::Interacting, 75, 2, 3)
+        );
+        let event = service
+            .drain_events()
+            .expect("events")
+            .pop()
+            .expect("event");
+        assert_eq!(
+            command.command_id.to_string(),
+            "pet.interaction.double-click"
+        );
+        assert_eq!(event.event_type, "pet.interaction.double-clicked");
+        assert_eq!(event.trace_id, command.trace_id);
+        assert_eq!(event.data["position"]["x"], 18.0);
+        assert_eq!(event.data["button"], "left");
+        assert_eq!(event.data["before"]["bondPoints"], 0);
+        assert_eq!(event.data["after"]["bondPoints"], 3);
+
+        let failed = RuntimeService::initialize(MemoryRepository::default(), "Aster")
+            .expect("failed runtime");
+        failed.repository.fail_save.store(true, Ordering::Relaxed);
+        assert!(
+            failed
+                .double_click_pet(Position { x: 18.0, y: 36.0 }, PointerButton::Left)
+                .is_err()
+        );
+        let snapshot = failed.snapshot().expect("failed snapshot");
+        assert_eq!(
+            (snapshot.mood, snapshot.affinity, snapshot.bond_points),
+            (70, 0, 0)
+        );
+        assert!(failed.drain_events().expect("failed events").is_empty());
+    }
+
+    #[test]
     fn stroke_publishes_growth_and_gesture_evidence_atomically() {
         let service =
             RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
@@ -1750,7 +1845,11 @@ mod tests {
         let snapshot = service.snapshot().expect("snapshot");
         assert_eq!(snapshot.position, Position { x: 12.0, y: 24.0 });
         assert_eq!(snapshot.state, PetState::Peeking);
-        let event = service.drain_events().expect("events").pop().expect("drop event");
+        let event = service
+            .drain_events()
+            .expect("events")
+            .pop()
+            .expect("drop event");
         assert_eq!(event.data["settleAction"], "peek");
         assert_eq!(event.data["afterState"], "peeking");
     }

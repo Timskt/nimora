@@ -440,6 +440,23 @@ impl Pet {
         Ok(())
     }
 
+    /// Applies one deliberate double-click greeting as a stronger direct interaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PetError::InvalidTransition`] while a drag is active.
+    pub fn double_interact(&mut self) -> Result<(), PetError> {
+        if self.state == PetState::Dragged {
+            return Err(PetError::InvalidTransition);
+        }
+        self.state = PetState::Interacting;
+        self.emotion = Emotion::Happy;
+        self.mood = self.mood.saturating_add(5).min(100);
+        self.add_bond_points(3);
+        self.affinity = self.affinity.saturating_add(2).min(100);
+        Ok(())
+    }
+
     /// Applies one deliberate, host-recognized petting gesture.
     ///
     /// # Errors
@@ -1402,6 +1419,30 @@ mod tests {
         assert_eq!(pet.mood, 100);
         assert_eq!(pet.affinity, 100);
         assert_eq!(pet.bond_points, 101);
+    }
+
+    #[test]
+    fn double_interaction_is_distinct_bounded_and_drag_safe() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        let before_bond = pet.effective_bond_points();
+        pet.double_interact().expect("double interaction");
+        assert_eq!(pet.state, PetState::Interacting);
+        assert_eq!(pet.emotion, Emotion::Happy);
+        assert_eq!(pet.mood, 75);
+        assert_eq!(pet.affinity, 2);
+        assert_eq!(pet.effective_bond_points(), before_bond + 3);
+
+        pet.mood = 99;
+        pet.affinity = 99;
+        pet.double_interact()
+            .expect("saturating double interaction");
+        assert_eq!(pet.mood, 100);
+        assert_eq!(pet.affinity, 100);
+
+        pet.begin_drag().expect("drag");
+        let before = pet.clone();
+        assert_eq!(pet.double_interact(), Err(PetError::InvalidTransition));
+        assert_eq!(pet, before);
     }
 
     #[test]

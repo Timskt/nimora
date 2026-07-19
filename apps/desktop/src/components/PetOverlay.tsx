@@ -8,6 +8,7 @@ import {
   createPetGestureTrail,
   exceedsPetDragThreshold,
   isPetStroke,
+  petClickResolution,
   PET_LONG_PRESS_MS,
   PET_SINGLE_CLICK_DELAY_MS,
   type PetGestureTrail,
@@ -181,6 +182,12 @@ export function PetOverlay() {
   async function interact(x: number, y: number) {
     setMessage("今天也很棒！");
     await desktopApi.clickPet(x, y, "left");
+    setSnapshot(await desktopApi.snapshot());
+  }
+
+  async function doubleInteract(x: number, y: number) {
+    setMessage("太开心了，再来一次吧！");
+    await desktopApi.doubleClickPet(x, y, "left");
     setSnapshot(await desktopApi.snapshot());
   }
 
@@ -369,10 +376,12 @@ export function PetOverlay() {
       suppressClick.current = false;
       return;
     }
-    if (event.detail >= 2) {
+    const resolution = petClickResolution(event.detail);
+    if (resolution === "ignore") return;
+    if (resolution === "double") {
       if (singleClickTimer.current) clearTimeout(singleClickTimer.current);
       singleClickTimer.current = null;
-      void play("celebrate");
+      void doubleInteract(event.screenX, event.screenY);
       return;
     }
     const { screenX, screenY } = event;

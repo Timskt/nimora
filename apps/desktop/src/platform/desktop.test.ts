@@ -388,6 +388,7 @@ describe("desktop platform adapter", () => {
     await api.returnPetHome();
     await api.playAction("work");
     await api.clickPet(12, 24, "left");
+    await api.doubleClickPet(12, 24, "left");
     await api.strokePet(42, 240, 3);
     await api.dragPet();
     await api.setClickThrough(true);
@@ -530,6 +531,7 @@ describe("desktop platform adapter", () => {
       ["return_pet_home"],
       ["play_pet_action", { action: "work" }],
       ["click_pet", { request: { x: 12, y: 24, button: "left" } }],
+      ["double_click_pet", { request: { x: 12, y: 24, button: "left" } }],
       ["stroke_pet", { request: { distancePx: 42, durationMs: 240, reversals: 3 } }],
       ["begin_pet_drag"],
       ["finish_pet_drag"],

@@ -1080,3 +1080,20 @@ ID / 标题 / 优先级 / 前置条件
 | DP-EDGE-WANDER-010 | 当前显示器消失、Safe/Recovery 或状态被抢占 | 原生移动停止且不跨屏猜测；Desktop Coordinator 仍为唯一窗口执行者 |
 | DP-EDGE-WANDER-011 | 持久快照包含非法恢复动作或无活动 Intent 的恢复点 | Core 校验拒绝恢复，不执行 Work/Sleep/Celebrate 等越权姿态 |
 | DP-EDGE-WANDER-012 | 重启与旧快照迁移 | 缺失 `resumeAction` 默认 `null`；瞬时自主状态沿启动恢复规则收敛，不伪造边缘移动完成 |
+
+## DP-DOUBLE-CLICK — 正式双击互动
+
+| ID | 场景 | 预期 |
+|---|---|---|
+| DP-DOUBLE-CLICK-001 | 单次左键点击 | 等待 220ms 后只调用 `click_pet`，保持既有 Mood +2、Affinity +1、BondPoints +1 契约 |
+| DP-DOUBLE-CLICK-002 | 第二击在窗口内到达 | 取消待处理单击，只调用一次 `double_click_pet`，不额外提交单击成长 |
+| DP-DOUBLE-CLICK-003 | 浏览器报告 Click Detail 3/4 | 忽略后续击次，不重复提交双击或重新调度单击 |
+| DP-DOUBLE-CLICK-004 | Runtime 双击成功 | 状态 Interacting、情绪 Happy、Mood +5、Affinity +2、BondPoints +3，数值在 100/安全整数边界饱和 |
+| DP-DOUBLE-CLICK-005 | Command/Event 契约 | 使用 `pet.interaction.double-click` 与 `pet.interaction.double-clicked`，Trace 相关且记录位置、按键、前后关系投影 |
+| DP-DOUBLE-CLICK-006 | Repository 保存失败 | Snapshot、成长和 Event 零提交，不展示已成功的领域状态 |
+| DP-DOUBLE-CLICK-007 | Dragged、Safe 或 Recovery | Host/Core 失败关闭，不覆盖拖拽，不发放成长，不产生成功事件 |
+| DP-DOUBLE-CLICK-008 | 互动反馈计时结束前发生更新状态 | `finish_interaction` 不能覆盖更新的 Drag/Work/Sleep 等状态 |
+| DP-DOUBLE-CLICK-009 | Preview 与 Tauri Platform Port | 方法和参数完全一致；Preview 只模拟数值，Tauri 调用精确类型化命令 |
+| DP-DOUBLE-CLICK-010 | 离线、无 Provider、控制中心关闭 | 双击完整可用，不访问网络、不启动 Agent、不读取桌面内容 |
+| DP-DOUBLE-CLICK-011 | 内置/Sprite/glTF/VRM/未来 Live2D | 共享 Interacting 语义与统一角色舞台，不要求资产实现双击专属窗口逻辑 |
+| DP-DOUBLE-CLICK-012 | 键盘激活按钮 | Click Detail 0 继续按单击处理，不错误识别为双击，保留辅助技术可达性 |

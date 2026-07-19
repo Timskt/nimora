@@ -7370,6 +7370,30 @@ fn click_pet(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn double_click_pet(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    request: ClickPetRequest,
+) -> Result<Command, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let command = state.runtime.double_click_pet(
+        Position {
+            x: request.x,
+            y: request.y,
+        },
+        request.button,
+    )?;
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(CLICK_FEEDBACK_DURATION);
+        let _ = app.state::<DesktopState>().runtime.finish_interaction();
+    });
+    Ok(command)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn stroke_pet(
     app: AppHandle,
     state: State<'_, DesktopState>,
@@ -11463,6 +11487,7 @@ pub fn run() {
             use_pet_item,
             rename_pet,
             click_pet,
+            double_click_pet,
             stroke_pet,
             begin_pet_drag,
             finish_pet_drag,
