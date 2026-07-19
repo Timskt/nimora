@@ -14,7 +14,7 @@
 
 桌宠位置由 Desktop Coordinator 投影为版本化 Surface Semantic：Free、Left、Right、Top、Bottom 以及四个 Corner。分类只基于当前显示器原生 Work Area、窗口物理尺寸和统一安全边距；无显示器、几何读取失败与跨屏过渡不得猜测 Surface。移动期间沿用 Position Revision 防抖，持久成功后才发布稳定变化；拖拽期间不发布，Drop 成功后立即收敛。
 
-Surface 是宿主瞬时环境投影，不进入 Pet Core 快照，不改变 Home，不授予 Renderer 原生能力。统一角色舞台可据此做低幅度贴边表现，气泡、菜单、阴影、拖拽和无障碍阅读方向保持独立。`pet.perch` 与 `pet.climb` 已是正式语义动作；未来 `pet.peek` 仍必须明确可用 Surface、取消规则、资源回退和 Reduced Motion 行为，不得用任意 CSS 类冒充完整能力。
+Surface 是宿主瞬时环境投影，不进入 Pet Core 快照，不改变 Home，不授予 Renderer 原生能力。统一角色舞台可据此做低幅度贴边表现，气泡、菜单、阴影、拖拽和无障碍阅读方向保持独立。`pet.perch`、`pet.climb` 与 `pet.peek` 已分别成为正式语义动作，资源包和扩展不得以任意 CSS 类或私有动作绕过其取消、回退与 Reduced Motion 规则。
 
 ## 1. 产品定义
 
@@ -173,7 +173,7 @@ Agent 任务通过版本化 `nimora.agent-companion-signal/1` 向桌宠发布思
 
 - 用户把宠物拖到工作区底边或底角后，可在“更多 → 在边缘栖息”触发 `pet.perch`；同一动作也可由用户程序、Automation 和 Agent 经 Capability Gateway 请求。
 - 栖息是正式 `Perching` 状态。内置角色降低重心并收敛呼吸幅度；第三方 Sprite/glTF/VRM 共享同一动作名称与回退规则。
-- Bottom Surface 提供栖息锚点，左右 Surface 保留给未来 `pet.climb`，Top Surface 保留给未来 `pet.peek`，避免一个动作承担互相冲突的空间语义。
+- Bottom Surface 提供栖息锚点，左右 Surface 对应 `pet.climb`，Top Surface 对应 `pet.peek`，避免一个动作承担互相冲突的空间语义。
 - 不支持该动作的旧资源包继续显示 `pet.idle`，不会白屏、冻结或执行任意模型表达式；Reduced Motion 下只保留静态姿态。
 - 栖息不赋予 Renderer 移窗权限。原生窗口坐标仍只由 Desktop Coordinator 读取、约束、持久化和执行。
 
@@ -184,3 +184,11 @@ Agent 任务通过版本化 `nimora.agent-companion-signal/1` 向桌宠发布思
 - 内置角色使用短周期上下攀爬反馈；Sprite/glTF 优先播放资源声明的 `pet.climb`，缺失时沿 Manifest 回退到 `pet.idle`；VRM 只使用低权重 `surprised` Preset。
 - Reduced Motion 下停止上下循环，但保留侧边倾角和贴墙支点；气泡、菜单、阴影、拖拽命中区与无障碍文本保持独立。
 - 攀爬动作不读取桌面内容，也不直接移动原生窗口。跨屏、任务栏/Dock 和工作区边界仍由 Desktop Coordinator 的 Work Area 规则约束。
+
+## 顶部探头体验
+
+- 用户把宠物拖到工作区顶部或顶部角落后，可从“更多 → 从顶部探头”触发 `pet.peek`；用户程序、Automation 和 Agent 通过共同 Action Catalog 请求相同语义。
+- 探头是正式 `Peeking` 状态。Top、TopLeft、TopRight 使用靠近上缘的支点与小幅探出反馈；Left、Right、Bottom 和 Free 不套用顶部位移。
+- 内置角色表现为好奇睁眼和缓慢探出；Sprite/glTF 优先使用 `pet.peek`，旧资源缺失时确定性回退 `pet.idle`；VRM 只使用白名单 `surprised` Preset。
+- Reduced Motion 下停止循环探出，只保留静态上缘位置和好奇表情；菜单、气泡、阴影、点击与拖拽命中区域保持原位。
+- 探头不允许角色越过 Work Area，也不授予 Renderer 移窗或桌面采集能力；Desktop Coordinator 继续负责原生几何和窗口事务。

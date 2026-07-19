@@ -1,5 +1,14 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-19 QQ 宠物式顶部探头纵切
+
+- 结果：新增 `Peek → Peeking → pet.peek` 正式语义，完成 Bottom 栖息、Side 攀爬、Top 探头三类基础边缘动作的领域闭环。
+- 空间边界：只有 Top 与顶部 Corner 获得探出支点；Side、Bottom、Free 不套用顶部姿态，动作不直接移动窗口或越过 Work Area。
+- 生态：Runtime 唯一动作词表继续驱动 Desktop、用户代码、Automation、Agent 与 Creator；Sprite/glTF 回退 Idle，VRM 只使用封闭 Preset。
+- UI/无障碍：内置角色使用好奇睁眼和低幅度探出；Reduced Motion 保留静态语义；菜单、气泡、阴影和交互命中区不被变换。
+- 验证：Core 状态、Action Catalog、Gateway、Agent Fixture、状态映射、VRM、TypeScript、生产 Build 与 Bundle Budget 均纳入本地门禁。
+- 缺口：签名 macOS/Windows 原生窗口视觉、动态 Dock/任务栏、混合 DPI 和多屏顶部边界仍需真机验收；沿边自动移动与桌面物体感知是后续独立纵切。
+
 ## M-2026-07-19 QQ 宠物式侧边攀爬纵切
 
 - 结果：新增 `Climb → Climbing → pet.climb` 正式语义，桌宠菜单和受控扩展能力面可统一触发，不再用通用 Walking 或 Renderer 私有动画冒充攀爬。

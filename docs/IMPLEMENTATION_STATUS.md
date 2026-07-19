@@ -356,6 +356,15 @@ Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Wo
 - Reduced Motion 停止循环位移但保留静态空间语义；气泡、菜单、阴影、命中区不参与角色变换。
 - Desktop Coordinator 仍是唯一原生窗口执行者，攀爬不新增桌面捕获、网络、显示器或窗口权限，离线运行路径不变。
 - 当前仍未宣称顶部探头、沿边自动位移、应用窗口或桌面图标攀附；后续必须分别建立宿主协调语义和真机门禁。
+
+## 2026-07-19 — QQ 宠物式顶部探头动作
+
+- 已建立 `Peek → Peeking → pet.peek` 完整领域链路，动作进入 Runtime 唯一词表，并自动贯通 Desktop、用户代码、Automation、Agent 与 Creator Studio。
+- Top、TopLeft、TopRight Surface 使用顶部支点、好奇表情和低幅度探出反馈；Free、Side 与 Bottom 不冒充顶部动作。
+- Sprite/glTF 缺少 `pet.peek` 时按 Manifest 确定性回退 `pet.idle`；VRM 仅使用封闭有界 `surprised` Preset。
+- Reduced Motion 停止循环位移并保留静态顶部语义；气泡、菜单、阴影和命中区不参与角色舞台变换。
+- 至此 Bottom 栖息、Side 攀爬、Top 探头具备独立正式动作与共同扩展词表，但沿边自动移动和环境物体感知仍未宣称完成。
+- Desktop Coordinator 仍是唯一窗口执行者；探头不新增网络、桌面采集、显示器或窗口权限，离线路径保持完整。
 ## 2026-07-18 — Indeterminate Attempt reconciliation
 
 - Added a parameter-bound manual reconciliation contract for indeterminate Auto Mode attempts.

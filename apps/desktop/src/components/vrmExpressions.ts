@@ -22,6 +22,7 @@ const ACTION_EXPRESSIONS: Readonly<Record<string, VrmExpressionBinding>> = {
   "pet.observe": { name: "surprised", weight: 0.22 },
   "pet.perch": { name: "relaxed", weight: 0.28 },
   "pet.climb": { name: "surprised", weight: 0.18 },
+  "pet.peek": { name: "surprised", weight: 0.42 },
   "pet.click": { name: "happy", weight: 0.85 },
   "pet.celebrate": { name: "happy", weight: 1 },
   "pet.drag": { name: "surprised", weight: 0.55 },

@@ -14,6 +14,7 @@ describe("SpriteRenderer helpers", () => {
     expect(petStateAction("walking")).toBe("pet.walk");
     expect(petStateAction("perching")).toBe("pet.perch");
     expect(petStateAction("climbing")).toBe("pet.climb");
+    expect(petStateAction("peeking")).toBe("pet.peek");
     expect(petStateAction("sleeping")).toBe("pet.sleep");
     expect(petStateAction("dragged")).toBe("pet.drag");
     expect(petStateAction("interacting")).toBe("pet.click");

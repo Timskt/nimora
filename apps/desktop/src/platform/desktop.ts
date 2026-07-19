@@ -14,7 +14,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
-export const petActions = ["idle", "observe", "walk", "perch", "climb", "sleep", "work", "celebrate"] as const;
+export const petActions = ["idle", "observe", "walk", "perch", "climb", "peek", "sleep", "work", "celebrate"] as const;
 export type PetAction = (typeof petActions)[number];
 export const petCareActions = ["feed", "play", "groom"] as const;
 export type PetCareAction = (typeof petCareActions)[number];

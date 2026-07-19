@@ -451,6 +451,7 @@ export function PetOverlay() {
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void setHome(); }}><span>⌖</span>这里设为家</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("perch"); }}><span>⌄</span>在边缘栖息</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("climb"); }}><span>↥</span>沿侧边攀爬</button>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("peek"); }}><span>◉</span>从顶部探头</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("sleep"); }}><span>☾</span>休息</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void toggleClickThrough(); }}><span>⌁</span>鼠标穿透</button>
               <button type="button" role="menuitem" onClick={() => void desktopApi.openControlCenter("settings")}><span>⚙</span>设置</button>

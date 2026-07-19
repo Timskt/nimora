@@ -1035,3 +1035,17 @@ ID / 标题 / 优先级 / 前置条件
 | DP-CLIMB-007 | 开启 Reduced Motion | 停止上下循环，保留静态侧边倾角、支点和动作可识别性 |
 | DP-CLIMB-008 | 菜单、用户代码、Automation、Agent 请求 | 共享 `climb` 词汇并沿类型化 IPC、授权、确认、审计和 Safe Mode 门禁执行 |
 | DP-CLIMB-009 | 拖拽、重启、Renderer 切换 | 拖拽优先；重启恢复 Idle；所有 Renderer 对同一 Snapshot 产生一致动作选择 |
+
+## DP-PEEK — 顶部探头
+
+| ID | 场景 | 预期 |
+|---|---|---|
+| DP-PEEK-001 | Runtime 播放 `peek` | 状态为 `peeking`、情绪为 `surprised`，Action Catalog 精确包含一次 `peek` |
+| DP-PEEK-002 | Top/TopLeft/TopRight Surface | 统一角色舞台使用顶部支点与有界探出反馈，不改变窗口持久坐标 |
+| DP-PEEK-003 | Free/Left/Right/Bottom Surface | 不施加顶部探出位移，不冒充攀爬或栖息，不越过 Work Area |
+| DP-PEEK-004 | 内置角色动作 | 眼睛和星标表现好奇，探出周期低幅度且不造成窗口点击区漂移 |
+| DP-PEEK-005 | Sprite/glTF 缺少 `pet.peek` | 按 Manifest 回退链稳定落到 `pet.idle`，加载和 WebGL 失败继续沿既有安全降级 |
+| DP-PEEK-006 | VRM 播放 `pet.peek` | 只请求白名单有界 `surprised`，缺失表达式时安全无表情降级 |
+| DP-PEEK-007 | 开启 Reduced Motion | 停止循环探出，保留静态顶部位置、表情和可识别空间语义 |
+| DP-PEEK-008 | 菜单、用户代码、Automation、Agent 请求 | 共享 `peek` 词汇，并经过类型化 IPC、授权、确认、审计和 Safe Mode 门禁 |
+| DP-PEEK-009 | 拖拽、重启、跨屏与系统栏变化 | 拖拽优先、重启 Idle；Surface 重新分类后不保留错误顶部投影 |
