@@ -11338,6 +11338,22 @@ fn publish_second_instance_failure(app: &AppHandle, error: &DesktopError) {
     );
 }
 
+fn publish_shutdown_flush_failure(app: &AppHandle, error: &DesktopError) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    let _ = state.events.publish(
+        Event::new(
+            "desktop.application.shutdown-flush-failed",
+            EventSource::System("desktop".to_owned()),
+            serde_json::json!({ "error": error.to_string() }),
+        )
+        .unwrap_or_else(|event_error| {
+            unreachable!("static shutdown flush failure event contract is invalid: {event_error}")
+        }),
+    );
+}
+
 #[cfg(target_os = "macos")]
 fn publish_application_reopen_failure(app: &AppHandle, error: &DesktopError) {
     let Some(state) = app.try_state::<DesktopState>() else {
@@ -11931,6 +11947,11 @@ pub fn run() {
         RunEvent::ExitRequested { .. } => {
             let state = app.state::<DesktopState>();
             begin_desktop_shutdown(&state);
+            if let Err(error) =
+                persist_pet_window_position(app, PositionPersistenceMode::ShutdownFlush)
+            {
+                publish_shutdown_flush_failure(app, &error);
+            }
             let _ = quiesce_auto_mode_jobs(&state, AUTO_MODE_SHUTDOWN_TIMEOUT, "shutdown-timeout");
             let _ = stop_automation_event_sessions(&state);
         }

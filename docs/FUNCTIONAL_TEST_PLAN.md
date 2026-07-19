@@ -35,6 +35,7 @@
 - 模拟最终位置读取或持久化失败；记录 `desktop.tray.action-failed` 后仍完成退出，不因诊断、AI、网络或用户确认无限等待。
 - 验证系统退出、托盘退出和快速连续退出均幂等停止自主循环，并有界静默 Auto Mode 与 Automation Event Session；不得遗留 Worker、托盘、数据库写入者或孤立桌宠窗口。
 - macOS 与 Windows 签名包分别观察退出时窗口销毁顺序和进程树；Browser Preview 不能作为原生销毁、恢复线程或进程退出证据。
+- macOS 分别通过 `⌘Q`、应用菜单退出和用户会话注销触发 `ExitRequested`，Windows 通过系统会话结束与原生退出请求触发；每条路径都执行 `ShutdownFlush`。注入窗口缺失或存储失败时记录 `desktop.application.shutdown-flush-failed`，不得取消系统退出或无限重试。
 
 ## 桌面边缘 Surface Semantic
 

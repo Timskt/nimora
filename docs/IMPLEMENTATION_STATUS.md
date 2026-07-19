@@ -4,6 +4,7 @@
 
 - 托盘退出在请求 Tauri 终止前立即发布 shutdown intent，同时停止自主循环并禁止 Pet Window Recovery 接纳新 worker，消除窗口销毁事件反向重建桌宠的竞态。
 - 位置持久化现区分防抖移动与关停刷新：后台写仍跳过拖拽，关停刷新强制读取原生坐标；若快照仍为 `Dragged`，则按 Profile 吸附和 Surface Semantic 原子完成最终 Drop，避免重启卡在瞬态动作。保存失败保留托盘失败事件但不阻塞退出。
+- 操作系统 `ExitRequested` 现同样执行幂等 `ShutdownFlush`，覆盖 macOS `⌘Q`、会话退出及平台原生终止请求；失败写入 `desktop.application.shutdown-flush-failed` 后继续退出，不把最终落点可靠性变成系统关停阻塞器。
 - 恢复宿主单元测试证明 shutdown 后不再启动 worker；真实窗口销毁顺序、进程树清理和最终落点仍要求 macOS/Windows 签名包真机门禁。
 
 ## 2026-07-19 — macOS Dock 重开恢复
