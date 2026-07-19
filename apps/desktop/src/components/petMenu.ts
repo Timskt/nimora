@@ -6,3 +6,9 @@ export function nextMenuItemIndex(current: number, count: number, key: string): 
   if (key === "ArrowLeft" || key === "ArrowUp") return (current - 1 + count) % count;
   return null;
 }
+
+export function focusMenuItem(item: Pick<HTMLElement, "focus" | "scrollIntoView"> | undefined) {
+  if (!item) return;
+  item.focus();
+  item.scrollIntoView({ block: "nearest", inline: "nearest" });
+}

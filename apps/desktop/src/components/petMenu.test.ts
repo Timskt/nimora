@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { nextMenuItemIndex } from "./petMenu";
+import { describe, expect, it, vi } from "vitest";
+import { focusMenuItem, nextMenuItemIndex } from "./petMenu";
 
 describe("nextMenuItemIndex", () => {
   it("wraps directional navigation in both directions", () => {
@@ -14,5 +14,17 @@ describe("nextMenuItemIndex", () => {
     expect(nextMenuItemIndex(3, 6, "End")).toBe(5);
     expect(nextMenuItemIndex(3, 6, "Enter")).toBeNull();
     expect(nextMenuItemIndex(0, 0, "ArrowRight")).toBeNull();
+  });
+});
+
+describe("focusMenuItem", () => {
+  it("keeps keyboard navigation visible inside bounded menus", () => {
+    const focus = vi.fn();
+    const scrollIntoView = vi.fn();
+
+    focusMenuItem({ focus, scrollIntoView });
+
+    expect(focus).toHaveBeenCalledOnce();
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
   });
 });

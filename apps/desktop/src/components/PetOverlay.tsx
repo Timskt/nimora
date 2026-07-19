@@ -16,7 +16,7 @@ import {
 } from "./petGesture";
 import { petStateAction, SpriteRenderer } from "./SpriteRenderer";
 import { petInventoryQuantity, petItemPresentation } from "./petItems";
-import { nextMenuItemIndex } from "./petMenu";
+import { focusMenuItem, nextMenuItemIndex } from "./petMenu";
 import { agentCompanionPresentation } from "./agentCompanion";
 
 const GltfRenderer = lazy(async () => {
@@ -320,7 +320,7 @@ export function PetOverlay() {
     const next = nextMenuItemIndex(Math.max(0, current), items.length, event.key);
     if (next === null) return;
     event.preventDefault();
-    items[next]?.focus();
+    focusMenuItem(items[next]);
   }
 
   function handlePointerDown(event: React.PointerEvent<HTMLButtonElement>) {
