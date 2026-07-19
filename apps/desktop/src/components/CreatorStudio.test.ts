@@ -3,9 +3,10 @@ import { suggestAnimationMap } from "./CreatorStudio";
 
 describe("suggestAnimationMap", () => {
   it("maps recognized names with action-specific loop behavior", () => {
-    expect(suggestAnimationMap(["Idle", "WalkCycle", "FriendlyWave"])).toEqual({
+    expect(suggestAnimationMap(["Idle", "WalkCycle", "MorningStretch", "FriendlyWave"])).toEqual({
       "pet.idle": { animation: "Idle", looped: true },
       "pet.walk": { animation: "WalkCycle", looped: true },
+      "pet.stretch": { animation: "MorningStretch", looped: false },
       "pet.click": { animation: "FriendlyWave", looped: false },
     });
   });

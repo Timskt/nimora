@@ -13519,6 +13519,7 @@ mod tests {
                 "perch",
                 "climb",
                 "peek",
+                "stretch",
                 "sleep",
                 "work",
                 "celebrate"
@@ -16146,6 +16147,7 @@ mod tests {
         assert_eq!(serde_json::to_value(PetAction::Perch).unwrap(), "perch");
         assert_eq!(serde_json::to_value(PetAction::Climb).unwrap(), "climb");
         assert_eq!(serde_json::to_value(PetAction::Peek).unwrap(), "peek");
+        assert_eq!(serde_json::to_value(PetAction::Stretch).unwrap(), "stretch");
         assert_eq!(
             serde_json::to_value(PetAction::Celebrate).unwrap(),
             "celebrate"

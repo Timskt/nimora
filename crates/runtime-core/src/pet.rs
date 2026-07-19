@@ -28,6 +28,7 @@ pub enum PetState {
     Perching,
     Climbing,
     Peeking,
+    Stretching,
     Sleeping,
     Dragged,
     Interacting,
@@ -56,6 +57,7 @@ pub enum PetAction {
     Perch,
     Climb,
     Peek,
+    Stretch,
     Sleep,
     Work,
     Celebrate,
@@ -164,6 +166,7 @@ pub enum PetVitalsPolicy {
 pub enum PetIntent {
     Observe,
     Explore,
+    Stretch,
     Rest,
 }
 
@@ -218,13 +221,14 @@ pub enum PetAutonomyDecision {
 }
 
 impl PetAction {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Idle,
         Self::Observe,
         Self::Walk,
         Self::Perch,
         Self::Climb,
         Self::Peek,
+        Self::Stretch,
         Self::Sleep,
         Self::Work,
         Self::Celebrate,
@@ -728,6 +732,7 @@ impl Pet {
             PetAction::Perch => (PetState::Perching, Emotion::Neutral),
             PetAction::Climb => (PetState::Climbing, Emotion::Focused),
             PetAction::Peek => (PetState::Peeking, Emotion::Surprised),
+            PetAction::Stretch => (PetState::Stretching, Emotion::Happy),
             PetAction::Sleep => (PetState::Sleeping, Emotion::Sleepy),
             PetAction::Work => (PetState::Working, Emotion::Focused),
             PetAction::Celebrate => (PetState::Interacting, Emotion::Happy),
@@ -914,6 +919,7 @@ impl Pet {
             let expected_state = match self.autonomy.active_intent {
                 Some(PetIntent::Observe) => PetState::Observing,
                 Some(PetIntent::Explore) => PetState::Walking,
+                Some(PetIntent::Stretch) => PetState::Stretching,
                 Some(PetIntent::Rest) => PetState::Sleeping,
                 None => return PetAutonomyDecision::Interrupt,
             };
@@ -954,9 +960,10 @@ impl Pet {
         {
             (PetIntent::Observe, PetAction::Observe)
         } else {
-            match self.autonomy.sequence % 3 {
+            match self.autonomy.sequence % 4 {
                 0 => (PetIntent::Observe, PetAction::Observe),
                 1 => (PetIntent::Explore, PetAction::Walk),
+                2 => (PetIntent::Stretch, PetAction::Stretch),
                 _ => (PetIntent::Rest, PetAction::Sleep),
             }
         };
@@ -1110,6 +1117,37 @@ mod tests {
             assert_eq!(pet.state, state);
             assert_eq!(pet.autonomy.resume_action, None);
         }
+    }
+
+    #[test]
+    fn healthy_autonomy_includes_a_bounded_stretch_cycle() {
+        let policy = PetAutonomyPolicy::default();
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.autonomy.sequence = 2;
+        pet.autonomy.next_due_ms = 100;
+
+        let started = pet.autonomy_decision(policy, 100);
+        assert_eq!(
+            started,
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Stretch,
+                action: PetAction::Stretch,
+            }
+        );
+        pet.apply_autonomy_decision(started, policy, 100);
+        assert_eq!(pet.state, PetState::Stretching);
+        assert_eq!(pet.emotion, Emotion::Happy);
+        assert_eq!(
+            pet.autonomy_decision(policy, 107),
+            PetAutonomyDecision::Noop
+        );
+        assert_eq!(
+            pet.autonomy_decision(policy, 8_100),
+            PetAutonomyDecision::Finish
+        );
+        pet.apply_autonomy_decision(PetAutonomyDecision::Finish, policy, 8_100);
+        assert_eq!(pet.state, PetState::Idle);
+        assert_eq!(pet.autonomy.next_due_ms, 53_100);
     }
 
     #[test]

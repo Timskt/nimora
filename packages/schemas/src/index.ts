@@ -44,6 +44,7 @@ export const petStateSchema = z.enum([
   "idle",
   "observing",
   "walking",
+  "stretching",
   "sleeping",
   "dragged",
   "interacting",

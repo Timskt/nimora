@@ -1,5 +1,13 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — QQ 宠物式自主伸懒腰
+
+- 新增正式 `Stretch → Stretching → pet.stretch` 语义；伸懒腰不再是内置 Renderer 的私有彩蛋，而是 Runtime 唯一动作词表中的离线桌宠行为。
+- 健康状态的自主循环由 Observe、Explore、Stretch、Rest 四步确定性轮转；低精力仍优先 Rest，低心情/饱腹/清洁仍优先温和 Observe，伸懒腰不会增加成长或绕过安静/专注策略。
+- 普通用户可从桌宠“更多 → 伸个懒腰”直接触发；用户代码、Automation 与 Agent 通过共同 Action Catalog 获得同一动作，不新增原生窗口权限。
+- 内置角色提供低幅度压身—舒展动画与状态文案；Sprite/glTF 使用 `pet.stretch`，缺失时确定性回退 `pet.idle`；Creator Studio 可自动识别 Stretch/Yawn/Wake-up 动画，VRM 仅使用有界 `happy` Preset。
+- Core、Schema、Frontend、User Code Gateway、Agent Tool 与 Asset Installer 均有聚焦验证；Reduced Motion 继续由全局策略把动作近乎即时收敛。
+
 ## 2026-07-19 — 瞬时互动双窗口收敛通知
 
 - 照料、道具、单击、双击、抚摸与悬停不再只在 Runtime 内延迟恢复；Desktop Host 统一调度反馈结束，并在原子恢复成功后向 Pet Overlay 与 Control Center 同时发布生命状态变化。

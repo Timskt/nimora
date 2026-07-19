@@ -59,6 +59,7 @@ const VOICE_V1_CUES: &[&str] = &[
     "pet.perch",
     "pet.climb",
     "pet.peek",
+    "pet.stretch",
     "pet.sleep",
     "pet.wake",
     "pet.work",

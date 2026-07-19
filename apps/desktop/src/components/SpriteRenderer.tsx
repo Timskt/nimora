@@ -13,6 +13,7 @@ export function petStateAction(state: string): string {
     perching: "pet.perch",
     climbing: "pet.climb",
     peeking: "pet.peek",
+    stretching: "pet.stretch",
     sleeping: "pet.sleep",
     dragged: "pet.drag",
     interacting: "pet.click",

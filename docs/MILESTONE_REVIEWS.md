@@ -703,3 +703,10 @@ Actions 分钟：
 - 修正：六条直接互动统一进入 Host 调度器；只有领域 Finish 原子成功才广播双窗口更新，失败关闭时保持当前新状态。
 - 架构：Renderer 继续被动消费 Snapshot，Desktop Coordinator 保持唯一原生事件执行者，未把计时或窗口能力下放到资源包。
 - 鲁棒性闭环：不同状态抢占由状态机保护；相同 Interacting/Observing 的连续反馈由持久领域代次隔离。Host Timer 只携带启动 Command 的代次，旧 Finish 失败关闭且不广播伪 Idle。
+# 2026-07-19 QQ 宠物式自主伸懒腰纵切回顾
+
+- 对齐：补齐规范已承诺但领域词表缺失的生命动作，形成 `Stretch → Stretching → pet.stretch` 正式闭环，而不是内置 CSS 彩蛋。
+- 调度：健康自主序列扩为 Observe/Explore/Stretch/Rest；低生命值优先级、Quiet/Focus、拖拽抢占和边缘姿态恢复契约保持不变。
+- 生态：普通用户菜单、用户代码、Automation、Agent、Creator Studio、Sprite、glTF 与 VRM 使用同一动作目录；旧资源无需迁移并回退 Idle。
+- 安全：动作离线、无成长收益、不读取桌面、不授予 Renderer 或扩展窗口能力，VRM 表情继续限制在白名单和有界权重内。
+- 验证边界：自动化证明状态、调度、目录和回退；真实签名桌面仍需检查不同模型骨架的舒展幅度与透明窗口合成质量。
