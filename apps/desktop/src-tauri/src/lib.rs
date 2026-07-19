@@ -195,6 +195,7 @@ const PET_WINDOW_LABEL: &str = "pet";
 const CHARACTER_RENDERER_CHANGED_EVENT: &str = "nimora://character-renderer-changed";
 const PET_AUTONOMY_CHANGED_EVENT: &str = "nimora://pet-autonomy-changed";
 const PROFILE_CHANGED_EVENT: &str = "nimora://profile-changed";
+const SYSTEM_CONTEXT_CHANGED_EVENT: &str = "nimora://system-context-changed";
 const PET_VITALS_CHANGED_EVENT: &str = "nimora://pet-vitals-changed";
 const PET_SURFACE_CHANGED_EVENT: &str = "nimora://pet-surface-changed";
 const PET_VITALS_INTERVAL_MS: u64 = 10 * 60 * 1_000;
@@ -7029,39 +7030,60 @@ fn start_system_context_sensors(app: AppHandle) {
         let Ok(now_ms) = current_time_ms() else {
             return;
         };
-        let Ok(mut fullscreen) = SensorController::new(
-            SensorDescriptor {
-                kind: ContextKind::Fullscreen,
-                source: SensorSource::OperatingSystem,
-            },
-            schedule,
-            now_ms,
+        let create = |kind| {
+            SensorController::new(
+                SensorDescriptor {
+                    kind,
+                    source: SensorSource::OperatingSystem,
+                },
+                schedule,
+                now_ms,
+            )
+        };
+        let (Ok(mut fullscreen), Ok(mut do_not_disturb)) = (
+            create(ContextKind::Fullscreen),
+            create(ContextKind::DoNotDisturb),
         ) else {
             return;
         };
         while let Some(state) = app.try_state::<DesktopState>() {
-            publish_sensor_health(&state, &[&fullscreen]);
+            publish_sensor_health(&state, &[&fullscreen, &do_not_disturb]);
             if state.autonomy_stop.load(Ordering::Acquire) {
                 fullscreen.stop();
-                publish_sensor_health(&state, &[&fullscreen]);
+                do_not_disturb.stop();
+                publish_sensor_health(&state, &[&fullscreen, &do_not_disturb]);
                 break;
             }
             let Ok(now_ms) = current_time_ms() else {
                 std::thread::sleep(Duration::from_secs(1));
                 continue;
             };
+            let mut sampled = false;
             if fullscreen.is_due(now_ms) {
+                sampled = true;
                 match system_context_sensor::sample_fullscreen(schedule.sample_timeout) {
                     Ok(active) => {
-                        if observe_sensor_success(&state, &mut fullscreen, active, now_ms) {
-                            let _ = reconcile_system_context_presence(&app, now_ms);
-                        }
+                        let _ = observe_sensor_success(&state, &mut fullscreen, active, now_ms);
                     }
                     Err(_) => fullscreen.record_failure("fullscreen-sample-failed", now_ms),
                 }
-                publish_sensor_health(&state, &[&fullscreen]);
             }
+            if do_not_disturb.is_due(now_ms) {
+                sampled = true;
+                match system_context_sensor::sample_do_not_disturb(schedule.sample_timeout) {
+                    Ok(active) => {
+                        let _ = observe_sensor_success(&state, &mut do_not_disturb, active, now_ms);
+                    }
+                    Err(_) => {
+                        do_not_disturb.record_failure("do-not-disturb-sample-failed", now_ms);
+                    }
+                }
+            }
+            publish_sensor_health(&state, &[&fullscreen, &do_not_disturb]);
             let _ = reconcile_system_context_presence(&app, now_ms);
+            if sampled {
+                let _ = app.emit_to(CONTROL_CENTER_LABEL, SYSTEM_CONTEXT_CHANGED_EVENT, ());
+            }
             std::thread::sleep(Duration::from_secs(1));
         }
     });
@@ -7097,36 +7119,38 @@ fn start_system_context_sensors(app: AppHandle) {
                 std::thread::sleep(Duration::from_secs(1));
                 continue;
             };
-            let mut changed = false;
+            let mut sampled = false;
             if fullscreen.is_due(now_ms) {
+                sampled = true;
                 match system_context_sensor::sample_fullscreen(schedule.sample_timeout) {
                     Ok(active) => {
-                        changed |= observe_sensor_success(&state, &mut fullscreen, active, now_ms);
+                        let _ = observe_sensor_success(&state, &mut fullscreen, active, now_ms);
                     }
                     Err(_) => fullscreen.record_failure("fullscreen-sample-failed", now_ms),
                 }
             }
             if do_not_disturb.is_due(now_ms) || game.is_due(now_ms) {
+                sampled = true;
                 if let Ok(activity) =
                     system_context_sensor::sample_activity(schedule.sample_timeout)
                 {
-                    changed |= observe_sensor_success(
+                    let _ = observe_sensor_success(
                         &state,
                         &mut do_not_disturb,
                         activity.do_not_disturb,
                         now_ms,
                     );
-                    changed |= observe_sensor_success(&state, &mut game, activity.game, now_ms);
+                    let _ = observe_sensor_success(&state, &mut game, activity.game, now_ms);
                 } else {
                     do_not_disturb.record_failure("activity-sample-failed", now_ms);
                     game.record_failure("activity-sample-failed", now_ms);
                 }
             }
             publish_sensor_health(&state, &[&fullscreen, &do_not_disturb, &game]);
-            if changed {
-                let _ = reconcile_system_context_presence(&app, now_ms);
-            }
             let _ = reconcile_system_context_presence(&app, now_ms);
+            if sampled {
+                let _ = app.emit_to(CONTROL_CENTER_LABEL, SYSTEM_CONTEXT_CHANGED_EVENT, ());
+            }
             std::thread::sleep(Duration::from_secs(1));
         }
     });

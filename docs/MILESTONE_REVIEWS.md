@@ -139,6 +139,14 @@
 - 证据：纯状态机覆盖退避、预算恢复、并发去重与退出抑制；诊断码序列化契约、Desktop Clippy 和格式门禁通过。
 - 剩余：真实 WebView 强杀、GPU Context Loss、macOS/Windows 签名包与 8 小时长稳仍属于发布真机门禁，当前不把纯状态机测试冒充跨平台运行证据。
 
+## 2026-07-19 — macOS Do Not Disturb Presence Adapter
+
+- 结果：系统 Darwin Notification 的命名 `0/1` 状态接入既有 Do Not Disturb 领域事实，自动模式可随 Focus 降扰，手动覆盖和 Safe Mode 优先级保持不变。
+- 隐私：不读取用户 Focus 数据库、模式名称、通知正文、应用名、窗口标题或屏幕；子进程参数固定、输出有界且不经 Shell。
+- 鲁棒性：非精确响应、未知平台状态、超时和命令失败全部进入独立 Sensor 退避，15 秒租约过期后不会让桌宠永久隐藏。
+- 可观察性：采样后向控制中心发送无 Payload 刷新提示，UI 再读取权威 Snapshot，同时展示 Do Not Disturb 与 Fullscreen 的独立健康状态。
+- 证据边界：开发机 macOS 26.5.1 已确认通知通道存在；跨 macOS 版本、签名包 Focus 切换和睡眠唤醒仍需发布真机门禁。
+
 ## 2026-07-19 — macOS Fullscreen Presence Adapter
 
 - 结果：macOS Adapter 已通过 Accessibility `AXFullScreen` 采样前台全屏事实，接入 15 秒续租、指数退避、过期清理和 Desktop Presence Coordinator。
@@ -146,7 +154,7 @@
 - 并发：新增 Presence Transition 串行门，Profile、三档覆盖、Safe Mode、托盘恢复和后台 Sensor 共用同一可逆窗口事务。
 - 可观察性：Desktop Snapshot 暴露版本化 Sensor Health，控制中心明确显示正常、降级、不可用或停止，权限缺失不再静默。
 - 证据：Sensor Host 4 项、macOS Adapter 2 项、Desktop Host 153 项和前端 74 项测试通过；生产构建、Clippy、Format 与架构门禁通过。
-- 后续：Windows 前台全屏 Adapter 已在独立里程碑完成；macOS/Windows 屏幕共享、游戏和免打扰仍未实现，不宣称完整跨平台情境感知。
+- 后续：Windows 前台全屏与活动状态、macOS 免打扰 Adapter 已在独立里程碑完成；macOS 游戏和跨平台屏幕共享仍未实现，不宣称完整跨平台情境感知。
 
 ## 2026-07-19 — Windows Fullscreen Presence Adapter
 

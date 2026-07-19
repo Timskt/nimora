@@ -153,21 +153,26 @@ export function App() {
   useEffect(() => {
     if (!desktopApi.native) return;
     let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void desktopApi.onPetVitalsChanged(() => {
+    const listeners: Array<() => void> = [];
+    const refreshSnapshot = () => {
       void desktopApi.snapshot().then((snapshot) => {
         if (!disposed) {
           setDesktopSnapshot(snapshot);
           setPetNameDraft(snapshot.pet.name);
         }
-      });
-    }).then((value) => {
+      }).catch(() => undefined);
+    };
+    void desktopApi.onPetVitalsChanged(refreshSnapshot).then((value) => {
       if (disposed) value();
-      else unlisten = value;
+      else listeners.push(value);
     });
+    void desktopApi.onSystemContextChanged(refreshSnapshot).then((value) => {
+      if (disposed) value();
+      else listeners.push(value);
+    }).catch(() => undefined);
     return () => {
       disposed = true;
-      unlisten?.();
+      listeners.forEach((unlisten) => unlisten());
     };
   }, []);
 

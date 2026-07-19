@@ -125,7 +125,9 @@ Pet Identity 必须贯穿领域快照、原生窗口标题、控制中心、Over
 - 默认不得读取窗口正文、键盘内容、密码框、剪贴板或屏幕像素；细粒度感知能力必须逐项授权。
 - 全屏应用、演示、游戏、屏幕共享、免打扰和系统安全界面出现时自动降低打扰或隐藏。
 
-`presentation` Profile 是环境自动感知接入前也必须可靠工作的显式降扰基线：激活后原生桌宠窗口隐藏且自主互动暂停，控制中心和后台生命状态继续本地运行；以该 Profile 启动时窗口从创建阶段即隐藏，不允许先闪现再消失。切回其它 Profile 时恢复原位置与目标窗口策略。可见性、置顶、穿透和活动 Profile 使用同一可逆事务，任一步失败必须整体回滚；Safe Mode 始终强制可见，系统托盘恢复属于用户明确覆盖。未来全屏、屏幕共享、游戏和系统免打扰 Adapter 必须复用该策略协调器，而不是各自直接调用窗口隐藏。
+`presentation` Profile 是环境自动感知不可用时也必须可靠工作的显式降扰基线：激活后原生桌宠窗口隐藏且自主互动暂停，控制中心和后台生命状态继续本地运行；以该 Profile 启动时窗口从创建阶段即隐藏，不允许先闪现再消失。切回其它 Profile 时恢复原位置与目标窗口策略。可见性、置顶、穿透和活动 Profile 使用同一可逆事务，任一步失败必须整体回滚；Safe Mode 始终强制可见，系统托盘恢复属于用户明确覆盖。已接入的 macOS Fullscreen/Do Not Disturb 与 Windows Fullscreen/Game/Do Not Disturb Adapter 都只提交有租约的布尔事实并复用该策略协调器；未来 Screen Share 等 Adapter 也不得各自直接调用窗口隐藏。
+
+macOS Do Not Disturb Adapter 只查询系统 Darwin Notification `com.apple.donotdisturb.status` 的 `0/1` 状态，不读取 Focus 名称、通知正文、用户数据库、前台应用或屏幕像素。命令缺失、超时、非零退出、未知状态或额外输出均视为采样失败，旧信号在 15 秒后自然过期，自动模式恢复基础 Profile，而不是永久隐藏桌宠。该内部系统通知名可能随 macOS 演进，因此健康面板必须诚实显示降级，`presentation` Profile 和手动三档覆盖始终作为稳定离线后备。
 
 ## 5. AI、Agent 与用户扩展
 

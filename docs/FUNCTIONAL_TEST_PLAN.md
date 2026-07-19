@@ -1040,6 +1040,15 @@ ID / 标题 / 优先级 / 前置条件
 
 - 向 UI 注入 Fullscreen、Do Not Disturb、Game 的乱序健康集合，验证按稳定产品顺序分别显示，任一项更新不得覆盖或清除其它项。
 - 分别注入 available、degraded、unavailable、stopped 和空集合；验证状态文字、非纯颜色提示、失败次数与平台未报告说明准确，不渲染原始错误正文或用户内容。
+
+### PET-083 macOS 勿扰与专注模式 Sensor
+
+- 验证 Adapter 只执行 `/usr/bin/notifyutil -g com.apple.donotdisturb.status`，不读取 `~/Library/DoNotDisturb`、Focus 名称、通知正文、窗口标题、应用名或屏幕像素。
+- 解析测试只接受 `com.apple.donotdisturb.status 0` 与 `1`；未知数值、错误名称、缺字段、额外字段和超长输出必须失败关闭。
+- 验证单次采样最多 2 秒，超时杀死并回收子进程；失败进入独立 5/10/20/30 秒退避，Fullscreen Sensor 健康和信号不受影响。
+- 验证成功续租 15 秒并经 Desktop Presence Coordinator 隐藏和抑制自主行为；关闭 Focus 后恢复，Force Visible、Force Hidden、Safe Mode 与 Screen Share 优先级保持领域矩阵。
+- 控制中心打开时切换 Focus，验证 `system-context-changed` 仅提示重新读取 Snapshot，健康状态和当前依据实时收敛且事件 Payload 不包含布尔状态或用户内容。
+- 在签名 macOS 13、14、15、26 包上执行真实 Focus 开关、睡眠唤醒和命令不可用演练；当前开发机命令输出与单元测试不能替代跨版本发布门禁。
 - 使用读屏检查健康列表名称、逐项能力名、状态和说明；状态刷新通过 polite live region 宣告，不抢占当前焦点。
 - 在 1180px、900px、720px 和控制中心最小宽度检查三列、两列、单列收敛，无横向滚动、文本遮挡、徽标挤压或不可读字号。
 - Browser Preview 只证明 DOM、响应式和视觉设计；Windows/macOS 签名 Tauri 包仍需验证真实 Sensor 状态刷新、字体渲染、缩放与窗口合成，不得以浏览器截图替代。

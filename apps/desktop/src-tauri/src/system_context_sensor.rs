@@ -22,6 +22,9 @@ end tell
 "#;
 
 #[cfg(target_os = "macos")]
+const DO_NOT_DISTURB_NOTIFICATION: &str = "com.apple.donotdisturb.status";
+
+#[cfg(target_os = "macos")]
 pub fn sample_fullscreen(timeout: Duration) -> Result<bool, MacOsFullscreenError> {
     if timeout.is_zero() {
         return Err(MacOsFullscreenError::InvalidTimeout);
@@ -60,6 +63,50 @@ pub fn sample_fullscreen(timeout: Duration) -> Result<bool, MacOsFullscreenError
 }
 
 #[cfg(target_os = "macos")]
+pub fn sample_do_not_disturb(timeout: Duration) -> Result<bool, MacOsDoNotDisturbError> {
+    if timeout.is_zero() {
+        return Err(MacOsDoNotDisturbError::InvalidTimeout);
+    }
+    let mut child = Command::new("/usr/bin/notifyutil")
+        .args(["-g", DO_NOT_DISTURB_NOTIFICATION])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| MacOsDoNotDisturbError::AdapterUnavailable)?;
+    let Some(status) = child
+        .wait_timeout(timeout)
+        .map_err(|_| MacOsDoNotDisturbError::AdapterUnavailable)?
+    else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(MacOsDoNotDisturbError::SampleTimeout);
+    };
+    if !status.success() {
+        return Err(MacOsDoNotDisturbError::SystemUnsupported);
+    }
+    let mut output = String::new();
+    child
+        .stdout
+        .take()
+        .ok_or(MacOsDoNotDisturbError::InvalidResponse)?
+        .take(128)
+        .read_to_string(&mut output)
+        .map_err(|_| MacOsDoNotDisturbError::InvalidResponse)?;
+    parse_do_not_disturb_state(&output)
+}
+
+#[cfg(target_os = "macos")]
+fn parse_do_not_disturb_state(output: &str) -> Result<bool, MacOsDoNotDisturbError> {
+    let mut fields = output.split_ascii_whitespace();
+    match (fields.next(), fields.next(), fields.next()) {
+        (Some(DO_NOT_DISTURB_NOTIFICATION), Some("0"), None) => Ok(false),
+        (Some(DO_NOT_DISTURB_NOTIFICATION), Some("1"), None) => Ok(true),
+        _ => Err(MacOsDoNotDisturbError::InvalidResponse),
+    }
+}
+
+#[cfg(target_os = "macos")]
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
 pub enum MacOsFullscreenError {
     #[error("macOS fullscreen sensor timeout must be non-zero")]
@@ -71,6 +118,21 @@ pub enum MacOsFullscreenError {
     #[error("macOS fullscreen sensor lacks permission or system support")]
     PermissionDeniedOrUnavailable,
     #[error("macOS fullscreen sensor returned an invalid response")]
+    InvalidResponse,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
+pub enum MacOsDoNotDisturbError {
+    #[error("macOS do-not-disturb sensor timeout must be non-zero")]
+    InvalidTimeout,
+    #[error("macOS do-not-disturb sensor adapter is unavailable")]
+    AdapterUnavailable,
+    #[error("macOS do-not-disturb sensor timed out")]
+    SampleTimeout,
+    #[error("macOS do-not-disturb sensor is unsupported")]
+    SystemUnsupported,
+    #[error("macOS do-not-disturb sensor returned an invalid response")]
     InvalidResponse,
 }
 
@@ -103,6 +165,10 @@ mod tests {
             sample_fullscreen(Duration::ZERO),
             Err(MacOsFullscreenError::InvalidTimeout)
         );
+        assert_eq!(
+            sample_do_not_disturb(Duration::ZERO),
+            Err(MacOsDoNotDisturbError::InvalidTimeout)
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -111,6 +177,39 @@ mod tests {
         assert!(FULLSCREEN_QUERY.contains("AXFullScreen"));
         for forbidden in ["AXTitle", "name of", "description of", "contents"] {
             assert!(!FULLSCREEN_QUERY.contains(forbidden));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn do_not_disturb_parser_accepts_only_the_named_boolean_state() {
+        assert_eq!(
+            parse_do_not_disturb_state("com.apple.donotdisturb.status 0\n"),
+            Ok(false)
+        );
+        assert_eq!(
+            parse_do_not_disturb_state("com.apple.donotdisturb.status 1\n"),
+            Ok(true)
+        );
+        for invalid in [
+            "com.apple.donotdisturb.status 2",
+            "com.apple.donotdisturb.status 1 extra",
+            "other.status 1",
+            "1",
+        ] {
+            assert_eq!(
+                parse_do_not_disturb_state(invalid),
+                Err(MacOsDoNotDisturbError::InvalidResponse)
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn do_not_disturb_adapter_never_reads_user_databases() {
+        assert_eq!(DO_NOT_DISTURB_NOTIFICATION, "com.apple.donotdisturb.status");
+        for forbidden in ["Library", "Assertions.json", "defaults", "sqlite"] {
+            assert!(!DO_NOT_DISTURB_NOTIFICATION.contains(forbidden));
         }
     }
 }

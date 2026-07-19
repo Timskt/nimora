@@ -1,5 +1,13 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — macOS 专注模式低打扰感知
+
+- macOS 原生 Adapter 通过系统 Darwin Notification 状态 `com.apple.donotdisturb.status` 获取单一布尔事实，不读取 Focus 名称、通知内容、用户数据库、窗口标题或屏幕像素。
+- `/usr/bin/notifyutil` 使用参数数组直接启动、2 秒硬超时和 128 字节输出上限；只接受精确的命名 `0/1` 响应，未知值、额外字段、命令缺失和超时全部失败关闭。
+- Do Not Disturb 与 Fullscreen 使用独立 Sensor Controller、15 秒租约、5/10/20/30 秒退避和 Health Snapshot；Sensor 只提交事实，Desktop Presence Coordinator 仍是唯一窗口执行者。
+- 控制中心新增 `system-context-changed` 轻量刷新通道，采样后重新获取权威 Desktop Snapshot；事件不携带状态或用户内容，避免 UI 展示陈旧健康信息。
+- 已在 macOS 26.5.1 验证系统通知通道存在且返回有界状态；签名包中的实际 Focus 开关、睡眠唤醒、权限与跨 macOS 版本行为仍属于真机发布门禁。
+
 ## 2026-07-19 — 系统情境健康可视化
 
 - 控制中心不再把系统情境压缩成单条“全屏感知”文本；Fullscreen、Do Not Disturb、Game 与未来 Screen Share 按稳定顺序独立呈现可用、降级、不可用和停止状态。

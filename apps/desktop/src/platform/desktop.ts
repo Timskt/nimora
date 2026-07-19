@@ -1002,6 +1002,7 @@ export interface DesktopApi {
   onCharacterRendererChanged(handler: () => void): Promise<() => void>;
   onPetAutonomyChanged(handler: () => void): Promise<() => void>;
   onProfileChanged(handler: () => void): Promise<() => void>;
+  onSystemContextChanged(handler: () => void): Promise<() => void>;
   onPetVitalsChanged(handler: () => void): Promise<() => void>;
   onPetSurfaceChanged(handler: () => void): Promise<() => void>;
   onControlCenterNavigate(handler: (destination: ControlCenterDestination) => void): Promise<() => void>;
@@ -1275,6 +1276,7 @@ export function createDesktopApi(
         window.addEventListener("nimora:preview-profile-changed", handler);
         return () => window.removeEventListener("nimora:preview-profile-changed", handler);
       },
+      async onSystemContextChanged() { return () => undefined; },
       async onPetVitalsChanged() { return () => undefined; },
       async onPetSurfaceChanged() { return () => undefined; },
       async onControlCenterNavigate() { return () => undefined; },
@@ -1748,6 +1750,9 @@ export function createDesktopApi(
     },
     async onProfileChanged(handler) {
       return await listen("nimora://profile-changed", handler);
+    },
+    async onSystemContextChanged(handler) {
+      return await listen("nimora://system-context-changed", handler);
     },
     async onPetVitalsChanged(handler) {
       return await listen("nimora://pet-vitals-changed", handler);
