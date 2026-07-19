@@ -7,7 +7,7 @@ export function loginLaunchStatusLabel(enabled: boolean): string {
 
 export function loginLaunchDetail(native: boolean): string {
   return native
-    ? "由系统登录项管理；不会自动开启 AI、Agent、自动化、技能或网络请求。"
+    ? "由系统登录项管理；登录后安静唤醒桌宠与托盘，不弹出控制中心，也不会自动开启 AI、Agent、自动化、技能或网络请求。"
     : "浏览器预览只演示设置界面，不会修改系统登录项。";
 }
 

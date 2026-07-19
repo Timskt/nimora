@@ -191,6 +191,7 @@ use zeroize::Zeroizing;
 
 const CONTROL_CENTER_LABEL: &str = "control-center";
 const CONTROL_CENTER_NAVIGATE_EVENT: &str = "nimora://control-center-navigate";
+const LOGIN_LAUNCH_ARGUMENT: &str = "--nimora-login-launch";
 const PET_WINDOW_LABEL: &str = "pet";
 const CHARACTER_RENDERER_CHANGED_EVENT: &str = "nimora://character-renderer-changed";
 const PET_AUTONOMY_CHANGED_EVENT: &str = "nimora://pet-autonomy-changed";
@@ -11352,19 +11353,44 @@ fn publish_second_instance_failure(app: &AppHandle, error: &DesktopError) {
     );
 }
 
-fn show_control_center(app: &AppHandle, source: &'static str) -> Result<Command, DesktopError> {
+fn restore_control_center_window(app: &AppHandle) -> Result<(), DesktopError> {
     let window = app
         .get_webview_window(CONTROL_CENTER_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(CONTROL_CENTER_LABEL.to_owned()))?;
     window.show()?;
     window.unminimize()?;
     window.set_focus()?;
+    Ok(())
+}
+
+fn show_control_center(app: &AppHandle, source: &'static str) -> Result<Command, DesktopError> {
+    restore_control_center_window(app)?;
     publish_desktop_action(
         &app.state::<DesktopState>(),
         "desktop.window.control-center.open",
         "desktop.window.control-center-opened",
         serde_json::json!({ "source": source }),
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessLaunchIntent {
+    Interactive,
+    Login,
+}
+
+fn process_launch_intent(
+    arguments: impl IntoIterator<Item = std::ffi::OsString>,
+) -> ProcessLaunchIntent {
+    let mut arguments = arguments.into_iter();
+    let _executable = arguments.next();
+    if arguments.next().as_deref() == Some(std::ffi::OsStr::new(LOGIN_LAUNCH_ARGUMENT))
+        && arguments.next().is_none()
+    {
+        ProcessLaunchIntent::Login
+    } else {
+        ProcessLaunchIntent::Interactive
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -11647,6 +11673,7 @@ fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
 )]
 pub fn run() {
     let autostart_builder = tauri_plugin_autostart::Builder::new();
+    let autostart_builder = autostart_builder.args([LOGIN_LAUNCH_ARGUMENT]);
     #[cfg(target_os = "macos")]
     let autostart_builder =
         autostart_builder.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
@@ -11847,6 +11874,7 @@ fn open_diagnostic_journal(directory: &Path, now_ms: u64) -> PersistentDiagnosti
 }
 
 fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let launch_intent = process_launch_intent(std::env::args_os());
     let data_directory = app.path().app_data_dir()?;
     std::fs::create_dir_all(&data_directory)?;
     let database_path = data_directory.join("runtime.sqlite3");
@@ -11927,6 +11955,11 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
         start_system_context_sensors(app.handle().clone());
     }
     create_tray(app.handle())?;
+    if launch_intent == ProcessLaunchIntent::Interactive
+        || app.state::<DesktopState>().startup.mode == StartupMode::Recovery
+    {
+        restore_control_center_window(app.handle())?;
+    }
     Ok(())
 }
 
@@ -14569,6 +14602,36 @@ mod tests {
     fn accepts_finite_screen_coordinates() {
         assert_eq!(screen_coordinate(42.6).expect("valid coordinate"), 43);
         assert_eq!(screen_coordinate(-12.4).expect("valid coordinate"), -12);
+    }
+
+    #[test]
+    fn login_launch_intent_requires_the_exact_reserved_argument_shape() {
+        let arguments = |values: &[&str]| {
+            values
+                .iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            super::process_launch_intent(arguments(&["nimora", super::LOGIN_LAUNCH_ARGUMENT,])),
+            super::ProcessLaunchIntent::Login
+        );
+        for rejected in [
+            arguments(&["nimora"]),
+            arguments(&["nimora", "--unknown"]),
+            arguments(&["nimora", super::LOGIN_LAUNCH_ARGUMENT, "extra"]),
+            arguments(&[
+                "nimora",
+                super::LOGIN_LAUNCH_ARGUMENT,
+                super::LOGIN_LAUNCH_ARGUMENT,
+            ]),
+        ] {
+            assert_eq!(
+                super::process_launch_intent(rejected),
+                super::ProcessLaunchIntent::Interactive
+            );
+        }
     }
 
     #[test]

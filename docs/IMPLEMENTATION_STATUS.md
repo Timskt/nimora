@@ -12,6 +12,7 @@
 - 已增加 typed Desktop API 与控制中心设置卡片；写入后复查系统权威状态，异常不乐观伪装成功，Browser Preview 仅作离线内存模拟。
 - 默认关闭，自动启动不联动 AI、Provider、Agent、Auto Mode、Automation、Skill、用户程序或网络请求；Safe/Recovery Mode 可继续撤销系统偏好。
 - 自动化覆盖前端状态语义与 Preview 可逆性；macOS/Windows 重登、系统策略、卸载清理和视觉细节保留为真机发布门禁。
+- 已修正首屏语义：控制中心原生默认隐藏，普通启动显式恢复，登录启动只安静创建桌宠与托盘；Recovery Mode 始终显示控制中心。登录来源只接受官方登录项写入的唯一精确参数形态。
 
 ## 2026-07-19 — macOS 专注模式低打扰感知
 
