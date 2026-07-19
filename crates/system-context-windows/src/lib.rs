@@ -6,10 +6,68 @@ use std::time::Duration;
 use windows_sys::Win32::{
     Foundation::{HWND, RECT},
     Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow},
-    UI::WindowsAndMessaging::{
-        GetClassNameW, GetForegroundWindow, GetWindowRect, IsIconic, IsWindowVisible,
+    UI::{
+        Shell::{QUERY_USER_NOTIFICATION_STATE, SHQueryUserNotificationState},
+        WindowsAndMessaging::{
+            GetClassNameW, GetForegroundWindow, GetWindowRect, IsIconic, IsWindowVisible,
+        },
     },
 };
+
+#[cfg(any(test, target_os = "windows"))]
+const NOTIFICATION_STATE_BUSY: i32 = 2;
+#[cfg(any(test, target_os = "windows"))]
+const NOTIFICATION_STATE_D3D_FULLSCREEN: i32 = 3;
+#[cfg(any(test, target_os = "windows"))]
+const NOTIFICATION_STATE_PRESENTATION: i32 = 4;
+#[cfg(any(test, target_os = "windows"))]
+const NOTIFICATION_STATE_QUIET_TIME: i32 = 6;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WindowsActivitySnapshot {
+    pub do_not_disturb: bool,
+    pub game: bool,
+}
+
+/// Samples privacy-preserving Windows activity state exposed by the shell.
+///
+/// # Errors
+///
+/// Returns a stable adapter error for invalid input or a failed shell query.
+pub fn sample_activity(timeout: Duration) -> Result<WindowsActivitySnapshot, WindowsActivityError> {
+    if timeout.is_zero() {
+        return Err(WindowsActivityError::InvalidTimeout);
+    }
+    sample_activity_platform()
+}
+
+#[cfg(target_os = "windows")]
+fn sample_activity_platform() -> Result<WindowsActivitySnapshot, WindowsActivityError> {
+    let mut state: QUERY_USER_NOTIFICATION_STATE = 0;
+    let result = unsafe { SHQueryUserNotificationState(&raw mut state) };
+    if result < 0 {
+        return Err(WindowsActivityError::QueryFailed);
+    }
+    Ok(classify_notification_state(state))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn sample_activity_platform() -> Result<WindowsActivitySnapshot, WindowsActivityError> {
+    Err(WindowsActivityError::AdapterUnavailable)
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn classify_notification_state(state: i32) -> WindowsActivitySnapshot {
+    WindowsActivitySnapshot {
+        do_not_disturb: matches!(
+            state,
+            NOTIFICATION_STATE_BUSY
+                | NOTIFICATION_STATE_PRESENTATION
+                | NOTIFICATION_STATE_QUIET_TIME
+        ),
+        game: state == NOTIFICATION_STATE_D3D_FULLSCREEN,
+    }
+}
 
 /// Samples whether the visible foreground window covers its current monitor.
 ///
@@ -125,6 +183,16 @@ pub enum WindowsFullscreenError {
     MonitorBoundsUnavailable,
 }
 
+#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsActivityError {
+    #[error("Windows activity sensor timeout must be non-zero")]
+    InvalidTimeout,
+    #[error("Windows activity sensor adapter is unavailable")]
+    AdapterUnavailable,
+    #[error("Windows activity state query failed")]
+    QueryFailed,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +232,44 @@ mod tests {
         assert_eq!(
             sample_fullscreen(Duration::ZERO),
             Err(WindowsFullscreenError::InvalidTimeout)
+        );
+    }
+
+    #[test]
+    fn notification_states_map_to_independent_activity_facts() {
+        for state in [
+            NOTIFICATION_STATE_BUSY,
+            NOTIFICATION_STATE_PRESENTATION,
+            NOTIFICATION_STATE_QUIET_TIME,
+        ] {
+            assert_eq!(
+                classify_notification_state(state),
+                WindowsActivitySnapshot {
+                    do_not_disturb: true,
+                    game: false,
+                }
+            );
+        }
+        assert_eq!(
+            classify_notification_state(NOTIFICATION_STATE_D3D_FULLSCREEN),
+            WindowsActivitySnapshot {
+                do_not_disturb: false,
+                game: true,
+            }
+        );
+        for state in [0, 1, 5, 7, i32::MAX] {
+            assert_eq!(
+                classify_notification_state(state),
+                WindowsActivitySnapshot::default()
+            );
+        }
+    }
+
+    #[test]
+    fn activity_rejects_zero_timeout_before_platform_access() {
+        assert_eq!(
+            sample_activity(Duration::ZERO),
+            Err(WindowsActivityError::InvalidTimeout)
         );
     }
 }

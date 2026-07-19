@@ -1026,6 +1026,14 @@ ID / 标题 / 优先级 / 前置条件
 - 在签名 Windows 11 包上切换窗口化、最大化、无边框全屏、独占全屏和多屏前台，记录窗口可见性与自主行为；非 Windows 主机的源码或几何测试不能替代此真机门禁。
 - 验证控制中心明确显示全屏感知正常、降级、不可用或停止；权限缺失不得伪装为“未全屏”。
 
+### PET-081 Windows 游戏与免打扰 Sensor
+
+- 用映射单元测试覆盖 `QUNS_RUNNING_D3D_FULL_SCREEN`、`QUNS_PRESENTATION_MODE`、`QUNS_BUSY`、`QUNS_QUIET_TIME`、`QUNS_NOT_PRESENT`、普通通知状态和未知值；Game 与 Do Not Disturb 必须是独立事实。
+- 验证一次 Activity 采样同时续租 Do Not Disturb 与 Game Controller，失败时两者分别进入稳定 `activity-sample-failed` 退避，不能清除 Fullscreen Health。
+- 验证停止流程把 Fullscreen、Do Not Disturb、Game 三项全部标记为 stopped；控制中心不得因最后一次更新覆盖而只显示单个 Sensor。
+- 在签名 Windows 11 包上切换演示模式、系统 Quiet Time 可复现场景、D3D 独占/无边框全屏与普通窗口；验证自动隐藏、强制可见覆盖和恢复行为无闪烁。
+- 分别运行 Vulkan、OpenGL 和窗口化游戏，确认 UI 不把未检测到解释为“没有游戏”；产品文案必须明确 Shell API 能力边界，不得宣传通用游戏识别或完整 Focus Assist 配置读取。
+
 ## DP-PERCH — 边缘栖息
 
 | ID | 场景 | 预期 |

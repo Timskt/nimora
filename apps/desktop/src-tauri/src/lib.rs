@@ -6905,7 +6905,38 @@ fn reconcile_system_context_presence(app: &AppHandle, now_ms: u64) -> Result<(),
     set_current_window_policy(&state, target)
 }
 
+fn sensor_health_snapshot(controllers: &[&SensorController]) -> Vec<SensorHealth> {
+    controllers
+        .iter()
+        .map(|controller| controller.health().clone())
+        .collect()
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+fn publish_sensor_health(state: &DesktopState, controllers: &[&SensorController]) {
+    if let Ok(mut health) = state.system_context_sensor_health.lock() {
+        *health = sensor_health_snapshot(controllers);
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn observe_sensor_success(
+    state: &DesktopState,
+    controller: &mut SensorController,
+    active: bool,
+    now_ms: u64,
+) -> bool {
+    controller
+        .record_success(active, now_ms)
+        .is_ok_and(|signal| {
+            state
+                .system_context
+                .lock()
+                .is_ok_and(|mut policy| policy.observe(signal).is_ok())
+        })
+}
+
+#[cfg(target_os = "macos")]
 fn start_system_context_sensors(app: AppHandle) {
     std::thread::spawn(move || {
         let schedule = SensorSchedule::default();
@@ -6923,16 +6954,10 @@ fn start_system_context_sensors(app: AppHandle) {
             return;
         };
         while let Some(state) = app.try_state::<DesktopState>() {
-            if let Ok(mut health) = state.system_context_sensor_health.lock() {
-                health.clear();
-                health.push(fullscreen.health().clone());
-            }
+            publish_sensor_health(&state, &[&fullscreen]);
             if state.autonomy_stop.load(Ordering::Acquire) {
                 fullscreen.stop();
-                if let Ok(mut health) = state.system_context_sensor_health.lock() {
-                    health.clear();
-                    health.push(fullscreen.health().clone());
-                }
+                publish_sensor_health(&state, &[&fullscreen]);
                 break;
             }
             let Ok(now_ms) = current_time_ms() else {
@@ -6942,21 +6967,78 @@ fn start_system_context_sensors(app: AppHandle) {
             if fullscreen.is_due(now_ms) {
                 match system_context_sensor::sample_fullscreen(schedule.sample_timeout) {
                     Ok(active) => {
-                        if let Ok(signal) = fullscreen.record_success(active, now_ms)
-                            && state
-                                .system_context
-                                .lock()
-                                .is_ok_and(|mut policy| policy.observe(signal).is_ok())
-                        {
+                        if observe_sensor_success(&state, &mut fullscreen, active, now_ms) {
                             let _ = reconcile_system_context_presence(&app, now_ms);
                         }
                     }
                     Err(_) => fullscreen.record_failure("fullscreen-sample-failed", now_ms),
                 }
-                if let Ok(mut health) = state.system_context_sensor_health.lock() {
-                    health.clear();
-                    health.push(fullscreen.health().clone());
+                publish_sensor_health(&state, &[&fullscreen]);
+            }
+            let _ = reconcile_system_context_presence(&app, now_ms);
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn start_system_context_sensors(app: AppHandle) {
+    std::thread::spawn(move || {
+        let schedule = SensorSchedule::default();
+        let Ok(now_ms) = current_time_ms() else {
+            return;
+        };
+        let create = |kind, source| {
+            SensorController::new(SensorDescriptor { kind, source }, schedule, now_ms)
+        };
+        let (Ok(mut fullscreen), Ok(mut do_not_disturb), Ok(mut game)) = (
+            create(ContextKind::Fullscreen, SensorSource::OperatingSystem),
+            create(ContextKind::DoNotDisturb, SensorSource::OperatingSystem),
+            create(ContextKind::Game, SensorSource::OperatingSystem),
+        ) else {
+            return;
+        };
+        while let Some(state) = app.try_state::<DesktopState>() {
+            publish_sensor_health(&state, &[&fullscreen, &do_not_disturb, &game]);
+            if state.autonomy_stop.load(Ordering::Acquire) {
+                fullscreen.stop();
+                do_not_disturb.stop();
+                game.stop();
+                publish_sensor_health(&state, &[&fullscreen, &do_not_disturb, &game]);
+                break;
+            }
+            let Ok(now_ms) = current_time_ms() else {
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            };
+            let mut changed = false;
+            if fullscreen.is_due(now_ms) {
+                match system_context_sensor::sample_fullscreen(schedule.sample_timeout) {
+                    Ok(active) => {
+                        changed |= observe_sensor_success(&state, &mut fullscreen, active, now_ms);
+                    }
+                    Err(_) => fullscreen.record_failure("fullscreen-sample-failed", now_ms),
                 }
+            }
+            if do_not_disturb.is_due(now_ms) || game.is_due(now_ms) {
+                if let Ok(activity) =
+                    system_context_sensor::sample_activity(schedule.sample_timeout)
+                {
+                    changed |= observe_sensor_success(
+                        &state,
+                        &mut do_not_disturb,
+                        activity.do_not_disturb,
+                        now_ms,
+                    );
+                    changed |= observe_sensor_success(&state, &mut game, activity.game, now_ms);
+                } else {
+                    do_not_disturb.record_failure("activity-sample-failed", now_ms);
+                    game.record_failure("activity-sample-failed", now_ms);
+                }
+            }
+            publish_sensor_health(&state, &[&fullscreen, &do_not_disturb, &game]);
+            if changed {
+                let _ = reconcile_system_context_presence(&app, now_ms);
             }
             let _ = reconcile_system_context_presence(&app, now_ms);
             std::thread::sleep(Duration::from_secs(1));
@@ -11921,13 +12003,14 @@ mod tests {
         ActiveSkillExecution, AgentProviderStatusRequest, AssetInstallReceipt, AutoModeJobStatus,
         AutomationEventMetrics, AutomationRun, AutomationRunOrigin, AutomationTestRequest,
         BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID, BUILTIN_VOICE_ID, CHARACTER_SELECTION,
-        CapabilityBackend, DETERMINISTIC_PROVIDER_ID, DeleteProviderRequest, DesktopAgentRunStatus,
-        DesktopCapabilityBackend, DesktopError, DesktopProviderCredentialResolver,
-        DesktopResolveAutoModeAttemptRequest, DesktopSecretStore, DesktopState,
-        ExecutionCancellation, LocalAgentRequest, PendingCreatorApproval, PendingSkillExecution,
-        PetAction, PetSurface, PhysicalArea, PrepareAgentToolRequest, ProfileMode, ProfilePolicy,
-        ResolveAgentToolRequest, ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest,
-        SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
+        CapabilityBackend, ContextKind, DETERMINISTIC_PROVIDER_ID, DeleteProviderRequest,
+        DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
+        DesktopProviderCredentialResolver, DesktopResolveAutoModeAttemptRequest,
+        DesktopSecretStore, DesktopState, ExecutionCancellation, LocalAgentRequest,
+        PendingCreatorApproval, PendingSkillExecution, PetAction, PetSurface, PhysicalArea,
+        PrepareAgentToolRequest, ProfileMode, ProfilePolicy, ResolveAgentToolRequest,
+        ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SensorController, SensorDescriptor,
+        SensorSchedule, SensorSource, SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
         UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
         VOICE_SELECTION, WindowPolicy, agent_catalog_inner, agent_provider_status_inner,
         append_program_scope_diff, approve_automation_run_inner, approve_skill_execution_inner,
@@ -11950,8 +12033,8 @@ mod tests {
         resolve_active_voice, resolve_asset_selection, resolve_auto_mode_attempt_inner,
         resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
         run_live_automation_event, run_local_agent_inner, run_skill_agent_task,
-        run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
-        settle_action_for_surface, skill_capability_names, skill_event_types,
+        run_user_program_agent_task, screen_coordinate, sensor_health_snapshot,
+        serve_asset_protocol, settle_action_for_surface, skill_capability_names, skill_event_types,
         stage_creator_package, stop_skill_event_sessions, test_automation, user_program_input,
         valid_asset_identifier, validate_model_source, validate_package_source,
         validate_requested_animation_map, verify_capability_gap,
@@ -14333,6 +14416,46 @@ mod tests {
     fn accepts_finite_screen_coordinates() {
         assert_eq!(screen_coordinate(42.6).expect("valid coordinate"), 43);
         assert_eq!(screen_coordinate(-12.4).expect("valid coordinate"), -12);
+    }
+
+    #[test]
+    fn sensor_health_snapshot_preserves_every_controller() {
+        let schedule = SensorSchedule::default();
+        let controllers = [
+            SensorController::new(
+                SensorDescriptor {
+                    kind: ContextKind::Fullscreen,
+                    source: SensorSource::OperatingSystem,
+                },
+                schedule,
+                100,
+            )
+            .expect("fullscreen controller"),
+            SensorController::new(
+                SensorDescriptor {
+                    kind: ContextKind::DoNotDisturb,
+                    source: SensorSource::OperatingSystem,
+                },
+                schedule,
+                100,
+            )
+            .expect("do-not-disturb controller"),
+            SensorController::new(
+                SensorDescriptor {
+                    kind: ContextKind::Game,
+                    source: SensorSource::OperatingSystem,
+                },
+                schedule,
+                100,
+            )
+            .expect("game controller"),
+        ];
+        let health = sensor_health_snapshot(&controllers.iter().collect::<Vec<_>>());
+
+        assert_eq!(health.len(), 3);
+        assert_eq!(health[0].descriptor.kind, ContextKind::Fullscreen);
+        assert_eq!(health[1].descriptor.kind, ContextKind::DoNotDisturb);
+        assert_eq!(health[2].descriptor.kind, ContextKind::Game);
     }
 
     #[test]

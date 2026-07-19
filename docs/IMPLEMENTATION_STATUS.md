@@ -1,5 +1,12 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — Windows 活动状态低打扰感知
+
+- Windows 原生 Adapter 新增 `SHQueryUserNotificationState` 安全边界：D3D 全屏映射为 Game，Presentation、Busy 与首次登录 Quiet Time 映射为 Do Not Disturb；不读取进程名、窗口标题、注册表、通知正文或屏幕像素。
+- Fullscreen、Do Not Disturb 与 Game 使用三个独立 Sensor Controller、租约、失败退避和 Health Snapshot；Activity 状态每轮只查询一次，再投影为两个独立事实，Sensor 仍不得直接操作窗口。
+- `QUNS_NOT_PRESENT` 不被误报为免打扰；未知状态确定性映射为 inactive。该 Shell API 只能覆盖 Windows 提供的通知/演示与 D3D 全屏状态，不能代表 Vulkan、OpenGL、窗口化游戏或通用进程游戏识别。
+- 状态映射、零超时、三 Controller 健康投影、本机 Host 163 项测试、Windows Adapter Clippy 和完整 Desktop Windows 交叉检查均通过；签名 Windows 11 真机切换、控制中心健康展示和非 D3D 游戏行为仍为发布门禁。
+
 ## 2026-07-19 — Windows 前台全屏情境适配器
 
 - Windows 原生 Adapter 使用 `GetForegroundWindow`、窗口/显示器边界和 2px 原生框架舍入容差判断前台全屏，不读取窗口标题、进程命令行、屏幕像素或用户内容。

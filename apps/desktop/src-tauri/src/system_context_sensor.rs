@@ -81,6 +81,16 @@ pub fn sample_fullscreen(
     nimora_system_context_windows::sample_fullscreen(timeout)
 }
 
+#[cfg(target_os = "windows")]
+pub fn sample_activity(
+    timeout: std::time::Duration,
+) -> Result<
+    nimora_system_context_windows::WindowsActivitySnapshot,
+    nimora_system_context_windows::WindowsActivityError,
+> {
+    nimora_system_context_windows::sample_activity(timeout)
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(target_os = "macos")]

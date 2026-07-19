@@ -1,5 +1,14 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-19 Windows 游戏与免打扰感知
+
+- 结果：QQ 宠物式原生陪伴在 Windows 演示、Busy、Quiet Time 与 D3D 全屏期间可通过统一 Presence Policy 收敛，不再只理解几何全屏。
+- 架构：最小 FFI crate 将一次 Shell Activity 查询投影为 Do Not Disturb 与 Game 两个独立事实；连同 Fullscreen 共三个 Controller，各自保有租约、退避、停止状态和健康证据，Desktop Coordinator 仍是唯一窗口执行者。
+- 隐私与离线：不读取进程名、标题、通知正文、注册表或屏幕内容；完全本地，不依赖 AI、Provider 或网络。未知状态和 `QUNS_NOT_PRESENT` 保守映射为 inactive。
+- 边界：D3D Fullscreen 不等于通用游戏检测，无法证明 Vulkan、OpenGL 或窗口化游戏；Presentation/Busy/Quiet Time 是 Shell 活动状态，不宣称完整读取 Windows Focus Assist 配置。
+- 验证：状态映射、零超时、三 Controller Health、Host 163 项测试、Windows Adapter Clippy 与完整 Windows Desktop 交叉检查通过；签名 Windows 11 真机和控制中心状态呈现继续保留为发布门禁。
+- Actions：本地门禁完整通过后集中提交推送，不新增高频 Workflow，保护每月 2000 分钟预算。
+
 ## M-2026-07-19 QQ 宠物式正式双击互动
 
 - 结果：双击从临时 Celebrate 动画升级为正式陪伴行为，具备独立成长、Command/Event、Trace、失败原子性和一致的 Preview/Tauri 入口。
