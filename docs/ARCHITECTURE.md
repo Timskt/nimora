@@ -1,5 +1,7 @@
 # Nimora 系统架构
 
+桌面生命周期协调器同时约束应用 Resume 与 Shutdown：Resume 只能在激活 gate 内重放权威 Window Policy、纠正可见位置或请求 Pet Window Recovery；Shutdown 关闭 gate 后，任何迟到的系统唤醒事件都不能显示或重建窗口。该协议位于 Desktop Host，不向 Renderer、Sensor、Agent、Skill、Automation 或用户程序暴露原生句柄。
+
 > 版本：0.1.0-draft  
 > 更新日期：2026-07-18
 > 状态：开发基线

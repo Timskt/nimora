@@ -1,5 +1,14 @@
 # Nimora 功能测试计划
 
+## DESKTOP-LIFECYCLE-004 系统休眠与唤醒恢复
+
+- 在宠物可见、置顶开启/关闭、点击穿透开启/关闭的组合下休眠并唤醒 macOS 与 Windows；恢复后必须重新施加权威策略，不能短暂获得错误交互能力。
+- 唤醒前切换分辨率、主显示器、Dock/任务栏位置或断开宠物所在显示器；可见宠物应立即回到有效 Work Area，支持负坐标与混合 DPI，不能等待下一次自主动作。
+- Presence/Profile 策略隐藏宠物后休眠唤醒；恢复协议不得显示宠物、抢焦点或打开控制中心。
+- 在休眠期间终止 Pet WebView/窗口，唤醒后仅允许一个有界 Recovery Worker 重建；注入连续失败时按既有预算降级，不形成重建风暴。
+- 让 Resume 与明确退出、系统注销并发 100 次；Shutdown gate 返回后不得重放窗口策略、创建宠物或启动恢复线程，失败仅记录 `desktop.application.resume-failed`。
+- Browser Preview 不作为系统休眠、原生置顶、点击穿透、Work Area、DPI 或窗口重建证据；必须使用签名 macOS/Windows 包验证。
+
 ## DESKTOP-LOGIN-001 登录后自动陪伴
 
 - 全新安装默认关闭；控制中心首次加载读取系统权威状态，不以本地缓存猜测。

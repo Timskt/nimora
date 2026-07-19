@@ -1007,6 +1007,22 @@ struct WindowPolicy {
     visible: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PetResumePlan {
+    RestoreExisting { ensure_visible: bool },
+    RecoverMissing,
+}
+
+fn plan_pet_resume(has_window: bool, policy: WindowPolicy) -> PetResumePlan {
+    if has_window {
+        PetResumePlan::RestoreExisting {
+            ensure_visible: policy.visible,
+        }
+    } else {
+        PetResumePlan::RecoverMissing
+    }
+}
+
 impl WindowPolicy {
     const SAFE: Self = Self {
         always_on_top: true,
@@ -11372,6 +11388,24 @@ fn publish_shutdown_flush_failure(app: &AppHandle, error: &DesktopError) {
     );
 }
 
+fn publish_application_resume_failure(app: &AppHandle, error: &DesktopError) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    let _ = state.events.publish(
+        Event::new(
+            "desktop.application.resume-failed",
+            EventSource::System("desktop".to_owned()),
+            serde_json::json!({ "error": error.to_string() }),
+        )
+        .unwrap_or_else(|event_error| {
+            unreachable!(
+                "static application resume failure event contract is invalid: {event_error}"
+            )
+        }),
+    );
+}
+
 #[cfg(target_os = "macos")]
 fn publish_application_reopen_failure(app: &AppHandle, error: &DesktopError) {
     let Some(state) = app.try_state::<DesktopState>() else {
@@ -11414,6 +11448,28 @@ fn show_control_center(app: &AppHandle, source: &'static str) -> Result<Command,
         "desktop.window.control-center-opened",
         serde_json::json!({ "source": source }),
     )
+}
+
+fn resume_desktop_pet(app: &AppHandle) -> Result<(), DesktopError> {
+    let state = app.state::<DesktopState>();
+    state
+        .lifecycle
+        .activation
+        .run_if_active(|| {
+            let policy = current_window_policy(&state)?;
+            match plan_pet_resume(app.get_webview_window(PET_WINDOW_LABEL).is_some(), policy) {
+                PetResumePlan::RestoreExisting { ensure_visible } => {
+                    apply_window_policy(app, policy, policy)?;
+                    if ensure_visible {
+                        ensure_pet_window_visible(app)?;
+                    }
+                }
+                PetResumePlan::RecoverMissing => schedule_pet_window_recovery(app.clone()),
+            }
+            Ok::<(), DesktopError>(())
+        })
+        .ok_or(DesktopError::ShutdownInProgress)??;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11980,6 +12036,11 @@ pub fn run() {
             let _ = quiesce_auto_mode_jobs(&state, AUTO_MODE_SHUTDOWN_TIMEOUT, "shutdown-timeout");
             let _ = stop_automation_event_sessions(&state);
         }
+        RunEvent::Resumed => {
+            if let Err(error) = resume_desktop_pet(app) {
+                publish_application_resume_failure(app, &error);
+            }
+        }
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => {
             if let Err(error) = show_control_center(app, "application-reopen") {
@@ -12314,8 +12375,8 @@ mod tests {
         DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
         DesktopProviderCredentialResolver, DesktopResolveAutoModeAttemptRequest,
         DesktopSecretStore, DesktopState, ExecutionCancellation, LocalAgentRequest,
-        PendingCreatorApproval, PendingSkillExecution, PetAction, PetSurface, PhysicalArea,
-        PrepareAgentToolRequest, ProfileMode, ProfilePolicy, ResolveAgentToolRequest,
+        PendingCreatorApproval, PendingSkillExecution, PetAction, PetResumePlan, PetSurface,
+        PhysicalArea, PrepareAgentToolRequest, ProfileMode, ProfilePolicy, ResolveAgentToolRequest,
         ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SensorController, SensorDescriptor,
         SensorSchedule, SensorSource, SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
         UserProgramAgentContextSegment, UserProgramAgentTask, UserProgramRollbackReceipt,
@@ -12334,18 +12395,19 @@ mod tests {
         install_generated_theme, install_gltf_character, open_diagnostic_journal,
         parse_asset_protocol_path, parse_user_program_plan, pause_auto_mode_job_inner,
         permission_grant, persist_asset_selection, pet_autonomy_policy,
-        plan_cursor_approach_target, plan_edge_snap_position, plan_surface_wander_target,
-        plan_wander_target, prepare_agent_tool_inner, profile_cursor_approach_enabled,
-        quiesce_auto_mode_jobs, recover_visible_position, reject_agent_tool_inner,
-        reject_automation_run_inner, resolve_active_character, resolve_active_theme,
-        resolve_active_voice, resolve_asset_selection, resolve_auto_mode_attempt_inner,
-        resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
-        run_live_automation_event, run_local_agent_inner, run_skill_agent_task,
-        run_user_program_agent_task, screen_coordinate, sensor_health_snapshot,
-        serve_asset_protocol, settle_action_for_surface, skill_capability_names, skill_event_types,
-        stage_creator_package, stop_skill_event_sessions, test_automation, user_program_input,
-        valid_asset_identifier, validate_model_source, validate_package_source,
-        validate_requested_animation_map, verify_capability_gap,
+        plan_cursor_approach_target, plan_edge_snap_position, plan_pet_resume,
+        plan_surface_wander_target, plan_wander_target, prepare_agent_tool_inner,
+        profile_cursor_approach_enabled, quiesce_auto_mode_jobs, recover_visible_position,
+        reject_agent_tool_inner, reject_automation_run_inner, resolve_active_character,
+        resolve_active_theme, resolve_active_voice, resolve_asset_selection,
+        resolve_auto_mode_attempt_inner, resolve_character_renderer, resume_auto_mode_turn_inner,
+        run_live_automation, run_live_automation_event, run_local_agent_inner,
+        run_skill_agent_task, run_user_program_agent_task, screen_coordinate,
+        sensor_health_snapshot, serve_asset_protocol, settle_action_for_surface,
+        skill_capability_names, skill_event_types, stage_creator_package,
+        stop_skill_event_sessions, test_automation, user_program_input, valid_asset_identifier,
+        validate_model_source, validate_package_source, validate_requested_animation_map,
+        verify_capability_gap,
     };
     use nimora_agent_runtime::{
         AgentBudget, AgentGoal, AgentPlan, AgentPlanStep, AgentTask, AgentTaskOrigin,
@@ -16727,6 +16789,35 @@ mod tests {
         assert_eq!(
             serde_json::to_value(PetAction::Celebrate).unwrap(),
             "celebrate"
+        );
+    }
+
+    #[test]
+    fn resume_plan_restores_policy_without_revealing_hidden_pet() {
+        let visible = WindowPolicy {
+            always_on_top: true,
+            click_through: false,
+            visible: true,
+        };
+        let hidden = WindowPolicy {
+            visible: false,
+            ..visible
+        };
+        assert_eq!(
+            plan_pet_resume(true, visible),
+            PetResumePlan::RestoreExisting {
+                ensure_visible: true
+            }
+        );
+        assert_eq!(
+            plan_pet_resume(true, hidden),
+            PetResumePlan::RestoreExisting {
+                ensure_visible: false
+            }
+        );
+        assert_eq!(
+            plan_pet_resume(false, visible),
+            PetResumePlan::RecoverMissing
         );
     }
 

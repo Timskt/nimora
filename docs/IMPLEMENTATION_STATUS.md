@@ -1,5 +1,11 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — 系统唤醒后的桌宠原生恢复
+
+- Tauri `RunEvent::Resumed` 已接入 Desktop Lifecycle Gate；唤醒只在运行期准入区重放当前置顶、点击穿透与可见策略，退出开始后永久拒绝迟到 Resume。
+- 可见宠物立即按当前原生 Work Area 纠正位置；策略隐藏的宠物保持隐藏。Pet Window 缺失时复用单 Worker、有界退避 Recovery，不并行创建第二窗口。
+- 纯规划测试覆盖可见恢复、隐藏不揭示与窗口缺失分流；桌面端真实休眠、显示器热插拔、混合 DPI、GPU/WebView 回收和退出竞态仍需 macOS/Windows 签名包验证。
+
 ## 2026-07-19 — 关停期间控制中心激活准入
 
 - 新增 Tauri-free `DesktopLifecycleGate`，所有运行期控制中心显示入口在互斥准入区执行；关停等待已准入操作完成并永久拒绝后续 Dock、第二实例、托盘、桌宠与恢复降级激活。

@@ -1,5 +1,7 @@
 # Nimora 原生桌面宠物体验规范
 
+系统事件循环 `Resumed` 进入独立的桌宠恢复协议：Desktop Host 在生命周期激活 gate 内重放当前权威窗口策略，恢复置顶与点击穿透状态；仅当策略要求可见时才立即执行 Work Area 可见性纠正，Profile、Presence 或安全策略隐藏的宠物不会因唤醒被擅自显示。若原生 Pet Window 在休眠、GPU/WebView 重建或系统资源回收期间丢失，唤醒路径只启动既有单 Worker、有界退避恢复，不创建第二套窗口。退出已经开始时 Resume 永久拒绝，避免关机/注销竞态反向复活桌宠；失败记录 `desktop.application.resume-failed`，不启动 AI、网络或扩展代码。
+
 ## 登录后常驻陪伴
 
 Nimora 提供默认关闭、由用户明确开启的“登录后自动陪伴”。控制中心是唯一管理入口，使用 Tauri 官方 Autostart 插件读取和修改操作系统登录项；写入后必须重新查询权威状态，系统拒绝、权限故障或只读环境不得被乐观 UI 伪装为成功。macOS 使用 LaunchAgent，Windows 使用系统登录启动机制；Pet Window、Renderer、AI、Agent、Skill、Automation 与用户程序均不持有该权限。
