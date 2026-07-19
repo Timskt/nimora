@@ -20,6 +20,14 @@
 - 主实例控制中心异常不可用时，第二实例退出且主实例记录 `desktop.single-instance.activation-failed`；不得为恢复焦点创建未审计窗口或启动第二个 Runtime。
 - macOS 与 Windows 安装包真机验证用户会话隔离、快速重复点击、登录重登和升级后稳定性；Browser Preview 不宣称提供进程互斥证据。
 
+## DESKTOP-LIFECYCLE-001 Dock 与应用激活恢复
+
+- macOS 签名安装包中分别关闭和最小化控制中心，再点击 Dock 图标；既有控制中心必须显示、取消最小化并聚焦，桌宠、托盘、Runtime 与数据库写入者数量保持为一。
+- Pet Window 已可见、点击穿透开启、Focus/Presentation/Safe/Recovery Mode 各状态下点击 Dock；均不得因“已有可见窗口”跳过控制中心恢复，也不得改变桌宠语义状态或安全模式。
+- 快速重复点击 Dock，确认入口幂等，不创建新窗口、不重复初始化 Runtime，不触发 Provider、Agent、Auto Mode、Automation、Skill、用户程序或网络请求。
+- 模拟控制中心缺失、原生显示失败和事件存储失败；应用记录 `desktop.application.reopen-failed` 后继续常驻。窗口已恢复但审计失败时不得再次隐藏窗口或退出 Runtime。
+- Windows 重复启动继续验证 `DESKTOP-INSTANCE-001` 的单实例恢复，不以 macOS `Reopen` 冒充任务栏激活协议；两平台均需签名真机记录，Browser Preview 不作为原生焦点证据。
+
 ## 桌面边缘 Surface Semantic
 
 1. 在带左侧 80px 与顶部 30px 系统保留区的 Work Area 上，分别验证 Free、Left、Right、Top、Bottom 和四个 Corner；分类边界必须叠加 16/24/48px 生命体安全边距，而不是使用整屏边界。

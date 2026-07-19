@@ -11353,6 +11353,25 @@ fn publish_second_instance_failure(app: &AppHandle, error: &DesktopError) {
     );
 }
 
+#[cfg(target_os = "macos")]
+fn publish_application_reopen_failure(app: &AppHandle, error: &DesktopError) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    let _ = state.events.publish(
+        Event::new(
+            "desktop.application.reopen-failed",
+            EventSource::System("desktop".to_owned()),
+            serde_json::json!({ "error": error.to_string() }),
+        )
+        .unwrap_or_else(|event_error| {
+            unreachable!(
+                "static application reopen failure event contract is invalid: {event_error}"
+            )
+        }),
+    );
+}
+
 fn restore_control_center_window(app: &AppHandle) -> Result<(), DesktopError> {
     let window = app
         .get_webview_window(CONTROL_CENTER_LABEL)
@@ -11857,14 +11876,21 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("Nimora desktop runtime failed during bootstrap");
-    application.run(|app, event| {
-        if matches!(event, RunEvent::ExitRequested { .. }) {
+    application.run(|app, event| match event {
+        RunEvent::ExitRequested { .. } => {
             let state = app.state::<DesktopState>();
             state.pet_window_recovery.begin_shutdown();
             state.autonomy_stop.store(true, Ordering::Release);
             let _ = quiesce_auto_mode_jobs(&state, AUTO_MODE_SHUTDOWN_TIMEOUT, "shutdown-timeout");
             let _ = stop_automation_event_sessions(&state);
         }
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => {
+            if let Err(error) = show_control_center(app, "application-reopen") {
+                publish_application_reopen_failure(app, &error);
+            }
+        }
+        _ => {}
     });
 }
 

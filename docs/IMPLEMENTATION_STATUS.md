@@ -1,5 +1,11 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — macOS Dock 重开恢复
+
+- 原生应用事件循环现处理 Tauri `RunEvent::Reopen`；无论其他窗口是否可见，均复用统一事务显示、取消最小化并聚焦既有控制中心。
+- 重开不创建窗口、不解释参数，也不启动 AI、Agent、Auto Mode、Automation、Skill、用户程序或网络请求；失败写入独立的 `desktop.application.reopen-failed` 后继续保持桌宠 Runtime。
+- Windows 仍由官方 Single Instance 插件承担重复启动恢复。编译门禁不能替代 Dock 点击、焦点、快速重开和事件存储故障的 macOS 签名真机验收，Browser Preview 不作为证据。
+
 ## 2026-07-19 — 原生单实例协调
 
 - 已接入 Tauri 官方 Single Instance 插件并置于插件链首位；同一用户会话的第二次启动只唤醒既有控制中心，不创建第二套 Runtime、桌宠或托盘。
