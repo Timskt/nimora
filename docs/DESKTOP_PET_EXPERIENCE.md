@@ -8,6 +8,10 @@
 
 自主 Explore 由 Desktop Coordinator 在当前原生 Work Area 内规划目标，并以有界帧数移动桌宠窗口；Renderer 不读取显示器、系统栏或窗口句柄。角色资源以“默认面向右侧”为统一创作基线，表现层根据权威 Autonomy Sequence 在 Walking 期间确定性投影 Left/Right，并在动作结束后回到 Neutral。内置、Sprite、glTF、VRM 与未来 Live2D 必须复用统一角色舞台变换，不能分别维护方向状态，否则会在取消、拖拽、重启和 Renderer 切换时发生漂移。
 
+边缘姿态不是自主生命循环的终点。Perching、Climbing 与 Peeking 可以像 Idle 一样进入离线自主 Observe、Explore 或 Rest；Core 在动作开始时记录受限 `resumeAction`，完成或安静策略抑制后恢复原边缘姿态，用户拖拽和其它显式状态抢占则丢弃恢复点。`resumeAction` 只允许 Perch、Climb、Peek，篡改快照写入 Work、Sleep 或无活动 Intent 的恢复点必须在持久化边界失败关闭。
+
+从边缘开始的 Explore 由 Desktop Coordinator 沿当前 Surface 移动：Top/Bottom 及其 Corner 保持固定纵坐标水平行走，Left/Right 保持固定横坐标上下攀行，Free 继续使用二维漫游。目标始终位于当前显示器 Work Area 与生命体安全边距内；到达轴向端点时确定性反向而不是原地踏步。Corner 归属沿 Drop 契约保持唯一：顶部 Corner 属于 Top，底部 Corner 属于 Bottom。无显示器、拖拽、Safe/Recovery、Profile 静默或状态变化立即停止，不猜测另一块屏幕，也不授予 Renderer、AI、Skill 或用户代码移窗能力。
+
 朝向只改变角色视觉，不镜像气泡、菜单、阴影命中区域或无障碍文本；Reduced Motion 关闭镜像过渡而不是删除方向反馈。旧资产无需迁移，若资产本身默认面向左侧，应在未来版本化资产描述符中显式声明基础朝向，不能依赖文件名或模型内容猜测。
 
 ## 桌面表面与边缘栖息

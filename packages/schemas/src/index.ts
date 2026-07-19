@@ -117,6 +117,7 @@ export const petSchema = z.object({
     nextDueMs: z.number().int().nonnegative(),
     activeUntilMs: z.number().int().nonnegative().nullable(),
     activeIntent: z.enum(["observe", "explore", "rest"]).nullable(),
+    resumeAction: z.enum(["perch", "climb", "peek"]).nullable().optional(),
   }).optional(),
 });
 

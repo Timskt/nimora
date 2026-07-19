@@ -1063,3 +1063,20 @@ ID / 标题 / 优先级 / 前置条件
 | DP-SETTLE-007 | 边缘吸附后 Runtime 保存失败 | 原生窗口补偿回拖放前位置；补偿失败显式报错，不宣称事务成功 |
 | DP-SETTLE-008 | Drop 成功 | 清除 Drag 标记后只发布一次稳定 Surface 事件，Renderer 从同一 Snapshot 选择动作 |
 | DP-SETTLE-009 | 关闭 edge snap | 仍对最终实际坐标分类；仅精确位于 Surface 容差内时自动动作，否则 Idle |
+
+## DP-EDGE-WANDER — 沿边自主移动
+
+| ID | 场景 | 预期 |
+|---|---|---|
+| DP-EDGE-WANDER-001 | Perching/Climbing/Peeking 到达自主调度时间 | 可以启动 Observe、Explore 或 Rest，并记录对应 Perch/Climb/Peek `resumeAction` |
+| DP-EDGE-WANDER-002 | 边缘自主动作正常完成 | 恢复动作开始前的边缘姿态，清空恢复点并进入正常 Cooldown，不回到错误 Idle |
+| DP-EDGE-WANDER-003 | Profile Quiet/Focus 在动作中生效 | 立即抑制动作并恢复原边缘姿态；不访问网络、不等待 AI 或权限确认 |
+| DP-EDGE-WANDER-004 | 用户在沿边移动中开始拖拽 | Dragged 优先，恢复点被丢弃；后续 Interrupt 不覆盖用户状态 |
+| DP-EDGE-WANDER-005 | Top/TopLeft/TopRight Explore | 固定安全 Top 坐标，仅水平移动；顶部 Corner 不切换为侧边攀行 |
+| DP-EDGE-WANDER-006 | Bottom/BottomLeft/BottomRight Explore | 固定安全 Bottom 坐标，仅水平移动；底部 Corner 不切换为侧边攀行 |
+| DP-EDGE-WANDER-007 | Left/Right Explore | 固定对应安全横坐标，仅垂直移动，不越过顶部或底部生命体安全边距 |
+| DP-EDGE-WANDER-008 | 位于轴向端点且序列指向外侧 | 规划器自动反向产生非零有界目标，不发生重复原地 Walking |
+| DP-EDGE-WANDER-009 | Free Explore | 保持原二维 Wander 规则、方向序列和跨负坐标显示器安全约束 |
+| DP-EDGE-WANDER-010 | 当前显示器消失、Safe/Recovery 或状态被抢占 | 原生移动停止且不跨屏猜测；Desktop Coordinator 仍为唯一窗口执行者 |
+| DP-EDGE-WANDER-011 | 持久快照包含非法恢复动作或无活动 Intent 的恢复点 | Core 校验拒绝恢复，不执行 Work/Sleep/Celebrate 等越权姿态 |
+| DP-EDGE-WANDER-012 | 重启与旧快照迁移 | 缺失 `resumeAction` 默认 `null`；瞬时自主状态沿启动恢复规则收敛，不伪造边缘移动完成 |

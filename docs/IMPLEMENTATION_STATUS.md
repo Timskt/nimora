@@ -1,5 +1,14 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — QQ 宠物式沿边自主移动
+
+- Perching、Climbing、Peeking 现可参与完整离线自主循环；Core 用可迁移 `resumeAction` 保存动作前边缘姿态，完成或 Quiet/Focus 抑制后恢复，拖拽或外部状态抢占时清除而不覆盖用户意图。
+- `resumeAction` 只接受 Perch、Climb、Peek 且必须绑定活动 Intent；旧快照缺字段默认 `null`，非法持久数据在领域恢复边界失败关闭。
+- Desktop Coordinator 根据移动开始时的权威 Surface 规划路径：Top/Bottom 水平沿边，Left/Right 垂直攀行，Free 保持二维 Wander；顶部和底部 Corner 分别继承对应水平边。
+- 所有目标复用原生 Work Area、窗口物理尺寸与 16/24/48px 生命体安全边距；轴向端点自动反向，负坐标副屏和窄工作区继续使用饱和/夹紧运算。
+- Renderer、AI、Skill、Program 与 Sensor 仍无窗口句柄；动作完全离线，拖拽、Safe/Recovery 和状态变化会在每帧门禁停止移动。
+- 纯领域测试覆盖三种姿态恢复、拖拽抢占和恶意恢复点；纯几何测试覆盖四边、Corner、负坐标与端点反向。签名 macOS/Windows 的视觉连续性与动态系统栏仍待真机门禁，不据此虚报完成。
+
 ## 2026-07-19 — 桌面边缘 Surface Semantic
 
 - Desktop Coordinator 新增版本化 `nimora.pet-surface/1` 投影，基于当前显示器原生 Work Area 与统一生命体安全边距，把位置分类为 Free、四条边或四个角；Renderer、AI、Skill 和用户代码不读取显示器或窗口句柄。

@@ -427,6 +427,57 @@ fn plan_wander_target(
     )
 }
 
+fn bounded_axis_step(current: i64, minimum: i64, maximum: i64, step: i64, direction: i64) -> i64 {
+    let preferred = current
+        .saturating_add(step.saturating_mul(direction))
+        .clamp(minimum, maximum);
+    if preferred == current && minimum != maximum {
+        current
+            .saturating_sub(step.saturating_mul(direction))
+            .clamp(minimum, maximum)
+    } else {
+        preferred
+    }
+}
+
+fn plan_surface_wander_target(
+    current: tauri::PhysicalPosition<i32>,
+    window_size: tauri::PhysicalSize<u32>,
+    monitor: PhysicalArea,
+    surface: PetSurface,
+    sequence: u64,
+) -> tauri::PhysicalPosition<i32> {
+    const HORIZONTAL_STEP: i64 = 140;
+    const VERTICAL_STEP: i64 = 96;
+    let (minimum_x, minimum_y, maximum_x, maximum_y) = safe_position_bounds(window_size, monitor);
+    let direction = if sequence.is_multiple_of(2) { 1 } else { -1 };
+    let current_x = i64::from(current.x).clamp(minimum_x, maximum_x);
+    let current_y = i64::from(current.y).clamp(minimum_y, maximum_y);
+    let (x, y) = match surface {
+        PetSurface::Bottom | PetSurface::BottomLeft | PetSurface::BottomRight => (
+            bounded_axis_step(current_x, minimum_x, maximum_x, HORIZONTAL_STEP, direction),
+            maximum_y,
+        ),
+        PetSurface::Top | PetSurface::TopLeft | PetSurface::TopRight => (
+            bounded_axis_step(current_x, minimum_x, maximum_x, HORIZONTAL_STEP, direction),
+            minimum_y,
+        ),
+        PetSurface::Left => (
+            minimum_x,
+            bounded_axis_step(current_y, minimum_y, maximum_y, VERTICAL_STEP, direction),
+        ),
+        PetSurface::Right => (
+            maximum_x,
+            bounded_axis_step(current_y, minimum_y, maximum_y, VERTICAL_STEP, direction),
+        ),
+        PetSurface::Free => return plan_wander_target(current, window_size, monitor, sequence),
+    };
+    tauri::PhysicalPosition::new(
+        i32::try_from(x).unwrap_or(current.x),
+        i32::try_from(y).unwrap_or(current.y),
+    )
+}
+
 #[derive(Debug)]
 struct DesktopState {
     native_app: Option<AppHandle>,
@@ -11716,7 +11767,9 @@ fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
         .snapshot()?
         .autonomy
         .sequence;
-    let target = plan_wander_target(current, window_size, monitor_work_area(&monitor), sequence);
+    let work_area = monitor_work_area(&monitor);
+    let surface = classify_pet_surface(current, window_size, work_area);
+    let target = plan_surface_wander_target(current, window_size, work_area, surface, sequence);
     for frame in 1..=PET_WANDER_FRAMES {
         let state = app.state::<DesktopState>();
         if state.dragging.load(Ordering::Acquire)
@@ -11795,15 +11848,15 @@ mod tests {
         install_generated_theme, install_gltf_character, open_diagnostic_journal,
         parse_asset_protocol_path, parse_user_program_plan, pause_auto_mode_job_inner,
         permission_grant, persist_asset_selection, pet_autonomy_policy, plan_edge_snap_position,
-        plan_wander_target, prepare_agent_tool_inner, quiesce_auto_mode_jobs,
-        recover_visible_position, reject_agent_tool_inner, reject_automation_run_inner,
-        resolve_active_character, resolve_active_theme, resolve_active_voice,
-        resolve_asset_selection, resolve_auto_mode_attempt_inner, resolve_character_renderer,
-        resume_auto_mode_turn_inner, run_live_automation, run_live_automation_event,
-        run_local_agent_inner, run_skill_agent_task, run_user_program_agent_task,
-        screen_coordinate, serve_asset_protocol, skill_capability_names, skill_event_types,
-        settle_action_for_surface, stage_creator_package, stop_skill_event_sessions,
-        test_automation, user_program_input,
+        plan_surface_wander_target, plan_wander_target, prepare_agent_tool_inner,
+        quiesce_auto_mode_jobs, recover_visible_position, reject_agent_tool_inner,
+        reject_automation_run_inner, resolve_active_character, resolve_active_theme,
+        resolve_active_voice, resolve_asset_selection, resolve_auto_mode_attempt_inner,
+        resolve_character_renderer, resume_auto_mode_turn_inner, run_live_automation,
+        run_live_automation_event, run_local_agent_inner, run_skill_agent_task,
+        run_user_program_agent_task, screen_coordinate, serve_asset_protocol,
+        settle_action_for_surface, skill_capability_names, skill_event_types,
+        stage_creator_package, stop_skill_event_sessions, test_automation, user_program_input,
         valid_asset_identifier, validate_model_source, validate_package_source,
         validate_requested_animation_map, verify_capability_gap,
     };
@@ -13363,7 +13416,17 @@ mod tests {
         assert_eq!(value["spec"], "nimora.pet-action-catalog/1");
         assert_eq!(
             value["actions"],
-            json!(["idle", "observe", "walk", "perch", "climb", "peek", "sleep", "work", "celebrate"])
+            json!([
+                "idle",
+                "observe",
+                "walk",
+                "perch",
+                "climb",
+                "peek",
+                "sleep",
+                "work",
+                "celebrate"
+            ])
         );
         assert_eq!(value["commandTool"], "pet.animation.play");
     }
@@ -14295,14 +14358,99 @@ mod tests {
     #[test]
     fn surface_settle_mapping_keeps_edge_actions_disjoint() {
         assert_eq!(settle_action_for_surface(PetSurface::Free), PetAction::Idle);
-        assert_eq!(settle_action_for_surface(PetSurface::Left), PetAction::Climb);
-        assert_eq!(settle_action_for_surface(PetSurface::Right), PetAction::Climb);
+        assert_eq!(
+            settle_action_for_surface(PetSurface::Left),
+            PetAction::Climb
+        );
+        assert_eq!(
+            settle_action_for_surface(PetSurface::Right),
+            PetAction::Climb
+        );
         assert_eq!(settle_action_for_surface(PetSurface::Top), PetAction::Peek);
-        assert_eq!(settle_action_for_surface(PetSurface::TopLeft), PetAction::Peek);
-        assert_eq!(settle_action_for_surface(PetSurface::TopRight), PetAction::Peek);
-        assert_eq!(settle_action_for_surface(PetSurface::Bottom), PetAction::Perch);
-        assert_eq!(settle_action_for_surface(PetSurface::BottomLeft), PetAction::Perch);
-        assert_eq!(settle_action_for_surface(PetSurface::BottomRight), PetAction::Perch);
+        assert_eq!(
+            settle_action_for_surface(PetSurface::TopLeft),
+            PetAction::Peek
+        );
+        assert_eq!(
+            settle_action_for_surface(PetSurface::TopRight),
+            PetAction::Peek
+        );
+        assert_eq!(
+            settle_action_for_surface(PetSurface::Bottom),
+            PetAction::Perch
+        );
+        assert_eq!(
+            settle_action_for_surface(PetSurface::BottomLeft),
+            PetAction::Perch
+        );
+        assert_eq!(
+            settle_action_for_surface(PetSurface::BottomRight),
+            PetAction::Perch
+        );
+    }
+
+    #[test]
+    fn surface_wander_stays_on_each_safe_edge() {
+        let monitor = PhysicalArea {
+            x: -1200,
+            y: 40,
+            width: 1200,
+            height: 900,
+        };
+        let window = tauri::PhysicalSize::new(260, 300);
+        let top = plan_surface_wander_target(
+            tauri::PhysicalPosition::new(-900, 56),
+            window,
+            monitor,
+            PetSurface::Top,
+            2,
+        );
+        let bottom = plan_surface_wander_target(
+            tauri::PhysicalPosition::new(-900, 592),
+            window,
+            monitor,
+            PetSurface::BottomRight,
+            3,
+        );
+        let left = plan_surface_wander_target(
+            tauri::PhysicalPosition::new(-1184, 300),
+            window,
+            monitor,
+            PetSurface::Left,
+            2,
+        );
+        let right = plan_surface_wander_target(
+            tauri::PhysicalPosition::new(-276, 300),
+            window,
+            monitor,
+            PetSurface::Right,
+            3,
+        );
+        assert_eq!(top, tauri::PhysicalPosition::new(-760, 64));
+        assert_eq!(bottom, tauri::PhysicalPosition::new(-1040, 592));
+        assert_eq!(left, tauri::PhysicalPosition::new(-1184, 396));
+        assert_eq!(right, tauri::PhysicalPosition::new(-276, 204));
+    }
+
+    #[test]
+    fn surface_wander_reverses_at_edge_instead_of_stalling() {
+        let monitor = PhysicalArea {
+            x: 0,
+            y: 0,
+            width: 1200,
+            height: 900,
+        };
+        let window = tauri::PhysicalSize::new(260, 300);
+        assert_eq!(
+            plan_surface_wander_target(
+                tauri::PhysicalPosition::new(924, 552),
+                window,
+                monitor,
+                PetSurface::Bottom,
+                2,
+            ),
+            tauri::PhysicalPosition::new(784, 552)
+        );
     }
 
     #[test]

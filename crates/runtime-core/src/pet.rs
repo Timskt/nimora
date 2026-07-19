@@ -198,6 +198,8 @@ pub struct PetAutonomyState {
     pub next_due_ms: u64,
     pub active_until_ms: Option<u64>,
     pub active_intent: Option<PetIntent>,
+    #[serde(default)]
+    pub resume_action: Option<PetAction>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -534,6 +536,7 @@ impl Pet {
         }
         self.state = PetState::Dragged;
         self.emotion = Emotion::Surprised;
+        self.autonomy.resume_action = None;
         Ok(())
     }
 
@@ -595,6 +598,15 @@ impl Pet {
             || self.bond_points > Self::MAX_BOND_POINTS
         {
             return Err(PetError::InvalidVitals);
+        }
+        if self.autonomy.resume_action.is_some_and(|action| {
+            self.autonomy.active_intent.is_none()
+                || !matches!(
+                    action,
+                    PetAction::Perch | PetAction::Climb | PetAction::Peek
+                )
+        }) {
+            return Err(PetError::InvalidTransition);
         }
         if self.keepsakes.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err(PetError::InvalidCollection);
@@ -831,7 +843,10 @@ impl Pet {
         if !policy.enabled || policy.quiet || policy.focus {
             return PetAutonomyDecision::Noop;
         }
-        if self.state != PetState::Idle {
+        if !matches!(
+            self.state,
+            PetState::Idle | PetState::Perching | PetState::Climbing | PetState::Peeking
+        ) {
             return PetAutonomyDecision::Noop;
         }
         if self.autonomy.next_due_ms == 0 {
@@ -871,6 +886,12 @@ impl Pet {
                 self.autonomy.next_due_ms = next_due_ms;
             }
             PetAutonomyDecision::Start { intent, action } => {
+                self.autonomy.resume_action = match self.state {
+                    PetState::Perching => Some(PetAction::Perch),
+                    PetState::Climbing => Some(PetAction::Climb),
+                    PetState::Peeking => Some(PetAction::Peek),
+                    _ => None,
+                };
                 self.apply_action(action);
                 self.autonomy.active_intent = Some(intent);
                 self.autonomy.active_until_ms =
@@ -884,20 +905,23 @@ impl Pet {
                         .saturating_add(Self::AUTONOMY_REST_ENERGY_GAIN)
                         .min(100);
                 }
-                self.apply_action(PetAction::Idle);
+                self.apply_action(self.autonomy.resume_action.unwrap_or(PetAction::Idle));
                 self.autonomy.active_intent = None;
                 self.autonomy.active_until_ms = None;
+                self.autonomy.resume_action = None;
                 self.autonomy.next_due_ms = now_ms.saturating_add(policy.cooldown_ms);
             }
             PetAutonomyDecision::Suppress => {
-                self.apply_action(PetAction::Idle);
+                self.apply_action(self.autonomy.resume_action.unwrap_or(PetAction::Idle));
                 self.autonomy.active_intent = None;
                 self.autonomy.active_until_ms = None;
+                self.autonomy.resume_action = None;
                 self.autonomy.next_due_ms = 0;
             }
             PetAutonomyDecision::Interrupt => {
                 self.autonomy.active_intent = None;
                 self.autonomy.active_until_ms = None;
+                self.autonomy.resume_action = None;
                 self.autonomy.next_due_ms = now_ms.saturating_add(policy.cooldown_ms);
             }
         }
@@ -971,6 +995,82 @@ mod tests {
         pet.apply_autonomy_decision(finished, policy, 115);
         assert_eq!(pet.state, PetState::Idle);
         assert_eq!(pet.autonomy.next_due_ms, 135);
+    }
+
+    #[test]
+    fn edge_posture_resumes_after_autonomous_action() {
+        let policy = PetAutonomyPolicy {
+            idle_delay_ms: 10,
+            action_duration_ms: 5,
+            cooldown_ms: 20,
+            ..PetAutonomyPolicy::default()
+        };
+        for (action, state) in [
+            (PetAction::Perch, PetState::Perching),
+            (PetAction::Climb, PetState::Climbing),
+            (PetAction::Peek, PetState::Peeking),
+        ] {
+            let mut pet = Pet::new("Aster").expect("valid pet");
+            pet.apply_action(action);
+            pet.autonomy.next_due_ms = 100;
+            let started = pet.autonomy_decision(policy, 100);
+            pet.apply_autonomy_decision(started, policy, 100);
+            assert_eq!(pet.autonomy.resume_action, Some(action));
+            assert_ne!(pet.state, state);
+            pet.apply_autonomy_decision(PetAutonomyDecision::Finish, policy, 105);
+            assert_eq!(pet.state, state);
+            assert_eq!(pet.autonomy.resume_action, None);
+        }
+    }
+
+    #[test]
+    fn drag_discards_edge_posture_resume() {
+        let policy = PetAutonomyPolicy::default();
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.apply_action(PetAction::Climb);
+        pet.autonomy.next_due_ms = 100;
+        let started = pet.autonomy_decision(policy, 100);
+        pet.apply_autonomy_decision(started, policy, 100);
+        pet.begin_drag().expect("drag preempts autonomy");
+        assert_eq!(pet.autonomy.resume_action, None);
+        pet.apply_autonomy_decision(PetAutonomyDecision::Interrupt, policy, 101);
+        assert_eq!(pet.state, PetState::Dragged);
+    }
+
+    #[test]
+    fn quiet_policy_restores_edge_posture() {
+        let policy = PetAutonomyPolicy::default();
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.apply_action(PetAction::Peek);
+        pet.autonomy.next_due_ms = 100;
+        let started = pet.autonomy_decision(policy, 100);
+        pet.apply_autonomy_decision(started, policy, 100);
+
+        let quiet_policy = PetAutonomyPolicy {
+            quiet: true,
+            ..policy
+        };
+        let suppressed = pet.autonomy_decision(quiet_policy, 101);
+        assert_eq!(suppressed, PetAutonomyDecision::Suppress);
+        pet.apply_autonomy_decision(suppressed, quiet_policy, 101);
+        assert_eq!(pet.state, PetState::Peeking);
+        assert_eq!(pet.autonomy.resume_action, None);
+        assert_eq!(pet.autonomy.next_due_ms, 0);
+    }
+
+    #[test]
+    fn persisted_autonomy_resume_accepts_only_active_edge_postures() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.autonomy.resume_action = Some(PetAction::Work);
+        pet.autonomy.active_intent = Some(PetIntent::Explore);
+        assert_eq!(pet.validate(), Err(PetError::InvalidTransition));
+
+        pet.autonomy.resume_action = Some(PetAction::Perch);
+        pet.autonomy.active_intent = None;
+        assert_eq!(pet.validate(), Err(PetError::InvalidTransition));
+
+        pet.autonomy.active_intent = Some(PetIntent::Explore);
+        assert_eq!(pet.validate(), Ok(()));
     }
 
     #[test]
@@ -1613,10 +1713,7 @@ mod tests {
         let mut pet = Pet::new("Aster").expect("valid pet");
         pet.begin_drag().expect("drag");
         assert_eq!(
-            pet.drop_at_with_action(
-                Position { x: 4.0, y: 8.0 },
-                PetAction::Celebrate,
-            ),
+            pet.drop_at_with_action(Position { x: 4.0, y: 8.0 }, PetAction::Celebrate,),
             Err(PetError::InvalidTransition)
         );
         assert_eq!(pet.state, PetState::Dragged);
