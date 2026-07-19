@@ -12313,12 +12313,12 @@ fn local_minute_of_day(now_ms: u64) -> Option<u16> {
 
 fn pet_autonomy_policy(profile: &ProfilePolicy, local_minute: Option<u16>) -> PetAutonomyPolicy {
     let frequency = profile.proactive_frequency.unwrap_or(25).min(100);
-    let (idle_delay_ms, cooldown_ms) = match frequency {
-        0..=20 => (120_000, 300_000),
-        21..=40 => (60_000, 180_000),
-        41..=60 => (30_000, 90_000),
-        61..=80 => (15_000, 45_000),
-        81..=100 => (8_000, 20_000),
+    let (idle_delay_ms, cooldown_ms, budget_capacity) = match frequency {
+        0..=20 => (120_000, 300_000, 2),
+        21..=40 => (60_000, 180_000, 6),
+        41..=60 => (30_000, 90_000, 12),
+        61..=80 => (15_000, 45_000, 20),
+        81..=100 => (8_000, 20_000, 30),
         _ => unreachable!("frequency is clamped"),
     };
     PetAutonomyPolicy {
@@ -12333,6 +12333,8 @@ fn pet_autonomy_policy(profile: &ProfilePolicy, local_minute: Option<u16>) -> Pe
         idle_delay_ms,
         action_duration_ms: 8_000,
         cooldown_ms,
+        budget_capacity,
+        budget_refill_ms: 3_600_000 / u64::from(budget_capacity),
     }
 }
 
@@ -12463,7 +12465,7 @@ mod tests {
         DesktopAgentRunStatus, DesktopCapabilityBackend, DesktopError,
         DesktopProviderCredentialResolver, DesktopResolveAutoModeAttemptRequest,
         DesktopSecretStore, DesktopState, ExecutionCancellation, LocalAgentRequest,
-        PendingCreatorApproval, PendingSkillExecution, PetAction, PetResumePlan, PetSurface,
+        PendingCreatorApproval, PendingSkillExecution, Pet, PetAction, PetResumePlan, PetSurface,
         PhysicalArea, PrepareAgentToolRequest, ProfileMode, ProfilePolicy, ResolveAgentToolRequest,
         ResolveSkillApprovalRequest, ResumeAutoModeTurnRequest, SensorController, SensorDescriptor,
         SensorSchedule, SensorSource, SkillEventSession, StartupMode, THEME_SELECTION, TrayAction,
@@ -17371,6 +17373,14 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair[0].cooldown_ms >= pair[1].cooldown_ms)
         );
+        assert!(
+            mapped
+                .windows(2)
+                .all(|pair| pair[0].budget_capacity <= pair[1].budget_capacity)
+        );
+        assert!(mapped.iter().all(|item| {
+            item.budget_capacity <= Pet::MAX_AUTONOMY_BUDGET_CAPACITY && item.budget_refill_ms > 0
+        }));
     }
 
     #[test]

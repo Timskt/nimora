@@ -179,6 +179,8 @@ pub struct PetAutonomyPolicy {
     pub idle_delay_ms: u64,
     pub action_duration_ms: u64,
     pub cooldown_ms: u64,
+    pub budget_capacity: u8,
+    pub budget_refill_ms: u64,
 }
 
 impl Default for PetAutonomyPolicy {
@@ -190,6 +192,8 @@ impl Default for PetAutonomyPolicy {
             idle_delay_ms: 20_000,
             action_duration_ms: 8_000,
             cooldown_ms: 45_000,
+            budget_capacity: 6,
+            budget_refill_ms: 600_000,
         }
     }
 }
@@ -203,6 +207,10 @@ pub struct PetAutonomyState {
     pub active_intent: Option<PetIntent>,
     #[serde(default)]
     pub resume_action: Option<PetAction>,
+    #[serde(default)]
+    pub budget_tokens: u8,
+    #[serde(default)]
+    pub budget_refill_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,12 +315,42 @@ const fn default_need_level() -> u8 {
 }
 
 impl Pet {
+    fn autonomy_budget(&self, policy: PetAutonomyPolicy, now_ms: u64) -> (u8, u64) {
+        let capacity = policy
+            .budget_capacity
+            .min(Self::MAX_AUTONOMY_BUDGET_CAPACITY);
+        if capacity == 0 || policy.budget_refill_ms == 0 {
+            return (0, u64::MAX);
+        }
+        if self.autonomy.budget_refill_at_ms == 0 {
+            return (capacity, now_ms.saturating_add(policy.budget_refill_ms));
+        }
+        let tokens = self.autonomy.budget_tokens.min(capacity);
+        if now_ms < self.autonomy.budget_refill_at_ms {
+            return (tokens, self.autonomy.budget_refill_at_ms);
+        }
+        let elapsed = now_ms.saturating_sub(self.autonomy.budget_refill_at_ms);
+        let intervals = elapsed / policy.budget_refill_ms + 1;
+        let replenished = u8::try_from(
+            u64::from(tokens)
+                .saturating_add(intervals)
+                .min(u64::from(capacity)),
+        )
+        .unwrap_or(capacity);
+        let next_refill_at_ms = self
+            .autonomy
+            .budget_refill_at_ms
+            .saturating_add(intervals.saturating_mul(policy.budget_refill_ms));
+        (replenished, next_refill_at_ms)
+    }
+
     const LOW_VITAL_THRESHOLD: u8 = 25;
     const AUTONOMY_REST_ENERGY_GAIN: u8 = 8;
     const SLEEP_ENERGY_GAIN_PER_INTERVAL: u64 = 2;
     pub const MAX_BOND_POINTS: u64 = 9_007_199_254_740_991;
     pub const BOND_POINTS_PER_LEVEL: u64 = 50;
     pub const MAX_COLLABORATION_RECEIPTS: usize = 256;
+    pub const MAX_AUTONOMY_BUDGET_CAPACITY: u8 = 30;
 
     fn idle_emotion(&self) -> Emotion {
         if self.energy <= Self::LOW_VITAL_THRESHOLD {
@@ -737,6 +775,9 @@ impl Pet {
         {
             return Err(PetError::InvalidCollaborationReceipts);
         }
+        if self.autonomy.budget_tokens > Self::MAX_AUTONOMY_BUDGET_CAPACITY {
+            return Err(PetError::InvalidAutonomyBudget);
+        }
         if self
             .inventory
             .iter()
@@ -984,6 +1025,12 @@ impl Pet {
         if now_ms < self.autonomy.next_due_ms {
             return PetAutonomyDecision::Noop;
         }
+        let (budget_tokens, next_refill_at_ms) = self.autonomy_budget(policy, now_ms);
+        if budget_tokens == 0 {
+            return PetAutonomyDecision::Schedule {
+                next_due_ms: next_refill_at_ms,
+            };
+        }
         let (intent, action) = if self.energy <= Self::LOW_VITAL_THRESHOLD {
             (PetIntent::Rest, PetAction::Sleep)
         } else if self.mood <= Self::LOW_VITAL_THRESHOLD
@@ -1014,6 +1061,13 @@ impl Pet {
                 self.autonomy.next_due_ms = next_due_ms;
             }
             PetAutonomyDecision::Start { intent, action } => {
+                let (budget_tokens, next_refill_at_ms) = self.autonomy_budget(policy, now_ms);
+                if budget_tokens == 0 {
+                    self.autonomy.next_due_ms = next_refill_at_ms;
+                    return;
+                }
+                self.autonomy.budget_tokens = budget_tokens.saturating_sub(1);
+                self.autonomy.budget_refill_at_ms = next_refill_at_ms;
                 self.autonomy.resume_action = match self.state {
                     PetState::Perching => Some(PetAction::Perch),
                     PetState::Climbing => Some(PetAction::Climb),
@@ -1072,6 +1126,8 @@ pub enum PetError {
     InvalidCollection,
     #[error("pet collaboration receipts must be bounded, sorted, and unique")]
     InvalidCollaborationReceipts,
+    #[error("pet autonomy budget exceeds the host maximum")]
+    InvalidAutonomyBudget,
     #[error("pet collaboration was already rewarded")]
     DuplicateCollaboration,
     #[error("pet inventory must be sorted, unique, and contain quantities between 1 and 999")]
@@ -1127,6 +1183,93 @@ mod tests {
         pet.apply_autonomy_decision(finished, policy, 115);
         assert_eq!(pet.state, PetState::Idle);
         assert_eq!(pet.autonomy.next_due_ms, 135);
+    }
+
+    #[test]
+    fn autonomy_budget_is_persisted_bounded_and_clock_safe() {
+        let policy = PetAutonomyPolicy {
+            idle_delay_ms: 0,
+            action_duration_ms: 1,
+            cooldown_ms: 0,
+            budget_capacity: 2,
+            budget_refill_ms: 1_000,
+            ..PetAutonomyPolicy::default()
+        };
+        let mut pet = Pet::new("Aster").expect("pet");
+
+        for now_ms in [100, 102] {
+            pet.autonomy.next_due_ms = now_ms;
+            let decision = pet.autonomy_decision(policy, now_ms);
+            assert!(matches!(decision, PetAutonomyDecision::Start { .. }));
+            pet.apply_autonomy_decision(decision, policy, now_ms);
+            pet.apply_autonomy_decision(PetAutonomyDecision::Finish, policy, now_ms + 1);
+        }
+        assert_eq!(pet.autonomy.budget_tokens, 0);
+        assert_eq!(pet.autonomy.budget_refill_at_ms, 1_100);
+        assert_eq!(
+            pet.autonomy_decision(policy, 103),
+            PetAutonomyDecision::Schedule { next_due_ms: 1_100 }
+        );
+
+        let value = serde_json::to_value(&pet).expect("serialize budgeted pet");
+        let restored: Pet = serde_json::from_value(value.clone()).expect("restore budgeted pet");
+        assert_eq!(restored.autonomy.budget_tokens, 0);
+        assert_eq!(
+            restored.autonomy_decision(policy, 50),
+            PetAutonomyDecision::Noop
+        );
+        assert!(matches!(
+            restored.autonomy_decision(policy, 1_100),
+            PetAutonomyDecision::Start { .. }
+        ));
+
+        let mut legacy = value;
+        let autonomy = legacy["autonomy"].as_object_mut().expect("autonomy object");
+        autonomy.remove("budgetTokens");
+        autonomy.remove("budgetRefillAtMs");
+        let migrated: Pet = serde_json::from_value(legacy).expect("legacy autonomy snapshot");
+        assert_eq!(migrated.autonomy.budget_tokens, 0);
+        assert_eq!(migrated.autonomy.budget_refill_at_ms, 0);
+        assert!(matches!(
+            migrated.autonomy_decision(policy, 1_100),
+            PetAutonomyDecision::Start { .. }
+        ));
+    }
+
+    #[test]
+    fn forged_autonomy_start_cannot_overdraw_budget() {
+        let policy = PetAutonomyPolicy {
+            budget_capacity: 1,
+            budget_refill_ms: 1_000,
+            ..PetAutonomyPolicy::default()
+        };
+        let mut pet = Pet::new("Aster").expect("pet");
+        pet.autonomy.budget_refill_at_ms = 2_000;
+        pet.apply_autonomy_decision(
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Explore,
+                action: PetAction::Walk,
+            },
+            policy,
+            1_000,
+        );
+        assert_eq!(pet.state, PetState::Idle);
+        assert_eq!(pet.autonomy.next_due_ms, 2_000);
+        assert_eq!(pet.autonomy.sequence, 0);
+
+        let unbounded_policy = PetAutonomyPolicy {
+            budget_capacity: u8::MAX,
+            ..policy
+        };
+        let mut bounded = Pet::new("Aster").expect("pet");
+        bounded.autonomy.next_due_ms = 3_000;
+        let decision = bounded.autonomy_decision(unbounded_policy, 3_000);
+        bounded.apply_autonomy_decision(decision, unbounded_policy, 3_000);
+        assert_eq!(
+            bounded.autonomy.budget_tokens,
+            Pet::MAX_AUTONOMY_BUDGET_CAPACITY - 1
+        );
+        bounded.validate().expect("host cap remains valid");
     }
 
     #[test]

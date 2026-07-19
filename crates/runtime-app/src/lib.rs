@@ -554,6 +554,11 @@ impl<R: PetRepository> RuntimeService<R> {
                     "afterEnergy": after.energy,
                     "intent": after.autonomy.active_intent,
                     "nextDueMs": after.autonomy.next_due_ms,
+                    "budget": {
+                        "beforeTokens": before.autonomy.budget_tokens,
+                        "afterTokens": after.autonomy.budget_tokens,
+                        "nextRefillAtMs": after.autonomy.budget_refill_at_ms,
+                    },
                 })
             },
         )
@@ -1628,6 +1633,31 @@ mod tests {
             service.snapshot().expect("snapshot").last_vitals_update_ms,
             0
         );
+        assert!(service.drain_events().expect("events").is_empty());
+    }
+
+    #[test]
+    fn failed_autonomy_start_preserves_budget_state_and_events() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let policy = PetAutonomyPolicy {
+            idle_delay_ms: 0,
+            budget_capacity: 2,
+            budget_refill_ms: 1_000,
+            ..PetAutonomyPolicy::default()
+        };
+        service
+            .tick_autonomy(policy, 100)
+            .expect("schedule")
+            .expect("schedule command");
+        service.drain_events().expect("scheduled event");
+        let before = service.snapshot().expect("before failed start");
+
+        service.repository.fail_save.store(true, Ordering::Relaxed);
+        assert!(service.tick_autonomy(policy, 100).is_err());
+        let after = service.snapshot().expect("after failed start");
+        assert_eq!(after.state, before.state);
+        assert_eq!(after.autonomy, before.autonomy);
         assert!(service.drain_events().expect("events").is_empty());
     }
 

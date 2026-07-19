@@ -81,6 +81,8 @@ Needs → Mood → Intent → Action Plan → Renderer Semantics → Adapter Ani
 
 自主行为至少包括待机变体、眨眼、张望、睡眠、伸懒腰、桌面小范围漫游、边缘停靠、被拖拽反馈、点击反馈、任务完成庆祝和低打扰提醒。行为调度必须有冷却、频率预算、安静时段和“专注模式”。张望使用独立 `pet.observe`，伸懒腰使用正式 `Stretch → Stretching → pet.stretch`，两者都不得借用庆祝或点击来伪造生命感；角色包缺失时确定性回退到 `pet.idle`。
 
+自主频率不只映射 Idle Delay 与 Cooldown，还必须映射宿主受控的持久令牌桶。五档频率容量分别为每小时平滑补充 2、6、12、20、30 次，令牌和下一补充时间进入 Pet 快照；退出、重启或隐藏窗口不会重置预算。预算耗尽时只推迟下一次自主动作，不影响手动互动、照料、拖拽、生命值或离线恢复；系统时钟回拨不得增发令牌，外部调用方伪造 Start 也不能透支。Profile、Renderer、AI 与扩展只能选择 0–100 的产品频率，不能直接修改令牌或补充时间。
+
 健康状态自主序列按 Observe、Explore、Stretch、Rest 确定性轮转；Stretch 只产生短时生命表现，不发放 Mood、Affinity、BondPoints 或道具。低 Energy 与其它低需求优先级保持不变，Quiet/Focus、拖拽和显式用户动作可以抢占。内置角色做低幅度压身—舒展；Sprite/glTF 消费 `pet.stretch`，VRM 仅使用有界白名单表达式；用户也可从桌宠“更多”页触发同一动作，用户代码、Automation 与 Agent 只能通过共同 Capability Catalog 请求它。
 
 当前实现基线已经将调度放入纯 Rust 领域层：由显式时间和持久序列确定性选择观察、探索或休息，动作具有截止时间与冷却，用户状态可抢占且不会被自主结束动作覆盖。Desktop Host 每秒从活动 Profile 动态解析 `proactiveFrequency`：0% 完全关闭，1–100% 采用五档单调延迟与冷却预算；Focus 和 Presentation 会立即结束仍由自主循环控制的动作，用户拖拽等抢占状态不被覆盖，Offline 模式不依赖网络并继续运行。Explore 由 Desktop Host 映射为原生窗口短路径平滑移动，按当前显示器原生 Work Area 和窗口尺寸夹取安全边距，避开系统报告的菜单栏、Dock、任务栏或 Panel，支持负坐标副屏并复用位置防抖持久化；逐帧复验 Drag、Safe Mode 和语义状态。低频可见性守卫会在跨屏时选择最大工作区交集，在分辨率或系统保留区变化时重新夹取，完全离屏时回到主屏工作区，且拖拽期间不抢夺窗口。Renderer 继续消费统一语义状态。该基线不是最终体验完成声明；自动隐藏系统栏、混合 DPI、环境感知和双平台真机门禁仍需补齐。
