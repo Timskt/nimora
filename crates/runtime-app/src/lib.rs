@@ -1089,6 +1089,76 @@ impl<R: ProfileRepository> ProfileService<R> {
         Ok(command)
     }
 
+    /// Deletes a profile while preserving a valid active-profile reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when deleting the final profile, when an active-profile
+    /// replacement is missing or invalid, or when validation/persistence fails.
+    pub fn delete_profile(
+        &self,
+        profile_id: ProfileId,
+        replacement_profile_id: Option<ProfileId>,
+    ) -> Result<Command, ProfileServiceError> {
+        let mut current = self
+            .snapshot
+            .lock()
+            .map_err(|_| ProfileServiceError::StatePoisoned)?;
+        let index = current
+            .profiles
+            .iter()
+            .position(|profile| profile.id == profile_id)
+            .ok_or(ProfileServiceError::ProfileNotFound)?;
+        if current.profiles.len() == 1 {
+            return Err(ProfileServiceError::LastProfileDeletion);
+        }
+        let was_active = current.active_profile_id == profile_id;
+        let replacement = if was_active {
+            let replacement =
+                replacement_profile_id.ok_or(ProfileServiceError::ActiveReplacementRequired)?;
+            if replacement == profile_id
+                || !current
+                    .profiles
+                    .iter()
+                    .any(|profile| profile.id == replacement)
+            {
+                return Err(ProfileServiceError::InvalidActiveReplacement);
+            }
+            Some(replacement)
+        } else {
+            if replacement_profile_id.is_some() {
+                return Err(ProfileServiceError::UnexpectedActiveReplacement);
+            }
+            None
+        };
+        let mut candidate = current.clone();
+        let removed = candidate.profiles.remove(index);
+        if let Some(replacement) = replacement {
+            candidate.active_profile_id = replacement;
+        }
+        candidate.validate()?;
+        let command = Command::new(
+            "profile.collection.delete",
+            serde_json::json!({ "profileId": profile_id }),
+            CommandRisk::Low,
+        )?;
+        let event = Event::with_trace_id(
+            "profile.collection.deleted",
+            EventSource::Core,
+            command.trace_id,
+            serde_json::json!({
+                "profile": removed,
+                "beforeActiveProfileId": current.active_profile_id,
+                "afterActiveProfileId": candidate.active_profile_id,
+            }),
+        )?;
+        let mut events = self.events.lock().map_err(ProfileServiceError::Runtime)?;
+        self.repository.save_with_event(&candidate, &event)?;
+        *current = candidate;
+        RuntimeEventBus::publish_locked(&mut events, event);
+        Ok(command)
+    }
+
     /// Activates a profile only after the complete snapshot is durably stored.
     ///
     /// # Errors
@@ -1151,6 +1221,14 @@ pub enum ProfileServiceError {
     ProfileNotFound,
     #[error("profile is already active")]
     ProfileAlreadyActive,
+    #[error("the final profile cannot be deleted")]
+    LastProfileDeletion,
+    #[error("deleting the active profile requires a replacement")]
+    ActiveReplacementRequired,
+    #[error("the active profile replacement is invalid")]
+    InvalidActiveReplacement,
+    #[error("a replacement is only valid when deleting the active profile")]
+    UnexpectedActiveReplacement,
     #[error("profile snapshot version {0} is unsupported")]
     UnsupportedSnapshotVersion(u32),
     #[error(transparent)]
@@ -1752,6 +1830,90 @@ mod tests {
             .expect_err("save fails");
         assert_eq!(service.snapshot().expect("snapshot"), before);
         assert!(bus.drain().expect("events").is_empty());
+    }
+
+    #[test]
+    fn deletes_inactive_profile_without_changing_activation() {
+        let first = Profile::new("Default", ProfilePolicy::standard()).expect("profile");
+        let second = Profile::new("Focus", ProfilePolicy::standard()).expect("profile");
+        let repository = MemoryProfileRepository {
+            snapshot: Mutex::new(Some(ProfileSnapshot {
+                schema_version: ProfileSnapshot::SCHEMA_VERSION,
+                active_profile_id: first.id,
+                profiles: vec![first.clone(), second.clone()],
+            })),
+            outbox: Mutex::new(Vec::new()),
+            fail_save: AtomicBool::new(false),
+        };
+        let bus = RuntimeEventBus::default();
+        let service = ProfileService::initialize(repository, bus.clone()).expect("profiles");
+        let command = service.delete_profile(second.id, None).expect("delete");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.profiles, vec![first]);
+        assert_eq!(snapshot.active_profile_id, snapshot.profiles[0].id);
+        let event = bus.drain().expect("events").pop().expect("event");
+        assert_eq!(event.event_type, "profile.collection.deleted");
+        assert_eq!(event.trace_id, command.trace_id);
+    }
+
+    #[test]
+    fn active_profile_deletion_requires_a_valid_replacement() {
+        let first = Profile::new("Default", ProfilePolicy::standard()).expect("profile");
+        let second = Profile::new("Focus", ProfilePolicy::standard()).expect("profile");
+        let repository = MemoryProfileRepository {
+            snapshot: Mutex::new(Some(ProfileSnapshot {
+                schema_version: ProfileSnapshot::SCHEMA_VERSION,
+                active_profile_id: first.id,
+                profiles: vec![first.clone(), second.clone()],
+            })),
+            outbox: Mutex::new(Vec::new()),
+            fail_save: AtomicBool::new(false),
+        };
+        let service =
+            ProfileService::initialize(repository, RuntimeEventBus::default()).expect("profiles");
+        assert!(matches!(
+            service.delete_profile(first.id, None),
+            Err(ProfileServiceError::ActiveReplacementRequired)
+        ));
+        service
+            .delete_profile(first.id, Some(second.id))
+            .expect("delete active");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.active_profile_id, second.id);
+        assert_eq!(snapshot.profiles, vec![second]);
+    }
+
+    #[test]
+    fn final_profile_and_failed_delete_preserve_state() {
+        let bus = RuntimeEventBus::default();
+        let repository = MemoryProfileRepository::default();
+        let service = ProfileService::initialize(repository, bus.clone()).expect("profiles");
+        let only = service.snapshot().expect("snapshot");
+        assert!(matches!(
+            service.delete_profile(only.active_profile_id, None),
+            Err(ProfileServiceError::LastProfileDeletion)
+        ));
+        service
+            .create_profile("Focus", ProfilePolicy::standard())
+            .expect("create");
+        let before = service.snapshot().expect("snapshot");
+        let inactive = before
+            .profiles
+            .iter()
+            .find(|profile| profile.id != before.active_profile_id)
+            .expect("inactive")
+            .id;
+        service.repository.fail_save.store(true, Ordering::Relaxed);
+        service
+            .delete_profile(inactive, None)
+            .expect_err("save fails");
+        assert_eq!(service.snapshot().expect("snapshot"), before);
+        assert!(
+            bus.drain()
+                .expect("events")
+                .iter()
+                .all(|event| event.event_type != "profile.collection.deleted")
+        );
     }
 
     #[test]

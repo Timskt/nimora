@@ -1,5 +1,12 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-19 Profile 安全删除闭环
+
+- 结果：Profile 生命周期补齐安全删除，不再让长期使用积累废弃场景；至少保留一个 Profile，删除配置绝不级联删除桌宠本体、成长、库存、资产或纪念。
+- 一致性：非活动删除不触碰窗口；活动删除按“下一项优先、否则上一项”接替，并在 Presence Transition 锁内复用可逆窗口事务与 Snapshot/Outbox 原子提交，任何阶段失败都不留下半删除或半切换状态。
+- 权限边界：Desktop Coordinator 仍是 QQ 宠物式原生桌面窗口唯一执行者；Renderer、AI、Skill、Program 与 Sensor 只能提交受约束意图，Safe/Recovery Mode 拒绝破坏性生命周期操作。
+- 验证：Runtime 覆盖最后项保护、接替合法性、成功删除和保存失败零副作用；Desktop 编译、前端 78 项测试及生产构建已通过。macOS/Windows 的隐藏、置顶、穿透组合切换仍需签名真机门禁，不以 Browser Preview 冒充。
+
 ## M-2026-07-19 Profile 原子编辑闭环
 
 - 结果：Profile 从“只能创建和切换”补齐为可维护配置，用户可直接调整当前桌宠场景，不再积累一次性 Profile。

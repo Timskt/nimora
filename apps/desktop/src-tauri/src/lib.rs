@@ -6567,6 +6567,65 @@ fn update_profile_inner(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn delete_profile(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    profile_id: ProfileId,
+) -> Result<Command, DesktopError> {
+    delete_profile_inner(&app, &state, profile_id)
+}
+
+fn delete_profile_inner(
+    app: &AppHandle,
+    state: &DesktopState,
+    profile_id: ProfileId,
+) -> Result<Command, DesktopError> {
+    ensure_normal_mode(state)?;
+    let _transition = state
+        .presence_transition
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    let snapshot = state.profiles.snapshot()?;
+    let deleted_index = snapshot
+        .profiles
+        .iter()
+        .position(|profile| profile.id == profile_id)
+        .ok_or(ProfileServiceError::ProfileNotFound)?;
+    if snapshot.profiles.len() == 1 {
+        return Err(ProfileServiceError::LastProfileDeletion.into());
+    }
+    if snapshot.active_profile_id != profile_id {
+        return Ok(state.profiles.delete_profile(profile_id, None)?);
+    }
+    let replacement = snapshot
+        .profiles
+        .get(deleted_index + 1)
+        .or_else(|| {
+            deleted_index
+                .checked_sub(1)
+                .and_then(|index| snapshot.profiles.get(index))
+        })
+        .ok_or(ProfileServiceError::InvalidActiveReplacement)?;
+    let replacement_id = replacement.id;
+    let base_policy = WindowPolicy::from_profile(&replacement.policy);
+    let decision = decide_presence(state, base_policy.visible, false, current_time_ms()?)?;
+    let next_policy = WindowPolicy {
+        visible: decision.visible,
+        ..base_policy
+    };
+    let previous_policy = current_window_policy(state)?;
+    let command = run_window_policy_transition(app, previous_policy, next_policy, || {
+        state
+            .profiles
+            .delete_profile(profile_id, Some(replacement_id))
+    })?;
+    set_current_window_policy(state, next_policy)?;
+    set_presence_decision(state, decision)?;
+    Ok(command)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn switch_profile(
     app: AppHandle,
     state: State<'_, DesktopState>,
@@ -11242,6 +11301,7 @@ pub fn run() {
             profile_snapshot,
             create_profile,
             update_profile,
+            delete_profile,
             switch_profile,
             set_presence_override,
             enter_safe_mode,

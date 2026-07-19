@@ -143,6 +143,27 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
     }
   }
 
+  async function deleteProfile(profileId: string, profileName: string, active: boolean) {
+    const replacementNote = active ? " 删除后将自动切换到相邻 Profile，并同步桌宠窗口策略。" : "";
+    if (!window.confirm(`确定删除 Profile「${profileName}」吗？${replacementNote}此操作不会删除宠物、资产或本地纪念。`)) return;
+    setBusy(true);
+    try {
+      await desktopApi.deleteProfile(profileId);
+      await refresh();
+      if (editingProfileId === profileId) {
+        setEditingProfileId(null);
+        setExpanded(false);
+        setName("");
+        setPolicy(initialPolicy);
+      }
+      onNotice(active ? `已删除「${profileName}」并切换到接替 Profile` : `Profile「${profileName}」已删除`);
+    } catch {
+      onNotice(safeMode ? "安全模式下不能删除 Profile" : "Profile 删除失败，配置和窗口策略均未改变");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="profile-card" aria-labelledby="profile-heading">
       <div className="section-heading">
@@ -175,13 +196,24 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
                 </p>
               </div>
               <div className="profile-actions">
-                <button type="button" disabled={busy || safeMode} onClick={() => openEditForm(profile)}>编辑</button>
+                <button type="button" aria-label={`编辑 Profile ${profile.name}`} disabled={busy || safeMode} onClick={() => openEditForm(profile)}>编辑</button>
                 <button
                   type="button"
+                  aria-label={active ? `Profile ${profile.name} 使用中` : `切换到 Profile ${profile.name}`}
                   disabled={active || busy || safeMode}
                   onClick={() => void switchProfile(profile.id, profile.name)}
                 >
                   {active ? "使用中" : "切换"}
+                </button>
+                <button
+                  className="profile-delete"
+                  type="button"
+                  aria-label={`删除 Profile ${profile.name}`}
+                  title={snapshot.profiles.length === 1 ? "至少需要保留一个 Profile" : undefined}
+                  disabled={snapshot.profiles.length === 1 || busy || safeMode}
+                  onClick={() => void deleteProfile(profile.id, profile.name, active)}
+                >
+                  删除
                 </button>
               </div>
             </article>

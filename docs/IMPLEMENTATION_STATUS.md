@@ -1,5 +1,12 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — Profile 安全删除闭环
+
+- 控制中心现可删除不再使用的 Profile，同时强制至少保留一个 Profile；删除仅作用于场景配置，不删除 QQ 宠物式桌面生命体、角色资产、成长数据、库存或纪念。
+- 删除非活动 Profile 不触碰原生桌宠窗口；删除活动 Profile 时由 Desktop Coordinator 确定性选择相邻项接替（优先下一项，否则上一项），Renderer、AI、Skill、Program 和 Sensor 均不能直接决定或应用窗口状态。
+- 活动删除复用 Presence Transition 串行锁与可逆窗口事务：先应用接替 Profile 的可见性、置顶与穿透策略，再原子提交 Profile Snapshot 和 Outbox Event；持久提交失败会补偿恢复原窗口策略，不留下“界面已切换、数据未提交”的分裂状态。
+- Safe/Recovery Mode 继续 fail-closed；UI 对破坏性操作二次确认、禁用最后一个 Profile 的删除入口，并在删除正在编辑的项目后收敛编辑状态。Browser Preview 只提供同契约交互验收，不替代原生窗口事务证据。
+
 ## 2026-07-19 — Profile 原子编辑闭环
 
 - 控制中心可编辑任意既有 Profile 的名称与完整策略，不再要求用户为调整主动频率、照料强度、安静时段、吸附、置顶或声音反复创建新 Profile；Profile ID 与活动引用保持稳定。
