@@ -1,5 +1,12 @@
 # Nimora 里程碑回顾
 
+## M-2026-07-19 Profile 原子编辑闭环
+
+- 结果：Profile 从“只能创建和切换”补齐为可维护配置，用户可直接调整当前桌宠场景，不再积累一次性 Profile。
+- 一致性：稳定 Profile ID 不变；领域 Snapshot 与 Outbox Event 同事务提交，活动 Profile 的原生窗口策略使用补偿事务，失败不留下半应用状态。
+- 权限边界：只有控制中心的类型化 IPC 可编辑；Safe/Recovery Mode 拒绝，Renderer、Pet Overlay、AI、Skill 与 Program 不能绕过 Profile Service。
+- 验证：Runtime App 覆盖成功更新与保存失败零副作用，Desktop 复用已验证的可逆窗口事务；真机仍需验证置顶、穿透和 Presentation 可见性的组合切换。
+
 ## M-2026-07-19 Profile 安静时段
 
 - 结果：QQ 宠物式自主生命循环新增 Profile 级本地安静时段，支持日内与跨午夜，不需要用户切换整个 Focus/Profile 才能在夜间降扰。

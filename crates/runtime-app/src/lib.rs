@@ -1036,6 +1036,59 @@ impl<R: ProfileRepository> ProfileService<R> {
         Ok(command)
     }
 
+    /// Replaces a profile's editable fields while preserving its stable identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown profile or when validation, persistence,
+    /// event creation, or locking fails. State and events remain unchanged when
+    /// persistence fails.
+    pub fn update_profile(
+        &self,
+        profile_id: ProfileId,
+        name: impl Into<String>,
+        policy: ProfilePolicy,
+    ) -> Result<Command, ProfileServiceError> {
+        let candidate_profile = Profile {
+            id: profile_id,
+            name: name.into().trim().to_owned(),
+            policy,
+        };
+        candidate_profile.validate()?;
+        let mut current = self
+            .snapshot
+            .lock()
+            .map_err(|_| ProfileServiceError::StatePoisoned)?;
+        let index = current
+            .profiles
+            .iter()
+            .position(|profile| profile.id == profile_id)
+            .ok_or(ProfileServiceError::ProfileNotFound)?;
+        let before = current.profiles[index].clone();
+        let mut candidate = current.clone();
+        candidate.profiles[index] = candidate_profile.clone();
+        candidate.validate()?;
+        let command = Command::new(
+            "profile.collection.update",
+            serde_json::json!({ "profileId": profile_id }),
+            CommandRisk::Safe,
+        )?;
+        let event = Event::with_trace_id(
+            "profile.collection.updated",
+            EventSource::Core,
+            command.trace_id,
+            serde_json::json!({
+                "before": before,
+                "after": candidate_profile,
+            }),
+        )?;
+        let mut events = self.events.lock().map_err(ProfileServiceError::Runtime)?;
+        self.repository.save_with_event(&candidate, &event)?;
+        *current = candidate;
+        RuntimeEventBus::publish_locked(&mut events, event);
+        Ok(command)
+    }
+
     /// Activates a profile only after the complete snapshot is durably stored.
     ///
     /// # Errors
@@ -1656,6 +1709,46 @@ mod tests {
         let second = Profile::new("Focus", ProfilePolicy::standard()).expect("profile");
         service
             .create_profile(second.name, second.policy)
+            .expect_err("save fails");
+        assert_eq!(service.snapshot().expect("snapshot"), before);
+        assert!(bus.drain().expect("events").is_empty());
+    }
+
+    #[test]
+    fn updates_profile_without_changing_identity_or_activation() {
+        let bus = RuntimeEventBus::default();
+        let service = ProfileService::initialize(MemoryProfileRepository::default(), bus.clone())
+            .expect("profiles");
+        let before = service.snapshot().expect("snapshot");
+        let profile_id = before.active_profile_id;
+        let mut policy = ProfilePolicy::standard();
+        policy.proactive_frequency = Some(60);
+        let command = service
+            .update_profile(profile_id, "  Evening  ", policy.clone())
+            .expect("update");
+        let after = service.snapshot().expect("snapshot");
+        assert_eq!(after.active_profile_id, profile_id);
+        assert_eq!(after.profiles[0].id, profile_id);
+        assert_eq!(after.profiles[0].name, "Evening");
+        assert_eq!(after.profiles[0].policy, policy);
+        let event = bus.drain().expect("events").pop().expect("event");
+        assert_eq!(event.event_type, "profile.collection.updated");
+        assert_eq!(event.trace_id, command.trace_id);
+    }
+
+    #[test]
+    fn failed_profile_update_preserves_state_and_events() {
+        let bus = RuntimeEventBus::default();
+        let repository = MemoryProfileRepository::default();
+        let service = ProfileService::initialize(repository, bus.clone()).expect("profiles");
+        let before = service.snapshot().expect("snapshot");
+        service.repository.fail_save.store(true, Ordering::Relaxed);
+        service
+            .update_profile(
+                before.active_profile_id,
+                "Changed",
+                ProfilePolicy::standard(),
+            )
             .expect_err("save fails");
         assert_eq!(service.snapshot().expect("snapshot"), before);
         assert!(bus.drain().expect("events").is_empty());

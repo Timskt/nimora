@@ -6517,6 +6517,56 @@ fn create_profile(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn update_profile(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    profile_id: ProfileId,
+    name: String,
+    policy: ProfilePolicy,
+) -> Result<Command, DesktopError> {
+    update_profile_inner(&app, &state, profile_id, name, policy)
+}
+
+fn update_profile_inner(
+    app: &AppHandle,
+    state: &DesktopState,
+    profile_id: ProfileId,
+    name: String,
+    policy: ProfilePolicy,
+) -> Result<Command, DesktopError> {
+    ensure_normal_mode(state)?;
+    let _transition = state
+        .presence_transition
+        .lock()
+        .map_err(|_| DesktopError::StatePoisoned)?;
+    let snapshot = state.profiles.snapshot()?;
+    if !snapshot
+        .profiles
+        .iter()
+        .any(|profile| profile.id == profile_id)
+    {
+        return Err(ProfileServiceError::ProfileNotFound.into());
+    }
+    if snapshot.active_profile_id != profile_id {
+        return Ok(state.profiles.update_profile(profile_id, name, policy)?);
+    }
+    let base_policy = WindowPolicy::from_profile(&policy);
+    let decision = decide_presence(state, base_policy.visible, false, current_time_ms()?)?;
+    let next_policy = WindowPolicy {
+        visible: decision.visible,
+        ..base_policy
+    };
+    let previous_policy = current_window_policy(state)?;
+    let command = run_window_policy_transition(app, previous_policy, next_policy, || {
+        state.profiles.update_profile(profile_id, name, policy)
+    })?;
+    set_current_window_policy(state, next_policy)?;
+    set_presence_decision(state, decision)?;
+    Ok(command)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn switch_profile(
     app: AppHandle,
     state: State<'_, DesktopState>,
@@ -11191,6 +11241,7 @@ pub fn run() {
             export_diagnostics,
             profile_snapshot,
             create_profile,
+            update_profile,
             switch_profile,
             set_presence_override,
             enter_safe_mode,

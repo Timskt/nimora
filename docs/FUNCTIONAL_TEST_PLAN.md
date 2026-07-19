@@ -1,5 +1,11 @@
 # Nimora 功能测试计划
 
+## Profile 编辑
+
+- 编辑非活动 Profile，确认名称和所有策略持久化、ID 与活动 Profile 不变，并且桌宠窗口没有变化。
+- 编辑活动 Profile 的置顶、穿透、Presentation 可见性、主动频率、照料模式和安静时段，确认原生策略与 Snapshot 同步生效；重启后保持一致。
+- 注入 Repository 保存失败和原生窗口应用失败，确认前者回滚原生策略、后者不提交 Snapshot，两者都不发布成功事件；Safe/Recovery Mode 禁止编辑。
+
 ## Profile 安静时段
 
 - 创建未启用安静时段的 Profile，确认行为与旧版本一致；创建 `09:00–17:00` 和 `22:00–07:00` 两种 Profile，分别验证区间内自主动作停止、区间外恢复。

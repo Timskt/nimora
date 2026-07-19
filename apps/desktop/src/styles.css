@@ -135,6 +135,8 @@ body.pet-window.pet-browser-preview { display: grid; min-height: 100vh; place-it
 .profile-item p, .profile-loading { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
 .profile-item button { border: 0; border-radius: 9px; padding: 8px 10px; color: var(--accent); background: var(--accent-soft); cursor: pointer; font-size: 10px; font-weight: 700; }
 .profile-item button:disabled { color: #92958c; background: #ecece7; cursor: default; }
+.profile-actions { display: flex; gap: 6px; align-items: center; }
+.profile-actions button:first-child { color: var(--ink); background: #ecece7; }
 .profile-form { display: grid; grid-template-columns: minmax(180px, 1.5fr) auto auto minmax(180px, 1fr) auto; gap: 18px; align-items: end; margin-top: 18px; padding: 18px; border-radius: 15px; background: #f5f5ef; }
 .profile-form label { color: #5f6259; font-size: 11px; }
 .profile-name, .profile-frequency { display: grid; gap: 8px; }

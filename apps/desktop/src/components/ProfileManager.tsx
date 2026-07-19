@@ -77,6 +77,7 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
   const [policy, setPolicy] = useState(initialPolicy);
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
 
   async function refresh() {
     setSnapshot(await desktopApi.profiles());
@@ -86,7 +87,21 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
     void refresh().catch(() => onNotice("Profile 暂时无法读取"));
   }, [onNotice]);
 
-  async function createProfile() {
+  function openCreateForm() {
+    setEditingProfileId(null);
+    setName("");
+    setPolicy(initialPolicy);
+    setExpanded(true);
+  }
+
+  function openEditForm(profile: ProfileSnapshot["profiles"][number]) {
+    setEditingProfileId(profile.id);
+    setName(profile.name);
+    setPolicy(profile.policy);
+    setExpanded(true);
+  }
+
+  async function saveProfile() {
     const normalizedName = normalizedProfileName(name);
     if (!normalizedName) {
       onNotice("Profile 名称需要 1–64 个字符");
@@ -98,13 +113,18 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
     }
     setBusy(true);
     try {
-      await desktopApi.createProfile(normalizedName, policy);
+      if (editingProfileId) await desktopApi.updateProfile(editingProfileId, normalizedName, policy);
+      else await desktopApi.createProfile(normalizedName, policy);
       await refresh();
       setName("");
+      setPolicy(initialPolicy);
+      setEditingProfileId(null);
       setExpanded(false);
-      onNotice(`Profile「${normalizedName}」已创建`);
+      onNotice(editingProfileId ? `Profile「${normalizedName}」已更新` : `Profile「${normalizedName}」已创建`);
     } catch {
-      onNotice("Profile 创建失败，现有配置未改变");
+      onNotice(editingProfileId
+        ? (safeMode ? "安全模式下不能编辑 Profile" : "Profile 更新失败，原配置和窗口策略均已回滚")
+        : "Profile 创建失败，现有配置未改变");
     } finally {
       setBusy(false);
     }
@@ -130,7 +150,7 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
           <p className="card-label">场景配置</p>
           <h2 id="profile-heading">Profile</h2>
         </div>
-        <button className="text-button" type="button" onClick={() => setExpanded((value) => !value)}>
+        <button className="text-button" type="button" onClick={() => expanded ? setExpanded(false) : openCreateForm()}>
           {expanded ? "收起" : "新建 Profile"}
         </button>
       </div>
@@ -154,20 +174,23 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
                   {` · ${quietHoursLabel(profile.policy)}`}
                 </p>
               </div>
-              <button
-                type="button"
-                disabled={active || busy || safeMode}
-                onClick={() => void switchProfile(profile.id, profile.name)}
-              >
-                {active ? "使用中" : "切换"}
-              </button>
+              <div className="profile-actions">
+                <button type="button" disabled={busy || safeMode} onClick={() => openEditForm(profile)}>编辑</button>
+                <button
+                  type="button"
+                  disabled={active || busy || safeMode}
+                  onClick={() => void switchProfile(profile.id, profile.name)}
+                >
+                  {active ? "使用中" : "切换"}
+                </button>
+              </div>
             </article>
           );
         }) ?? <p className="profile-loading">正在读取本地 Profile…</p>}
       </div>
 
       {expanded && (
-        <form className="profile-form" onSubmit={(event) => { event.preventDefault(); void createProfile(); }}>
+        <form className="profile-form" aria-label={editingProfileId ? "编辑 Profile" : "新建 Profile"} onSubmit={(event) => { event.preventDefault(); void saveProfile(); }}>
           <label className="profile-name">
             <span>名称</span>
             <input
@@ -285,7 +308,7 @@ export function ProfileManager({ safeMode, onNotice }: ProfileManagerProps) {
             </select>
             <small>所有模式都不会死亡、倒扣关系或惩罚离线；切换不会删除当前状态，喂食、玩耍和清洁始终可用。</small>
           </label>
-          <button className="primary-button" type="submit" disabled={busy}>保存 Profile</button>
+          <button className="primary-button" type="submit" disabled={busy}>{editingProfileId ? "保存修改" : "保存 Profile"}</button>
         </form>
       )}
     </section>

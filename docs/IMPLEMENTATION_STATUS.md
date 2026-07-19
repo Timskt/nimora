@@ -1,5 +1,12 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-19 — Profile 原子编辑闭环
+
+- 控制中心可编辑任意既有 Profile 的名称与完整策略，不再要求用户为调整主动频率、照料强度、安静时段、吸附、置顶或声音反复创建新 Profile；Profile ID 与活动引用保持稳定。
+- Core Service 通过 `profile.collection.update` / `profile.collection.updated` 原子保存完整 Snapshot 与 Outbox Event；校验、Repository 或 Event 失败时内存状态和事件均不改变。
+- 编辑非活动 Profile 不触碰原生窗口；编辑活动 Profile 由 Desktop Coordinator 在 Presence Transition 锁内执行可逆窗口事务，持久提交失败时回滚可见性、置顶与穿透，成功后才更新当前窗口策略和 Presence Decision。
+- Safe/Recovery Mode 继续 fail-closed，UI 明确区分创建失败与编辑回滚；Browser Preview 实现同一 API 以支持后续视觉回归，但不作为原生事务证据。
+
 ## 2026-07-19 — Profile 安静时段
 
 - 每个 Profile 可独立启用本地安静时段，使用 0–1439 的分钟值持久化，避免区域格式与夏令时字符串进入领域数据；控制中心提供原生时间输入和清晰摘要。

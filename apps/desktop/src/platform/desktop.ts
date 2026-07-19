@@ -1066,6 +1066,7 @@ export interface DesktopApi {
   exportDiagnostics(destinationPath: string, includeEvents: boolean): Promise<DiagnosticBundleReceipt | null>;
   profiles(): Promise<ProfileSnapshot>;
   createProfile(name: string, policy: ProfilePolicy): Promise<NimoraCommand | null>;
+  updateProfile(profileId: string, name: string, policy: ProfilePolicy): Promise<NimoraCommand | null>;
   switchProfile(profileId: string): Promise<NimoraCommand | null>;
   setPresenceOverride(presenceOverride: PresenceOverride): Promise<PresenceDecision>;
   enterSafeMode(): Promise<NimoraCommand | null>;
@@ -1499,6 +1500,13 @@ export function createDesktopApi(
       async exportDiagnostics() { return null; },
       async profiles() { return structuredClone(previewProfiles); },
       async createProfile() { return null; },
+      async updateProfile(profileId, name, policy) {
+        const profile = previewProfiles.profiles.find((candidate) => candidate.id === profileId);
+        if (!profile) throw new Error("profile-not-found");
+        profile.name = name.trim();
+        profile.policy = structuredClone(policy);
+        return null;
+      },
       async switchProfile() { return null; },
       async setPresenceOverride(presenceOverride) {
         previewSnapshot.presenceOverride = presenceOverride;
@@ -1772,6 +1780,7 @@ export function createDesktopApi(
     exportDiagnostics: async (destinationPath, includeEvents) => await invokeCommand("export_diagnostics", { request: { destinationPath, includeEvents } }) as DiagnosticBundleReceipt,
     profiles: async () => await invokeCommand("profile_snapshot") as ProfileSnapshot,
     createProfile: async (name, policy) => await invokeCommand("create_profile", { name, policy }) as NimoraCommand,
+    updateProfile: async (profileId, name, policy) => await invokeCommand("update_profile", { profileId, name, policy }) as NimoraCommand,
     switchProfile: async (profileId) => await invokeCommand("switch_profile", { profileId }) as NimoraCommand,
     setPresenceOverride: async (presenceOverride) => await invokeCommand("set_presence_override", { request: { presenceOverride } }) as PresenceDecision,
     enterSafeMode: async () => await invokeCommand("enter_safe_mode") as NimoraCommand,
