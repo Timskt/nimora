@@ -404,7 +404,7 @@ export function PetOverlay() {
         aria-expanded={menuOpen}
       >
         <span className="overlay-status">{message}</span>
-        <span className={`pet-character-stage facing-${facing} surface-${surface ?? "free"}`}>
+        <span className={`pet-character-stage facing-${facing} surface-${surface ?? "free"} state-${snapshot?.pet.state ?? "idle"}`}>
           {renderer && renderer.backend !== "built-in" && !rendererFailed ? (
             ["gltf", "vrm"].includes(renderer.backend) ? (
               <RendererErrorBoundary resetKey={renderer.assetId} onFailure={handleRendererFailure}>
@@ -449,6 +449,7 @@ export function PetOverlay() {
               <button type="button" role="menuitem" onClick={() => void desktopApi.openControlCenter("agent_task")}><span>▶</span>开始任务</button>
               <button type="button" role="menuitem" onClick={() => { setNameDraft(snapshot?.pet.name ?? "Aster"); setMenuPage("rename"); }}><span>✎</span>改名字</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void setHome(); }}><span>⌖</span>这里设为家</button>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("perch"); }}><span>⌄</span>在边缘栖息</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("sleep"); }}><span>☾</span>休息</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void toggleClickThrough(); }}><span>⌁</span>鼠标穿透</button>
               <button type="button" role="menuitem" onClick={() => void desktopApi.openControlCenter("settings")}><span>⚙</span>设置</button>

@@ -1007,3 +1007,17 @@ ID / 标题 / 优先级 / 前置条件
 - 验证成功信号续租 15 秒；权限撤销、Adapter 错误或休眠后信号过期，自动模式恢复活动 Profile，不永久隐藏桌宠。
 - 验证 Profile 切换、Safe Mode、托盘恢复、三档用户覆盖和后台 Sensor 使用同一串行窗口事务，不出现竞态覆盖或部分提交。
 - 验证控制中心明确显示全屏感知正常、降级、不可用或停止；权限缺失不得伪装为“未全屏”。
+
+## DP-PERCH — 边缘栖息
+
+| ID | 场景 | 预期 |
+|---|---|---|
+| DP-PERCH-001 | Runtime 播放 `perch` | 状态为 `perching`、情绪为 `neutral`，动作目录包含且仅包含一次 `perch` |
+| DP-PERCH-002 | 桌宠菜单触发栖息 | 经 `play_pet_action` 类型化 IPC 执行，不由 Renderer 直接改状态或移动窗口 |
+| DP-PERCH-003 | 宠物位于 Bottom/BottomLeft/BottomRight | 统一角色舞台应用底边栖息锚点，气泡、菜单、阴影和命中区不被变换 |
+| DP-PERCH-004 | 宠物位于 Free/Left/Right/Top | 动作保持确定性但不伪装攀爬或探头，不越过原生工作区安全边界 |
+| DP-PERCH-005 | Sprite/glTF 缺少 `pet.perch` | 按 Manifest 回退链解析，最终稳定回退 `pet.idle` |
+| DP-PERCH-006 | VRM 播放 `pet.perch` | 只请求白名单 `relaxed` 表情，缺失 Preset 时安全无表情降级 |
+| DP-PERCH-007 | 开启 Reduced Motion | 无循环位移动画，保留可识别的静态栖息姿态 |
+| DP-PERCH-008 | 用户代码/Automation/Agent 请求 | 从共同 Action Catalog 发现 `perch`，沿既有授权、确认、审计和 Safe Mode 门禁执行 |
+| DP-PERCH-009 | 拖拽、Safe/Recovery 或重启 | 拖拽优先；受限模式拒绝写动作；恢复后为 Idle，不持久化瞬时姿态 |

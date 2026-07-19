@@ -471,7 +471,7 @@ mod tests {
         }
 
         fn read_pet_action_catalog(&self) -> Result<Value, String> {
-            Ok(json!({"actions": ["idle", "observe", "walk", "sleep", "work", "celebrate"]}))
+            Ok(json!({"actions": ["idle", "observe", "walk", "perch", "sleep", "work", "celebrate"]}))
         }
 
         fn read_profile_state(&self) -> Result<Value, String> {

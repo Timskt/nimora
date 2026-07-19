@@ -338,6 +338,15 @@ Auto Host 上下文准备已接入持久 Context Cache：完整 continuation 经
 Auto Host 每轮 Workspace 门禁已实现真实有界重扫；一致时才允许继续，漂移时以 Session/Checkpoint/Workspace 三重 CAS 原子暂停 Session 与 Task 并追加 successor，竞争写入整体回滚且零 Provider 释放。单轮结果提交服务已支持 Continue、Paused、Completed 三类结果，将 Session/Task 生命周期、完整 continuation 与单调 Checkpoint sequence 以 timestamp + sequence 双 CAS 原子提交。调用前 durable Turn Attempt 已精确绑定 Session、Checkpoint、timestamp 与请求指纹且禁止过期重领；结果事务原子消费 Attempt，重复 Begin、陈旧提交与崩溃遗留均 fail-closed，遗留 Attempt 转为 indeterminate 并阻断 continuation 自动恢复。该链路已接入桌面持久监督 Runner、聚合控制中心与人工处置 UI，持久缓存已完成系统密钥 AEAD 加密；剩余缺口是真实跨崩溃桌面演练和更完整的指标控制面。
 
 Auto Host 已将上述独立能力组合为生产单轮执行 Facade：真实 Workspace 预检、加密 Context Cache、durable Attempt、Provider/Tool Supervisor 和原子 Commit 按固定顺序执行。真实 SQLite/Workspace 测试覆盖 Provider 完成、安全只读 Tool continuation、写 Tool 整批零派发暂停、Provider 失败 indeterminate 隔离及漂移前置退出；Checkpoint 同时支持验证历史 Tool Call/Result 结构而不持久化 Tool Descriptor。桌面后台有界监督循环及 Goal/Plan/Attempt 聚合查看、暂停、取消和人工对账 UI 已接通；尚缺 Goal/Plan 完整编辑和跨重启桌面端到端验证。
+
+## 2026-07-19 — QQ 宠物式边缘栖息动作
+
+- 已建立 `Perch → Perching → pet.perch` 正式领域链路，而不是 Renderer 私有 CSS 状态。
+- `PetAction::ALL` 是 Desktop、用户代码、Automation 与 Agent Action Catalog 的共同权威；`perch` 可从桌宠“更多”菜单和既有受控能力网关触发。
+- 内置角色使用低幅度静态重心姿态；Sprite 与 glTF 按资源 Manifest 精确解析，缺少 `pet.perch` 时确定性回退 `pet.idle`；VRM 仅使用封闭的 `relaxed` Preset。
+- Bottom、BottomLeft、BottomRight Surface 会应用更低的栖息锚点；左右边缘不冒充攀爬，顶部不冒充探头。
+- Reduced Motion 停止持续姿态动画但保留静态栖息位置。重启仍恢复 Idle；Safe/Recovery、拖拽抢占和窗口唯一执行者边界保持不变。
+- 当前未宣称支持攀爬、顶部探头、应用窗口或桌面图标表面；这些能力必须分别建立可测试语义和平台适配器。
 ## 2026-07-18 — Indeterminate Attempt reconciliation
 
 - Added a parameter-bound manual reconciliation contract for indeterminate Auto Mode attempts.

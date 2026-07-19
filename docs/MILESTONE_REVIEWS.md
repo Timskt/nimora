@@ -638,3 +638,11 @@ Actions 分钟：
 - 架构：新增三项封闭目标枚举；Pet Window 只提交意图，Tauri Host 负责窗口恢复与定向事件，控制中心映射到注册导航，拒绝任意 URL。
 - 鲁棒性：原生命令限制调用窗口，窗口恢复成功后才发布导航；托盘与桌宠来源分别进入审计数据，避免可观测性失真。
 - 体验：聊天、任务与设置进入“更多”页，保留六向高频轮盘的清晰度；Browser Preview 使用同一查询目标白名单完成独立验收。
+# M-2026-07-19 QQ 宠物式边缘栖息纵切
+
+- 结果：新增 `Perch → Perching → pet.perch` 完整语义，用户可从桌宠菜单或既有用户代码、Automation、Agent 能力面让宠物栖息。
+- 架构：Core 动作词表继续作为唯一权威；Surface 只提供空间上下文，Desktop Coordinator 仍是唯一窗口执行者，Renderer 仅投影状态。
+- 生态：Creator Studio 暴露标准动作；Sprite/glTF 使用 Manifest 回退，VRM 使用封闭低权重 Preset，旧角色缺动作时回退 Idle。
+- 体验：底边和底角使用专属低重心锚点；左右攀爬与顶部探头未被混入本动作；Reduced Motion 保留静态姿态。
+- 风险：签名 macOS/Windows 包仍需验证 Bottom Surface、混合 DPI、任务栏/Dock 变化及第三方角色视觉质量；不得用 Browser Preview 替代原生窗口证据。
+- Actions：继续只运行本地门禁，避免无价值 GitHub Actions 触发并保护每月 2000 分钟预算。

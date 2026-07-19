@@ -168,3 +168,11 @@ Nimora 的桌宠定位是经典 QQ 宠物式“常驻桌面的生命体”，但
 Agent 任务通过版本化 `nimora.agent-companion-signal/1` 向桌宠发布思考、运行、等待确认、完成、失败和取消六种有限状态。信号只包含状态、Task ID 与时间戳，不携带提示词、回答、文件内容、工具参数或任意显示文本。思考和运行映射为工作动作，等待确认恢复待机并提醒用户，完成短暂庆祝，失败和取消使用不施压的安抚文案；终态 4.2 秒后恢复 Core 权威生命状态。
 
 该通道属于可丢弃的瞬时表现，不持久化为宠物领域状态。未启用 Agent、Provider 全禁用、断网、控制中心关闭或事件丢失时，桌宠仍完整支持启动、拖动、照料、菜单、自主行为和离线持久化。未来 Auto Mode、Automation 与第三方 Agent 必须复用同一封闭枚举，不得注入任意动画名或任意气泡文本。
+
+## 边缘栖息体验
+
+- 用户把宠物拖到工作区底边或底角后，可在“更多 → 在边缘栖息”触发 `pet.perch`；同一动作也可由用户程序、Automation 和 Agent 经 Capability Gateway 请求。
+- 栖息是正式 `Perching` 状态。内置角色降低重心并收敛呼吸幅度；第三方 Sprite/glTF/VRM 共享同一动作名称与回退规则。
+- Bottom Surface 提供栖息锚点，左右 Surface 保留给未来 `pet.climb`，Top Surface 保留给未来 `pet.peek`，避免一个动作承担互相冲突的空间语义。
+- 不支持该动作的旧资源包继续显示 `pet.idle`，不会白屏、冻结或执行任意模型表达式；Reduced Motion 下只保留静态姿态。
+- 栖息不赋予 Renderer 移窗权限。原生窗口坐标仍只由 Desktop Coordinator 读取、约束、持久化和执行。

@@ -10,6 +10,7 @@ export function petStateAction(state: string): string {
     idle: "pet.idle",
     observing: "pet.observe",
     walking: "pet.walk",
+    perching: "pet.perch",
     sleeping: "pet.sleep",
     dragged: "pet.drag",
     interacting: "pet.click",
