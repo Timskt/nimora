@@ -1294,3 +1294,19 @@ ID / 标题 / 优先级 / 前置条件
 | DP-BUBBLE-017 | 自定义主题或角色包 | 只能映射批准的气泡 Token，角色资产不能注入 CSS 或改变命中区 |
 | DP-BUBBLE-018 | 自主状态与 Agent 陪伴并发 | 两者先经同一宿主 Attention Gateway；被环境策略或共享预算拒绝时不展示、不抢占现有反馈 |
 | DP-BUBBLE-019 | Renderer、Skill 或用户代码尝试绕过 | 只能提交版本化请求，不能直接消费、补充或重置宿主预算，也不能直接移动窗口 |
+
+## DP-OVERLAY — QQ 宠物式桌面 Overlay
+
+| ID | 场景 | 预期结果 |
+|---|---|---|
+| DP-OVERLAY-001 | 默认停留且无指针/键盘互动 | 仅角色与当前瞬时气泡可见，不常驻网页式工具面板 |
+| DP-OVERLAY-002 | 指针进入角色命中区 | 显示紧凑快捷工具条和温和反馈；工具条不遮挡脸部、不扩大原生窗口 |
+| DP-OVERLAY-003 | 指针离开 Overlay | 快捷工具条按动效规范收起，角色继续常驻且不触发领域副作用 |
+| DP-OVERLAY-004 | 鼠标右键或长按角色 | 打开同一宿主受控菜单，不显示浏览器原生菜单，不导航网页 |
+| DP-OVERLAY-005 | 主角色按钮聚焦后按 `Shift+F10` 或 Menu 键 | 打开与鼠标等价的菜单并聚焦首项，读屏获得菜单与动作名称 |
+| DP-OVERLAY-006 | 菜单打开时按方向键、Home、End、Enter、Escape | 焦点确定性移动；激活单一动作；Escape 按层级返回并最终聚焦角色 |
+| DP-OVERLAY-007 | `260×300`、200% 缩放、长宠物名和 Forced Colors | 角色、气泡、焦点与菜单均可辨识，无页面级滚动和关键操作裁切 |
+| DP-OVERLAY-008 | 断网、Provider 禁用、控制中心关闭 | 抚摸、拖动、照料、背包、回家和本地菜单保持可用，不启动 Agent |
+| DP-OVERLAY-009 | Renderer、AI、Skill 或用户程序请求移动/置顶/穿透 | 请求不能直接执行；仅 Desktop Coordinator 可在能力与策略检查后改变窗口 |
+| DP-OVERLAY-010 | Chrome Browser Preview 审计 | 只记录排版、焦点、ARIA、菜单和 Console 结果，不签署透明合成、置顶、DPI、多屏或 Work Area |
+| DP-OVERLAY-011 | Tauri 签名包真机审计 | 分别验证透明合成、置顶、桌面拖拽、点击穿透、托盘召回、离屏夹回与 WebView 自愈 |
