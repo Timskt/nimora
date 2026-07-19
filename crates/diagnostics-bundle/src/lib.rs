@@ -106,6 +106,8 @@ pub enum DiagnosticEventCode {
     ScheduledBackupFailed,
     ContextAdmissionRejected,
     SafeModeConvergenceFailed,
+    PetWindowRecovered,
+    PetWindowRecoveryExhausted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -727,6 +729,20 @@ mod tests {
             serde_json::to_string(&DiagnosticEventCode::SafeModeConvergenceFailed)
                 .expect("serialize event code"),
             "\"safe-mode-convergence-failed\""
+        );
+    }
+
+    #[test]
+    fn pet_window_recovery_events_have_stable_public_codes() {
+        assert_eq!(
+            serde_json::to_string(&DiagnosticEventCode::PetWindowRecovered)
+                .expect("serialize recovered code"),
+            "\"pet-window-recovered\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DiagnosticEventCode::PetWindowRecoveryExhausted)
+                .expect("serialize exhausted code"),
+            "\"pet-window-recovery-exhausted\""
         );
     }
 

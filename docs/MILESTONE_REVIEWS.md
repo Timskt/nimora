@@ -1,5 +1,13 @@
 # Nimora 里程碑回顾
 
+## 2026-07-19 — Native Pet Window Recovery
+
+- 结果：Desktop Host 已对 `pet` 窗口销毁建立有限恢复，重建继续复用统一窗口构造器、持久位置和实时 Presence 策略，桌宠不再因单次 WebView 异常永久消失。
+- 鲁棒性：60 秒滚动窗口最多 3 次，1/2/4 秒退避；原子门保证单 Worker，应用退出屏障保证正常退出不被误判为崩溃。
+- 降级：预算耗尽后保留 Core、托盘和控制中心，不无限创建窗口；成功/耗尽使用稳定无内容诊断码，不采集桌面或角色内容。
+- 证据：纯状态机覆盖退避、预算恢复、并发去重与退出抑制；诊断码序列化契约、Desktop Clippy 和格式门禁通过。
+- 剩余：真实 WebView 强杀、GPU Context Loss、macOS/Windows 签名包与 8 小时长稳仍属于发布真机门禁，当前不把纯状态机测试冒充跨平台运行证据。
+
 ## 2026-07-19 — macOS Fullscreen Presence Adapter
 
 - 结果：macOS Adapter 已通过 Accessibility `AXFullScreen` 采样前台全屏事实，接入 15 秒续租、指数退避、过期清理和 Desktop Presence Coordinator。

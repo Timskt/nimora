@@ -6,6 +6,7 @@ mod backup_service;
 mod creator_workspace;
 mod diagnostic_report;
 mod fail_closed_convergence;
+mod pet_window_recovery;
 mod reversible_transition;
 mod system_context_sensor;
 
@@ -30,6 +31,7 @@ use diagnostic_report::{
     DiagnosticReportFacts, DiagnosticSafetyMode, DiagnosticStartupMode, build_diagnostic_report,
 };
 use fail_closed_convergence::{SafeModeConvergenceOperations, converge_safe_mode};
+use pet_window_recovery::{PetWindowRecoveryHost, RecoveryDecision};
 use reversible_transition::{ReversibleTransitionError, run_reversible_transition};
 
 use auto_mode_jobs::{
@@ -374,6 +376,7 @@ struct DesktopState {
     policy_before_safe_mode: Mutex<Option<WindowPolicy>>,
     position_revision: AtomicU64,
     dragging: AtomicBool,
+    pet_window_recovery: PetWindowRecoveryHost,
     autonomy_stop: AtomicBool,
     asset_store: PathBuf,
     active_asset_selection_write: Mutex<()>,
@@ -841,6 +844,7 @@ impl DesktopState {
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
+            pet_window_recovery: PetWindowRecoveryHost::default(),
             autonomy_stop: AtomicBool::new(false),
             asset_store,
             active_asset_selection_write: Mutex::new(()),
@@ -935,6 +939,7 @@ impl DesktopState {
             policy_before_safe_mode: Mutex::new(None),
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
+            pet_window_recovery: PetWindowRecoveryHost::default(),
             autonomy_stop: AtomicBool::new(false),
             asset_store,
             active_asset_selection_write: Mutex::new(()),
@@ -10972,6 +10977,53 @@ fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
     Ok(())
 }
 
+fn schedule_pet_window_recovery(app: AppHandle) {
+    let state = app.state::<DesktopState>();
+    if !state.pet_window_recovery.try_start() {
+        return;
+    }
+    std::thread::spawn(move || {
+        loop {
+            let state = app.state::<DesktopState>();
+            if state.pet_window_recovery.is_shutting_down() {
+                state.pet_window_recovery.finish();
+                return;
+            }
+            let decision = state
+                .pet_window_recovery
+                .next_attempt(current_time_ms().unwrap_or(u64::MAX));
+            let RecoveryDecision::RetryAfter(delay) = decision else {
+                let _ = record_diagnostic_event(
+                    &state,
+                    DiagnosticSeverity::Error,
+                    DiagnosticComponent::Application,
+                    DiagnosticEventCode::PetWindowRecoveryExhausted,
+                );
+                state.pet_window_recovery.finish();
+                let _ = show_control_center(&app, "pet-window-recovery");
+                return;
+            };
+            std::thread::sleep(delay);
+            let state = app.state::<DesktopState>();
+            if state.pet_window_recovery.is_shutting_down() {
+                state.pet_window_recovery.finish();
+                return;
+            }
+            if app.get_webview_window(PET_WINDOW_LABEL).is_some() || create_pet_window(&app).is_ok()
+            {
+                let _ = record_diagnostic_event(
+                    &state,
+                    DiagnosticSeverity::Info,
+                    DiagnosticComponent::Application,
+                    DiagnosticEventCode::PetWindowRecovered,
+                );
+                state.pet_window_recovery.finish();
+                return;
+            }
+        }
+    });
+}
+
 fn create_tray(app: &AppHandle) -> Result<(), DesktopError> {
     let open = MenuItem::with_id(app, "open", "打开控制中心", true, None::<&str>)?;
     let interactive = MenuItem::with_id(app, "interactive", "恢复宠物交互", true, None::<&str>)?;
@@ -11069,6 +11121,9 @@ pub fn run() {
                 && window.label() == PET_WINDOW_LABEL
             {
                 schedule_position_persistence(window.app_handle().clone());
+            }
+            if matches!(event, WindowEvent::Destroyed) && window.label() == PET_WINDOW_LABEL {
+                schedule_pet_window_recovery(window.app_handle().clone());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -11201,6 +11256,7 @@ pub fn run() {
     application.run(|app, event| {
         if matches!(event, RunEvent::ExitRequested { .. }) {
             let state = app.state::<DesktopState>();
+            state.pet_window_recovery.begin_shutdown();
             state.autonomy_stop.store(true, Ordering::Release);
             let _ = quiesce_auto_mode_jobs(&state, AUTO_MODE_SHUTDOWN_TIMEOUT, "shutdown-timeout");
             let _ = stop_automation_event_sessions(&state);
