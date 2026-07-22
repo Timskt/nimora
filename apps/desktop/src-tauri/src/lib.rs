@@ -7,6 +7,7 @@ mod creator_workspace;
 mod desktop_lifecycle;
 mod diagnostic_report;
 mod fail_closed_convergence;
+mod pet_physics;
 mod pet_window_recovery;
 mod reversible_transition;
 mod system_context_sensor;
@@ -36,6 +37,7 @@ use fail_closed_convergence::{SafeModeConvergenceOperations, converge_safe_mode}
 use pet_window_recovery::{
     HEARTBEAT_INTERVAL, PetWindowRecoveryHost, PetWindowWatchdog, RecoveryDecision,
 };
+use pet_physics::Spring;
 use reversible_transition::{ReversibleTransitionError, run_reversible_transition};
 
 use auto_mode_jobs::{
@@ -269,8 +271,20 @@ const AUTOMATION_EVENT_QUEUE_CAPACITY: usize = 32;
 const AUTOMATION_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const AUTO_MODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const AUTOMATION_AGENT_REQUESTER: &str = "automation:desktop";
-const PET_WANDER_FRAMES: i32 = 12;
 const PET_WANDER_FRAME_DURATION: Duration = Duration::from_millis(25);
+/// Upper bound on roam frames so a spring that never quite settles (or a target
+/// it can't reach because a gate keeps nudging it) still terminates the loop.
+/// At [`PET_WANDER_FRAME_DURATION`] this caps a single roam at roughly one
+/// second, matching the prior twelve-frame feel while allowing organic easing.
+const PET_WANDER_MAX_FRAMES: u32 = 40;
+/// Spring restoring force per unit displacement for autonomous roaming. Tuned
+/// so the pet covers the ~140px roam step in well under the frame cap while
+/// easing in and out rather than sliding at constant speed.
+const PET_WANDER_SPRING_STIFFNESS: f64 = 90.0;
+/// Position tolerance (pixels) for treating a roam as arrived.
+const PET_WANDER_ARRIVAL_POSITION_EPSILON: f64 = 0.75;
+/// Velocity tolerance (pixels/second) for treating a roam as arrived.
+const PET_WANDER_ARRIVAL_VELOCITY_EPSILON: f64 = 4.0;
 const PET_EDGE_SNAP_THRESHOLD: i64 = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12773,7 +12787,16 @@ fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
     } else {
         plan_surface_wander_target(current, window_size, work_area, surface, sequence)
     };
-    for frame in 1..=PET_WANDER_FRAMES {
+    // Drive each axis with a critically damped spring instead of a linear
+    // tween: the pet eases out of rest, accelerates, and eases into the target
+    // rather than sliding at constant speed. Critical damping is used for calm,
+    // purposeful roaming that never overshoots the safe bounds computed above.
+    let mut spring_x = Spring::critically_damped(f64::from(current.x), PET_WANDER_SPRING_STIFFNESS);
+    let mut spring_y = Spring::critically_damped(f64::from(current.y), PET_WANDER_SPRING_STIFFNESS);
+    let target_x = f64::from(target.x);
+    let target_y = f64::from(target.y);
+    let dt = PET_WANDER_FRAME_DURATION.as_secs_f64();
+    for _ in 0..PET_WANDER_MAX_FRAMES {
         let state = app.state::<DesktopState>();
         if state.reduced_motion.load(Ordering::Acquire)
             || state.dragging.load(Ordering::Acquire)
@@ -12782,18 +12805,50 @@ fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
         {
             break;
         }
-        let interpolate = |start: i32, end: i32| {
-            let delta = i64::from(end) - i64::from(start);
-            let value = i64::from(start) + delta * i64::from(frame) / i64::from(PET_WANDER_FRAMES);
-            i32::try_from(value).unwrap_or(start)
-        };
+        let next_x = spring_x.advance(target_x, dt);
+        let next_y = spring_y.advance(target_y, dt);
         window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-            interpolate(current.x, target.x),
-            interpolate(current.y, target.y),
+            round_to_i32(next_x, current.x),
+            round_to_i32(next_y, current.y),
         )))?;
+        if spring_x.is_settled(
+            target_x,
+            PET_WANDER_ARRIVAL_POSITION_EPSILON,
+            PET_WANDER_ARRIVAL_VELOCITY_EPSILON,
+        ) && spring_y.is_settled(
+            target_y,
+            PET_WANDER_ARRIVAL_POSITION_EPSILON,
+            PET_WANDER_ARRIVAL_VELOCITY_EPSILON,
+        ) {
+            // Land exactly on the planned target so downstream persistence and
+            // surface classification see the intended coordinate, not a
+            // sub-pixel spring residual.
+            window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+                target.x, target.y,
+            )))?;
+            break;
+        }
         std::thread::sleep(PET_WANDER_FRAME_DURATION);
     }
     Ok(())
+}
+
+/// Rounds a spring's floating-point position to a physical pixel coordinate,
+/// falling back to `fallback` if the value is non-finite or out of `i32` range
+/// so a misbehaving spring can never teleport or crash the native window move.
+#[allow(clippy::cast_possible_truncation)]
+fn round_to_i32(value: f64, fallback: i32) -> i32 {
+    if !value.is_finite() {
+        return fallback;
+    }
+    let rounded = value.round();
+    if rounded >= f64::from(i32::MAX) {
+        i32::MAX
+    } else if rounded <= f64::from(i32::MIN) {
+        i32::MIN
+    } else {
+        rounded as i32
+    }
 }
 
 fn discover_agent_provider_worker(app: &AppHandle) -> Option<PathBuf> {
