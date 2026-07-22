@@ -213,7 +213,10 @@ mod tests {
         // A NaN target must not poison the position; it is treated as 0.0.
         for _ in 0..10 {
             let position = spring.advance(f64::NAN, DT);
-            assert!(position.is_finite(), "NaN target produced non-finite motion");
+            assert!(
+                position.is_finite(),
+                "NaN target produced non-finite motion"
+            );
         }
     }
 
@@ -239,7 +242,10 @@ mod tests {
             max_abs <= 200.0,
             "stiff spring was not bounded near the target (max {max_abs})"
         );
-        assert!(spring.is_settled(100.0, 1.0, 1.0), "stiff spring did not settle");
+        assert!(
+            spring.is_settled(100.0, 1.0, 1.0),
+            "stiff spring did not settle"
+        );
     }
 
     #[test]

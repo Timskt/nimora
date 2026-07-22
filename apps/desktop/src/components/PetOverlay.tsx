@@ -31,6 +31,11 @@ import {
   type CollisionImpact,
   type CollisionWall,
 } from "./petCollision";
+import {
+  vitalityStateFromCompanionStatus,
+  workerVitalityReaction,
+  type VitalityExpression,
+} from "./petWorkerVitality";
 import { BUILTIN_FOX_RENDERER } from "./builtinFox";
 
 const GltfRenderer = lazy(async () => {
@@ -58,6 +63,8 @@ const LANDING_SQUASH_DURATION_MS = 160;
  * (being at/above the default dizzy threshold) briefly reels.
  */
 const COLLISION_IMPACT_SPEED = 0.7;
+/** How long a transient worker-vitality cue (bounce/smoke) shows before clearing. */
+const VITALITY_TRANSIENT_MS = 3_600;
 
 export function PetOverlay() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
@@ -92,6 +99,10 @@ export function PetOverlay() {
   // bump is active so the stage can drop its easing transition mid-pulse.
   const [collision, setCollision] = useState({ recoilX: 0, recoilY: 0, dizzy: false, active: false });
   const collisionFrame = useRef(0);
+  // Worker vitality: the pet embodies the state of the background workers that
+  // are its "body" — sweat while busy, bounce on success, smoke on a crash.
+  const [vitalityExpression, setVitalityExpression] = useState<VitalityExpression>("none");
+  const vitalityResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previousSurface = useRef<PetSurface | null>(null);
   const reducedMotion = useRef(false);
   // Mirror of the reduced-motion ref as state so the built-in character can
@@ -230,6 +241,18 @@ export function PetOverlay() {
     void desktopApi.onAgentCompanionSignal((signal) => {
       if (disposed) return;
       const presentation = agentCompanionPresentation(signal.status);
+      // Physical embodiment of worker state (sweat/bounce/smoke/snore). Set
+      // outside the attention gate: the body reflects the work even when the
+      // bubble budget is exhausted. Transient cues reset; sustained ones persist.
+      const reaction = workerVitalityReaction(vitalityStateFromCompanionStatus(signal.status));
+      if (vitalityResetTimer.current) clearTimeout(vitalityResetTimer.current);
+      setVitalityExpression(reaction.expression);
+      if (!reaction.sustained && reaction.expression !== "none") {
+        vitalityResetTimer.current = setTimeout(() => {
+          if (!disposed) setVitalityExpression("none");
+          vitalityResetTimer.current = null;
+        }, VITALITY_TRANSIENT_MS);
+      }
       const priority = signal.status === "failed" || signal.status === "waiting_for_confirmation" ? "feedback" : "ambient";
       void desktopApi.requestAttention("agent", "bubble", priority).then((attention) => {
         if (disposed || !attention.allowed) return;
@@ -255,6 +278,7 @@ export function PetOverlay() {
       listeners.forEach((unlisten) => unlisten());
       if (companionResetTimer.current) clearTimeout(companionResetTimer.current);
       if (squashResetTimer.current) clearTimeout(squashResetTimer.current);
+      if (vitalityResetTimer.current) clearTimeout(vitalityResetTimer.current);
     };
   }, [applySnapshot, presentBubble, refreshRenderer]);
 
@@ -654,7 +678,7 @@ export function PetOverlay() {
       >
         <span className="overlay-status" role="status" aria-live="polite" aria-atomic="true">{message}</span>
         <span
-          className={`pet-character-stage facing-${facing} surface-${surface ?? "free"} state-${snapshot?.pet.state ?? "idle"}`}
+          className={`pet-character-stage facing-${facing} surface-${surface ?? "free"} state-${snapshot?.pet.state ?? "idle"} vitality-${vitalityExpression}`}
           style={{ "--squash-x": `${squash.sx}`, "--squash-y": `${squash.sy}` } as CSSProperties}
         >
           {renderer && renderer.backend !== "built-in" && !rendererFailed ? (

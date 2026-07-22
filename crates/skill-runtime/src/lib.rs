@@ -1,7 +1,7 @@
 use nimora_capability_contract::{
     CapabilitySemanticContract, validate_capability_semantic_contract,
 };
-use nimora_runtime_core::CommandRisk;
+use nimora_runtime_core::{CommandRisk, PetAction};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -79,6 +79,12 @@ pub struct SkillAgentToolContribution {
     pub effect: SkillAgentToolEffect,
     #[serde(default)]
     pub composition: Option<CapabilitySemanticContract>,
+    /// Optional pet animation this tool embodies while it runs (e.g. a coding
+    /// skill binds `work` so the pet mimes typing). The pet is the subject: a
+    /// Skill declares how it wants the creature to behave when the tool fires.
+    /// `None` leaves the pet in its ambient behavior.
+    #[serde(default)]
+    pub pet_behavior: Option<PetAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -637,6 +643,7 @@ mod tests {
             base_risk: CommandRisk::Low,
             effect: SkillAgentToolEffect::ReversibleWrite,
             composition: None,
+            pet_behavior: None,
         }];
         assert!(validate_manifest(manifest.clone()).is_ok());
 

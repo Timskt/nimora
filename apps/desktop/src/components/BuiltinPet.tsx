@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { GazeOffset } from "./petGaze";
 import { NEUTRAL_GAZE } from "./petGaze";
 import { createFollower, stepFollower, type FollowerConfig } from "./petSecondaryMotion";
+import { nextBlink } from "./petBlink";
 
 interface BuiltinPetProps {
   state: string;
@@ -12,10 +13,15 @@ interface BuiltinPetProps {
    */
   gaze?: GazeOffset;
   /**
-   * When true, secondary motion (the lagging tail swing) is suppressed and the
-   * tail rests, honoring the user's reduced-motion preference.
+   * When true, secondary motion (the lagging tail swing) and blinking are
+   * suppressed and the eyes/tail rest, honoring the reduced-motion preference.
    */
   reducedMotion?: boolean;
+  /**
+   * Pet energy, 0..100. Low energy makes the pet blink rarely and heavily (the
+   * drowsy "dry-eye" tell); defaults to fully rested.
+   */
+  energy?: number;
 }
 
 /**
@@ -33,6 +39,7 @@ export function BuiltinPet({
   emotion,
   gaze = NEUTRAL_GAZE,
   reducedMotion = false,
+  energy = 100,
 }: BuiltinPetProps) {
   const gazeTransform = `translate(${gaze.dx} ${gaze.dy})`;
 

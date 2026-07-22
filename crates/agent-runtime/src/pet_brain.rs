@@ -123,9 +123,7 @@ pub fn parse_brain_instruction(raw: &str) -> Result<PetBrainInstruction, PetBrai
 ///
 /// Returns [`PetBrainError::PersonalityOutOfRange`] if any dimension exceeds 100
 /// (values are `u8`, so only the upper bound can be violated).
-pub fn personality_system_prompt(
-    personality: &PetPersonality,
-) -> Result<String, PetBrainError> {
+pub fn personality_system_prompt(personality: &PetPersonality) -> Result<String, PetBrainError> {
     for value in [
         personality.energy,
         personality.curiosity,
@@ -221,10 +219,7 @@ mod tests {
             parse_brain_instruction("not json"),
             Err(PetBrainError::InvalidJson)
         );
-        assert_eq!(
-            parse_brain_instruction(""),
-            Err(PetBrainError::InvalidJson)
-        );
+        assert_eq!(parse_brain_instruction(""), Err(PetBrainError::InvalidJson));
     }
 
     #[test]

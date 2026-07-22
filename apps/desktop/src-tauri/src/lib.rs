@@ -34,10 +34,10 @@ use diagnostic_report::{
     DiagnosticReportFacts, DiagnosticSafetyMode, DiagnosticStartupMode, build_diagnostic_report,
 };
 use fail_closed_convergence::{SafeModeConvergenceOperations, converge_safe_mode};
+use pet_physics::Spring;
 use pet_window_recovery::{
     HEARTBEAT_INTERVAL, PetWindowRecoveryHost, PetWindowWatchdog, RecoveryDecision,
 };
-use pet_physics::Spring;
 use reversible_transition::{ReversibleTransitionError, run_reversible_transition};
 
 use auto_mode_jobs::{
@@ -16728,6 +16728,7 @@ mod tests {
                         )
                         .expect("semantic contract"),
                     ),
+                    pet_behavior: None,
                 }],
                 agent_tasks: false,
             },
@@ -16969,6 +16970,7 @@ mod tests {
                     base_risk: CommandRisk::Low,
                     effect: SkillAgentToolEffect::ReversibleWrite,
                     composition: None,
+                    pet_behavior: None,
                 }],
                 agent_tasks: false,
             },
