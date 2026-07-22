@@ -21,6 +21,7 @@ import { agentCompanionPresentation } from "./agentCompanion";
 import { canPresentPetBubble, usePetBubble } from "./petBubble";
 import { subscribeReducedMotion } from "./reducedMotion";
 import { BuiltinPet } from "./BuiltinPet";
+import { computeGaze, NEUTRAL_GAZE, type GazeOffset } from "./petGaze";
 import { BUILTIN_FOX_RENDERER } from "./builtinFox";
 
 const GltfRenderer = lazy(async () => {
@@ -32,6 +33,12 @@ const BuiltinPet3D = lazy(async () => {
   return { default: module.BuiltinPet3D };
 });
 const PET_WINDOW_HEARTBEAT_INTERVAL_MS = 15_000;
+/** Largest pupil deflection, in the built-in SVG's 220x240 coordinate units. */
+const GAZE_MAX_OFFSET = { dx: 4, dy: 6 };
+/** Client-pixel distance at which the gaze reaches full deflection. */
+const GAZE_SATURATION_DISTANCE = 220;
+/** Vertical position of the eyes as a fraction of the character box height. */
+const GAZE_EYE_CENTER_HEIGHT_RATIO = 0.47;
 
 export function PetOverlay() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
@@ -57,6 +64,8 @@ export function PetOverlay() {
   const [companionAction, setCompanionAction] = useState<PetAction | null>(null);
   const companionResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNoticeAt = useRef(Number.NEGATIVE_INFINITY);
+  const [gaze, setGaze] = useState<GazeOffset>(NEUTRAL_GAZE);
+  const reducedMotion = useRef(false);
   const facing = snapshot ? petFacing(snapshot.pet) : "neutral";
   const applySnapshot = useCallback((value: DesktopSnapshot) => {
     setSnapshot(value);
@@ -75,6 +84,8 @@ export function PetOverlay() {
     if (typeof window.matchMedia !== "function") return;
     const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
     return subscribeReducedMotion(preference, (enabled) => {
+      reducedMotion.current = enabled;
+      if (enabled) setGaze(NEUTRAL_GAZE);
       void desktopApi.setReducedMotion(enabled).catch(() => undefined);
     });
   }, []);
@@ -421,6 +432,27 @@ export function PetOverlay() {
   }
 
   function handlePointerMove(event: React.PointerEvent<HTMLButtonElement>) {
+    // Eye-tracking: point the pupils at the cursor on every hover move, not
+    // only during a gesture. Skipped under reduced motion, while dragging, or
+    // when the menu is open so the gaze never fights an explicit interaction.
+    if (!reducedMotion.current && !dragging.current && !menuOpen) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setGaze(
+          computeGaze({
+            pointer: { x: event.clientX, y: event.clientY },
+            // Eyes sit at ~50% width and ~47% height of the character box
+            // (SVG viewBox 220x240, eye center near y=112).
+            eyeCenter: {
+              x: rect.left + rect.width * 0.5,
+              y: rect.top + rect.height * GAZE_EYE_CENTER_HEIGHT_RATIO,
+            },
+            maxOffset: GAZE_MAX_OFFSET,
+            saturationDistance: GAZE_SATURATION_DISTANCE,
+          }),
+        );
+      }
+    }
     if (!gestureTrail.current || dragging.current) return;
     const nextTrail = appendPetGesturePoint(gestureTrail.current, {
       clientX: event.clientX,
@@ -501,6 +533,7 @@ export function PetOverlay() {
         onPointerMove={handlePointerMove}
         onPointerUp={finishPointerGesture}
         onPointerCancel={cancelPointerGesture}
+        onPointerLeave={() => setGaze(NEUTRAL_GAZE)}
         onClick={handlePetClick}
         onKeyDown={(event) => {
           if (!isPetMenuShortcut(event.key, event.shiftKey)) return;
@@ -545,7 +578,7 @@ export function PetOverlay() {
               </Suspense>
             </RendererErrorBoundary>
           ) : builtin3dFailed ? (
-            <BuiltinPet state={companionAction ?? snapshot?.pet.state ?? "idle"} emotion={snapshot?.pet.emotion ?? "neutral"} />
+            <BuiltinPet state={companionAction ?? snapshot?.pet.state ?? "idle"} emotion={snapshot?.pet.emotion ?? "neutral"} gaze={gaze} />
           ) : (
             <RendererErrorBoundary resetKey="builtin.aster.3d" onFailure={handleBuiltin3dFailure}>
               <Suspense fallback={<BuiltinPet state={companionAction ?? snapshot?.pet.state ?? "idle"} emotion={snapshot?.pet.emotion ?? "neutral"} />}>

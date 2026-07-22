@@ -1,9 +1,18 @@
+import type { GazeOffset } from "./petGaze";
+import { NEUTRAL_GAZE } from "./petGaze";
+
 interface BuiltinPetProps {
   state: string;
   emotion: string;
+  /**
+   * Pupil displacement, in this SVG's own coordinate units, that makes the eyes
+   * track the pointer. Defaults to a neutral forward gaze.
+   */
+  gaze?: GazeOffset;
 }
 
-export function BuiltinPet({ state, emotion }: BuiltinPetProps) {
+export function BuiltinPet({ state, emotion, gaze = NEUTRAL_GAZE }: BuiltinPetProps) {
+  const gazeTransform = `translate(${gaze.dx} ${gaze.dy})`;
   return (
     <svg
       className={`builtin-pet overlay-pet ${state} emotion-${emotion}`}
@@ -47,7 +56,11 @@ export function BuiltinPet({ state, emotion }: BuiltinPetProps) {
         <g className="builtin-face">
           <ellipse className="builtin-eye builtin-eye-left" cx="82" cy="112" rx="11" ry="16" fill="url(#aster-eye)" />
           <ellipse className="builtin-eye builtin-eye-right" cx="138" cy="112" rx="11" ry="16" fill="url(#aster-eye)" />
-          <circle cx="78" cy="106" r="3.6" fill="#fff" /><circle cx="134" cy="106" r="3.6" fill="#fff" />
+          <g className="builtin-pupils" transform={gazeTransform}>
+            <circle className="builtin-pupil" cx="82" cy="112" r="4.4" fill="#201b3d" />
+            <circle className="builtin-pupil" cx="138" cy="112" r="4.4" fill="#201b3d" />
+            <circle cx="78" cy="106" r="3.6" fill="#fff" /><circle cx="134" cy="106" r="3.6" fill="#fff" />
+          </g>
           <ellipse className="builtin-blush" cx="66" cy="139" rx="15" ry="7" fill="#ee9ab6" opacity=".2" />
           <ellipse className="builtin-blush" cx="154" cy="139" rx="15" ry="7" fill="#ee9ab6" opacity=".2" />
           <path d="m104 132 6 5 6-5c0-5-12-5-12 0Z" fill="#77658c" />
