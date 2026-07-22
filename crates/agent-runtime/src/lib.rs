@@ -14,6 +14,7 @@ mod context_management;
 mod coordinator;
 mod deterministic;
 mod goal;
+mod pet_brain;
 mod provider;
 mod reasoning;
 mod task_gateway;
@@ -40,6 +41,10 @@ pub use coordinator::{
 pub use deterministic::DeterministicLocalProvider;
 pub use goal::{
     AgentGoal, AgentGoalError, AgentGoalStatus, AgentPlan, AgentPlanStep, AgentPlanStepStatus,
+};
+pub use pet_brain::{
+    PetBrainError, PetBrainInstruction, PetMood, PetPersonality, parse_brain_instruction,
+    personality_system_prompt,
 };
 pub use provider::{
     CancellationFlag, ProviderAdapter, ProviderCapabilities, ProviderCapability,
