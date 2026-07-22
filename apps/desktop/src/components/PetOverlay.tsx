@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import type { CharacterRendererSnapshot, DesktopSnapshot, PetAction, PetCareAction, PetItemId, PetSurface } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 import { RendererErrorBoundary } from "./RendererErrorBoundary";
@@ -22,6 +23,7 @@ import { canPresentPetBubble, usePetBubble } from "./petBubble";
 import { subscribeReducedMotion } from "./reducedMotion";
 import { BuiltinPet } from "./BuiltinPet";
 import { computeGaze, NEUTRAL_GAZE, type GazeOffset } from "./petGaze";
+import { computeSquash, NEUTRAL_SQUASH, type SquashScale } from "./petSquash";
 import { BUILTIN_FOX_RENDERER } from "./builtinFox";
 
 const GltfRenderer = lazy(async () => {
@@ -39,6 +41,10 @@ const GAZE_MAX_OFFSET = { dx: 4, dy: 6 };
 const GAZE_SATURATION_DISTANCE = 220;
 /** Vertical position of the eyes as a fraction of the character box height. */
 const GAZE_EYE_CENTER_HEIGHT_RATIO = 0.47;
+/** Peak strain of the landing squash when the pet is set down after a drag. */
+const LANDING_SQUASH_MAX_STRAIN = 0.16;
+/** How long the landing squash holds before easing back to rest. */
+const LANDING_SQUASH_DURATION_MS = 160;
 
 export function PetOverlay() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
@@ -65,7 +71,12 @@ export function PetOverlay() {
   const companionResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNoticeAt = useRef(Number.NEGATIVE_INFINITY);
   const [gaze, setGaze] = useState<GazeOffset>(NEUTRAL_GAZE);
+  const [squash, setSquash] = useState<SquashScale>(NEUTRAL_SQUASH);
+  const squashResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reducedMotion = useRef(false);
+  // Mirror of the reduced-motion ref as state so the built-in character can
+  // re-render (and stop its tail-swing rAF loop) when the preference changes.
+  const [reducedMotionActive, setReducedMotionState] = useState(false);
   const facing = snapshot ? petFacing(snapshot.pet) : "neutral";
   const applySnapshot = useCallback((value: DesktopSnapshot) => {
     setSnapshot(value);
@@ -85,7 +96,11 @@ export function PetOverlay() {
     const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
     return subscribeReducedMotion(preference, (enabled) => {
       reducedMotion.current = enabled;
-      if (enabled) setGaze(NEUTRAL_GAZE);
+      setReducedMotionState(enabled);
+      if (enabled) {
+        setGaze(NEUTRAL_GAZE);
+        setSquash(NEUTRAL_SQUASH);
+      }
       void desktopApi.setReducedMotion(enabled).catch(() => undefined);
     });
   }, []);
@@ -203,6 +218,7 @@ export function PetOverlay() {
       disposed = true;
       listeners.forEach((unlisten) => unlisten());
       if (companionResetTimer.current) clearTimeout(companionResetTimer.current);
+      if (squashResetTimer.current) clearTimeout(squashResetTimer.current);
     };
   }, [applySnapshot, presentBubble, refreshRenderer]);
 
@@ -472,10 +488,25 @@ export function PetOverlay() {
     void drag();
   }
 
+  // A short "landing" squash when the pet is set down after a drag: it presses
+  // wide and short, then eases back to rest. Skipped under reduced motion.
+  function pulseLandingSquash() {
+    if (reducedMotion.current) return;
+    if (squashResetTimer.current) clearTimeout(squashResetTimer.current);
+    setSquash(
+      computeSquash({ intensity: 1, axis: "horizontal", maxStrain: LANDING_SQUASH_MAX_STRAIN }),
+    );
+    squashResetTimer.current = setTimeout(() => {
+      setSquash(NEUTRAL_SQUASH);
+      squashResetTimer.current = null;
+    }, LANDING_SQUASH_DURATION_MS);
+  }
+
   function finishPointerGesture() {
     clearLongPress();
     const trail = gestureTrail.current;
     gestureTrail.current = null;
+    const wasDragging = dragging.current;
     if (!dragging.current && trail && isPetStroke(trail, performance.now())) {
       suppressClick.current = true;
       void stroke(
@@ -491,6 +522,7 @@ export function PetOverlay() {
     }
     dragging.current = false;
     setPointerActive(false);
+    if (wasDragging) pulseLandingSquash();
   }
 
   function cancelPointerGesture() {
@@ -552,7 +584,10 @@ export function PetOverlay() {
         aria-expanded={menuOpen}
       >
         <span className="overlay-status" role="status" aria-live="polite" aria-atomic="true">{message}</span>
-        <span className={`pet-character-stage facing-${facing} surface-${surface ?? "free"} state-${snapshot?.pet.state ?? "idle"}`}>
+        <span
+          className={`pet-character-stage facing-${facing} surface-${surface ?? "free"} state-${snapshot?.pet.state ?? "idle"}`}
+          style={{ "--squash-x": `${squash.sx}`, "--squash-y": `${squash.sy}` } as CSSProperties}
+        >
           {renderer && renderer.backend !== "built-in" && !rendererFailed ? (
             ["gltf", "vrm"].includes(renderer.backend) ? (
               <RendererErrorBoundary resetKey={renderer.assetId} onFailure={handleRendererFailure}>
@@ -578,10 +613,10 @@ export function PetOverlay() {
               </Suspense>
             </RendererErrorBoundary>
           ) : builtin3dFailed ? (
-            <BuiltinPet state={companionAction ?? snapshot?.pet.state ?? "idle"} emotion={snapshot?.pet.emotion ?? "neutral"} gaze={gaze} />
+            <BuiltinPet state={companionAction ?? snapshot?.pet.state ?? "idle"} emotion={snapshot?.pet.emotion ?? "neutral"} gaze={gaze} reducedMotion={reducedMotionActive} />
           ) : (
             <RendererErrorBoundary resetKey="builtin.aster.3d" onFailure={handleBuiltin3dFailure}>
-              <Suspense fallback={<BuiltinPet state={companionAction ?? snapshot?.pet.state ?? "idle"} emotion={snapshot?.pet.emotion ?? "neutral"} />}>
+              <Suspense fallback={<BuiltinPet state={companionAction ?? snapshot?.pet.state ?? "idle"} emotion={snapshot?.pet.emotion ?? "neutral"} gaze={gaze} reducedMotion={reducedMotionActive} />}>
                 <BuiltinPet3D
                   state={companionAction ?? snapshot?.pet.state ?? "idle"}
                   emotion={snapshot?.pet.emotion ?? "neutral"}

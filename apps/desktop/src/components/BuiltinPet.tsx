@@ -1,5 +1,7 @@
+import { useEffect, useRef, useState } from "react";
 import type { GazeOffset } from "./petGaze";
 import { NEUTRAL_GAZE } from "./petGaze";
+import { createFollower, stepFollower, type FollowerConfig } from "./petSecondaryMotion";
 
 interface BuiltinPetProps {
   state: string;
@@ -9,10 +11,55 @@ interface BuiltinPetProps {
    * track the pointer. Defaults to a neutral forward gaze.
    */
   gaze?: GazeOffset;
+  /**
+   * When true, secondary motion (the lagging tail swing) is suppressed and the
+   * tail rests, honoring the user's reduced-motion preference.
+   */
+  reducedMotion?: boolean;
 }
 
-export function BuiltinPet({ state, emotion, gaze = NEUTRAL_GAZE }: BuiltinPetProps) {
+/**
+ * Soft, trailing tail: low stiffness so it lags the body, high retained
+ * velocity so it swings past and settles rather than snapping.
+ */
+const TAIL_FOLLOWER: FollowerConfig = { stiffness: 0.18, damping: 0.82, maxLeash: 12 };
+/** Maps a horizontal gaze lean (SVG units) to the tail's anchor target. */
+const TAIL_LEAN_GAIN = 1.6;
+/** Degrees of tail rotation per unit of follower displacement. */
+const TAIL_DEGREES_PER_UNIT = 1.1;
+
+export function BuiltinPet({
+  state,
+  emotion,
+  gaze = NEUTRAL_GAZE,
+  reducedMotion = false,
+}: BuiltinPetProps) {
   const gazeTransform = `translate(${gaze.dx} ${gaze.dy})`;
+
+  // Secondary motion: the tail trails the pet's look direction. The anchor
+  // target is derived from the horizontal gaze lean and lives in a ref so the
+  // rAF loop always reads the latest value without re-subscribing each frame.
+  const [tailAngle, setTailAngle] = useState(0);
+  const anchorX = useRef(0);
+  anchorX.current = reducedMotion ? 0 : gaze.dx * TAIL_LEAN_GAIN;
+
+  useEffect(() => {
+    if (reducedMotion || typeof window.requestAnimationFrame !== "function") {
+      setTailAngle(0);
+      return;
+    }
+    let follower = createFollower({ x: 0, y: 0 });
+    let frame = 0;
+    const tick = () => {
+      follower = stepFollower(follower, { x: anchorX.current, y: 0 }, TAIL_FOLLOWER);
+      setTailAngle(follower.position.x * TAIL_DEGREES_PER_UNIT);
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [reducedMotion]);
+
+  const tailTransform = `rotate(${tailAngle.toFixed(2)} 168 200)`;
   return (
     <svg
       className={`builtin-pet overlay-pet ${state} emotion-${emotion}`}
@@ -40,8 +87,10 @@ export function BuiltinPet({ state, emotion, gaze = NEUTRAL_GAZE }: BuiltinPetPr
         </filter>
       </defs>
       <g className="builtin-tail">
-        <path d="M168 157c36 3 43 38 22 54-12 9-28 5-27-8 1-8 10-9 16-14 7-7 3-17-8-19" fill="none" stroke="#c9bce9" strokeWidth="20" strokeLinecap="round" />
-        <path d="M177 169c10 4 14 13 10 21" fill="none" stroke="#e9e0f7" strokeWidth="7" strokeLinecap="round" opacity=".72" />
+        <g className="builtin-tail-swing" transform={tailTransform}>
+          <path d="M168 157c36 3 43 38 22 54-12 9-28 5-27-8 1-8 10-9 16-14 7-7 3-17-8-19" fill="none" stroke="#c9bce9" strokeWidth="20" strokeLinecap="round" />
+          <path d="M177 169c10 4 14 13 10 21" fill="none" stroke="#e9e0f7" strokeWidth="7" strokeLinecap="round" opacity=".72" />
+        </g>
       </g>
       <g className="builtin-body" filter="url(#aster-shadow)">
         <path className="builtin-ear builtin-ear-left" d="M50 73 43 18c-1-8 7-12 13-7l40 38Z" fill="url(#aster-fur)" stroke="#b9abd9" strokeWidth="2" />
