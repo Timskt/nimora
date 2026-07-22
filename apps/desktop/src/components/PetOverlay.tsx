@@ -23,7 +23,14 @@ import { canPresentPetBubble, usePetBubble } from "./petBubble";
 import { subscribeReducedMotion } from "./reducedMotion";
 import { BuiltinPet } from "./BuiltinPet";
 import { computeGaze, NEUTRAL_GAZE, type GazeOffset } from "./petGaze";
+import { awarenessFromReason } from "./petAwareness";
 import { computeSquash, NEUTRAL_SQUASH, type SquashScale } from "./petSquash";
+import {
+  collisionResponse,
+  surfaceToWall,
+  type CollisionImpact,
+  type CollisionWall,
+} from "./petCollision";
 import { BUILTIN_FOX_RENDERER } from "./builtinFox";
 
 const GltfRenderer = lazy(async () => {
@@ -45,6 +52,12 @@ const GAZE_EYE_CENTER_HEIGHT_RATIO = 0.47;
 const LANDING_SQUASH_MAX_STRAIN = 0.16;
 /** How long the landing squash holds before easing back to rest. */
 const LANDING_SQUASH_DURATION_MS = 160;
+/**
+ * Impact speed used when the pet arrives at a screen edge during autonomous
+ * roaming. A firm-but-not-maximal bump so it reliably squashes and recoils and
+ * (being at/above the default dizzy threshold) briefly reels.
+ */
+const COLLISION_IMPACT_SPEED = 0.7;
 
 export function PetOverlay() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
@@ -73,6 +86,13 @@ export function PetOverlay() {
   const [gaze, setGaze] = useState<GazeOffset>(NEUTRAL_GAZE);
   const [squash, setSquash] = useState<SquashScale>(NEUTRAL_SQUASH);
   const squashResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Collision feedback: a wall bump squashes the body, recoils it off the wall,
+  // and (on a hard hit) leaves it dizzy. Driven by a rAF loop over the tested
+  // `collisionResponse`; state carries the current recoil offset and whether a
+  // bump is active so the stage can drop its easing transition mid-pulse.
+  const [collision, setCollision] = useState({ recoilX: 0, recoilY: 0, dizzy: false, active: false });
+  const collisionFrame = useRef(0);
+  const previousSurface = useRef<PetSurface | null>(null);
   const reducedMotion = useRef(false);
   // Mirror of the reduced-motion ref as state so the built-in character can
   // re-render (and stop its tail-swing rAF loop) when the preference changes.
@@ -182,6 +202,22 @@ export function PetOverlay() {
       void desktopApi.onPetSurfaceChanged(() => {
         void desktopApi.petSurface().then((value) => {
           if (!disposed) setSurface(value.surface);
+        });
+      }).then((disposeListener) => {
+        if (disposed) disposeListener();
+        else listeners.push(disposeListener);
+      }).catch(() => undefined);
+      // Sensory awakening (Milestone 1): react to the privacy-safe system
+      // context the host already surfaces. We read only the presence-decision
+      // reason (a single boolean fact — fullscreen / DND / game / screen-share),
+      // never window titles, rects, or z-order, and show a content-free cue so
+      // the pet feels aware of the environment without learning what the user
+      // is doing.
+      void desktopApi.onSystemContextChanged(() => {
+        void desktopApi.snapshot().then((value) => {
+          if (disposed) return;
+          const reaction = awarenessFromReason(value.presenceDecision.reason);
+          if (reaction.quiet) presentBubble(reaction.cue, "status");
         });
       }).then((disposeListener) => {
         if (disposed) disposeListener();
@@ -500,6 +536,39 @@ export function PetOverlay() {
       setSquash(NEUTRAL_SQUASH);
       squashResetTimer.current = null;
     }, LANDING_SQUASH_DURATION_MS);
+  }
+
+  // Plays the full collision arc (squash -> recoil -> dizzy -> settle) for a
+  // wall bump, driving both the squash and recoil/dizzy stage state from the
+  // tested pure `collisionResponse` over a rAF loop. Skipped under reduced
+  // motion. Any in-flight pulse is superseded so a rapid second bump restarts.
+  function pulseCollision(wall: CollisionWall) {
+    if (reducedMotion.current || typeof window.requestAnimationFrame !== "function") return;
+    if (collisionFrame.current) window.cancelAnimationFrame(collisionFrame.current);
+    if (squashResetTimer.current) {
+      clearTimeout(squashResetTimer.current);
+      squashResetTimer.current = null;
+    }
+    const impact: CollisionImpact = { wall, speed: COLLISION_IMPACT_SPEED };
+    const startedAt = performance.now();
+    const tick = () => {
+      const elapsed = performance.now() - startedAt;
+      const response = collisionResponse(impact, elapsed);
+      setSquash(response.squash);
+      setCollision({
+        recoilX: response.recoilX,
+        recoilY: response.recoilY,
+        dizzy: response.dizzy,
+        active: !response.done,
+      });
+      if (response.done) {
+        setSquash(NEUTRAL_SQUASH);
+        collisionFrame.current = 0;
+        return;
+      }
+      collisionFrame.current = window.requestAnimationFrame(tick);
+    };
+    collisionFrame.current = window.requestAnimationFrame(tick);
   }
 
   function finishPointerGesture() {
