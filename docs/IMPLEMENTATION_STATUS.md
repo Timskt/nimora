@@ -1,5 +1,16 @@
 # Nimora 全量实现状态与证据矩阵
 
+## 2026-07-22 — 桌面生命体表现层、行为语义与多屏漫游纵切
+
+- 视觉表现层：宠物漫游位移由 `pet_physics` 的临界阻尼 Spring 驱动，替换原有 12 帧线性插值（ADR-009）；眼球 IK 注视鼠标（`petGaze`）、尾巴 Verlet 延迟跟随（`petSecondaryMotion`）、体积守恒的挤压拉伸与落地反馈（`petSquash`）、撞墙→压缩→反弹→晕眩碰撞反馈（`petCollision`）、随精力下降变缓变重的动态眨眼（`petBlink`）均为纯模块 + 单测，接入内置角色与 Overlay，全部遵守 Reduced Motion。
+- 感官（隐私安全版）：宠物根据宿主已暴露的 Presence 决策原因（全屏/勿扰/游戏/共享屏幕）做出安静反应（`petAwareness`），不读取窗口标题、矩形、Z 序或屏幕像素——遵守既有传感器只产出布尔事实的安全模型，因此未新增暴露窗口几何的 `desktop-context` crate。
+- 生理：Worker/Skill 生命周期映射为宠物身体语言——繁忙冒汗、成功蹦跳、出错冒烟、超时打呼噜（`petWorkerVitality`），接入 Agent 陪伴信号，瞬时线索自动收敛、持续线索保持。
+- 技能具象化：`SkillAgentToolContribution` 新增可选 `pet_behavior: Option<PetAction>` 字段，复用权威 `PetAction` 词表，未知动作 serde fail-closed，旧 Manifest 向后兼容（ADR-010）；宠物径向菜单可“掏出”技能面板（`petSkillPanel`），复用既有 `agent_tool_catalog` IPC。
+- 智能涌现：`agent-runtime` 新增 `pet_brain` 纯模块，把模型 JSON 解析校验为 `{ speech, mood, action }` 结构化指令（封闭枚举 + `deny_unknown_fields` + 长度上限，全部 fail-closed），并把宠物性格注入 System Prompt（ADR-011）；宠物可从隐私安全的 Skill 执行事实回溯讲述“刚才做了什么”（`petStory`），只读 skillId/状态/时间戳，不触及命令参数、Prompt 或错误正文。
+- 完整生命体：`multi_monitor` 纯几何模块实现跨显示器相邻判定，接入漫游循环，宠物抵达与相邻显示器共享的屏幕边缘时可跨屏继续漫游；负坐标副屏、间隙、跨度不重叠与多邻居择优均有单测覆盖。
+- 已验证：前端 207 项测试、TypeScript、架构边界门禁通过；Rust 桌面 198 项（含 7 项 multi_monitor）、agent-runtime 与 skill-runtime 测试通过；全部经 `develop-opus` 干净克隆复验，`cargo clippy -- -D warnings` 与 rustfmt 通过。
+- 证据边界：M5 验收标准中的性能指标（内存 < 200MB、60 FPS）本轮**未测量**——需要签名原生构建与真机 profiling，不能由单测或浏览器预览替代，因此不声称已达成性能目标。透明合成、真机拖动手感、真实多屏跨越观感同样仍属签名桌面门禁。
+
 ## 2026-07-19 — 专业动画 3D 桌面伙伴与自主玩耍闭环
 
 - 默认内置角色改为随安装包离线分发的 Khronos glTF Sample Assets Fox；专业骨骼与 `Survey`、`Walk`、`Run` 动画分别承载观察、移动和玩耍语义，不在运行时下载模型。
