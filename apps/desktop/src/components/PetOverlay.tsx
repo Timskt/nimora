@@ -57,7 +57,6 @@ import {
   type ActivityScene,
   type ScenePropId,
 } from "./activityScenes";
-import { composeLivingMoment } from "./lifeformLiving";
 
 const GltfRenderer = lazy(async () => {
   const module = await import("./GltfRenderer");

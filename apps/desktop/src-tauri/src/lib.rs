@@ -701,6 +701,23 @@ impl std::fmt::Debug for DesktopSecretStore {
     }
 }
 
+impl DesktopSecretStore {
+    /// Host secret store for a live desktop process.
+    ///
+    /// Production/dogfood binaries bind the real OS keychain (`SystemSecretStore`).
+    /// Test binaries bind an in-memory store so `DesktopState::open` never issues a
+    /// blocking Keychain call (which can wait indefinitely on a GUI auth prompt and
+    /// deadlock the whole test suite). This mirrors the `cfg!(test)` convention already
+    /// used by `open_recovery` and the authorization-grant-key fallback.
+    fn host_default() -> Self {
+        if cfg!(test) {
+            DesktopSecretStore(Arc::new(MemorySecretStore::default()))
+        } else {
+            DesktopSecretStore(Arc::new(SystemSecretStore))
+        }
+    }
+}
+
 #[derive(Clone)]
 struct DesktopProviderCredentialResolver(DesktopSecretStore);
 
@@ -1165,7 +1182,7 @@ impl DesktopState {
             outbox: SqliteOutboxRepository::open(database_path)?,
             agent_history: SqliteAgentHistoryRepository::open(database_path)?,
             provider_configs: SqliteProviderConfigRepository::open(database_path)?,
-            secret_store: DesktopSecretStore(Arc::new(SystemSecretStore)),
+            secret_store: DesktopSecretStore::host_default(),
             automation_catalog: SqliteAutomationCatalog::open(database_path)?,
             automation_governance,
             automation_journal,
