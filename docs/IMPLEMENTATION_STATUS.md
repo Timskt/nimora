@@ -4,8 +4,8 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **313** passed（25 files） |
-| FE `pnpm exec vitest run src/components` | **277** passed（22 files） |
+| FE `pnpm exec vitest run`（全量） | **319** passed（25 files） |
+| FE `pnpm exec vitest run src/components` | **283** passed（22 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -26,9 +26,10 @@
 - **生活化临在**：`lifeformLiving.ts` `composeLivingMoment` / `livingAmbientSpeech` 经 `petPresentation.ts` 注入环境台词，避免「3 句循环 + 机械 idle」；隐私安全（不下发窗口标题/路径/OS 正文）。
 - **测试死锁根因修复**：`DesktopState::open` 原硬编码 `SystemSecretStore`，测试二进制里 `authorization_grant_key` → `SystemSecretStore::resolve` 触发**阻塞式 macOS Keychain 调用**（等待 GUI 授权，永久挂起整套 suite）。新增 `DesktopSecretStore::host_default()`：`cfg!(test)` 绑 `MemorySecretStore`，生产绑真实 keychain（与 `open_recovery` / grant-key fallback 既有约定一致）。
 - **死尸导入清理**：移除 `PetOverlay.tsx` 未使用的 `composeLivingMoment` 导入。
+- **情境域测试补齐**：`activityScenes.test.ts` 覆盖 `sceneCssVariables`、localStorage 持久化往返（含损坏/空回退）、builtin override enabled 合并、disabled 情境不下发台词（in-memory Storage stub）。
 
 ### 门禁（本切片本地 · 已跑）
-- 见本文顶部当前门禁表：FE 全量 **313** · desktop 全量 **270**（多线程无死锁）· desktop_lifeform **21** · grant encrypt **10** · `tsc -b` clean。
+- 见本文顶部当前门禁表：FE 全量 **319** · desktop 全量 **270**（多线程无死锁）· desktop_lifeform **21** · grant encrypt **10** · `tsc -b` clean。
 
 ### 仍须原生验收（不得标 goal complete）
 - `pnpm tauri:dev` 真机：透明无框、拖拽、穿透、遮挡、跨屏手感、情境舞台调色板/道具/粒子与生活化台词观感。
