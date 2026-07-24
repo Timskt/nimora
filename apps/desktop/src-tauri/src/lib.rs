@@ -486,6 +486,7 @@ fn plan_wander_target(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::cast_possible_truncation)]
 fn rounded_bounded_step(value: f64, maximum_magnitude: i32) -> i32 {
     value
@@ -493,6 +494,7 @@ fn rounded_bounded_step(value: f64, maximum_magnitude: i32) -> i32 {
         .clamp(-f64::from(maximum_magnitude), f64::from(maximum_magnitude)) as i32
 }
 
+#[cfg(test)]
 fn plan_cursor_approach_target(
     current: tauri::PhysicalPosition<i32>,
     window_size: tauri::PhysicalSize<u32>,
