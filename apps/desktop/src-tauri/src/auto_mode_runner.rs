@@ -1,6 +1,7 @@
 use super::{
     companion_directive::{
-        auto_mode_companion_status, CompanionPhase, CompanionPhaseTracker,
+        auto_mode_companion_status, pause_reason_is_budget, CompanionPhase,
+        CompanionPhaseTracker,
     },
     AppHandle, AutoModeExecutionError, AutoModeExecutionService, AutoModeHostControl,
     AutoModeHostControlService, AutoModeJobControl, AutoModeJobStatus, AutoModeLoopRequest,
@@ -382,12 +383,7 @@ fn apply_finish_companion(
         AutoModeJobStatus::Failed | AutoModeJobStatus::Indeterminate => {
             companion.apply_failed_if_changed(app, state, error_code);
         }
-        AutoModeJobStatus::Paused
-            if matches!(
-                pause_reason,
-                Some("budget_exhausted") | Some("budget") | Some("token_budget") | Some("cost_budget")
-            ) =>
-        {
+        AutoModeJobStatus::Paused if pause_reason_is_budget(pause_reason) => {
             companion.apply_budget_pause(app, state);
         }
         other => {

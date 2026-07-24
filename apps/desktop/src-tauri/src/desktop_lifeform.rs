@@ -6,8 +6,7 @@
 use nimora_desktop_context::{
     bounce_on_bounds, compute_pet_occlusion, integrate, is_fullscreen_over_any_display, is_usable,
     jump_parabola, occluders_from_snapshot, occluders_from_snapshot_dpi, plan_cross_display_target,
-    plan_wander, plan_wander_from_snapshot, safe_origin_bounds, sanitize_idle_ms, union_work_areas,
-    work_area_stages, CursorPosition, DegradationReason, DesktopDisplay, DesktopSnapshot,
+    plan_wander, plan_wander_from_snapshot, safe_origin_bounds, sanitize_idle_ms, union_work_areas, CursorPosition, DegradationReason, DesktopDisplay, DesktopSnapshot,
     DesktopSnapshotParts, DesktopWindow, ForegroundApp, Freshness, MeetingHint, MeetingState,
     MotionGoal, MotionMode, PowerState, Rect, Size, SpringParams, SpringState, Vec2i,
     WanderRequest, WorkArea, MAX_ENUMERATED_WINDOWS, MAX_SNAPSHOT_LIFETIME_MS,
@@ -537,7 +536,7 @@ fn sanitize_lifeform_windows(
 #[cfg(test)]
 #[must_use]
 pub fn lifeform_work_area_stages(displays: &[DesktopDisplay]) -> Vec<WorkArea> {
-    work_area_stages(displays)
+    nimora_desktop_context::work_area_stages(displays)
 }
 
 /// Union work-area bounds for cross-display spring walks (None when empty).
