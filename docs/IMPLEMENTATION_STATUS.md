@@ -18,6 +18,21 @@
 
 ---
 
+## 2026-07-25 — Auto Mode 预算暂停 pet 事件对齐 + wrapper 导入收敛（本切片）
+
+### DONE
+- **预算暂停判定统一（真实分歧修复）**：`auto_mode_runner.rs` 的 `apply_finish_companion` 原本内联白名单 `"budget_exhausted" | "budget" | "token_budget" | "cost_budget"`，与经测试的规范助手 `pause_reason_is_budget`（`contains("budget")`）分歧——`agent_budget` 等暂停原因会漏掉「体力/预算耗尽」专属 pet 事件而退化成普通 `StepPaused`。改为直接调用 `companion_directive::pause_reason_is_budget`，消除分歧并接线该助手（清除其 dead-code 警告）。
+- **wrapper 导入收敛**：`desktop_lifeform.rs` 的 `lifeform_work_area_stages` 标 `#[cfg(test)]` 后，其对 `work_area_stages` 的引用改用 `nimora_desktop_context::work_area_stages` 全路径，去掉模块级未用导入警告。
+
+### 门禁（本切片本地 · 已跑）
+- FE 全量 **325** passed（26 files）· `tsc -b` clean · desktop `companion_directive` **31** passed · `auto_mode_runner` **32** passed · desktop lib 警告 20 → 18。
+
+### 仍须原生验收（不得标 goal complete）
+- `pnpm tauri:dev` 真机：透明无框、拖拽、穿透、遮挡、跨屏手感、情境舞台观感。
+- Idle CPU/内存预算真机实测；Windows 签名包与 processBudget 真机验收；Grant 生产密钥轮换/设备绑定。
+
+---
+
 ## 2026-07-25 — Activity-Scene 工坊组件测试 + 跨屏 wrapper dead-code 收敛（本切片）
 
 ### DONE
