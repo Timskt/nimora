@@ -4,17 +4,32 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **319** passed（25 files） |
+| FE `pnpm exec vitest run`（全量） | **325** passed（26 files） |
 | FE `pnpm exec vitest run src/components` | **283** passed（22 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
 | `cargo test -p nimora-desktop --lib process_budget` | **7** passed |
 | `cargo test -p nimora-desktop --lib desktop_lifeform` | **21** passed |
-| `cargo test -p nimora-desktop --lib`（全量） | **270** passed（多线程默认，无死锁） |
+| `cargo test -p nimora-desktop --lib`（全量） | **270** passed（多线程默认，无死锁；跨屏 test-only wrapper 已 cfg(test)） |
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — Activity-Scene 工坊组件测试 + 跨屏 wrapper dead-code 收敛（本切片）
+
+### DONE
+- **ActivitySceneWorkshop 组件测试**：`apps/desktop/src/components/ActivitySceneWorkshop.test.tsx` 用 `renderToStaticMarkup` + `MemoryStorage` stub 覆盖工坊 hero/设计器/内置场景库渲染、持久化激活场景回填 hero pill、空态提示不误显；`RuntimeActivityPanel` 覆盖有界计数、dead-letter 告警、读取态、隐私说明（不下发对话正文/路径）。
+- **跨屏 test-only wrapper 收敛**：`desktop_lifeform.rs` 中 `lifeform_work_area_stages` / `lifeform_union_work_area` / `plan_cross_display_walk_frames` 仅被 `#[cfg(test)]` 测试引用，其底层内部函数（`work_area_stages` / `union_work_areas` / `spring_position_frames_multi_display`）已在生产 `execute_pet_wander` 直接使用。将三个 wrapper 标 `#[cfg(test)]`，消除非测试构建的 dead-code 警告，避免与 `plan_lifeform_wander_goal` 重复跨屏目标逻辑。
+
+### 门禁（本切片本地 · 已跑）
+- FE 全量 **325** passed（26 files）· `tsc -b` clean · desktop 全量 **270** passed（多线程无死锁）。
+
+### 仍须原生验收（不得标 goal complete）
+- `pnpm tauri:dev` 真机：透明无框、拖拽、穿透、遮挡、跨屏手感、情境舞台观感。
+- Idle CPU/内存预算真机实测；Windows 签名包与 processBudget 真机验收；Grant 生产密钥轮换/设备绑定。
 
 ---
 
