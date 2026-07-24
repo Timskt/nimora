@@ -644,6 +644,10 @@ struct DesktopState {
     position_revision: AtomicU64,
     dragging: AtomicBool,
     reduced_motion: AtomicBool,
+    /// Last-applied overlay ignore-cursor-events state (true = click-through).
+    /// Tracked so we only call `set_ignore_cursor_events` on transitions, which
+    /// prevents redundant native calls (a flicker/jitter source) every tick.
+    overlay_ignore_cursor: AtomicBool,
     /// Fullscreen overlay stage covering the active monitor work area.
     overlay_stage: Mutex<Option<desktop_lifeform::OverlayStage>>,
     /// Latest privacy-preserving desktop lifeform environment snapshot.
@@ -1146,6 +1150,7 @@ impl DesktopState {
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
             reduced_motion: AtomicBool::new(false),
+            overlay_ignore_cursor: AtomicBool::new(true),
             overlay_stage: Mutex::new(None),
             lifeform_env: Mutex::new(None),
             lifecycle: DesktopLifecycleCoordinator::default(),
@@ -1243,6 +1248,7 @@ impl DesktopState {
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
             reduced_motion: AtomicBool::new(false),
+            overlay_ignore_cursor: AtomicBool::new(true),
             overlay_stage: Mutex::new(None),
             lifeform_env: Mutex::new(None),
             lifecycle: DesktopLifecycleCoordinator::default(),
@@ -12214,6 +12220,13 @@ fn restore_control_center_window(app: &AppHandle) -> Result<(), DesktopError> {
     let window = app
         .get_webview_window(CONTROL_CENTER_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(CONTROL_CENTER_LABEL.to_owned()))?;
+    // Hide/Cmd+W can collapse the window to a tiny residual size on some hosts;
+    // always re-assert the product control-center geometry on restore.
+    window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(1180.0, 780.0)))?;
+    let _ = window.set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize::new(
+        720.0, 620.0,
+    ))));
+    let _ = window.center();
     window.show()?;
     window.unminimize()?;
     window.set_focus()?;
@@ -12846,6 +12859,12 @@ fn sync_overlay_stage_to_monitor(
     let stage = desktop_lifeform::overlay_stage_from_work_area(host_work_area_from_physical(
         work_area,
     ));
+    // Idempotent: only resize/reposition the transparent overlay when the stage
+    // actually changed. Resizing a transparent WebView forces a repaint, which
+    // manifests as a visible flicker if done on every autonomy tick.
+    if current_overlay_stage(&state) == Some(stage) {
+        return Ok(stage);
+    }
     if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
         apply_overlay_stage_window(&window, stage)?;
     }
@@ -12862,6 +12881,23 @@ fn logical_pet_position(state: &DesktopState) -> Result<tauri::PhysicalPosition<
     ))
 }
 
+/// Applies the overlay ignore-cursor state only when it actually changes.
+///
+/// Toggling `set_ignore_cursor_events` every tick issues a redundant native
+/// call that can jitter/repaint the transparent overlay. Tracking the last
+/// applied value keeps the window quiet until the interactivity truly flips.
+fn apply_overlay_ignore_cursor(app: &AppHandle, state: &DesktopState, ignore: bool) {
+    if state.overlay_ignore_cursor.swap(ignore, Ordering::AcqRel) == ignore {
+        return;
+    }
+    if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
+        if window.set_ignore_cursor_events(ignore).is_err() {
+            // Re-arm so the next tick retries the transition.
+            state.overlay_ignore_cursor.store(!ignore, Ordering::Release);
+        }
+    }
+}
+
 fn refresh_overlay_hit_testing(app: &AppHandle) {
     let Some(state) = app.try_state::<DesktopState>() else {
         return;
@@ -12870,9 +12906,7 @@ fn refresh_overlay_hit_testing(app: &AppHandle) {
         return;
     };
     if policy.click_through {
-        if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
-            let _ = window.set_ignore_cursor_events(true);
-        }
+        apply_overlay_ignore_cursor(app, &state, true);
         return;
     }
     let Ok(pet) = state.runtime.snapshot() else {
@@ -12896,9 +12930,7 @@ fn refresh_overlay_hit_testing(app: &AppHandle) {
         36,
     );
     let interactive = hits || state.dragging.load(Ordering::Acquire);
-    if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
-        let _ = window.set_ignore_cursor_events(!interactive);
-    }
+    apply_overlay_ignore_cursor(app, &state, !interactive);
 }
 
 fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
@@ -13423,6 +13455,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
     start_pet_window_watchdog(app.handle().clone());
     if schedule_backups {
         start_pet_autonomy(app.handle().clone());
+        start_pet_hit_testing(app.handle().clone());
         start_system_context_sensors(app.handle().clone());
     }
     create_tray(app.handle())?;
@@ -13432,6 +13465,32 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
         restore_control_center_window(app.handle())?;
     }
     Ok(())
+}
+
+fn start_pet_hit_testing(app: AppHandle) {
+    std::thread::spawn(move || {
+        // Fast cursor hit-testing cadence so the pet becomes grabbable almost
+        // immediately when the cursor enters its body, instead of waiting for
+        // the 1s autonomy tick. Only flips ignore-cursor on true transitions.
+        const HIT_TEST_INTERVAL: Duration = Duration::from_millis(80);
+        loop {
+            std::thread::sleep(HIT_TEST_INTERVAL);
+            let Some(state) = app.try_state::<DesktopState>() else {
+                return;
+            };
+            if state.lifecycle.autonomy_stop.load(Ordering::Acquire) {
+                return;
+            }
+            let normal = state
+                .safety
+                .snapshot()
+                .is_ok_and(|snapshot| snapshot.mode == RuntimeMode::Normal);
+            let visible = current_window_policy(&state).is_ok_and(|policy| policy.visible);
+            if normal && visible {
+                refresh_overlay_hit_testing(&app);
+            }
+        }
+    });
 }
 
 fn start_pet_autonomy(app: AppHandle) {

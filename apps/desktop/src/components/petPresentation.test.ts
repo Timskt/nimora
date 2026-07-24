@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  composeLivingMoment,
+  DIRTY_LINES,
+  HAPPY_IDLE_LINES,
+  LOW_BATTERY_LINES,
+  LOW_ENERGY_LINES,
+  LOW_MOOD_LINES,
+  MEETING_LINES,
+  MULTI_DISPLAY_LINES,
+  NOTIFY_LINES,
+  STATE_LINES,
+} from "./lifeformLiving";
+import {
   clampPetLocalToStage,
   clampPetScreenToStage,
   isStageWorkAreaReady,
@@ -22,58 +34,81 @@ import {
   resolvePetSubjectMotion,
   sanitizeStageNumber,
 } from "./petPresentation";
+describe("petStatusMessage / living presence", () => {
+  const HEALTHY = { energy: 80, mood: 80, satiety: 80, cleanliness: 80, emotion: "neutral" as const };
+  // Pin the clock to mid-afternoon so circadian morning/night branches never fire.
+  const NOON = { hourOfDay: 14 as const, nowMs: 0 };
 
-describe("petStatusMessage", () => {
-  it("describes autonomous observation without pretending it is celebration", () => {
-    expect(petStatusMessage({ state: "observing", energy: 100, mood: 100, satiety: 100, cleanliness: 100 })).toBe("正好奇地看看桌面");
-  });
-
-  it("prioritizes active behavior over vitals", () => {
-    expect(petStatusMessage({ state: "sleeping", energy: 10, mood: 10, satiety: 10, cleanliness: 10 })).toBe("正在安静恢复体力");
-    expect(petStatusMessage({ state: "walking", energy: 100, mood: 100, satiety: 100, cleanliness: 100 })).toBe("去桌面上走走看看");
-    expect(petStatusMessage({ state: "playing", energy: 100, mood: 100, satiety: 100, cleanliness: 100 })).toBe("正在桌面上自得其乐");
-  });
-
-  it("expresses low vitals without alarming the user", () => {
-    expect(petStatusMessage({ state: "idle", energy: 25, mood: 10, satiety: 10, cleanliness: 10 })).toBe("有点困了，想休息一下");
-    expect(petStatusMessage({ state: "idle", energy: 80, mood: 80, satiety: 25, cleanliness: 10 })).toBe("肚子有点空，陪我吃点东西吧");
-    expect(petStatusMessage({ state: "idle", energy: 80, mood: 80, satiety: 80, cleanliness: 25 })).toBe("想整理一下，保持清清爽爽");
-    expect(petStatusMessage({ state: "idle", energy: 80, mood: 25, satiety: 80, cleanliness: 80 })).toBe("今天想和你待一会儿");
-    expect(petStatusMessage({ state: "idle", energy: 80, mood: 80, satiety: 80, cleanliness: 80 })).toBe("在桌面上陪着你呢～");
+  it("host directive speech always wins verbatim", () => {
     expect(petStatusMessage(
-      { state: "idle", energy: 80, mood: 80, satiety: 80, cleanliness: 80 },
-      { sequence: 2 },
-    )).toBe("想不想摸摸我的护目镜？");
-  });
-
-  it("reacts to desktop lifeform sense without leaking titles", () => {
-    expect(petStatusMessage(
-      { state: "idle", energy: 80, mood: 80, satiety: 80, cleanliness: 80 },
-      { desktop: { meetingActive: true, meetingHint: "zoom" } },
-    )).toBe("会议中，我先安静靠边～");
-    expect(petStatusMessage(
-      { state: "idle", energy: 80, mood: 80, satiety: 80, cleanliness: 80 },
-      { desktop: { onBattery: true, batteryPercent: 12, charging: false } },
-    )).toBe("电量有点低，我轻一点活动");
-    expect(petStatusMessage(
-      { state: "walking", energy: 80, mood: 80, satiety: 80, cleanliness: 80 },
-      { desktop: { displayCount: 2 } },
-    )).toBe("去隔壁屏幕逛逛");
-    expect(petStatusMessage(
-      { state: "idle", energy: 80, mood: 80, satiety: 80, cleanliness: 80 },
-      { desktop: { notificationUnread: true } },
-    )).toBe("好像有事等你看一眼～");
-  });
-
-  it("prefers directive speech over ambient vitals status", () => {
-    expect(petStatusMessage(
-      { state: "working", energy: 80, mood: 80, satiety: 80, cleanliness: 80 },
-      { directiveSpeech: "正在帮你看任务进度" },
+      { state: "working", ...HEALTHY },
+      { directiveSpeech: "正在帮你看任务进度", ...NOON },
     )).toBe("正在帮你看任务进度");
-    expect(petStatusMessage(
-      { state: "working", energy: 80, mood: 80, satiety: 80, cleanliness: 80 },
-      { directiveSpeech: "   " },
-    )).toBe("正在专心陪你工作");
+  });
+
+  it("blank directive falls back to a living working line, never robotic silence", () => {
+    const moment = composeLivingMoment({ pet: { state: "working", ...HEALTHY }, directiveSpeech: "   ", sequence: 0, ...NOON });
+    expect(moment.reason).toBe("state:working");
+    expect(STATE_LINES.working).toContain(moment.speech);
+  });
+
+  it("named behavior states speak from their living pools, not vitals", () => {
+    for (const state of ["observing", "sleeping", "walking", "playing"] as const) {
+      const moment = composeLivingMoment({ pet: { state, ...HEALTHY }, sequence: 1, ...NOON });
+      expect(moment.reason).toBe(`state:${state}`);
+      expect(STATE_LINES[state]).toContain(moment.speech);
+    }
+  });
+
+  it("expresses low vitals as soft moods without alarming error codes", () => {
+    const lowMood = composeLivingMoment({ pet: { state: "idle", ...HEALTHY, mood: 20 }, sequence: 1, ...NOON });
+    expect(lowMood.reason).toBe("low-mood");
+    expect(LOW_MOOD_LINES).toContain(lowMood.speech);
+
+    const lowEnergy = composeLivingMoment({ pet: { state: "idle", ...HEALTHY, energy: 20 }, sequence: 1, ...NOON });
+    expect(lowEnergy.reason).toBe("low-energy");
+    expect(LOW_ENERGY_LINES).toContain(lowEnergy.speech);
+
+    const dirty = composeLivingMoment({ pet: { state: "idle", ...HEALTHY, cleanliness: 20 }, sequence: 1, ...NOON });
+    expect(dirty.reason).toBe("need-clean");
+    expect(DIRTY_LINES).toContain(dirty.speech);
+  });
+
+  it("reacts to desktop lifeform sense without leaking window titles", () => {
+    const meeting = composeLivingMoment({ pet: { state: "idle", ...HEALTHY }, desktop: { meetingActive: true, meetingHint: "zoom" }, sequence: 1, ...NOON });
+    expect(meeting.reason).toBe("meeting");
+    expect(MEETING_LINES).toContain(meeting.speech);
+
+    const battery = composeLivingMoment({ pet: { state: "idle", ...HEALTHY }, desktop: { onBattery: true, batteryPercent: 12, charging: false }, sequence: 1, ...NOON });
+    expect(battery.reason).toBe("low-battery");
+    expect(LOW_BATTERY_LINES).toContain(battery.speech);
+
+    const notify = composeLivingMoment({ pet: { state: "idle", ...HEALTHY }, desktop: { notificationUnread: true }, sequence: 1, ...NOON });
+    expect(notify.reason).toBe("notification");
+    expect(NOTIFY_LINES).toContain(notify.speech);
+
+    const multi = composeLivingMoment({ pet: { state: "walking", ...HEALTHY }, desktop: { displayCount: 2 }, sequence: 1, ...NOON });
+    expect(multi.reason).toBe("multi-display");
+    expect(MULTI_DISPLAY_LINES).toContain(multi.speech);
+  });
+
+  it("healthy idle draws from a large living pool (not a 3-line loop)", () => {
+    const moment = composeLivingMoment({ pet: { state: "idle", ...HEALTHY }, sequence: 7, ...NOON });
+    expect(moment.reason).toBe("living-idle");
+    expect(HAPPY_IDLE_LINES).toContain(moment.speech);
+    expect(HAPPY_IDLE_LINES.length).toBeGreaterThanOrEqual(12);
+  });
+
+  it("avoids immediately repeating recent lines when the pool allows", () => {
+    const recent = [HAPPY_IDLE_LINES[0]!];
+    const moment = composeLivingMoment({ pet: { state: "idle", ...HEALTHY }, sequence: 0, recentLines: recent, ...NOON });
+    expect(moment.speech).not.toBe(HAPPY_IDLE_LINES[0]);
+  });
+
+  it("petStatusMessage returns a non-empty living string end-to-end", () => {
+    const line = petStatusMessage({ state: "idle", ...HEALTHY }, { sequence: 3, hourOfDay: 14, nowMs: 0 });
+    expect(typeof line).toBe("string");
+    expect(line.length).toBeGreaterThan(0);
   });
 });
 

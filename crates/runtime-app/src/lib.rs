@@ -407,7 +407,8 @@ impl<R: PetRepository> RuntimeService<R> {
     ) -> Result<Self, RuntimeError> {
         let pet = if let Some(mut pet) = repository.load()? {
             let migrated_home = pet.ensure_home_position();
-            if pet.recover_transient_state() || migrated_home {
+            let migrated_identity = pet.migrate_legacy_identity(default_name);
+            if pet.recover_transient_state() || migrated_home || migrated_identity {
                 repository.save(&pet)?;
             }
             pet
@@ -2025,6 +2026,23 @@ mod tests {
         assert_eq!(snapshot.bond_points, 2);
         assert_eq!(snapshot.collaboration_receipts, [task_id]);
         assert!(service.drain_events().expect("events").is_empty());
+    }
+
+    #[test]
+    fn legacy_product_name_and_absurd_home_migrate_to_default_identity() {
+        let mut legacy = Pet::new("Aster").expect("pet");
+        legacy.position = Position { x: 480.0, y: 260.0 };
+        legacy.home_position = Some(Position { x: 0.0, y: 60.0 });
+        let repository = MemoryRepository::default();
+        *repository.pet.lock().expect("test lock") = Some(legacy);
+        let service = RuntimeService::initialize(repository, "灵灵").expect("runtime");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.name, "灵灵");
+        assert_eq!(
+            snapshot.home_position,
+            Some(Position { x: 480.0, y: 260.0 })
+        );
+        assert_eq!(snapshot.position, Position { x: 480.0, y: 260.0 });
     }
 
     #[test]

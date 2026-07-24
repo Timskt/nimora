@@ -55,7 +55,11 @@ import {
   tierSleepSafeCopy,
   tierUsesNeverAsk,
   controlEmptyGuidance,
+  isAbsoluteWorkspaceRoot,
+  providerReadinessGuidance,
+  runTaskLockReason,
   unattendedStartFailureMessage,
+  unattendedStartLockReason,
   UNATTENDED_REASONING_CHOICE_STORAGE_KEY,
 } from "./AgentWorkspace";
 
@@ -596,3 +600,80 @@ describe("controlEmptyGuidance", () => {
   });
 });
 
+
+describe("Workspace absolute path + unattended start lock", () => {
+  it("accepts POSIX and Windows absolute paths only", () => {
+    expect(isAbsoluteWorkspaceRoot("/Users/sky/code")).toBe(true);
+    expect(isAbsoluteWorkspaceRoot("C:\\Projects\\repo")).toBe(true);
+    expect(isAbsoluteWorkspaceRoot("C:/Projects/repo")).toBe(true);
+    expect(isAbsoluteWorkspaceRoot("  /tmp/ws  ")).toBe(true);
+    expect(isAbsoluteWorkspaceRoot("")).toBe(false);
+    expect(isAbsoluteWorkspaceRoot("relative/path")).toBe(false);
+    expect(isAbsoluteWorkspaceRoot("./local")).toBe(false);
+    expect(isAbsoluteWorkspaceRoot("C:relative")).toBe(false);
+  });
+
+  it("locks unattended start when workspace is missing or relative", () => {
+    const base = {
+      title: "整理文档",
+      objective: "汇总本周笔记",
+      stepCount: 2,
+      native: true as const,
+    };
+    expect(unattendedStartLockReason({ ...base, workspaceRoot: "/tmp/ws" })).toBeNull();
+    expect(unattendedStartLockReason({ ...base, workspaceRoot: "" })).toMatch(/工作区|绝对路径/);
+    expect(unattendedStartLockReason({ ...base, workspaceRoot: "relative" })).toMatch(/绝对路径/);
+  });
+});
+
+describe("runTaskLockReason + provider readiness guidance", () => {
+  const readyStatus = {
+    spec: "nimora.desktop-agent-provider-status/1" as const,
+    providerId: "provider:deterministic-local",
+    state: "ready" as const,
+    workerVerified: true,
+    serviceReachable: true,
+    locality: "local" as const,
+    credentialPresent: true,
+    models: [{ name: "model:echo-v1", size: 0, modifiedAt: null }],
+    message: "ok",
+  };
+
+  it("returns null when prompt, model, and provider are ready", () => {
+    expect(runTaskLockReason({
+      prompt: "hello",
+      model: "model:echo-v1",
+      providerStatus: readyStatus,
+    })).toBeNull();
+  });
+
+  it("explains missing prompt and offline provider", () => {
+    expect(runTaskLockReason({
+      prompt: "  ",
+      model: "model:echo-v1",
+      providerStatus: readyStatus,
+    })).toMatch(/任务内容/);
+    expect(runTaskLockReason({
+      prompt: "hello",
+      model: "model:echo-v1",
+      providerStatus: {
+        ...readyStatus,
+        state: "unavailable",
+        serviceReachable: false,
+        models: [],
+        message: "offline",
+      },
+    })).toMatch(/离线|模型连接/);
+  });
+
+  it("guides next steps when provider is not ready", () => {
+    expect(providerReadinessGuidance(null)).toMatch(/检测/);
+    expect(providerReadinessGuidance(readyStatus, { model: "model:echo-v1" })).toMatch(/就绪|ok/);
+    expect(providerReadinessGuidance({
+      ...readyStatus,
+      state: "unavailable",
+      serviceReachable: false,
+      models: [],
+    })).toMatch(/离线|模型连接/);
+  });
+});

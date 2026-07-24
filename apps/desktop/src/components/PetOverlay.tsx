@@ -47,6 +47,17 @@ import { canPresentPetBubble, usePetBubble } from "./petBubble";
 import { subscribeReducedMotion } from "./reducedMotion";
 import { BuiltinPet } from "./BuiltinPet";
 import { BUILTIN_FOX_RENDERER } from "./builtinFox";
+import {
+  loadActiveSceneId,
+  loadStoredScenes,
+  pickSceneSpeech,
+  resolveActiveScene,
+  sceneCssVariables,
+  SCENE_PROP_CATALOG,
+  type ActivityScene,
+  type ScenePropId,
+} from "./activityScenes";
+import { composeLivingMoment } from "./lifeformLiving";
 
 const GltfRenderer = lazy(async () => {
   const module = await import("./GltfRenderer");
@@ -79,12 +90,61 @@ function petAmbientFromSnapshot(value: DesktopSnapshot): PetAmbientDesktopContex
 function petStatusOptionsFromSnapshot(
   value: DesktopSnapshot,
   directiveSpeech: string | null,
+  extras?: {
+    sceneSpeech?: string | null;
+    recentLines?: readonly string[] | null;
+    workerBusy?: boolean | null;
+    occlusionCoverage?: number | null;
+  },
 ): PetStatusOptions {
-  return {
+  const options: PetStatusOptions = {
     directiveSpeech,
     sequence: value.pet.autonomy?.sequence ?? value.pet.feedbackSequence ?? null,
     desktop: petAmbientFromSnapshot(value),
   };
+  if (extras?.sceneSpeech != null) options.sceneSpeech = extras.sceneSpeech;
+  if (extras?.recentLines != null) options.recentLines = extras.recentLines;
+  if (extras?.workerBusy != null) options.workerBusy = extras.workerBusy;
+  if (extras?.occlusionCoverage != null) options.occlusionCoverage = extras.occlusionCoverage;
+  return options;
+}
+
+function readActiveActivityScene(): ActivityScene | null {
+  try {
+    const scenes = loadStoredScenes();
+    return resolveActiveScene(scenes, loadActiveSceneId());
+  } catch {
+    return null;
+  }
+}
+
+function buildAmbientStatusOptions(
+  value: DesktopSnapshot,
+  directiveSpeech: string | null,
+  activeScene: ActivityScene | null,
+  recentLines: readonly string[],
+  occlusionCoverage: number,
+): PetStatusOptions {
+  const sequence = value.pet.autonomy?.sequence ?? value.pet.feedbackSequence ?? 0;
+  const sceneSpeech = activeScene ? pickSceneSpeech(activeScene, sequence ?? 0) : null;
+  const workerBusy = Boolean(
+    (value as { workers?: { busy?: number } }).workers?.busy
+    || (value as { workerBusy?: boolean }).workerBusy,
+  );
+  return petStatusOptionsFromSnapshot(value, directiveSpeech, {
+    sceneSpeech,
+    recentLines,
+    workerBusy,
+    occlusionCoverage,
+  });
+}
+
+function rememberAmbientLine(recentRef: { current: string[] }, line: string | null | undefined) {
+  const text = line?.trim();
+  if (!text) return;
+  const next = recentRef.current.filter((item) => item !== text);
+  next.push(text);
+  recentRef.current = next.slice(-8);
 }
 
 export function PetOverlay() {
@@ -114,6 +174,12 @@ export function PetOverlay() {
   const [companionAction, setCompanionAction] = useState<PetAction | null>(null);
   const [directive, setDirective] = useState<PetDirectiveEvent | null>(null);
   const [occlusion, setOcclusion] = useState<PetOcclusion>(EMPTY_PET_OCCLUSION);
+  const [activeScene, setActiveScene] = useState<ActivityScene | null>(() => readActiveActivityScene());
+  const recentAmbientRef = useRef<string[]>([]);
+  const activeSceneRef = useRef<ActivityScene | null>(activeScene);
+  activeSceneRef.current = activeScene;
+  const occlusionCoverageRef = useRef(occlusion.coverage);
+  occlusionCoverageRef.current = occlusion.coverage;
   const companionResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastCompanionSpeechRef = useRef<string | null>(null);
   const directiveSpeechRef = useRef<string | null>(null);
@@ -159,7 +225,15 @@ export function PetOverlay() {
   const occlusionStyle = occlusionPresentation(occlusion);
   const ambientMuted = occlusionMutesAmbient(occlusion.coverage) || occlusion.fullyHidden;
   ambientMutedRef.current = ambientMuted;
+  const sceneVars = sceneCssVariables(activeScene);
+  const scenePropIcons = (activeScene?.propIds ?? [])
+    .map((id) => {
+      const prop = SCENE_PROP_CATALOG[id];
+      return prop ? { id, icon: prop.glyph } : null;
+    })
+    .filter((prop): prop is { id: ScenePropId; icon: string } => prop != null);
   const subjectStyle = {
+    ...(sceneVars as Record<string, string>),
     ["--pet-local-x" as string]: `${localX}px`,
     ["--pet-local-y" as string]: `${localY}px`,
     ["--pet-body-width" as string]: `${PET_BODY_WIDTH_PX}px`,
@@ -174,6 +248,24 @@ export function PetOverlay() {
     setSnapshot(value);
     setStatusBubblesEnabled(value.petPresentation.statusBubblesEnabled);
     if (!dragSession.current) setPoseOverride(null);
+  }, []);
+
+  useEffect(() => {
+    const refreshScene = () => setActiveScene(readActiveActivityScene());
+    refreshScene();
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key || event.key.includes("nimora") || event.key.includes("activity") || event.key.includes("scene")) {
+        refreshScene();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("nimora:activity-scene-changed", refreshScene as EventListener);
+    const timer = window.setInterval(refreshScene, 4_000);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("nimora:activity-scene-changed", refreshScene as EventListener);
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -277,7 +369,7 @@ export function PetOverlay() {
       setNameDraft(value.pet.name);
       setRenderer(descriptor);
       setRendererFailed(false);
-      presentBubble(desktopApi.native ? petStatusMessage(value.pet, petStatusOptionsFromSnapshot(value, directiveSpeechRef.current)) : "浏览器预览", "status");
+      presentBubble(desktopApi.native ? (() => { const line = petStatusMessage(value.pet, buildAmbientStatusOptions(value, directiveSpeechRef.current, activeSceneRef.current, recentAmbientRef.current, occlusionCoverageRef.current)); rememberAmbientLine(recentAmbientRef, line); return line; })() : "浏览器预览", "status");
     }).catch(() => {
       if (disposed) return;
       presentBubble("角色资源不可用，已使用内置角色", "error");
@@ -301,7 +393,7 @@ export function PetOverlay() {
           if (!disposed) {
             applySnapshot(value);
             void desktopApi.requestAttention("autonomy", "bubble", "ambient").then((attention) => {
-              if (!disposed && attention.allowed && !ambientMutedRef.current) presentBubble(petStatusMessage(value.pet, petStatusOptionsFromSnapshot(value, directiveSpeechRef.current)), "status");
+              if (!disposed && attention.allowed && !ambientMutedRef.current) presentBubble((() => { const line = petStatusMessage(value.pet, buildAmbientStatusOptions(value, directiveSpeechRef.current, activeSceneRef.current, recentAmbientRef.current, occlusionCoverageRef.current)); rememberAmbientLine(recentAmbientRef, line); return line; })(), "status");
             }).catch(() => undefined);
           }
         });
@@ -315,7 +407,7 @@ export function PetOverlay() {
         void desktopApi.snapshot().then((value) => {
           if (!disposed) {
             applySnapshot(value);
-            if (!ambientMutedRef.current) presentBubble(petStatusMessage(value.pet, petStatusOptionsFromSnapshot(value, directiveSpeechRef.current)), "status");
+            if (!ambientMutedRef.current) presentBubble((() => { const line = petStatusMessage(value.pet, buildAmbientStatusOptions(value, directiveSpeechRef.current, activeSceneRef.current, recentAmbientRef.current, occlusionCoverageRef.current)); rememberAmbientLine(recentAmbientRef, line); return line; })(), "status");
           }
         });
       }).then((disposeListener) => {
@@ -365,7 +457,7 @@ export function PetOverlay() {
             setCompanionAction(null);
             lastCompanionSpeechRef.current = null;
             void desktopApi.snapshot().then((value) => {
-              if (!disposed && !ambientMutedRef.current) presentBubble(petStatusMessage(value.pet, petStatusOptionsFromSnapshot(value, directiveSpeechRef.current)), "status");
+              if (!disposed && !ambientMutedRef.current) presentBubble((() => { const line = petStatusMessage(value.pet, buildAmbientStatusOptions(value, directiveSpeechRef.current, activeSceneRef.current, recentAmbientRef.current, occlusionCoverageRef.current)); rememberAmbientLine(recentAmbientRef, line); return line; })(), "status");
             });
           }, 4200);
         }
@@ -529,7 +621,7 @@ export function PetOverlay() {
       grabOffsetX: screenX - origin.x,
       grabOffsetY: screenY - origin.y,
     };
-    presentBubble("抓稳啦…");
+    presentBubble("带我飞～抓稳护目镜！");
     setIsDragging(true);
     try {
       // Prefer host begin/move/finish APIs when present (logical stage drag).
@@ -581,7 +673,7 @@ export function PetOverlay() {
       const next = await desktopApi.snapshot();
       setSnapshot(next);
       setPoseOverride(null);
-      presentBubble("安全落地");
+      presentBubble("安全落地！脚底圆影子归位");
     } catch {
       const next = await desktopApi.snapshot().catch(() => snapshot);
       if (next) {
@@ -747,7 +839,13 @@ export function PetOverlay() {
   }
 
   return (
-    <main className={`pet-overlay${menuOpen || pointerActive ? " bubble-suppressed" : ""}${bubbleVisible && canPresentPetBubble({ menuOpen, pointerActive }) ? " bubble-visible" : ""}${isDragging ? " is-dragging" : ""}${occlusion.fullyHidden ? " is-occluded" : ""}`} aria-label="Nimora 桌面宠物" data-lifeform="subject">
+    <main
+      className={`pet-overlay${menuOpen || pointerActive ? " bubble-suppressed" : ""}${bubbleVisible && canPresentPetBubble({ menuOpen, pointerActive }) ? " bubble-visible" : ""}${isDragging ? " is-dragging" : ""}${occlusion.fullyHidden ? " is-occluded" : ""}${activeScene ? " has-activity-scene" : ""}`}
+      aria-label="Nimora 桌面宠物"
+      data-lifeform="subject"
+      data-scene-id={activeScene?.id ?? ""}
+      data-scene-particle={activeScene?.particle ?? "none"}
+    >
       <div
         className="pet-subject"
         style={subjectStyle}
@@ -755,9 +853,24 @@ export function PetOverlay() {
         data-occlusion-hidden={occlusion.fullyHidden ? "true" : "false"}
         data-ambient-muted={ambientMuted ? "true" : "false"}
         data-directive-revision={directive?.revision ?? ""}
+        data-scene-id={activeScene?.id ?? ""}
       >
       {/* Speech + visual are siblings of the hit button so ellipse clip-path never trims the lifeform. */}
       <span className="overlay-status pet-speech-bubble" role="status" aria-live="polite" aria-atomic="true">{message}</span>
+      {scenePropIcons.length > 0 && !occlusion.fullyHidden ? (
+        <div className="pet-scene-props" aria-hidden="true" data-particle={activeScene?.particle ?? "none"}>
+          {scenePropIcons.slice(0, 6).map((prop, index) => (
+            <span
+              key={`${prop.id}-${index}`}
+              className={`pet-scene-prop prop-${index}`}
+              data-prop={prop.id}
+              style={{ ["--prop-index" as string]: String(index) }}
+            >
+              {prop.icon}
+            </span>
+          ))}
+        </div>
+      ) : null}
       <div
         className="pet-character-shell"
         data-state={renderState}
@@ -878,7 +991,7 @@ export function PetOverlay() {
                 const item = petItemPresentation(stack.itemId);
                 return <button className="inventory-item" type="button" role="menuitem" key={stack.itemId} onClick={() => void useItem(stack.itemId)}><span>{item.glyph}</span><b>{item.label}<small>{item.effect}</small></b><em>×{stack.quantity}</em></button>;
               })}
-              {(snapshot?.pet.inventory.length ?? 0) === 0 ? <p className="overlay-inventory-empty">背包空空的<br />已有物品不会过期</p> : null}
+              {(snapshot?.pet.inventory.length ?? 0) === 0 ? <p className="overlay-inventory-empty" role="status">背包空空的 ✧<br />喂食或玩耍后会有小惊喜<br /><small>已有物品不会过期</small></p> : null}
             </>
           ) : <form className="overlay-rename-form" onSubmit={(event) => { event.preventDefault(); void renamePet(); }}>
             <label htmlFor="overlay-pet-name">新的名字</label>

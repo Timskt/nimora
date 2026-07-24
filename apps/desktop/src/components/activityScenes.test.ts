@@ -1,0 +1,77 @@
+import { describe, expect, it, beforeEach } from "vitest";
+import {
+  builtinActivityScenes,
+  createUserActivityScene,
+  mergeSceneCatalog,
+  pickSceneSpeech,
+  sceneTemplateForPrompt,
+  updateUserScene,
+  removeUserScene,
+  resolveActiveScene,
+} from "./activityScenes";
+
+describe("activityScenes workshop domain", () => {
+  beforeEach(() => {
+    // jsdom localStorage is fine; no shared state in pure helpers
+  });
+
+  it("ships original themed builtins including sports and esports", () => {
+    const scenes = builtinActivityScenes();
+    expect(scenes.length).toBeGreaterThanOrEqual(5);
+    expect(scenes.some((scene) => scene.category === "sports")).toBe(true);
+    expect(scenes.some((scene) => scene.category === "esports")).toBe(true);
+    expect(scenes.every((scene) => scene.source === "builtin")).toBe(true);
+    const names = scenes.map((scene) => scene.name);
+    for (const required of ["绿茵狂欢夜", "峡谷出征夜", "新春团圆", "极客调试夜", "安静摸鱼塘"]) {
+      expect(names).toContain(required);
+    }
+  });
+
+  it("creates user scenes with clamped props and speech", () => {
+    const scene = createUserActivityScene({
+      name: "  我的决赛夜  ",
+      propIds: ["soccer_ball", "trophy", "flag", "star", "crown", "shield", "coffee"],
+      speechLines: ["a", "", "b", "c"],
+    });
+    expect(scene).not.toBeNull();
+    expect(scene!.name).toBe("我的决赛夜");
+    expect(scene!.source).toBe("user");
+    expect(scene!.propIds.length).toBeLessThanOrEqual(6);
+    expect(scene!.speechLines).toEqual(["a", "b", "c"]);
+  });
+
+  it("rejects empty names", () => {
+    expect(createUserActivityScene({ name: "   " })).toBeNull();
+  });
+
+  it("merges builtins with user scenes", () => {
+    const user = createUserActivityScene({ name: "自定义夜" })!;
+    const merged = mergeSceneCatalog([user]);
+    expect(merged.some((scene) => scene.id === user.id)).toBe(true);
+    expect(merged.some((scene) => scene.id.startsWith("scene.builtin."))).toBe(true);
+  });
+
+  it("picks speech by sequence and resolves active", () => {
+    const scene = builtinActivityScenes()[0]!;
+    const line = pickSceneSpeech(scene, 1);
+    expect(line).toBe(scene.speechLines[1 % scene.speechLines.length]);
+    expect(resolveActiveScene([scene], scene.id)?.id).toBe(scene.id);
+    expect(resolveActiveScene([{ ...scene, enabled: false }], scene.id)).toBeNull();
+  });
+
+  it("updates and removes user scenes only", () => {
+    const user = createUserActivityScene({ name: "临时" })!;
+    const builtin = builtinActivityScenes()[0]!;
+    const updated = updateUserScene([user, builtin], user.id, { name: "新名" });
+    expect(updated.find((scene) => scene.id === user.id)?.name).toBe("新名");
+    const removed = removeUserScene(updated, user.id);
+    expect(removed.some((scene) => scene.id === user.id)).toBe(false);
+    expect(removeUserScene(updated, builtin.id).some((scene) => scene.id === builtin.id)).toBe(true);
+  });
+
+  it("templates world cup and rift prompts", () => {
+    expect(sceneTemplateForPrompt("世界杯决赛").category).toBe("sports");
+    expect(sceneTemplateForPrompt("英雄联盟排位").category).toBe("esports");
+    expect(sceneTemplateForPrompt("写 skill 通宵").category).toBe("geek");
+  });
+});

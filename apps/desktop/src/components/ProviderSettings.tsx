@@ -134,10 +134,10 @@ export function ProviderSettings({ disabled, onCatalogChanged, onNotice }: Provi
     {disabled && desktopApi.native && <div className="control-readonly" role="status">安全或恢复模式下配置写入已锁定；你仍可撤销已有凭据。</div>}
     <div className="provider-settings-grid">
       <div className="provider-list" aria-label="已配置 Provider">
-        {loading ? <p className="provider-empty">正在读取本机配置…</p> : providers.length ? providers.map((provider) => <article className={selectedId === provider.id ? "selected" : ""} key={provider.id}>
+        {loading ? <div className="provider-empty is-loading" role="status"><span aria-hidden="true">◌</span><strong>正在读取本机配置…</strong><p>凭据不会出现在界面里，请稍候。</p></div> : providers.length ? providers.map((provider) => <article className={selectedId === provider.id ? "selected" : ""} key={provider.id}>
           <button className="provider-card-main" onClick={() => edit(provider)} type="button"><span className="provider-card-icon" aria-hidden="true">⌁</span><span><strong>{provider.displayName}</strong><small>{new URL(provider.baseUrl).origin}</small></span><i data-ready={provider.enabled && provider.credentialPresent}>{!provider.enabled ? "已停用" : provider.credentialPresent ? "凭据就绪" : "缺少凭据"}</i></button>
           <div><button disabled={busy || !provider.credentialPresent || !desktopApi.native} onClick={() => void revokeCredential(provider.id)} type="button">撤销凭据</button><button className="danger-link" disabled={busy || !desktopApi.native} onClick={() => void remove(provider)} type="button">删除配置</button></div>
-        </article>) : <div className="provider-empty"><span>◇</span><strong>还没有网络 Provider</strong><p>你仍可完全离线使用内置模型，也可以创建一个 OpenAI-compatible 连接。</p></div>}
+        </article>) : <div className="provider-empty" role="status"><span aria-hidden="true">◇</span><strong>还没有网络 Provider</strong><p>离线也能陪你。点右上角「新增 Provider」接上本地或云端模型；也可先用内置模型开聊。</p></div>}
       </div>
       <form className="provider-editor" onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <div className="provider-editor-heading"><div><p className="card-label">{selectedId ? "EDIT CONNECTION" : "NEW CONNECTION"}</p><h3>{selectedId ? "编辑安全连接" : "配置兼容服务"}</h3></div><span>{draft.enabled ? "启用" : "停用"}</span></div>

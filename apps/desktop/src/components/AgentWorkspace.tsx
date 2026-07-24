@@ -261,6 +261,18 @@ export function providerStatusUnavailableMessage(providerId: string): string {
 }
 
 /**
+ * Host `validate_start_request` requires an absolute workspaceRoot (POSIX `/…` or Windows drive).
+ * Mirror that gate in the FE so owners fail closed before submit.
+ */
+export function isAbsoluteWorkspaceRoot(path: string | null | undefined): boolean {
+  const value = (path ?? "").trim();
+  if (!value) return false;
+  if (value.startsWith("/")) return true;
+  // Windows: C:\… or C:/…
+  return /^[A-Za-z]:[\\/]/.test(value);
+}
+
+/**
  * Why unattended goal start is locked.
  * Returns null when the owner can open/submit start.
  */
@@ -271,6 +283,7 @@ export function unattendedStartLockReason(options: {
   title?: string;
   objective?: string;
   stepCount?: number;
+  workspaceRoot?: string;
   native?: boolean;
 }): string | null {
   const mode = modeLockReason(Boolean(options.safeMode), Boolean(options.recoveryMode));
@@ -280,6 +293,11 @@ export function unattendedStartLockReason(options: {
   if (!(options.title ?? "").trim()) return "请填写目标标题。";
   if (!(options.objective ?? "").trim()) return "请填写目标描述与完成标准。";
   if ((options.stepCount ?? 0) <= 0) return "请至少添加一步计划（每行一步）。";
+  const workspace = (options.workspaceRoot ?? "").trim();
+  if (!workspace) return "请填写工作区绝对路径（宿主会校验路径存在且可扫描）。";
+  if (!isAbsoluteWorkspaceRoot(workspace)) {
+    return "工作区必须是绝对路径，例如 /Users/… 或 C:\\Projects\\…。";
+  }
   return null;
 }
 
@@ -1364,6 +1382,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
     goalTitle.trim()
     && goalObjective.trim()
     && planSteps.length > 0
+    && isAbsoluteWorkspaceRoot(workspaceRoot)
     && !startBusy
     && !safeMode
     && !recoveryMode
@@ -1877,7 +1896,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
         </label>
         <label>
           <span>工作区路径</span>
-          <input aria-label="工作区路径" disabled={startBusy} maxLength={1024} onChange={(event) => setWorkspaceRoot(event.target.value)} placeholder="由宿主校验的本地路径，可留空" value={workspaceRoot} />
+          <input aria-label="工作区路径" disabled={startBusy} maxLength={1024} onChange={(event) => setWorkspaceRoot(event.target.value)} placeholder="绝对路径，如 /Users/… 或 C:\\Projects\\…（必填）" value={workspaceRoot} />
         </label>
         <div className="authorization-tier-picker" role="radiogroup" aria-label="授权档位">
           <div className="authorization-tier-picker-label">
@@ -2022,6 +2041,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
               title: goalTitle,
               objective: goalObjective,
               stepCount: planSteps.length,
+              workspaceRoot,
               native: desktopApi.native,
             }) ?? "签发绑定 Goal 的执行授权并启动"
           }
@@ -2204,6 +2224,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
           {grant && <div className="control-grant-meta"><span>授权 · {tierLabel(grant.tier)}</span><span className="grant-policy-chip">{tierApprovalLabel(grant.tier)}</span>{tierUsesNeverAsk(grant.tier) && grantActive ? <span className="grant-policy-chip never-ask" title={tierSleepSafeCopy(grant.tier)}>NeverAsk · 睡眠安全</span> : null}{grant.workspaceRoot && <code>{grant.workspaceRoot}</code>}{grantActive && <button disabled={Boolean(controlLockReason)} onClick={() => void revokeGrant(grant.grantId)} title={controlLockReason ?? "立即撤销此授权，阻止后续自动派发"} type="button">撤销授权</button>}</div>}
           {entry.attempt?.status === "indeterminate" && <div className="control-risk" role="alert"><strong>外部执行结果未知，禁止自动重试</strong><p>Attempt {entry.attempt.id} · Checkpoint #{entry.attempt.checkpointSequence}</p><code>{entry.attempt.requestFingerprint}</code><p className="control-risk-next">下一步：根据你掌握的外部证据，二选一完成对账；理由会永久写入审计。</p><div><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "resolve", entry, decision: "confirmed_not_executed" })} title={controlLockReason ?? "确认外部操作未执行，并安全暂停"} type="button">确认未执行并暂停</button><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "resolve", entry, decision: "accept_external_effect_and_cancel" })} title={controlLockReason ?? "接受可能已产生的副作用并取消任务"} type="button">接受副作用并取消</button></div></div>}
           {!entry.attempt && ["starting", "running"].includes(entry.job.status) && <div className="control-actions"><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "pause", entry })} title={controlLockReason ?? "在当前原子步骤结束后暂停，保留 Checkpoint"} type="button">暂停</button><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "cancel", entry })} title={controlLockReason ?? "取消不可恢复为同一运行；已产生副作用不会自动回滚"} type="button">取消任务</button></div>}
+          {!entry.attempt && ["paused", "pausing"].includes(entry.job.status) && <div className="control-actions"><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "cancel", entry })} title={controlLockReason ?? "取消已暂停任务；不可恢复为同一运行，已产生副作用不会自动回滚"} type="button">取消任务</button></div>}
           {entry.resolutions.length > 0 && <details className="resolution-history"><summary>不可变对账记录 · {entry.resolutions.length}</summary>{entry.resolutions.map((resolution) => <article key={resolution.id}><strong>{resolution.decision}</strong><p>{resolution.reason}</p><small>{resolution.actor} · {new Date(resolution.resolvedAtMs).toLocaleString("zh-CN")}</small></article>)}</details>}
         </article>
         );
@@ -2339,7 +2360,24 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
         </div>
         {activeProvider?.locality === "network" && <label className="agent-network-consent"><input checked={allowNetwork} disabled={busy} type="checkbox" onChange={(event) => setAllowNetwork(event.target.checked)} /><span><strong>允许本次请求联网</strong><small>任务内容将发送到你配置的第三方服务；模块能力仍受本机网关约束。</small></span></label>}
         <textarea value={prompt} maxLength={32768} onChange={(event) => setPrompt(event.target.value)} aria-label="Agent 任务内容" />
-        <div><span>{providerStatus?.message ?? "正在检查 Provider"}</span><button className="primary-button" disabled={busy || !prompt.trim() || !model.trim() || providerStatus?.state !== "ready" || !providerStatus.models.some((item) => item.name === model) || (activeProvider?.locality === "network" && !allowNetwork)} type="submit">{busy ? "运行中…" : "运行任务"}</button></div>
+        <div>
+          <span title={runLockReason ?? undefined}>
+            {providerReadinessGuidance(providerStatus, {
+              model,
+              networkRequiresConsent: activeProvider?.locality === "network",
+              allowNetwork,
+              hostMessage: providerStatus?.message ?? null,
+            })}
+          </span>
+          <button
+            className="primary-button"
+            disabled={Boolean(runLockReason)}
+            title={runLockReason ?? "向当前 Provider 发送任务"}
+            type="submit"
+          >
+            {busy ? "运行中…" : "运行任务"}
+          </button>
+        </div>
       </form>
     </div>
 
@@ -2347,7 +2385,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
       <div className="inspector-title"><div><p className="card-label">运行检查器</p><h3>能力与边界</h3></div><span>{catalog?.tools.length ?? 0} tools</span></div>
       <div className="provider-tile"><span className="provider-glyph">⌁</span><div><strong>{activeProvider?.displayName ?? activeProviderId}</strong><p>{activeProvider?.locality === "network" ? "网络 Provider · 受数据策略约束" : "本地 Provider · 可离线运行"}{reasoningCapabilities ? ` · ${reasoningCapabilities.supportedEfforts.length} 档推理` : " · 标准推理"}</p></div><i>{providerStatusLabel(providerStatus)}</i></div>
       <div className="boundary-note"><strong>{safeMode ? "安全模式已启用" : recoveryMode ? "恢复模式已启用" : "确认策略正常"}</strong><p>写操作与外部副作用始终要求绑定实际参数的批准。</p></div>
-      <div className="tool-catalog"><p className="card-label">伙伴能力 · 模块工具</p>{catalog?.tools.map((tool) => <article key={tool.id}><span>{tool.effect === "read_only" ? "R" : "W"}</span><div><strong>{tool.title}</strong><code>{tool.id}</code><em className="tool-domain-chip" data-domain={agentToolDomainLabel(tool.id)}>{agentToolDomainLabel(tool.id)}</em></div><button className={tool.effect === "read_only" ? "read-only" : "approval"} disabled={toolBusy || safeMode || recoveryMode} onClick={() => void prepareTool(tool.id)} type="button">{agentToolAccessLabel(tool.effect)}</button></article>)}</div>
+      <div className="tool-catalog"><p className="card-label">伙伴能力 · 模块工具</p>{catalog?.tools.map((tool) => <article key={tool.id}><span>{tool.effect === "read_only" ? "R" : "W"}</span><div><strong>{tool.title}</strong><code>{tool.id}</code><em className="tool-domain-chip" data-domain={agentToolDomainLabel(tool.id)}>{agentToolDomainLabel(tool.id)}</em></div><button className={tool.effect === "read_only" ? "read-only" : "approval"} disabled={Boolean(toolLockReason)} title={toolLockReason ?? undefined} onClick={() => void prepareTool(tool.id)} type="button">{agentToolAccessLabel(tool.effect)}</button></article>)}</div>
       <section className="agent-history" aria-labelledby="agent-history-heading">
         <div><div><p className="card-label">本机历史</p><h4 id="agent-history-heading">最近完成</h4></div><button disabled={busy || !history?.records.length} onClick={() => void clearHistory()} type="button">全部清除</button></div>
         {history?.historyDegraded && <p className="history-warning">最近一次历史写入失败；任务结果不受影响。</p>}

@@ -454,6 +454,46 @@ impl Pet {
         true
     }
 
+    /// One-time product identity + home heal for pets persisted under legacy product names.
+    ///
+    /// Migrates durable display names such as `Aster` / `DeskPet` / `gptpet` to
+    /// `default_name` (typically `灵灵`), and replaces absurd top-left home anchors
+    /// (`x <= 8 && y <= 80`) with the current on-screen position when it is usable.
+    ///
+    /// Returns `true` when any field changed and the caller should persist.
+    pub fn migrate_legacy_identity(&mut self, default_name: &str) -> bool {
+        let mut changed = false;
+        let legacy = matches!(
+            self.name.as_str(),
+            "Aster" | "aster" | "ASTER" | "DeskPet" | "deskpet" | "gptpet" | "GPTPet" | "GptPet"
+        );
+        if legacy {
+            if let Ok(normalized) = Self::normalize_name(default_name) {
+                if self.name != normalized {
+                    self.name = normalized;
+                    changed = true;
+                }
+            }
+        }
+
+        if let Some(home) = self.home_position {
+            let absurd_home = home.x <= 8.0 && home.y <= 80.0;
+            if absurd_home {
+                let candidate = if self.position.x > 40.0 || self.position.y > 100.0 {
+                    self.position
+                } else {
+                    Position { x: 120.0, y: 160.0 }
+                };
+                if self.home_position != Some(candidate) {
+                    self.home_position = Some(candidate);
+                    changed = true;
+                }
+            }
+        }
+
+        changed
+    }
+
     /// Saves a finite desktop coordinate as the companion's home.
     ///
     /// # Errors

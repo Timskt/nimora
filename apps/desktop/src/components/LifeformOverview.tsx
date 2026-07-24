@@ -736,7 +736,7 @@ export function LifeformOverview({
           {webglFailed ? (
             <div className="lifeform-fallback" role="status">
               <BuiltinPet state={state} emotion={emotion} mood={mood} animation={pet?.lastDirectiveAnimation ?? state} />
-              <p>3D 预览暂不可用，已切换柔和示意</p>
+              <p><strong>灵灵先用示意出现</strong>3D 预览暂不可用，已切换柔和剪影 · 不影响拖动与互动</p>
             </div>
           ) : (
             <RendererErrorBoundary resetKey={resetKey} onFailure={handleFailure}>

@@ -1,4 +1,5 @@
 import type { Pet } from "@nimora/schemas";
+import { livingAmbientSpeech, type LivingMomentInput } from "./lifeformLiving";
 
 export type PetFacing = "left" | "right" | "neutral";
 export type PetMoodBand = "low" | "steady" | "high";
@@ -84,6 +85,17 @@ export interface PetStatusOptions {
   sequence?: number | null;
   /** Optional lifeform sense for contextual ambient speech. */
   desktop?: PetAmbientDesktopContext | null;
+  /** Creative workshop active scene line. */
+  sceneSpeech?: string | null;
+  /** Session memory: avoid immediate ambient repeats. */
+  recentLines?: readonly string[] | null;
+  /** Host worker/agent busy aggregate. */
+  workerBusy?: boolean | null;
+  /** Occlusion coverage 0..1 for hide-and-seek speech. */
+  occlusionCoverage?: number | null;
+  /** Injected clock for tests / circadian. */
+  nowMs?: number;
+  hourOfDay?: number | null;
 }
 
 /** Resolve left/right stage facing for walk cycles; speech keeps neutral attention. */
@@ -112,6 +124,12 @@ const HEALTHY_IDLE_LINES = [
   "我在这儿，不吵你工作",
   "偷偷伸了个懒腰",
   "本地陪伴中，随时叫我",
+  "护目镜反光好亮，嘿嘿",
+  "有没有零食？我可以先看着",
+  "再过一会儿去隔壁屏幕逛逛",
+  "安静模式启动…其实还是想说话",
+  "脚底阴影圆圆的，刚刚好",
+  "你打字的时候，我帮你数空格",
 ] as const;
 
 function meetingSpeech(hint: string | null | undefined): string {
@@ -131,65 +149,33 @@ function healthyIdleLine(sequence: number | null | undefined): string {
   return HEALTHY_IDLE_LINES[index]!;
 }
 
-/** Ambient status line; directive speech wins when the host is talking. */
+/** Ambient status line; living presence engine (not fixed robotic loops). */
 export function petStatusMessage(
-  pet: Pick<Pet, "state" | "energy" | "mood" | "satiety" | "cleanliness">,
+  pet: Pick<Pet, "state" | "energy" | "mood" | "satiety" | "cleanliness" | "emotion">,
   options?: PetStatusOptions,
 ): string {
-  const directive = options?.directiveSpeech?.trim();
-  if (directive) return directive;
-
-  const desktop = options?.desktop;
-  if (desktop?.meetingActive) {
-    return meetingSpeech(desktop.meetingHint);
+  const moment: LivingMomentInput = {
+    pet: {
+      state: pet.state,
+      energy: pet.energy,
+      mood: pet.mood,
+      satiety: pet.satiety,
+      cleanliness: pet.cleanliness,
+      emotion: pet.emotion,
+    },
+    sequence: options?.sequence ?? null,
+    desktop: options?.desktop ?? null,
+    directiveSpeech: options?.directiveSpeech ?? null,
+    sceneSpeech: options?.sceneSpeech ?? null,
+    recentLines: options?.recentLines ?? null,
+    workerBusy: options?.workerBusy ?? null,
+    occlusionCoverage: options?.occlusionCoverage ?? null,
+    hourOfDay: options?.hourOfDay ?? null,
+  };
+  if (options?.nowMs != null) {
+    moment.nowMs = options.nowMs;
   }
-  if (desktop?.notificationUnread) {
-    return "好像有事等你看一眼～";
-  }
-  if (desktop?.degradationReason) {
-    return "桌面感知有点模糊，我慢慢来";
-  }
-  if (desktop?.charging) {
-    return "在充电诶，我也精神满满";
-  }
-  if (
-    desktop?.onBattery
-    && typeof desktop.batteryPercent === "number"
-    && desktop.batteryPercent <= 20
-  ) {
-    return "电量有点低，我轻一点活动";
-  }
-  if (typeof desktop?.idleMs === "number" && desktop.idleMs >= 10 * 60_000) {
-    return "你离开好一会儿啦，我守着桌面";
-  }
-  if (typeof desktop?.displayCount === "number" && desktop.displayCount > 1) {
-    if (pet.state === "walking") return "去隔壁屏幕逛逛";
-  }
-
-  const state = String(pet.state);
-  switch (state) {
-    case "observing": return "正好奇地看看桌面";
-    case "sleeping": return "正在安静恢复体力";
-    case "walking": return "去桌面上走走看看";
-    case "playing": return "正在桌面上自得其乐";
-    case "stretching": return "舒舒服服伸个懒腰";
-    case "working": return "正在专心陪你工作";
-    case "dragged": return "抓稳啦…";
-    case "interacting": return "很开心和你互动";
-    case "yawn": return "哈欠…再眯一会儿";
-    case "dig_nose": return "咦，鼻子有点痒";
-    case "count_ants": return "一、二、三…桌面有小蚂蚁？";
-    case "wave": return "嗨！看见你啦";
-    case "look_around": return "左看看，右看看";
-    case "hop": return "蹦一下！";
-    case "recovering": return "缓一缓就好…";
-    default:
-      if (pet.energy <= 25) return "有点困了，想休息一下";
-      if (pet.satiety <= 25) return "肚子有点空，陪我吃点东西吧";
-      if (pet.cleanliness <= 25) return "想整理一下，保持清清爽爽";
-      if (pet.mood <= 25) return "今天想和你待一会儿";
-      return healthyIdleLine(options?.sequence);
-  }
+  return livingAmbientSpeech(moment);
 }
 
 /** Map vitals mood (0–100) into a coarse lifeform band for CSS / data hooks. */

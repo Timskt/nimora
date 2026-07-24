@@ -103,43 +103,44 @@ export function clampGaze(value: number): number {
 /** Warm classic Q-minion palette (no chrome plate / no square frame). */
 export const Q_MINION_COLORS = {
   /** Classic film minion yellow — saturated, warm, candy-like. */
-  yellow: "#F7D117",
-  yellowLight: "#FFE94A",
-  yellowEmissive: "#F0C010",
-  denim: "#2E7DB5",
-  denimSoft: "#4C97C8",
-  denimDeep: "#246594",
-  goggleBand: "#101218",
-  metal: "#E8ECF1",
-  sclera: "#FFFEF8",
+  yellow: "#FFE01A",
+  yellowLight: "#FFF38A",
+  yellowEmissive: "#FFC400",
+  denim: "#2A78B0",
+  denimSoft: "#4A99CC",
+  denimDeep: "#1F5F8A",
+  goggleBand: "#0E1016",
+  /** Soft brushed metal — buckle, never chrome plate. */
+  metal: "#DDE3EA",
+  sclera: "#FFFEF9",
   /** Warm cocoa iris — soft Q-minion, not tech cyan. */
-  iris: "#6B3F22",
-  irisEmissive: "#3D2412",
-  glove: "#15161A",
-  boot: "#6A4326",
-  bootSole: "#3A2514",
-  hair: "#14151A",
-  blush: "#FF8E7A",
-  graphite: "#171A20",
+  iris: "#6A3A1C",
+  irisEmissive: "#3A2010",
+  glove: "#14151A",
+  boot: "#6B4224",
+  bootSole: "#352212",
+  hair: "#12131A",
+  blush: "#FF8A78",
+  graphite: "#151820",
 } as const;
 
 /** Tall warm pill + dual goggle layout (classic Q-minion proportions). */
 export const Q_MINION_LAYOUT = {
-  /** Cylinder radius of the yellow capsule. */
-  bodyRadius: 0.9,
+  /** Cylinder radius of the yellow capsule — chubbier Q silhouette. */
+  bodyRadius: 1.0,
   /** Cylinder length between hemispheres (total height ≈ length + 2r). */
-  bodyLength: 1.08,
-  bodyY: -0.32,
-  headY: 0.58,
-  /** Larger dual goggles = cuter Q face. */
-  goggleRadius: 0.48,
-  goggleSpacing: 0.45,
-  goggleZ: 0.98,
-  overallY: -0.82,
-  bootY: -1.34,
-  armX: 0.98,
-  hairY: 0.98,
-  shadowY: -1.48,
+  bodyLength: 1.06,
+  bodyY: -0.26,
+  headY: 0.5,
+  /** Oversized dual goggles = cuter Q face / Bob vibe. */
+  goggleRadius: 0.56,
+  goggleSpacing: 0.49,
+  goggleZ: 1.02,
+  overallY: -0.76,
+  bootY: -1.26,
+  armX: 1.04,
+  hairY: 0.9,
+  shadowY: -1.4,
 } as const;
 
 export type QMinionVec3 = readonly [number, number, number];
@@ -159,18 +160,18 @@ export type QMinionSilhouetteLayout = {
  */
 export function qMinionHairTuftSpecs(): ReadonlyArray<readonly [number, number, number, number]> {
   return [
-    [-0.12, 0.03, 0.02, -0.3],
-    [0.02, 0.1, -0.03, 0.08],
-    [0.14, 0.02, 0.04, 0.36],
-    [-0.04, 0.06, -0.07, -0.1],
-    [0.08, 0.01, 0.07, 0.2],
+    [-0.14, 0.04, 0.03, -0.34],
+    [0.01, 0.12, -0.04, 0.06],
+    [0.15, 0.03, 0.05, 0.38],
+    [-0.05, 0.07, -0.08, -0.12],
+    [0.09, 0.02, 0.08, 0.22],
   ] as const;
 }
 
 /** Dual goggle group position for side (-1 left, +1 right). */
 export function qMinionGogglePose(side: -1 | 1): QMinionVec3 {
   const { goggleSpacing, goggleZ } = Q_MINION_LAYOUT;
-  return [side * goggleSpacing, 0.05, goggleZ] as const;
+  return [side * goggleSpacing, 0.02, goggleZ] as const;
 }
 
 /** Denim strap + metal button placement for overall suspenders. */
@@ -180,9 +181,9 @@ export function qMinionOverallStrapPose(side: -1 | 1): {
   button: QMinionVec3;
 } {
   return {
-    strap: [side * 0.4, -0.12, 0.74] as const,
-    rotationZ: side * -0.4,
-    button: [side * 0.3, -0.4, 0.98] as const,
+    strap: [side * 0.42, -0.08, 0.78] as const,
+    rotationZ: side * -0.38,
+    button: [side * 0.32, -0.36, 1.02] as const,
   };
 }
 
@@ -346,222 +347,222 @@ export function isSadEmotion(emotion: string): boolean {
 export function builtinPetPose(state: string, emotion: string): BuiltinPetPose {
   if (isDazedState(state, emotion)) {
     return {
-      bounce: 0.012,
-      bodyTilt: 0.16,
-      eyeScale: 0.58,
+      bounce: 0.016,
+      bodyTilt: 0.2,
+      eyeScale: 0.52,
       tailSpeed: 0.28,
-      breath: 0.016,
-      armRest: 0.22,
+      breath: 0.018,
+      armRest: 0.18,
       hop: 0,
-      squash: 1.08,
-      stretch: 0.9,
-      lookAround: 0.12,
-      shadowPulse: 0.03,
-      slump: 0.18,
-      sweat: 0.48,
+      squash: 1.12,
+      stretch: 0.86,
+      lookAround: 0.1,
+      shadowPulse: 0.035,
+      slump: 0.24,
+      sweat: 0.55,
     };
   }
   if (isSadEmotion(emotion) && !isWorking(state) && !isPlaying(state)) {
     return {
-      bounce: 0.028,
-      bodyTilt: 0.07,
-      eyeScale: 0.84,
-      tailSpeed: 0.55,
-      breath: 0.022,
-      armRest: 0.28,
+      bounce: 0.022,
+      bodyTilt: 0.09,
+      eyeScale: 0.78,
+      tailSpeed: 0.48,
+      breath: 0.024,
+      armRest: 0.22,
       hop: 0,
-      squash: 1.04,
-      stretch: 0.96,
-      lookAround: 0.22,
-      shadowPulse: 0.03,
-      slump: 0.14,
-      sweat: 0.06,
+      squash: 1.06,
+      stretch: 0.93,
+      lookAround: 0.16,
+      shadowPulse: 0.028,
+      slump: 0.18,
+      sweat: 0.05,
     };
   }
   if (isSleeping(state, emotion)) {
     return {
-      bounce: 0.01,
-      bodyTilt: 0.06,
-      eyeScale: 0.05,
-      tailSpeed: 0.18,
-      breath: 0.034,
-      armRest: 0.24,
+      bounce: 0.008,
+      bodyTilt: 0.08,
+      eyeScale: 0.04,
+      tailSpeed: 0.16,
+      breath: 0.042,
+      armRest: 0.2,
       hop: 0,
-      squash: 1.08,
-      stretch: 0.9,
-      lookAround: 0.02,
+      squash: 1.12,
+      stretch: 0.88,
+      lookAround: 0.01,
       shadowPulse: 0.02,
-      slump: 0.12,
+      slump: 0.16,
       sweat: 0,
     };
   }
   if (isWorking(state)) {
     return {
-      bounce: 0.014,
-      bodyTilt: 0.05,
-      eyeScale: 0.9,
+      bounce: 0.018,
+      bodyTilt: 0.06,
+      eyeScale: 0.88,
       tailSpeed: 0.55,
-      breath: 0.012,
-      armRest: 0.52,
+      breath: 0.014,
+      armRest: 0.58,
       hop: 0,
-      squash: 1.05,
-      stretch: 0.95,
-      lookAround: 0.08,
-      shadowPulse: 0.024,
-      slump: 0.16,
-      sweat: 0.96,
+      squash: 1.07,
+      stretch: 0.93,
+      lookAround: 0.1,
+      shadowPulse: 0.028,
+      slump: 0.2,
+      sweat: 0.98,
     };
   }
   if (isWalking(state)) {
     return {
-      bounce: 0.09,
-      bodyTilt: 0.05,
-      eyeScale: 1,
-      tailSpeed: 2.1,
-      breath: 0.014,
-      armRest: 0.08,
+      bounce: 0.11,
+      bodyTilt: 0.07,
+      eyeScale: 1.02,
+      tailSpeed: 2.2,
+      breath: 0.016,
+      armRest: 0.1,
       hop: 0,
-      squash: 1,
-      stretch: 1,
-      lookAround: 0.18,
-      shadowPulse: 0.05,
+      squash: 0.98,
+      stretch: 1.04,
+      lookAround: 0.22,
+      shadowPulse: 0.06,
       slump: 0,
       sweat: 0.1,
     };
   }
   if (isPlaying(state) || emotion === "happy") {
     return {
-      bounce: 0.2,
-      bodyTilt: 0.1,
-      eyeScale: 1.1,
-      tailSpeed: 3.1,
-      breath: 0.024,
-      armRest: 0.88,
-      hop: 0.24,
-      squash: 0.88,
-      stretch: 1.18,
-      lookAround: 0.4,
-      shadowPulse: 0.12,
+      bounce: 0.24,
+      bodyTilt: 0.12,
+      eyeScale: 1.14,
+      tailSpeed: 3.2,
+      breath: 0.028,
+      armRest: 0.92,
+      hop: 0.3,
+      squash: 0.82,
+      stretch: 1.26,
+      lookAround: 0.48,
+      shadowPulse: 0.14,
       slump: 0,
       sweat: 0,
     };
   }
   if (isObserving(state, emotion)) {
     return {
-      bounce: 0.018,
-      bodyTilt: 0.03,
-      eyeScale: 1.22,
-      tailSpeed: 1.35,
-      breath: 0.012,
-      armRest: 0.1,
+      bounce: 0.024,
+      bodyTilt: 0.04,
+      eyeScale: 1.28,
+      tailSpeed: 1.4,
+      breath: 0.014,
+      armRest: 0.12,
       hop: 0,
-      squash: 0.99,
-      stretch: 1.03,
-      lookAround: 0.72,
-      shadowPulse: 0.03,
-      slump: -0.02,
+      squash: 0.98,
+      stretch: 1.05,
+      lookAround: 0.82,
+      shadowPulse: 0.035,
+      slump: -0.03,
       sweat: 0,
     };
   }
   const motion = normalizeMotionState(state);
   if (motion === "yawn") {
     return {
-      bounce: 0.02,
-      bodyTilt: 0.055,
-      eyeScale: 0.52,
+      bounce: 0.024,
+      bodyTilt: 0.07,
+      eyeScale: 0.42,
       tailSpeed: 0.42,
-      breath: 0.04,
-      armRest: 0.48,
+      breath: 0.048,
+      armRest: 0.55,
       hop: 0,
-      squash: 1.07,
-      stretch: 0.93,
-      lookAround: 0.08,
-      shadowPulse: 0.028,
-      slump: 0.07,
+      squash: 1.1,
+      stretch: 0.9,
+      lookAround: 0.06,
+      shadowPulse: 0.03,
+      slump: 0.1,
       sweat: 0,
     };
   }
   if (motion === "dig_nose") {
     return {
-      bounce: 0.028,
-      bodyTilt: 0.06,
-      eyeScale: 0.92,
-      tailSpeed: 0.85,
-      breath: 0.018,
-      armRest: 0.58,
+      bounce: 0.034,
+      bodyTilt: 0.08,
+      eyeScale: 0.9,
+      tailSpeed: 0.9,
+      breath: 0.02,
+      armRest: 0.64,
       hop: 0,
-      squash: 1.03,
-      stretch: 0.98,
-      lookAround: 0.18,
-      shadowPulse: 0.03,
-      slump: 0.05,
+      squash: 1.05,
+      stretch: 0.96,
+      lookAround: 0.2,
+      shadowPulse: 0.032,
+      slump: 0.07,
       sweat: 0,
     };
   }
   if (motion === "count_ants") {
     return {
-      bounce: 0.02,
-      bodyTilt: 0.09,
-      eyeScale: 1.18,
-      tailSpeed: 0.95,
-      breath: 0.014,
-      armRest: 0.38,
+      bounce: 0.028,
+      bodyTilt: 0.12,
+      eyeScale: 1.24,
+      tailSpeed: 1.0,
+      breath: 0.016,
+      armRest: 0.42,
       hop: 0,
-      squash: 1.05,
-      stretch: 0.96,
-      lookAround: 0.32,
-      shadowPulse: 0.03,
-      slump: 0.12,
+      squash: 1.08,
+      stretch: 0.94,
+      lookAround: 0.38,
+      shadowPulse: 0.034,
+      slump: 0.16,
       sweat: 0,
     };
   }
   if (motion === "wave") {
     return {
-      bounce: 0.08,
-      bodyTilt: 0.05,
-      eyeScale: 1.08,
-      tailSpeed: 1.7,
-      breath: 0.02,
-      armRest: 0.92,
-      hop: 0.04,
-      squash: 0.96,
-      stretch: 1.06,
-      lookAround: 0.34,
-      shadowPulse: 0.06,
+      bounce: 0.1,
+      bodyTilt: 0.07,
+      eyeScale: 1.12,
+      tailSpeed: 1.85,
+      breath: 0.024,
+      armRest: 0.95,
+      hop: 0.06,
+      squash: 0.94,
+      stretch: 1.1,
+      lookAround: 0.4,
+      shadowPulse: 0.07,
       slump: 0,
       sweat: 0,
     };
   }
   if (motion === "look_around") {
     return {
-      bounce: 0.018,
-      bodyTilt: 0.03,
-      eyeScale: 1.22,
-      tailSpeed: 1.35,
-      breath: 0.012,
-      armRest: 0.1,
+      bounce: 0.026,
+      bodyTilt: 0.04,
+      eyeScale: 1.28,
+      tailSpeed: 1.45,
+      breath: 0.014,
+      armRest: 0.12,
       hop: 0,
-      squash: 0.99,
-      stretch: 1.03,
-      lookAround: 0.88,
-      shadowPulse: 0.03,
-      slump: -0.02,
+      squash: 0.98,
+      stretch: 1.05,
+      lookAround: 0.95,
+      shadowPulse: 0.035,
+      slump: -0.03,
       sweat: 0,
     };
   }
   if (motion === "hop") {
     return {
-      bounce: 0.14,
-      bodyTilt: 0.08,
-      eyeScale: 1.06,
-      tailSpeed: 2.35,
-      breath: 0.022,
-      armRest: 0.55,
-      hop: 0.22,
-      squash: 0.9,
-      stretch: 1.14,
-      lookAround: 0.28,
-      shadowPulse: 0.1,
+      bounce: 0.16,
+      bodyTilt: 0.1,
+      eyeScale: 1.1,
+      tailSpeed: 2.5,
+      breath: 0.026,
+      armRest: 0.62,
+      hop: 0.3,
+      squash: 0.84,
+      stretch: 1.24,
+      lookAround: 0.32,
+      shadowPulse: 0.12,
       slump: 0,
       sweat: 0,
     };
@@ -584,17 +585,17 @@ export function builtinPetPose(state: string, emotion: string): BuiltinPetPose {
     };
   }
   return {
-    bounce: 0.082,
-    bodyTilt: 0.052,
-    eyeScale: 1.02,
-    tailSpeed: 1.28,
-    breath: 0.03,
-    armRest: 0.18,
+    bounce: 0.05,
+    bodyTilt: 0.065,
+    eyeScale: 1.04,
+    tailSpeed: 1.4,
+    breath: 0.034,
+    armRest: 0.22,
     hop: 0,
-    squash: 1,
-    stretch: 1.01,
-    lookAround: 0.68,
-    shadowPulse: 0.058,
+    squash: 0.98,
+    stretch: 1.04,
+    lookAround: 0.78,
+    shadowPulse: 0.07,
     slump: 0,
     sweat: 0,
   };
@@ -662,8 +663,8 @@ export function idlePerformancePhase(elapsed: number): {
   const blinkL = blinkBoth || (blinkCycle > 3.14 && blinkCycle < 3.26);
   const blinkR = blinkBoth || winkR || (blinkCycle > 3.24 && blinkCycle < 3.4);
   const blink = blinkL || blinkR;
-  // Yawn ~every 7.4s with a readable open window.
-  const yawn = cycleEnvelope(elapsed, 7.4, 5.85, 7.05);
+  // Yawn ~every 7.2s with a readable open window.
+  const yawn = cycleEnvelope(elapsed, 7.2, 5.55, 6.95);
   // Continuous weight rock — never a flat zero.
   const weightShift = MathUtils.clamp(
     0.5 + Math.sin(elapsed * 0.78) * 0.4 + Math.sin(elapsed * 1.55) * 0.14,
@@ -676,22 +677,22 @@ export function idlePerformancePhase(elapsed: number): {
   // Offset look-around sweep peak so it interleaves with settle hop.
   const lookAroundPeak = cycleEnvelope(elapsed + 1.15, 2.7, 2.15, 2.62);
   const lookSweep = MathUtils.clamp(
-    Math.sin(elapsed * 0.46) * 0.82
-      + Math.sin(elapsed * 1.18) * 0.36
-      + Math.sin(elapsed * 0.19) * 0.2
-      + glance * 0.95
-      + lookAroundPeak * 0.72,
+    Math.sin(elapsed * 0.5) * 0.9
+      + Math.sin(elapsed * 1.25) * 0.42
+      + Math.sin(elapsed * 0.2) * 0.22
+      + glance * 1.05
+      + lookAroundPeak * 0.82,
     -1,
     1,
   );
   // Soft continuous bounce + settle hop (~every 2.4s) so idle never freezes.
   const settleHop = cycleEnvelope(elapsed, 2.4, 1.98, 2.34);
   const microBounce = MathUtils.clamp(
-    0.55
-      + 0.44 * Math.sin(elapsed * 2.55)
-      + settleHop * 0.95
-      + Math.sin(elapsed * 0.9) * 0.16
-      + Math.sin(elapsed * 5.1) * 0.07,
+    0.58
+      + 0.5 * Math.sin(elapsed * 2.7)
+      + settleHop * 1.05
+      + Math.sin(elapsed * 0.95) * 0.18
+      + Math.sin(elapsed * 5.4) * 0.09,
     0,
     1,
   );
@@ -705,8 +706,8 @@ export function idlePerformancePhase(elapsed: number): {
   // Soft wave-lite / hop-lite so classic QQ micro-acts keep cycling.
   const waveLite = cycleEnvelope(elapsed + 0.6, 6.2, 5.15, 5.95);
   const hopLite = cycleEnvelope(elapsed + 2.1, 5.5, 4.7, 5.25);
-  // Dig-nose pulse every ~9.2s.
-  const digNose = cycleEnvelope(elapsed, 9.2, 7.7, 8.7);
+  // Dig-nose pulse every ~8.8s.
+  const digNose = cycleEnvelope(elapsed, 8.8, 7.2, 8.35);
   // Count ants: lean/peer window ~every 11.8s, offset from yawn/dig.
   const antsCycle = ((elapsed * 0.11) % 11.8);
   const antsEnvelope = antsCycle > 8.5 && antsCycle < 11.1
@@ -831,93 +832,108 @@ export function sampleBuiltinPetMotion(
   const hopLiteAmt = pureIdle ? micro.hopLite : 0;
   const waveLiteAmt = pureIdle ? micro.waveLite : 0;
   const fidgetAmt = pureIdle ? micro.fidget : micro.fidget * 0.2;
+  // Hop is vertical squash/stretch only — land has a rubbery settle beat.
+  const hopPhase = hopping
+    ? Math.abs(Math.sin(elapsed * 5.2))
+    : playing
+      ? Math.abs(Math.sin(elapsed * 5.6))
+      : 0;
   const hopWave = playing
-    ? Math.abs(Math.sin(elapsed * 5.4)) * pose.hop
+    ? hopPhase * pose.hop
     : hopping
-      ? Math.abs(Math.sin(elapsed * 5.0)) * Math.max(pose.hop, 0.2)
+      ? hopPhase * Math.max(pose.hop, 0.24)
       : walking
-        ? Math.abs(Math.sin(elapsed * 5.2)) * pose.bounce
-        : Math.abs(Math.sin(elapsed * (pose.tailSpeed + 0.7))) * pose.bounce
-          + idleBounce * pose.bounce * 0.88
-          + hopLiteAmt * 0.14
-          + settleBoost * 0.05
-          + yawnAmt * 0.014;
+        ? Math.abs(Math.sin(elapsed * 5.4)) * pose.bounce
+        : Math.abs(Math.sin(elapsed * (pose.tailSpeed + 0.75))) * pose.bounce
+          + idleBounce * pose.bounce * 1.05
+          + hopLiteAmt * 0.2
+          + settleBoost * 0.08
+          + yawnAmt * 0.02;
 
-  const breathRate = sleeping ? 0.85 : working ? 2.4 : 1.7;
+  const breathRate = sleeping ? 0.78 : working ? 2.5 : 1.75;
   const breath = Math.sin(elapsed * breathRate) * pose.breath;
-  const slumpDrop = pose.slump * 0.22 + dazedAmt * 0.04 + sadAmt * 0.03 + ants * 0.035;
+  const slumpDrop = pose.slump * 0.26 + dazedAmt * 0.05 + sadAmt * 0.04 + ants * 0.045;
   const rootY = (
-    -0.02
+    -0.01
     + hopWave
-    + breath * (sleeping ? 0.55 : 0.35)
-    + idleBounce * 0.022
-    + settleBoost * 0.035
+    + breath * (sleeping ? 0.62 : 0.4)
+    + idleBounce * 0.032
+    + settleBoost * 0.055
     - slumpDrop
-    + (sleeping ? -0.04 : 0)
-  ) * m + (-0.02) * (1 - m);
+    + (sleeping ? -0.05 : 0)
+  ) * m + (-0.01) * (1 - m);
 
-  // Settle hop lands with a soft squash beat for rubbery Q-body feel.
+  // Land squash: stronger when hop phase is falling / settle hop peaks.
+  const hopLand = (playing || hopping)
+    ? Math.max(0, Math.sin(elapsed * (playing ? 5.6 : 5.2) + Math.PI) * 0.14)
+    : 0;
   const settleLand = idleish
-    ? Math.max(0, Math.sin(elapsed * 2.15) * 0.01) + (micro.microBounce > 0.82 ? (micro.microBounce - 0.82) * 0.12 : 0)
+    ? Math.max(0, Math.sin(elapsed * 2.25) * 0.014)
+      + (micro.microBounce > 0.78 ? (micro.microBounce - 0.78) * 0.2 : 0)
+      + settleBoost * 0.1
     : 0;
   const squashPulse = playing
-    ? 1 + Math.sin(elapsed * 5.4) * 0.11
-    : walking
-      ? 1 + Math.sin(elapsed * 8) * 0.036
-      : 1
-        + Math.sin(elapsed * breathRate) * 0.018
-        + yawnAmt * 0.045
-        + idleBounce * 0.042
-        + dazedAmt * 0.028
-        + ants * 0.022
-        + settleLand;
+    ? 1 + Math.sin(elapsed * 5.6) * 0.16 + hopLand
+    : hopping
+      ? 1 + Math.sin(elapsed * 5.2) * 0.14 + hopLand
+      : walking
+        ? 1 + Math.sin(elapsed * 8.2) * 0.05
+        : 1
+          + Math.sin(elapsed * breathRate) * 0.024
+          + yawnAmt * 0.06
+          + idleBounce * 0.06
+          + dazedAmt * 0.04
+          + ants * 0.03
+          + sadAmt * 0.02
+          + settleLand;
   const scaleX = (pose.squash * squashPulse + (1 - pose.squash)) * m + (1 - m);
   const scaleY = (pose.stretch / Math.max(squashPulse, 0.001) + (1 - pose.stretch)) * m + (1 - m);
 
   const bodyTilt = (
-    Math.sin(elapsed * (walking ? 4.4 : playing ? 3.2 : dazedAmt ? 1.8 : 1.42)) * pose.bodyTilt
-    + (micro.weightShift - 0.5) * 0.1 * (walking || playing ? 0.2 : 1)
-    + yawnAmt * 0.055
-    + pose.slump * 0.16
-    + dazedAmt * Math.sin(elapsed * 2.1) * 0.07
-    + digAmt * 0.05 * (idleish ? 1 : 0.15)
-    + ants * 0.09
-    + idleBounce * 0.024 * (idleish ? 1 : 0.22)
-    + fidgetAmt * 0.045
-    + waveLiteAmt * 0.03
-    + gazeX * 0.035 * (idleish || observing ? 1 : 0.35)
+    Math.sin(elapsed * (walking ? 4.6 : playing ? 3.4 : dazedAmt ? 1.9 : 1.55)) * pose.bodyTilt
+    + (micro.weightShift - 0.5) * 0.14 * (walking || playing ? 0.25 : 1)
+    + yawnAmt * 0.07
+    + pose.slump * 0.2
+    + dazedAmt * Math.sin(elapsed * 2.2) * 0.1
+    + digAmt * 0.07 * (idleish ? 1 : 0.15)
+    + ants * 0.12
+    + idleBounce * 0.035 * (idleish ? 1 : 0.25)
+    + fidgetAmt * 0.06
+    + waveLiteAmt * 0.04
+    + hopLiteAmt * 0.03
+    + gazeX * 0.05 * (idleish || observing ? 1 : 0.4)
   ) * m;
 
   const bodyYaw = builtinPetBodyYaw(state, elapsed, gazeX) * m;
   const look = pose.lookAround * (
     observing
-      ? micro.lookBurst * 1.4 + Math.sin(elapsed * 0.55) * 0.58 + micro.lookSweep * 0.32
-      : micro.lookBurst * 0.95 + micro.lookSweep * (idleish ? 0.88 : 0.32)
+      ? micro.lookBurst * 1.55 + Math.sin(elapsed * 0.58) * 0.65 + micro.lookSweep * 0.4
+      : micro.lookBurst * 1.05 + micro.lookSweep * (idleish ? 1.0 : 0.38)
   );
   const headYaw = (
-    gazeX * (observing ? 0.58 : working ? 0.36 : idleish ? 0.52 : 0.42)
-    + look * (observing ? 0.68 : idleish ? 0.58 : 0.5)
-    - bodyYaw * 0.2
-    + digAmt * 0.14 * (idleish ? 1 : 0)
-    + ants * Math.sin(elapsed * 1.1) * 0.06
-    + dazedAmt * Math.sin(elapsed * 1.7) * 0.22
-    + yawnAmt * Math.sin(elapsed * 2.2) * 0.04
-    + fidgetAmt * Math.sin(elapsed * 3.1) * 0.08
-    + waveLiteAmt * 0.06
+    gazeX * (observing ? 0.68 : working ? 0.42 : idleish ? 0.62 : 0.48)
+    + look * (observing ? 0.78 : idleish ? 0.68 : 0.55)
+    - bodyYaw * 0.18
+    + digAmt * 0.16 * (idleish ? 1 : 0)
+    + ants * Math.sin(elapsed * 1.15) * 0.08
+    + dazedAmt * Math.sin(elapsed * 1.75) * 0.28
+    + yawnAmt * Math.sin(elapsed * 2.2) * 0.05
+    + fidgetAmt * Math.sin(elapsed * 3.2) * 0.1
+    + waveLiteAmt * 0.08
   ) * m;
   const headPitch = (
-    gazeY * (observing ? 0.3 : idleish ? 0.22 : 0.16)
-    + (sleeping ? 0.2 : 0)
-    + pose.slump * 0.62
-    + yawnAmt * -0.14
-    + Math.sin(elapsed * 0.95) * 0.04 * pose.lookAround
-    + digAmt * 0.16 * (idleish ? 1 : 0)
-    + ants * 0.26
-    + dazedAmt * 0.14
-    + sadAmt * 0.1
-    + idleBounce * -0.022 * (idleish ? 1 : 0)
-    + fidgetAmt * 0.04
-    + (working ? 0.06 : 0)
+    gazeY * (observing ? 0.36 : idleish ? 0.28 : 0.18)
+    + (sleeping ? 0.24 : 0)
+    + pose.slump * 0.72
+    + yawnAmt * -0.18
+    + Math.sin(elapsed * 0.98) * 0.05 * pose.lookAround
+    + digAmt * 0.2 * (idleish ? 1 : 0)
+    + ants * 0.32
+    + dazedAmt * 0.18
+    + sadAmt * 0.14
+    + idleBounce * -0.03 * (idleish ? 1 : 0)
+    + fidgetAmt * 0.05
+    + (working ? 0.08 : 0)
   ) * m;
 
   const blinkGateL = micro.blinkL || Math.sin(elapsed * 1.08) > 0.986;
@@ -946,21 +962,25 @@ export function sampleBuiltinPetMotion(
   const eyeScaleYR = eyeScaleYRRaw * m + 1 * (1 - m);
   const eyeScaleY = (eyeScaleYL + eyeScaleYR) * 0.5;
 
+  // Eye IK: snappy gaze follow inside large goggles (Bob "big eyes" read).
   const irisX = (
-    gazeX * (observing ? 0.1 : idleish ? 0.068 : 0.055)
-    + look * (observing ? 0.065 : idleish ? 0.042 : 0.038)
-    + micro.lookSweep * (observing ? 0.02 : idleish ? 0.022 : 0.012) * pose.lookAround
-    + ants * Math.sin(elapsed * 1.35) * 0.012
-    + dazedAmt * Math.sin(elapsed * 3.1) * 0.03
-    + fidgetAmt * Math.sin(elapsed * 2.6) * 0.008
+    gazeX * (observing ? 0.13 : idleish ? 0.095 : 0.07)
+    + look * (observing ? 0.08 : idleish ? 0.055 : 0.045)
+    + micro.lookSweep * (observing ? 0.028 : idleish ? 0.03 : 0.016) * pose.lookAround
+    + ants * Math.sin(elapsed * 1.4) * 0.016
+    + dazedAmt * Math.sin(elapsed * 3.2) * 0.04
+    + fidgetAmt * Math.sin(elapsed * 2.7) * 0.012
+    + digAmt * 0.01 * (idleish ? 1 : 0)
   ) * m;
   const irisY = (
-    gazeY * (observing ? 0.06 : idleish ? 0.038 : 0.032)
-    + (sleeping ? 0.025 : 0)
-    + ants * 0.045
-    + idleBounce * -0.01 * (idleish ? 1 : 0)
-    + dazedAmt * Math.cos(elapsed * 2.6) * 0.02
-    + fidgetAmt * 0.006
+    gazeY * (observing ? 0.08 : idleish ? 0.055 : 0.04)
+    + (sleeping ? 0.03 : 0)
+    + ants * 0.055
+    + idleBounce * -0.014 * (idleish ? 1 : 0)
+    + dazedAmt * Math.cos(elapsed * 2.7) * 0.028
+    + fidgetAmt * 0.01
+    + digAmt * 0.02 * (idleish ? 1 : 0)
+    + sadAmt * 0.015
   ) * m;
 
   const digArm = digAmt * 0.62 * (idleish || directedDig ? 1 : 0);
@@ -1041,24 +1061,27 @@ export function sampleBuiltinPetMotion(
 
   const mouthOpen = (
     sleeping
-      ? 0.06 + Math.max(0, Math.sin(elapsed * 0.85)) * 0.04
-      : yawnAmt * 0.62
-        + (playing ? 0.14 + Math.sin(elapsed * 4) * 0.06 : 0.02)
-        + dazedAmt * 0.1
-        + sadAmt * 0.04
-        + (idleish ? digAmt * 0.12 : 0)
-        + ants * 0.04 * Math.max(0, Math.sin(elapsed * 3.1))
+      ? 0.08 + Math.max(0, Math.sin(elapsed * 0.78)) * 0.05
+      : yawnAmt * 0.82
+        + (playing ? 0.18 + Math.sin(elapsed * 4.2) * 0.08 : 0.025)
+        + dazedAmt * 0.14
+        + sadAmt * 0.05
+        + (idleish ? digAmt * 0.14 : 0)
+        + ants * 0.05 * Math.max(0, Math.sin(elapsed * 3.1))
+        + hopLiteAmt * 0.04
   ) * m;
   // +1 smile (classic) · -1 frown for sad / connector offline mood.
   const mouthSmile = MathUtils.clamp(
-    (playing || emotion === "happy" || emotion === "excited" ? 1 : 0.82)
-      - sadAmt * 1.7
-      - dazedAmt * 0.55
-      - yawnAmt * 0.12
-      + (idleish ? micro.cheekPulse * 0.08 : 0),
+    (playing || emotion === "happy" || emotion === "excited" ? 1 : 0.86)
+      - sadAmt * 1.85
+      - dazedAmt * 0.7
+      - yawnAmt * 0.18
+      - (working ? 0.12 : 0)
+      + (idleish ? micro.cheekPulse * 0.1 : 0)
+      + hopLiteAmt * 0.05,
     -1,
     1,
-  ) * m + 0.82 * (1 - m);
+  ) * m + 0.86 * (1 - m);
 
   const sweatPulse = working || dazedAmt
     ? pose.sweat * (0.55 + 0.45 * (0.5 + 0.5 * Math.sin(elapsed * 4.2)))
@@ -1076,14 +1099,15 @@ export function sampleBuiltinPetMotion(
 
   // Hair lag target: opposite head pitch + root hop + idle sway (bounce stays pose-only).
   const hairSway = (
-    -headPitch * 0.68
-    + rootY * 0.48
-    + Math.sin(elapsed * 2.35) * 0.065 * (idleish ? 1 : 0.35)
-    + bodyTilt * 0.22
-    + ants * 0.08
-    + digNose * 0.06
-    + fidgetAmt * 0.05
-    + hopLiteAmt * 0.04
+    -headPitch * 0.78
+    + rootY * 0.58
+    + Math.sin(elapsed * 2.5) * 0.09 * (idleish ? 1 : 0.4)
+    + bodyTilt * 0.28
+    + ants * 0.1
+    + digNose * 0.08
+    + fidgetAmt * 0.07
+    + hopLiteAmt * 0.06
+    + hopWave * 0.12
   ) * m;
 
   // Cheek flush: celebrate, work stress, yawns, dig-nose, and ambient pulse.
@@ -1170,48 +1194,52 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
 
     const scene = new Scene();
     scene.background = null;
-    // Frustum frames tall dual-goggle pill + boots (transparent, no plate).
-    // Extra vertical room so crown tufts + boots + dual contact shadow never clip.
-    const camera = new OrthographicCamera(-2.65, 2.65, 3.2, -2.7, 0.1, 100);
-    camera.position.set(0, -0.08, 8);
-    scene.add(new AmbientLight(0xfff6e0, 2.45));
-    const keyLight = new DirectionalLight(0xfff8ee, 4.0);
-    keyLight.position.set(-2.8, 5.2, 6.8);
+    // Frustum frames chubbier dual-goggle pill + boots + dual contact shadow.
+    // Slight bottom bias so feet/shadow stand solid in 260×320 canvas without clipping crown.
+    const camera = new OrthographicCamera(-2.42, 2.42, 2.68, -2.58, 0.1, 100);
+    camera.position.set(0, -0.06, 8);
+    scene.add(new AmbientLight(0xfff6e0, 3.05));
+    const keyLight = new DirectionalLight(0xfffaf2, 4.35);
+    keyLight.position.set(-2.4, 5.0, 6.4);
     scene.add(keyLight);
-    const fillLight = new DirectionalLight(0xd8e8ff, 1.45);
-    fillLight.position.set(3.0, 1.6, 2.6);
+    const fillLight = new DirectionalLight(0xeaf4ff, 1.85);
+    fillLight.position.set(3.1, 1.8, 2.8);
     scene.add(fillLight);
-    const rimLight = new DirectionalLight(0x9ad8ff, 2.2);
-    rimLight.position.set(3.6, 1.8, -2.2);
+    const rimLight = new DirectionalLight(0xb8e6ff, 2.2);
+    rimLight.position.set(3.4, 2.0, -2.0);
     scene.add(rimLight);
+    // Soft front bounce so candy yellow stays soft on dark wallpapers.
+    const bounce = new DirectionalLight(0xfff2b0, 1.35);
+    bounce.position.set(0.15, -2.2, 4.4);
+    scene.add(bounce);
 
     const root = new Group();
-    // Fit full Q-minion (crown tufts → boots → dual shadow) inside ortho frustum.
-    root.scale.setScalar(0.88);
-    root.position.y = 0.04;
+    // Full Q-Bob (crown → boots → dual shadow) slightly low for grounded read.
+    root.scale.setScalar(0.98);
+    root.position.y = -0.06;
     scene.add(root);
 
     const layout = Q_MINION_LAYOUT;
     const colors = Q_MINION_COLORS;
 
-    // Dual contact shadow: soft wide pool + denser core under boots (grounded, no plate).
+    // Dual contact shadow: soft wide pool + denser core glued under boots (no plate).
     const shadowTexture = createContactShadowTexture(192);
     const contactShadow = new Mesh(
-      new CircleGeometry(1.48, 64),
+      new CircleGeometry(1.42, 64),
       new MeshBasicMaterial({ map: shadowTexture, transparent: true, opacity: 1, depthWrite: false }),
     );
     contactShadow.rotation.x = -Math.PI / 2;
-    contactShadow.position.set(0, layout.shadowY - 0.02, 0.05);
-    contactShadow.scale.set(1.14, 1, 0.52);
+    contactShadow.position.set(0, layout.shadowY, 0.04);
+    contactShadow.scale.set(1.08, 1, 0.48);
     root.add(contactShadow);
 
     const shadowCore = new Mesh(
-      new CircleGeometry(0.68, 48),
-      new MeshBasicMaterial({ map: shadowTexture, transparent: true, opacity: 0.78, depthWrite: false }),
+      new CircleGeometry(0.62, 48),
+      new MeshBasicMaterial({ map: shadowTexture, transparent: true, opacity: 0.84, depthWrite: false }),
     );
     shadowCore.rotation.x = -Math.PI / 2;
-    shadowCore.position.set(0, layout.shadowY - 0.01, 0.08);
-    shadowCore.scale.set(0.92, 1, 0.55);
+    shadowCore.position.set(0, layout.shadowY + 0.005, 0.07);
+    shadowCore.scale.set(0.88, 1, 0.5);
     root.add(shadowCore);
 
     const body = new Group();
@@ -1220,40 +1248,40 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
     head.position.set(0, layout.headY, 0.05);
     body.add(head);
 
-    // Soft warm Q-minion materials: gentle clearcoat, muted metal (no chrome plate).
-    const yellow = material(colors.yellow, 0.38, 0.78, colors.yellowEmissive, 0.09);
-    const yellowLight = material(colors.yellowLight, 0.34, 0.84, colors.yellowEmissive, 0.11);
-    const graphite = material(colors.graphite, 0.34, 0.48);
-    const goggleBand = material(colors.goggleBand, 0.42, 0.36);
-    const metal = metallicMaterial(colors.metal, 0.36, 0.58);
-    const glass = material(colors.iris, 0.16, 0.86, colors.irisEmissive, 0.24);
-    const white = material(colors.sclera, 0.55, 0.34);
-    const coral = material(colors.blush, 0.58, 0.32, "#d83d2c", 0.05);
-    const denim = material(colors.denim, 0.76, 0.14);
-    const denimSoft = material(colors.denimSoft, 0.72, 0.18);
-    const denimDeep = material(colors.denimDeep, 0.78, 0.12);
-    const gloveMat = material(colors.glove, 0.52, 0.18);
+    // Soft candy Q-Bob materials: rubbery clearcoat, brushed metal buckles (no chrome plate).
+    const yellow = material(colors.yellow, 0.42, 0.72, colors.yellowEmissive, 0.22);
+    const yellowLight = material(colors.yellowLight, 0.38, 0.78, colors.yellowEmissive, 0.18);
+    const graphite = material(colors.graphite, 0.4, 0.42);
+    const goggleBand = material(colors.goggleBand, 0.48, 0.28);
+    const metal = metallicMaterial(colors.metal, 0.42, 0.48);
+    const glass = material(colors.iris, 0.2, 0.9, colors.irisEmissive, 0.28);
+    const white = material(colors.sclera, 0.48, 0.4);
+    const coral = material(colors.blush, 0.62, 0.28, "#d83d2c", 0.06);
+    const denim = material(colors.denim, 0.8, 0.1);
+    const denimSoft = material(colors.denimSoft, 0.76, 0.12);
+    const denimDeep = material(colors.denimDeep, 0.82, 0.08);
+    const gloveMat = material(colors.glove, 0.56, 0.14);
     const bootMat = material(colors.boot, 0.62, 0.14);
     const bootSoleMat = material(colors.bootSole, 0.74, 0.08);
     const hairMat = material(colors.hair, 0.48, 0.16);
 
-    // Tall warm yellow capsule body (classic pill silhouette, not a box/plate).
+    // Chubby warm yellow capsule (Q-pill silhouette, never a box/plate).
     const torso = makeMesh(
-      new CapsuleGeometry(layout.bodyRadius, layout.bodyLength, 22, 56),
+      new CapsuleGeometry(layout.bodyRadius, layout.bodyLength, 20, 48),
       yellow,
       [0, layout.bodyY, 0],
-      [1.02, 1.0, 0.94],
+      [1.05, 0.98, 0.96],
     );
     body.add(torso);
     // Soft front belly highlight — rounded lifeform, not a flat plate.
-    const belly = makeMesh(new SphereGeometry(0.58, 32, 24), yellowLight, [0, -0.12, 0.62], [1.08, 1.12, 0.4]);
+    const belly = makeMesh(new SphereGeometry(0.62, 28, 20), yellowLight, [0, -0.08, 0.66], [1.12, 1.08, 0.42]);
     body.add(belly);
     // Soft crown dome blends into the capsule (keeps Q-round top).
-    const crown = makeMesh(new SphereGeometry(0.9, 48, 36), yellowLight, [0, 0.22, 0.02], [1.02, 0.78, 0.9]);
+    const crown = makeMesh(new SphereGeometry(0.92, 40, 32), yellowLight, [0, 0.18, 0.02], [1.04, 0.76, 0.92]);
     head.add(crown);
     // Tiny coral antenna: soft secondary spring accent (Q personalization).
-    const antennaStem = makeMesh(new CapsuleGeometry(0.024, 0.18, 6, 12), metal, [0.16, 0.94, 0.02], [1, 1, 1]);
-    const antennaTip = makeMesh(new SphereGeometry(0.068, 16, 12), coral, [0.16, 1.08, 0.02], [1, 1, 1]);
+    const antennaStem = makeMesh(new CapsuleGeometry(0.022, 0.16, 6, 10), metal, [0.14, 0.86, 0.02], [1, 1, 1]);
+    const antennaTip = makeMesh(new SphereGeometry(0.062, 14, 10), coral, [0.14, 0.98, 0.02], [1, 1, 1]);
     head.add(antennaStem, antennaTip);
 
     // Sparse black hair tufts (spring-damper secondary only).
@@ -1263,27 +1291,27 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
     const hairTufts: Mesh[] = [];
     const hairSpecs = qMinionHairTuftSpecs().map((spec) => [...spec] as [number, number, number, number]);
     for (const [hx, hy, hz, tilt] of hairSpecs) {
-      const tuft = makeMesh(new CapsuleGeometry(0.022, 0.22, 6, 12), hairMat, [hx, hy, hz], [0.85, 1.25, 0.72]);
+      const tuft = makeMesh(new CapsuleGeometry(0.02, 0.26, 6, 10), hairMat, [hx, hy, hz], [0.82, 1.35, 0.7]);
       tuft.rotation.z = tilt;
-      tuft.rotation.x = -0.42;
+      tuft.rotation.x = -0.48;
       hairGroup.add(tuft);
       hairTufts.push(tuft);
     }
 
     // Black goggle strap wrapping the head (classic band — no square chrome frame).
-    const strap = makeMesh(new TorusGeometry(0.9, 0.078, 14, 64), goggleBand, [0, 0.05, 0], [1.04, 0.72, 1.02]);
+    const strap = makeMesh(new TorusGeometry(0.94, 0.072, 12, 56), goggleBand, [0, 0.02, 0], [1.05, 0.7, 1.03]);
     strap.rotation.x = Math.PI / 2;
     head.add(strap);
-    const strapBridge = makeMesh(new CapsuleGeometry(0.055, 0.22, 8, 18), goggleBand, [0, 0.05, 0.9], [1.1, 0.48, 0.48]);
+    const strapBridge = makeMesh(new CapsuleGeometry(0.05, 0.2, 8, 16), goggleBand, [0, 0.02, 0.94], [1.08, 0.45, 0.45]);
     strapBridge.rotation.z = Math.PI / 2;
     head.add(strapBridge);
     for (const side of [-1, 1] as const) {
-      const sidePad = makeMesh(new CapsuleGeometry(0.07, 0.22, 8, 16), goggleBand, [side * 0.78, 0.05, 0.38], [1, 0.62, 0.5]);
+      const sidePad = makeMesh(new CapsuleGeometry(0.068, 0.2, 8, 14), goggleBand, [side * 0.82, 0.02, 0.4], [1, 0.58, 0.48]);
       sidePad.rotation.y = side * 0.55;
       head.add(sidePad);
     }
 
-    // Dual large goggles: soft metal rim + white sclera + brown iris (classic, not square frame).
+    // Dual oversized goggles: soft metal rim + white sclera + warm brown iris + dual catchlights.
     const eyeGroups: Group[] = [];
     const irises: Mesh[] = [];
     const pupils: Mesh[] = [];
@@ -1293,13 +1321,14 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
       const [ex, ey, ez] = qMinionGogglePose(side);
       eyeGroup.position.set(ex, ey, ez);
       // Soft silver rim (round), not a chrome plate.
-      const rim = makeMesh(new TorusGeometry(gR, 0.062, 16, 48), metal, [0, 0, 0.02], [1, 1.02, 0.52]);
-      const rimInner = makeMesh(new TorusGeometry(gR * 0.9, 0.022, 12, 36), goggleBand, [0, 0, 0.04], [1, 1.02, 0.42]);
-      const eye = makeMesh(new SphereGeometry(gR * 0.9, 36, 28), white, [0, 0, 0.05], [1, 1.04, 0.36]);
-      const iris = makeMesh(new SphereGeometry(gR * 0.48, 28, 22), glass, [0, -0.004, 0.15], [1, 1, 0.42]);
-      const pupil = makeMesh(new SphereGeometry(gR * 0.22, 22, 18), graphite, [0, -0.004, 0.22], [1, 1, 0.42]);
-      const shine = makeMesh(new SphereGeometry(0.045, 14, 12), white, [0.07, 0.06, 0.26], [1, 1, 0.5]);
-      const shineSoft = makeMesh(new SphereGeometry(0.022, 12, 10), white, [-0.05, -0.04, 0.24], [1, 1, 0.42]);
+      const rim = makeMesh(new TorusGeometry(gR, 0.068, 14, 42), metal, [0, 0, 0.02], [1, 1.02, 0.5]);
+      const rimInner = makeMesh(new TorusGeometry(gR * 0.9, 0.02, 10, 32), goggleBand, [0, 0, 0.04], [1, 1.02, 0.4]);
+      const eye = makeMesh(new SphereGeometry(gR * 0.9, 32, 24), white, [0, 0, 0.05], [1, 1.04, 0.34]);
+      const iris = makeMesh(new SphereGeometry(gR * 0.5, 24, 18), glass, [0, -0.006, 0.16], [1, 1, 0.4]);
+      const pupil = makeMesh(new SphereGeometry(gR * 0.23, 18, 14), graphite, [0, -0.006, 0.23], [1, 1, 0.4]);
+      // Dual catchlights for glossy "alive" eyes.
+      const shine = makeMesh(new SphereGeometry(0.055, 12, 10), white, [0.09, 0.08, 0.28], [1, 1, 0.48]);
+      const shineSoft = makeMesh(new SphereGeometry(0.028, 10, 8), white, [-0.06, -0.05, 0.26], [1, 1, 0.4]);
       eyeGroup.add(rim, rimInner, eye, iris, pupil, shine, shineSoft);
       head.add(eyeGroup);
       eyeGroups.push(eyeGroup);
@@ -1307,8 +1336,8 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
       pupils.push(pupil);
     }
 
-    // Soft smile arc.
-    const mouth = makeMesh(new TorusGeometry(0.17, 0.028, 10, 28, Math.PI), graphite, [0, -0.4, 0.86], [1.05, 0.7, 0.48]);
+    // Soft smile arc (flips to frown via rotation spring).
+    const mouth = makeMesh(new TorusGeometry(0.18, 0.03, 10, 28, Math.PI), graphite, [0, -0.42, 0.9], [1.08, 0.72, 0.46]);
     mouth.rotation.z = Math.PI;
     head.add(mouth);
     const cheekMatL = coral.clone();
@@ -1317,68 +1346,79 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
     const cheekMatR = coral.clone();
     cheekMatR.transparent = true;
     cheekMatR.opacity = 0.48;
-    const cheekLeft = makeMesh(new SphereGeometry(0.085, 18, 12), cheekMatL, [-0.66, -0.32, 0.76], [1.38, 0.54, 0.28]);
-    const cheekRight = makeMesh(new SphereGeometry(0.085, 18, 12), cheekMatR, [0.66, -0.32, 0.76], [1.38, 0.54, 0.28]);
+    const cheekLeft = makeMesh(new SphereGeometry(0.09, 16, 12), cheekMatL, [-0.7, -0.34, 0.8], [1.42, 0.56, 0.28]);
+    const cheekRight = makeMesh(new SphereGeometry(0.09, 16, 12), cheekMatR, [0.7, -0.34, 0.8], [1.42, 0.56, 0.28]);
     head.add(cheekLeft, cheekRight);
 
-    // Blue denim overalls: pants, bib, clear straps, front pocket + metal buttons.
-    const overalls = makeMesh(new CapsuleGeometry(0.86, 0.58, 14, 40), denim, [0, layout.overallY, 0.02], [1.04, 0.96, 0.94]);
-    const overallBib = makeMesh(new SphereGeometry(0.72, 42, 30), denimDeep, [0, -0.42, 0.42], [0.96, 0.78, 0.55]);
+    // Blue denim overalls: pants, bib, springy straps, pocket + metal buckles.
+    const overalls = makeMesh(new CapsuleGeometry(0.9, 0.52, 12, 36), denim, [0, layout.overallY, 0.02], [1.06, 0.94, 0.96]);
+    const overallBib = makeMesh(new SphereGeometry(0.74, 36, 26), denimDeep, [0, -0.36, 0.46], [0.98, 0.74, 0.56]);
     // Front pocket with flap — classic overalls tell.
-    const overallPocket = makeMesh(new CapsuleGeometry(0.16, 0.22, 10, 24), denimSoft, [0, -0.58, 0.92], [1.42, 0.88, 0.22]);
+    const overallPocket = makeMesh(new CapsuleGeometry(0.15, 0.24, 8, 20), denimSoft, [0, -0.52, 0.96], [1.45, 0.86, 0.2]);
     overallPocket.rotation.z = Math.PI / 2;
-    const pocketFlap = makeMesh(new CapsuleGeometry(0.06, 0.32, 8, 16), denim, [0, -0.46, 0.96], [1.2, 0.4, 0.18]);
+    const pocketFlap = makeMesh(new CapsuleGeometry(0.055, 0.34, 8, 14), denim, [0, -0.4, 1.0], [1.22, 0.38, 0.16]);
     pocketFlap.rotation.z = Math.PI / 2;
-    const pocketStitch = makeMesh(new CapsuleGeometry(0.02, 0.28, 6, 12), denimDeep, [0, -0.58, 0.98], [1.05, 0.35, 0.14]);
+    const pocketStitch = makeMesh(new CapsuleGeometry(0.018, 0.3, 6, 10), denimDeep, [0, -0.52, 1.02], [1.05, 0.32, 0.12]);
     pocketStitch.rotation.z = Math.PI / 2;
     body.add(overalls, overallBib, overallPocket, pocketFlap, pocketStitch);
+    const overallStrapMeshes: Mesh[] = [];
+    const strapBaseRotZ: number[] = [];
     for (const side of [-1, 1] as const) {
       const strapPose = qMinionOverallStrapPose(side);
       const overallStrap = makeMesh(
-        new CapsuleGeometry(0.068, 0.92, 8, 20),
+        new CapsuleGeometry(0.07, 0.88, 8, 18),
         denimSoft,
         [strapPose.strap[0], strapPose.strap[1], strapPose.strap[2]],
-        [1, 1, 0.38],
+        [1, 1, 0.36],
       );
       overallStrap.rotation.z = strapPose.rotationZ;
+      overallStrapMeshes.push(overallStrap);
+      strapBaseRotZ.push(strapPose.rotationZ);
       // Shoulder pad where strap meets yellow body.
       const strapPad = makeMesh(
-        new SphereGeometry(0.1, 16, 12),
+        new SphereGeometry(0.1, 14, 10),
         denim,
-        [side * 0.48, 0.18, 0.62],
-        [1.05, 0.55, 0.55],
+        [side * 0.5, 0.2, 0.66],
+        [1.08, 0.52, 0.52],
       );
+      // Metal buckle: disc + dark center dimple (readable hardware, not a plate).
       const button = makeMesh(
-        new SphereGeometry(0.075, 18, 12),
+        new SphereGeometry(0.082, 16, 12),
         metal,
         [strapPose.button[0], strapPose.button[1], strapPose.button[2]],
-        [1, 1, 0.32],
+        [1, 1, 0.28],
       );
-      body.add(overallStrap, strapPad, button);
+      const buttonDimple = makeMesh(
+        new SphereGeometry(0.032, 12, 10),
+        graphite,
+        [strapPose.button[0], strapPose.button[1], strapPose.button[2] + 0.03],
+        [1, 1, 0.2],
+      );
+      body.add(overallStrap, strapPad, button, buttonDimple);
     }
 
     const arms: Group[] = [];
     const feet: Group[] = [];
     for (const side of [-1, 1] as const) {
       const arm = new Group();
-      arm.position.set(side * layout.armX, -0.22, 0.02);
-      const upperArm = makeMesh(new CapsuleGeometry(0.13, 0.48, 10, 24), yellow, [side * 0.08, -0.24, 0], [1, 1, 1]);
-      upperArm.rotation.z = side * -0.22;
+      arm.position.set(side * layout.armX, -0.18, 0.02);
+      const upperArm = makeMesh(new CapsuleGeometry(0.14, 0.44, 8, 20), yellow, [side * 0.08, -0.22, 0], [1, 1, 1]);
+      upperArm.rotation.z = side * -0.2;
       // Black mitten gloves (classic minion).
-      const mitten = makeMesh(new SphereGeometry(0.19, 24, 18), gloveMat, [side * 0.16, -0.58, 0.04], [1.08, 0.9, 0.88]);
-      const thumb = makeMesh(new SphereGeometry(0.075, 16, 12), gloveMat, [side * 0.32, -0.52, 0.1], [1, 0.72, 0.78]);
+      const mitten = makeMesh(new SphereGeometry(0.2, 20, 16), gloveMat, [side * 0.15, -0.54, 0.04], [1.1, 0.88, 0.9]);
+      const thumb = makeMesh(new SphereGeometry(0.078, 14, 10), gloveMat, [side * 0.32, -0.48, 0.1], [1, 0.7, 0.76]);
       arm.add(upperArm, mitten, thumb);
       body.add(arm);
       arms.push(arm);
 
       const foot = new Group();
-      foot.position.set(side * 0.38, layout.bootY, 0.14);
-      // Brown rounded boots with darker soles.
-      const boot = makeMesh(new CapsuleGeometry(0.22, 0.28, 8, 20), bootMat, [0, 0.03, 0.05], [1.2, 0.72, 1.28]);
+      foot.position.set(side * 0.4, layout.bootY, 0.12);
+      // Brown rounded boots with darker soles, slightly stubby for Q read.
+      const boot = makeMesh(new CapsuleGeometry(0.23, 0.26, 8, 18), bootMat, [0, 0.02, 0.04], [1.22, 0.7, 1.26]);
       boot.rotation.x = Math.PI / 2;
-      const bootToe = makeMesh(new SphereGeometry(0.16, 18, 14), bootMat, [0, -0.01, 0.26], [1.24, 0.7, 0.98]);
-      const bootCuff = makeMesh(new CapsuleGeometry(0.16, 0.08, 6, 14), bootMat, [0, 0.12, 0.02], [1.15, 0.7, 1.05]);
-      const sole = makeMesh(new CapsuleGeometry(0.2, 0.09, 6, 16), bootSoleMat, [0, -0.1, 0.06], [1.28, 0.42, 1.4]);
+      const bootToe = makeMesh(new SphereGeometry(0.17, 16, 12), bootMat, [0, -0.01, 0.26], [1.22, 0.68, 0.96]);
+      const bootCuff = makeMesh(new CapsuleGeometry(0.17, 0.07, 6, 12), bootMat, [0, 0.11, 0.02], [1.12, 0.68, 1.02]);
+      const sole = makeMesh(new CapsuleGeometry(0.21, 0.08, 6, 14), bootSoleMat, [0, -0.1, 0.05], [1.26, 0.4, 1.36]);
       sole.rotation.x = Math.PI / 2;
       foot.add(boot, bootToe, bootCuff, sole);
       body.add(foot);
@@ -1454,7 +1494,7 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
     let frame = 0;
     let disposed = false;
     // Spring-damper body + secondary (no linear body lerp). High omega tracks hop liveliness.
-    const springRootY = createSpringState(-0.02);
+    const springRootY = createSpringState(-0.01);
     const springScaleX = createSpringState(1);
     const springScaleY = createSpringState(1);
     const springBodyTilt = createSpringState(0);
@@ -1465,10 +1505,14 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
     const springArmR = createSpringState(0);
     const springEyeL = createSpringState(1);
     const springEyeR = createSpringState(1);
+    const springIrisX = createSpringState(0);
+    const springIrisY = createSpringState(0);
     const springSweat = createSpringState(0);
-    const springMouthSmile = createSpringState(0.82);
+    const springMouthSmile = createSpringState(0.86);
     const springHair = createSpringState(0);
     const springAntenna = createSpringState(0);
+    const springStrapL = createSpringState(0);
+    const springStrapR = createSpringState(0);
 
     const render = () => {
       if (disposed) return;
@@ -1492,14 +1536,14 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
       const elapsed = timer.getElapsed();
       const current = stateRef.current;
       const motion = reducedMotion.matches ? 0 : 1;
-      // VISUAL: soft eye/head IK lag (secondary spring only — no body travel lerp).
-      const softGazeX = springToward(springGazeX, gazeX, dt, 11.5, 0.86) * motion;
-      const softGazeY = springToward(springGazeY, gazeY, dt, 11.5, 0.86) * motion;
+      // VISUAL: snappier eye/head IK lag (secondary spring only — no body travel lerp).
+      const softGazeX = springToward(springGazeX, gazeX, dt, 15.5, 0.8) * motion;
+      const softGazeY = springToward(springGazeY, gazeY, dt, 15.5, 0.8) * motion;
       const sample = sampleBuiltinPetMotion(current.state, current.emotion, elapsed, softGazeX, softGazeY, motion);
       const playing = isPlaying(current.state);
 
       // Body channels: spring-damper only (never linear lerp). Play spin stays snappy via higher omega.
-      const bodyOmega = playing ? 22 : 16.5;
+      const bodyOmega = playing ? 24 : 17.5;
       const softRootY = springToward(springRootY, sample.rootY, dt, bodyOmega, 0.86);
       const softScaleX = springToward(springScaleX, sample.scaleX, dt, bodyOmega, 0.84);
       const softScaleY = springToward(springScaleY, sample.scaleY, dt, bodyOmega, 0.84);
@@ -1514,53 +1558,74 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
       const softSweat = springToward(springSweat, sample.sweat, dt, 9.5, 0.9);
       const softMouthSmile = springToward(springMouthSmile, sample.mouthSmile, dt, 11, 0.88);
 
-      root.position.y = softRootY;
-      body.scale.set(softScaleX, softScaleY, 1);
+      // Keep grounded framing offset; softRootY only adds motion (never linear travel).
+      root.position.y = -0.06 + softRootY;
+      body.scale.set(softScaleX, softScaleY, softScaleX * 0.98 + 0.02);
       body.rotation.z = softBodyTilt;
       body.rotation.y = softBodyYaw;
 
       head.rotation.y = softHeadYaw;
       head.rotation.x = softHeadPitch;
-      // Hair lag: spring-damper secondary (follows soft head pitch targets).
-      const hairLean = springToward(springHair, sample.hairSway, dt, 8.2, 0.9);
+      // Hair lag: lower-omega spring secondary (Verlet-like delay on crown tufts).
+      const hairLean = springToward(springHair, sample.hairSway, dt, 6.8, 0.86);
       hairGroup.rotation.x = hairLean;
-      hairGroup.rotation.z = Math.sin(elapsed * 1.7) * 0.05 * motion + sample.bodyTilt * 0.12;
+      hairGroup.rotation.z = Math.sin(elapsed * 1.85) * 0.07 * motion + sample.bodyTilt * 0.16;
       for (let i = 0; i < hairTufts.length; i += 1) {
-        hairTufts[i]!.rotation.z = hairSpecs[i]![3] + Math.sin(elapsed * 2.4 + i) * 0.08 * motion + hairLean * 0.15;
-        hairTufts[i]!.rotation.x = -0.42 + hairLean * 0.35 + Math.sin(elapsed * 1.9 + i) * 0.04 * motion;
+        hairTufts[i]!.rotation.z = hairSpecs[i]![3]
+          + Math.sin(elapsed * 2.6 + i) * 0.12 * motion
+          + hairLean * 0.22
+          + sample.bodyTilt * 0.08;
+        hairTufts[i]!.rotation.x = -0.48
+          + hairLean * 0.42
+          + Math.sin(elapsed * 2.1 + i) * 0.06 * motion
+          + sample.rootY * 0.15;
+      }
+      // Overall straps lag body tilt / hop (secondary spring, not body travel).
+      const strapTarget = sample.bodyTilt * 0.55 + sample.rootY * 0.35 + sample.hairSway * 0.12;
+      const strapLeanL = springToward(springStrapL, strapTarget + sample.armL * 0.04, dt, 7.5, 0.9);
+      const strapLeanR = springToward(springStrapR, -strapTarget + sample.armR * 0.04, dt, 7.5, 0.9);
+      if (overallStrapMeshes[0]) {
+        overallStrapMeshes[0].rotation.z = strapBaseRotZ[0]! + strapLeanL * 0.12;
+        overallStrapMeshes[0].rotation.x = strapLeanL * 0.08 + Math.sin(elapsed * 1.6) * 0.02 * motion;
+      }
+      if (overallStrapMeshes[1]) {
+        overallStrapMeshes[1].rotation.z = strapBaseRotZ[1]! + strapLeanR * 0.12;
+        overallStrapMeshes[1].rotation.x = strapLeanR * 0.08 + Math.sin(elapsed * 1.6 + 0.4) * 0.02 * motion;
       }
       // Antenna soft lag secondary (follows head pitch with spring delay — never lerp body hop).
       const antennaLean = springToward(
         springAntenna,
-        -sample.headPitch * 0.52 + sample.hairSway * 0.32 + sample.rootY * 0.18,
+        -sample.headPitch * 0.58 + sample.hairSway * 0.36 + sample.rootY * 0.22,
         dt,
-        10.5,
-        0.88,
+        9.2,
+        0.86,
       );
-      antennaStem.rotation.x = antennaLean * 0.62;
-      antennaStem.rotation.z = Math.sin(elapsed * 2.1) * 0.04 * motion;
-      antennaTip.position.y = 1.08 + antennaLean * 0.08;
-      antennaTip.position.x = 0.16 + Math.sin(elapsed * 2.8) * 0.014 * motion + antennaLean * 0.02;
-      antennaTip.scale.setScalar(1 + Math.sin(elapsed * 3.4) * 0.06 * motion);
+      antennaStem.rotation.x = antennaLean * 0.7;
+      antennaStem.rotation.z = Math.sin(elapsed * 2.2) * 0.05 * motion;
+      antennaTip.position.y = 0.98 + antennaLean * 0.09;
+      antennaTip.position.x = 0.14 + Math.sin(elapsed * 2.9) * 0.016 * motion + antennaLean * 0.025;
+      antennaTip.scale.setScalar(1 + Math.sin(elapsed * 3.5) * 0.07 * motion);
 
-      // Dual goggles: livelier asymmetric blink via spring + shared gaze IK.
+      // Dual goggles: livelier asymmetric blink + spring-smoothed iris IK.
       eyeGroups[0]!.scale.y = softEyeL;
       eyeGroups[1]!.scale.y = softEyeR;
+      const softIrisX = springToward(springIrisX, sample.irisX, dt, 18, 0.78);
+      const softIrisY = springToward(springIrisY, sample.irisY, dt, 18, 0.78);
       for (let i = 0; i < eyeGroups.length; i += 1) {
         const sideSign = i === 0 ? -1 : 1;
-        const eyeIrisX = sample.irisX + sideSign * 0.004 * motion;
+        const eyeIrisX = softIrisX + sideSign * 0.005 * motion;
         irises[i]!.position.x = eyeIrisX;
-        irises[i]!.position.y = -0.004 + sample.irisY;
-        pupils[i]!.position.x = eyeIrisX * 1.1;
-        pupils[i]!.position.y = -0.004 + sample.irisY * 1.1;
+        irises[i]!.position.y = -0.006 + softIrisY;
+        pupils[i]!.position.x = eyeIrisX * 1.12;
+        pupils[i]!.position.y = -0.006 + softIrisY * 1.12;
       }
 
       // Smile (π) ↔ frown (0) spring; open for yawn / play.
       const smileT = MathUtils.clamp((softMouthSmile + 1) * 0.5, 0, 1);
       mouth.rotation.z = Math.PI * smileT;
-      mouth.scale.y = 0.7 + sample.mouthOpen * 0.9;
-      mouth.position.y = -0.4 - sample.mouthOpen * 0.04 + (1 - smileT) * 0.03;
-      mouth.scale.x = 1.05 + sample.digNose * 0.08 + sample.countAnts * 0.05 + (1 - smileT) * 0.06;
+      mouth.scale.y = 0.72 + sample.mouthOpen * 1.05;
+      mouth.position.y = -0.42 - sample.mouthOpen * 0.05 + (1 - smileT) * 0.035;
+      mouth.scale.x = 1.08 + sample.digNose * 0.1 + sample.countAnts * 0.06 + (1 - smileT) * 0.08;
 
       arms[0]!.rotation.z = softArmL;
       arms[1]!.rotation.z = softArmR;
@@ -1574,13 +1639,13 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
       feet[0]!.rotation.z = sample.footLZ;
       feet[1]!.rotation.z = sample.footRZ;
 
-      // Dual contact shadow: denser when grounded, shrinks on hop.
-      contactShadow.scale.x = sample.shadowScale * 1.06;
-      contactShadow.scale.z = 0.54 * sample.shadowScale;
+      // Dual contact shadow: denser when grounded, shrinks on hop — glued under boots.
+      contactShadow.scale.x = sample.shadowScale * 1.02;
+      contactShadow.scale.z = 0.48 * sample.shadowScale;
       (contactShadow.material as MeshBasicMaterial).opacity = sample.shadowOpacity;
-      shadowCore.scale.x = sample.shadowScale * 0.9;
-      shadowCore.scale.z = 0.54 * sample.shadowScale;
-      (shadowCore.material as MeshBasicMaterial).opacity = MathUtils.clamp(sample.shadowOpacity * 0.82, 0.3, 0.88);
+      shadowCore.scale.x = sample.shadowScale * 0.86;
+      shadowCore.scale.z = 0.48 * sample.shadowScale;
+      (shadowCore.material as MeshBasicMaterial).opacity = MathUtils.clamp(sample.shadowOpacity * 0.9, 0.34, 0.92);
 
       const lagSweat = softSweat;
       const lagSparkle = sample.sparkle;
@@ -1632,7 +1697,22 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
       renderer.render(scene, camera);
     };
 
-    const resize = () => renderer.setSize(Math.max(canvas.clientWidth, 1), Math.max(canvas.clientHeight, 1), false);
+    const resize = () => {
+      const parent = canvas.parentElement;
+      const width = Math.max(
+        canvas.clientWidth,
+        parent?.clientWidth ?? 0,
+        260,
+      );
+      const height = Math.max(
+        canvas.clientHeight,
+        parent?.clientHeight ?? 0,
+        320,
+      );
+      renderer.setSize(width, height, false);
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+    };
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
     resize();

@@ -3,6 +3,7 @@ import { ProfileManager } from "./components/ProfileManager";
 import { PresenceSettings } from "./components/PresenceSettings";
 import { StartupSettings } from "./components/StartupSettings";
 import { LazyWorkspace } from "./components/LazyWorkspace";
+import { ActivitySceneWorkshop, RuntimeActivityPanel } from "./components/ActivitySceneWorkshop";
 import { LifeformOverview, buildLifeformSenseHintsFromSnapshot } from "./components/LifeformOverview";
 import { hostProcessBudgetFromDesktopSnapshot } from "./components/lifeformPerf";
 import { petItemPresentation } from "./components/petItems";
@@ -334,7 +335,7 @@ export function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">COMPANION SPACE</p>
-            <h1>{active}</h1>
+            <h1>{active === "活动" ? "创意工坊 / 活动场景" : active}</h1>
           </div>
           <div className="top-actions">
             <button
@@ -467,39 +468,12 @@ export function App() {
 }
 
 function ActivityWorkspace({ outbox }: { outbox: OutboxSnapshot | null }) {
-  const activities = runtimeActivities(outbox);
-  const queueHealthy = outbox?.deadLetter === 0;
   return (
-    <section className="activity-workspace" aria-labelledby="activity-workspace-heading">
-      <header className="activity-workspace-hero">
-        <div>
-          <p className="eyebrow">LOCAL ACTIVITY</p>
-          <h2 id="activity-workspace-heading">运行记录，一眼看清</h2>
-          <p>这里只展示本地运行健康与有界计数，不显示对话正文、提示词、文件路径或桌面内容。</p>
-        </div>
-        <span className={queueHealthy ? "healthy" : "attention"}>{outbox ? queueHealthy ? "运行健康" : "需要查看" : "正在读取"}</span>
-      </header>
-      <div className="activity-summary" aria-label="本地事件队列摘要">
-        <article><strong>{outbox?.pending ?? "—"}</strong><span>待投递</span></article>
-        <article><strong>{outbox?.leased ?? "—"}</strong><span>处理中</span></article>
-        <article><strong>{outbox?.delivered ?? "—"}</strong><span>已投递</span></article>
-        <article className={outbox?.deadLetter ? "attention" : ""}><strong>{outbox?.deadLetter ?? "—"}</strong><span>需处理</span></article>
-      </div>
-      <section className="activity-timeline" aria-labelledby="activity-health-heading">
-        <div className="section-heading">
-          <div><p className="card-label">本地健康摘要</p><h3 id="activity-health-heading">核心能力状态</h3></div>
-          <span>可见时每 10 秒刷新</span>
-        </div>
-        <ul>
-          {activities.map((activity) => (
-            <li key={activity.title}>
-              <span className={`activity-icon ${activity.tone}`} aria-hidden="true" />
-              <div><strong>{activity.title}</strong><p>{activity.meta}</p></div>
-              <span className="activity-local-badge">仅本地</span>
-            </li>
-          ))}
-        </ul>
-      </section>
+    <section className="activity-workspace activity-workspace--workshop" aria-labelledby="scene-workshop-heading">
+      <ActivitySceneWorkshop />
+      <aside className="activity-workspace-runtime" aria-label="运行记录">
+        <RuntimeActivityPanel outbox={outbox} activities={runtimeActivities(outbox)} />
+      </aside>
     </section>
   );
 }
