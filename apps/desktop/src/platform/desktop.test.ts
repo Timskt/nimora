@@ -99,7 +99,7 @@ describe("desktop platform adapter", () => {
   it("keeps browser preview fully offline", async () => {
     const api = createDesktopApi(false);
     expect(api.native).toBe(false);
-    expect((await api.snapshot()).pet.name).toBe("Aster");
+    expect((await api.snapshot()).pet.name).toBe("灵灵");
     await expect(api.drainEvents()).resolves.toEqual([]);
     await expect(api.outboxSnapshot()).resolves.toEqual({ pending: 0, leased: 0, delivered: 0, deadLetter: 0 });
     expect((await api.previewDiagnosticReport()).privacy).toEqual({

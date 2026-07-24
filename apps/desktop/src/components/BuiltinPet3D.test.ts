@@ -9,6 +9,7 @@ import {
   idlePerformancePhase,
   isClassicQMinionSilhouette,
   isDazedState,
+  isSadEmotion,
   normalizeMotionState,
   Q_MINION_COLORS,
   Q_MINION_LAYOUT,
@@ -49,6 +50,19 @@ describe("BuiltinPet3D behavior", () => {
     expect(isDazedState("idle", "wounded")).toBe(true);
     expect(isDazedState("idle", "neutral")).toBe(false);
     expect(builtinPetPose("crash", "neutral").eyeScale).toBeLessThan(0.9);
+  });
+
+  it("marks connector-offline mood as sad (not crash daze)", () => {
+    expect(isSadEmotion("sad")).toBe(true);
+    expect(isSadEmotion("lonely")).toBe(true);
+    expect(isSadEmotion("neutral")).toBe(false);
+    expect(isDazedState("idle", "sad")).toBe(false);
+    expect(builtinPetPose("idle", "sad").slump).toBeGreaterThan(builtinPetPose("idle", "neutral").slump);
+    const sad = sampleBuiltinPetMotion("idle", "sad", 1.2, 0, 0, 1);
+    const neutral = sampleBuiltinPetMotion("idle", "neutral", 1.2, 0, 0, 1);
+    expect(sad.mouthSmile).toBeLessThan(0);
+    expect(sad.mouthSmile).toBeLessThan(neutral.mouthSmile);
+    expect(sad.headPitch).toBeGreaterThan(neutral.headPitch);
   });
 
   it("exposes idle micro-performance gates", () => {

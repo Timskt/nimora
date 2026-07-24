@@ -63,9 +63,27 @@ export interface PetFacingHints {
   directiveSpeech?: string | null;
 }
 
+/** Privacy-safe desktop aggregates that make ambient speech feel aware (no titles). */
+export interface PetAmbientDesktopContext {
+  meetingActive?: boolean;
+  /** zoom | teams | meet | webex | unknown — never raw titles. */
+  meetingHint?: string | null;
+  batteryPercent?: number | null;
+  onBattery?: boolean;
+  charging?: boolean;
+  idleMs?: number | null;
+  notificationUnread?: boolean;
+  displayCount?: number;
+  degradationReason?: string | null;
+}
+
 export interface PetStatusOptions {
   /** Prefer host directive speech over ambient vitals status. */
   directiveSpeech?: string | null;
+  /** Autonomy sequence for healthy-idle line variety (QQ-pet style). */
+  sequence?: number | null;
+  /** Optional lifeform sense for contextual ambient speech. */
+  desktop?: PetAmbientDesktopContext | null;
 }
 
 /** Resolve left/right stage facing for walk cycles; speech keeps neutral attention. */
@@ -87,6 +105,32 @@ export function petFacing(
   return (pet.autonomy?.sequence ?? 0) % 2 === 0 ? "right" : "left";
 }
 
+const HEALTHY_IDLE_LINES = [
+  "在桌面上陪着你呢～",
+  "数了数桌角的光斑…",
+  "想不想摸摸我的护目镜？",
+  "我在这儿，不吵你工作",
+  "偷偷伸了个懒腰",
+  "本地陪伴中，随时叫我",
+] as const;
+
+function meetingSpeech(hint: string | null | undefined): string {
+  const token = (hint ?? "").toLowerCase();
+  if (token.includes("zoom")) return "会议中，我先安静靠边～";
+  if (token.includes("teams")) return "Teams 开会啦，我小声陪着";
+  if (token.includes("meet")) return "Meet 进行中，我先别蹦跳";
+  if (token.includes("webex")) return "会议模式，我贴边待命";
+  return "你好像在开会，我先安静一下";
+}
+
+function healthyIdleLine(sequence: number | null | undefined): string {
+  if (sequence == null || !Number.isFinite(sequence)) {
+    return HEALTHY_IDLE_LINES[0]!;
+  }
+  const index = Math.abs(Math.trunc(sequence)) % HEALTHY_IDLE_LINES.length;
+  return HEALTHY_IDLE_LINES[index]!;
+}
+
 /** Ambient status line; directive speech wins when the host is talking. */
 export function petStatusMessage(
   pet: Pick<Pet, "state" | "energy" | "mood" | "satiety" | "cleanliness">,
@@ -95,7 +139,35 @@ export function petStatusMessage(
   const directive = options?.directiveSpeech?.trim();
   if (directive) return directive;
 
-  switch (pet.state) {
+  const desktop = options?.desktop;
+  if (desktop?.meetingActive) {
+    return meetingSpeech(desktop.meetingHint);
+  }
+  if (desktop?.notificationUnread) {
+    return "好像有事等你看一眼～";
+  }
+  if (desktop?.degradationReason) {
+    return "桌面感知有点模糊，我慢慢来";
+  }
+  if (desktop?.charging) {
+    return "在充电诶，我也精神满满";
+  }
+  if (
+    desktop?.onBattery
+    && typeof desktop.batteryPercent === "number"
+    && desktop.batteryPercent <= 20
+  ) {
+    return "电量有点低，我轻一点活动";
+  }
+  if (typeof desktop?.idleMs === "number" && desktop.idleMs >= 10 * 60_000) {
+    return "你离开好一会儿啦，我守着桌面";
+  }
+  if (typeof desktop?.displayCount === "number" && desktop.displayCount > 1) {
+    if (pet.state === "walking") return "去隔壁屏幕逛逛";
+  }
+
+  const state = String(pet.state);
+  switch (state) {
     case "observing": return "正好奇地看看桌面";
     case "sleeping": return "正在安静恢复体力";
     case "walking": return "去桌面上走走看看";
@@ -104,12 +176,19 @@ export function petStatusMessage(
     case "working": return "正在专心陪你工作";
     case "dragged": return "抓稳啦…";
     case "interacting": return "很开心和你互动";
+    case "yawn": return "哈欠…再眯一会儿";
+    case "dig_nose": return "咦，鼻子有点痒";
+    case "count_ants": return "一、二、三…桌面有小蚂蚁？";
+    case "wave": return "嗨！看见你啦";
+    case "look_around": return "左看看，右看看";
+    case "hop": return "蹦一下！";
+    case "recovering": return "缓一缓就好…";
     default:
       if (pet.energy <= 25) return "有点困了，想休息一下";
       if (pet.satiety <= 25) return "肚子有点空，陪我吃点东西吧";
       if (pet.cleanliness <= 25) return "想整理一下，保持清清爽爽";
       if (pet.mood <= 25) return "今天想和你待一会儿";
-      return "本地陪伴中";
+      return healthyIdleLine(options?.sequence);
   }
 }
 
@@ -251,7 +330,7 @@ export function petSquashVars(scaleX = 1, scaleY = 1): Record<string, string> {
 }
 
 export const PET_BODY_WIDTH_PX = 260;
-export const PET_BODY_HEIGHT_PX = 300;
+export const PET_BODY_HEIGHT_PX = 320;
 
 export interface OverlayStageOrigin {
   originX: number;

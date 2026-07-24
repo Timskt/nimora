@@ -120,7 +120,7 @@ button:focus-visible { outline: 3px solid rgba(92, 115, 81, 0.32); outline-offse
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 
 html:has(body.pet-window), body.pet-window, .pet-window #root { width:100%; height:100%; min-width:0; min-height:0; margin:0; padding:0; overflow:hidden; background:transparent!important; background-color:transparent!important; background-image:none!important; box-shadow:none!important; border:0!important; outline:0!important; }
-body.pet-window { user-select: none; -webkit-user-select: none; scrollbar-width: none; --pet-bubble-background: rgba(255,252,247,.9); --pet-bubble-border: rgba(88,78,120,.04); --pet-bubble-text: #4f4960; --pet-bubble-shadow: 0 12px 28px rgba(48,38,92,.09), 0 2px 6px rgba(48,38,92,.03); --pet-scale-x: 1; --pet-scale-y: 1; --pet-body-width: 260px; --pet-body-height: 300px; --pet-logical-width: var(--pet-body-width); --pet-logical-height: var(--pet-body-height); --pet-local-x: 0px; --pet-local-y: 0px; --pet-offset-x: 0px; --pet-offset-y: 0px; --pet-ground-inset: 0px; }
+body.pet-window { user-select: none; -webkit-user-select: none; scrollbar-width: none; --pet-bubble-background: rgba(255,252,247,.9); --pet-bubble-border: rgba(88,78,120,.04); --pet-bubble-text: #4f4960; --pet-bubble-shadow: 0 12px 28px rgba(48,38,92,.09), 0 2px 6px rgba(48,38,92,.03); --pet-scale-x: 1; --pet-scale-y: 1; --pet-body-width: 260px; --pet-body-height: 320px; --pet-logical-width: var(--pet-body-width); --pet-logical-height: var(--pet-body-height); --pet-local-x: 0px; --pet-local-y: 0px; --pet-offset-x: 0px; --pet-offset-y: 0px; --pet-ground-inset: 0px; }
 body.pet-window::-webkit-scrollbar { width:0; height:0; display:none; }
 /* Full-viewport transparent stage; character is absolutely placed by logical screen-local coords. */
 .pet-window, .pet-overlay { width: 100vw; height: 100vh; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; overflow: hidden; background: transparent!important; box-shadow: none; outline: none; }
@@ -545,30 +545,28 @@ body.pet-window.pet-browser-preview { display: block; min-height: 100vh; overflo
   justify-self: end;
 }
 
-/* Soft pedestal stage: ambient desk light, not a boxed card frame */
+/* Soft pedestal stage: ambient desk light only — never a square clip box */
 .lifeform-stage {
   position: relative;
-  width: min(100%, 268px);
-  height: min(44vw, 292px);
-  max-height: 292px;
-  min-height: 228px;
+  width: min(100%, 280px);
+  height: min(48vw, 320px);
+  max-height: 320px;
+  min-height: 248px;
   margin: 0 auto;
-  border-radius: 40% 40% 34% 34% / 30% 30% 42% 42%;
-  overflow: hidden;
+  border-radius: 48% 48% 42% 42% / 36% 36% 48% 48%;
+  overflow: visible;
   isolation: isolate;
   background:
-    radial-gradient(ellipse 88% 42% at 50% 100%, rgba(72, 86, 58, 0.12), transparent 72%),
-    radial-gradient(ellipse 70% 48% at 50% 18%, rgba(255, 252, 244, 0.92), transparent 70%),
+    radial-gradient(ellipse 90% 38% at 50% 100%, rgba(72, 86, 58, 0.1), transparent 74%),
+    radial-gradient(ellipse 68% 44% at 50% 22%, rgba(255, 252, 244, 0.55), transparent 72%),
     linear-gradient(180deg,
-      rgba(255, 253, 248, 0.42) 0%,
-      rgba(238, 242, 232, 0.22) 48%,
-      rgba(220, 228, 212, 0.38) 100%);
+      rgba(255, 253, 248, 0.18) 0%,
+      rgba(238, 242, 232, 0.1) 52%,
+      rgba(220, 228, 212, 0.22) 100%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.62),
-    inset 0 -18px 28px rgba(92, 108, 74, 0.05),
-    0 10px 28px rgba(58, 68, 48, 0.07),
-    0 2px 8px rgba(58, 68, 48, 0.04);
-  border: 1px solid rgba(90, 104, 78, 0.06);
+    inset 0 -22px 32px rgba(92, 108, 74, 0.04),
+    0 14px 32px rgba(58, 68, 48, 0.05);
+  border: 0;
 }
 
 .lifeform-stage-floor {
@@ -609,10 +607,11 @@ body.pet-window.pet-browser-preview { display: block; min-height: 100vh; overflo
 
 .lifeform-stage-canvas {
   position: absolute;
-  inset: 10px 6px 8px;
+  inset: 4px 2px 2px;
   display: grid;
   place-items: center;
   z-index: 1;
+  overflow: visible;
 }
 
 .lifeform-stage-canvas .builtin-pet-3d {
@@ -2112,6 +2111,31 @@ body.pet-window.pet-browser-preview { display: block; min-height: 100vh; overflo
 
 @media (max-width: 720px) {
   .lifeform-perf-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Host process budget — distinct from render FPS cards, same soft language. */
+.lifeform-host-budget-grid {
+  border-color: rgba(120, 96, 160, 0.12);
+  background:
+    linear-gradient(180deg, rgba(252, 250, 255, 0.9), rgba(246, 244, 252, 0.7));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 6px 14px rgba(88, 72, 140, 0.04);
+}
+
+.lifeform-host-budget-cards {
+  grid-template-columns: 1fr 1fr;
+}
+
+.lifeform-host-budget-card {
+  border-color: rgba(120, 96, 160, 0.12);
+  background: rgba(255, 255, 253, 0.92);
+}
+
+@media (max-width: 720px) {
+  .lifeform-host-budget-cards {
     grid-template-columns: 1fr;
   }
 }

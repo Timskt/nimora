@@ -7,9 +7,10 @@
 //! enum is coarser.
 
 use nimora_runtime_core::{
-    agent_status_directive, auto_mode_directive, automation_directive, grant_directive,
-    AgentCompanionPhase, AttentionFocus, AutoModePetEvent, AutomationPhase, GrantPetEvent,
-    MoodDelta, PetDirectiveAction, StructuredPetDirective,
+    agent_status_directive, auto_mode_directive, automation_directive, connector_sensory_directive,
+    grant_directive, skill_worker_busy_directive, skill_worker_done_directive, AgentCompanionPhase,
+    AttentionFocus, AutoModePetEvent, AutomationPhase, ConnectorSenseKind, GrantPetEvent, MoodDelta,
+    PetDirectiveAction, StructuredPetDirective,
 };
 use tauri::AppHandle;
 
@@ -234,6 +235,108 @@ fn error_code_is_crash_like(error_code: Option<&str>) -> bool {
                 || code.contains("panic")
                 || code.contains("indeterminate")
                 || code == "execution-indeterminate"
+    )
+}
+
+/// Host wrapper for skill/worker busy body language (`WorkBusy` + Chinese speech).
+#[must_use]
+pub(crate) fn skill_worker_busy_host_directive(skill_name: Option<&str>) -> StructuredPetDirective {
+    with_host_spec(skill_worker_busy_directive(skill_name))
+}
+
+/// Host wrapper for skill/worker completion (`Celebrate`) or crash (`WorkCrash`).
+#[must_use]
+pub(crate) fn skill_worker_done_host_directive(ok: bool) -> StructuredPetDirective {
+    with_host_spec(skill_worker_done_directive(ok))
+}
+
+/// Host wrapper for connector/OS sensory phases (offline / degraded / restored / event).
+#[must_use]
+pub(crate) fn connector_sensory_host_directive(kind: ConnectorSenseKind) -> StructuredPetDirective {
+    with_host_spec(connector_sensory_directive(kind))
+}
+
+/// Connector sensory phase codes used by the host sample loop.
+/// `0` unknown · `1` healthy · `2` degraded · `3` offline-like.
+#[must_use]
+pub(crate) fn connector_sensory_phase(
+    snapshot_present: bool,
+    sensor_degraded: bool,
+    low_battery: bool,
+) -> u8 {
+    if !snapshot_present {
+        return 3;
+    }
+    if sensor_degraded || low_battery {
+        2
+    } else {
+        1
+    }
+}
+
+/// Pure transition table for connector petization.
+///
+/// Returns `None` when the host should stay quiet (same phase, first healthy, or
+/// non-announce recovery paths).
+#[must_use]
+pub(crate) fn connector_sensory_kind_for_transition(
+    previous: u8,
+    phase: u8,
+) -> Option<ConnectorSenseKind> {
+    if previous == phase {
+        return None;
+    }
+    // Stay quiet on first healthy sample; announce stress and recovery only.
+    if previous == 0 && phase == 1 {
+        return None;
+    }
+    match (previous, phase) {
+        (_, 3) => Some(ConnectorSenseKind::Offline),
+        (_, 2) => Some(ConnectorSenseKind::Degraded),
+        (2 | 3, 1) => Some(ConnectorSenseKind::OnlineRestored),
+        // Fail-closed: unknown phase codes never invent a sensory act.
+        _ => None,
+    }
+}
+
+/// Applies skill/worker busy body language (`WorkBusy` → sweat / tired).
+pub(crate) fn apply_skill_worker_busy(app: &AppHandle, skill_name: Option<&str>) {
+    let _ = super::apply_lifeform_directive_from_host(
+        app,
+        skill_worker_busy_host_directive(skill_name),
+    );
+}
+
+/// Applies skill/worker done (`Celebrate`) or crash/fail (`WorkCrash` → dizzy).
+pub(crate) fn apply_skill_worker_done(app: &AppHandle, ok: bool) {
+    let _ = super::apply_lifeform_directive_from_host(app, skill_worker_done_host_directive(ok));
+}
+
+/// Applies connector sensory directive when a transition kind is known.
+pub(crate) fn apply_connector_sensory(app: &AppHandle, kind: ConnectorSenseKind) {
+    let _ = super::apply_lifeform_directive_from_host(app, connector_sensory_host_directive(kind));
+}
+
+/// Fail-closed worker outcome parser used by host / FE-aligned tests.
+///
+/// Unknown tokens do **not** invent busy or crash body language.
+#[must_use]
+pub(crate) fn worker_outcome_from_status(status: Option<&str>) -> Option<bool> {
+    let token = status.map(str::trim).filter(|s| !s.is_empty())?.to_ascii_lowercase();
+    match token.as_str() {
+        "busy" | "running" | "working" | "starting" => None, // in-flight, not a done outcome
+        "ok" | "done" | "completed" | "succeeded" | "success" => Some(true),
+        "failed" | "fail" | "error" | "crash" | "crashed" | "panic" => Some(false),
+        _ => None, // fail-closed
+    }
+}
+
+/// True when status should emit worker-busy (`WorkBusy`) body language.
+#[must_use]
+pub(crate) fn worker_status_is_busy(status: Option<&str>) -> bool {
+    matches!(
+        status.map(str::trim).map(|s| s.to_ascii_lowercase()).as_deref(),
+        Some("busy") | Some("running") | Some("working") | Some("starting")
     )
 }
 
@@ -850,4 +953,117 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn skill_worker_busy_and_crash_host_directives() {
+        let busy = skill_worker_busy_host_directive(Some("summarize"));
+        assert_eq!(busy.spec, DIRECTIVE_SPEC_V1);
+        assert_eq!(busy.action, PetDirectiveAction::WorkBusy);
+        assert_eq!(busy.animation.as_deref(), Some("pet.work"));
+        assert!(busy.speech.as_deref().unwrap_or("").contains("summarize"));
+        busy.validate().expect("busy validates");
+
+        let anonymous = skill_worker_busy_host_directive(None);
+        assert_eq!(anonymous.speech.as_deref(), Some("技能跑起来了"));
+
+        let done_ok = skill_worker_done_host_directive(true);
+        assert_eq!(done_ok.action, PetDirectiveAction::Celebrate);
+        assert_eq!(done_ok.speech.as_deref(), Some("搞定啦！"));
+        done_ok.validate().expect("done ok");
+
+        let done_fail = skill_worker_done_host_directive(false);
+        assert_eq!(done_fail.action, PetDirectiveAction::WorkCrash);
+        assert_eq!(done_fail.speech.as_deref(), Some("刚才绊了一下"));
+        assert_eq!(done_fail.mood_delta, Some(MoodDelta { mood: -8 }));
+        done_fail.validate().expect("done fail");
+    }
+
+    #[test]
+    fn connector_offline_and_phase_transition_petize() {
+        let offline = connector_sensory_host_directive(ConnectorSenseKind::Offline);
+        assert_eq!(offline.spec, DIRECTIVE_SPEC_V1);
+        assert_eq!(offline.action, PetDirectiveAction::Rest);
+        assert_eq!(offline.speech.as_deref(), Some("线路好像断了"));
+        assert_eq!(offline.mood_delta, Some(MoodDelta { mood: -10 }));
+        offline.validate().expect("offline validates");
+
+        let restored = connector_sensory_host_directive(ConnectorSenseKind::OnlineRestored);
+        assert_eq!(restored.action, PetDirectiveAction::Celebrate);
+        assert_eq!(restored.speech.as_deref(), Some("线路通了"));
+
+        assert_eq!(connector_sensory_phase(false, false, false), 3);
+        assert_eq!(connector_sensory_phase(true, true, false), 2);
+        assert_eq!(connector_sensory_phase(true, false, true), 2);
+        assert_eq!(connector_sensory_phase(true, false, false), 1);
+
+        assert_eq!(
+            connector_sensory_kind_for_transition(1, 3),
+            Some(ConnectorSenseKind::Offline)
+        );
+        assert_eq!(
+            connector_sensory_kind_for_transition(1, 2),
+            Some(ConnectorSenseKind::Degraded)
+        );
+        assert_eq!(
+            connector_sensory_kind_for_transition(3, 1),
+            Some(ConnectorSenseKind::OnlineRestored)
+        );
+        assert_eq!(
+            connector_sensory_kind_for_transition(2, 1),
+            Some(ConnectorSenseKind::OnlineRestored)
+        );
+        // Quiet cases
+        assert_eq!(connector_sensory_kind_for_transition(1, 1), None);
+        assert_eq!(connector_sensory_kind_for_transition(0, 1), None);
+        assert_eq!(connector_sensory_kind_for_transition(1, 0), None);
+        // Fail-closed: garbage phase codes stay quiet.
+        assert_eq!(connector_sensory_kind_for_transition(1, 9), None);
+        assert_eq!(connector_sensory_kind_for_transition(9, 4), None);
+    }
+
+    #[test]
+    fn worker_status_mapping_is_fail_closed() {
+        assert!(worker_status_is_busy(Some("busy")));
+        assert!(worker_status_is_busy(Some("WORKING")));
+        assert!(worker_status_is_busy(Some("running")));
+        assert!(!worker_status_is_busy(Some("mystery")));
+        assert!(!worker_status_is_busy(None));
+        assert!(!worker_status_is_busy(Some("")));
+
+        assert_eq!(worker_outcome_from_status(Some("ok")), Some(true));
+        assert_eq!(worker_outcome_from_status(Some("completed")), Some(true));
+        assert_eq!(worker_outcome_from_status(Some("failed")), Some(false));
+        assert_eq!(worker_outcome_from_status(Some("crash")), Some(false));
+        // In-flight and unknown do not invent terminal outcomes.
+        assert_eq!(worker_outcome_from_status(Some("busy")), None);
+        assert_eq!(worker_outcome_from_status(Some("mystery")), None);
+        assert_eq!(worker_outcome_from_status(None), None);
+    }
+
+    #[test]
+    fn worker_busy_is_sweat_work_busy_and_fail_is_dizzy_work_crash() {
+        let busy = skill_worker_busy_host_directive(Some("local-infer"));
+        assert_eq!(busy.action, PetDirectiveAction::WorkBusy);
+        assert_eq!(busy.animation.as_deref(), Some("pet.work"));
+        assert_eq!(busy.attention, AttentionFocus::User);
+        assert!(busy.mood_delta.is_some());
+
+        let crash = skill_worker_done_host_directive(false);
+        assert_eq!(crash.action, PetDirectiveAction::WorkCrash);
+        assert_eq!(crash.animation.as_deref(), Some("pet.work"));
+        assert!(crash.mood_delta.is_some_and(|d| d.mood < 0));
+    }
+
+    #[test]
+    fn connector_offline_is_sad_rest_and_degraded_is_alert_observe() {
+        let offline = connector_sensory_host_directive(ConnectorSenseKind::Offline);
+        assert_eq!(offline.action, PetDirectiveAction::Rest);
+        assert_eq!(offline.attention, AttentionFocus::IdleScene);
+        assert!(offline.mood_delta.is_some_and(|d| d.mood < 0));
+
+        let degraded = connector_sensory_host_directive(ConnectorSenseKind::Degraded);
+        assert_eq!(degraded.action, PetDirectiveAction::Observe);
+        assert!(degraded.speech.as_deref().unwrap_or("").contains("信号"));
+    }
+
 }

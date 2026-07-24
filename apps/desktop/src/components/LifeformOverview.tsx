@@ -588,6 +588,26 @@ export function buildLifeformSubjectLinks(options?: {
   return links;
 }
 
+/** Render-budget card ids (FPS / frame / idle headroom). */
+const RENDER_BUDGET_CARD_IDS = new Set(["fps", "frame", "idle-budget"]);
+/** Host-process budget card ids (RSS / idle CPU). */
+const HOST_PROCESS_BUDGET_CARD_IDS = new Set(["memory", "cpu"]);
+
+/** Split「渲染预算」vs「主机进程预算」for Control Center clarity. */
+export function partitionPerfBudgetCards<T extends { id: string }>(cards: readonly T[]): {
+  render: T[];
+  hostProcess: T[];
+} {
+  const render: T[] = [];
+  const hostProcess: T[] = [];
+  for (const card of cards) {
+    if (HOST_PROCESS_BUDGET_CARD_IDS.has(card.id)) hostProcess.push(card);
+    else if (RENDER_BUDGET_CARD_IDS.has(card.id)) render.push(card);
+    else render.push(card);
+  }
+  return { render, hostProcess };
+}
+
 interface LifeformOverviewProps {
   pet?: LifeformPet | null | undefined;
   overlayStage?: OverlayStage | null | undefined;
@@ -675,7 +695,7 @@ export function LifeformOverview({
     [senseHints, snapshotHints, pet],
   );
 
-  const name = pet?.name?.trim() || "Aster";
+  const name = pet?.name?.trim() || "灵灵";
   const state = pet?.state ?? "idle";
   const emotion = pet?.emotion ?? "neutral";
   const energy = clampPercent(pet?.energy, 100);
@@ -693,6 +713,7 @@ export function LifeformOverview({
   const effectivePerfSummary = perfSummaryProp ?? livePerfSummary;
   const effectiveHostBudget = hostProcessBudgetProp ?? snapshotProcessBudget;
   const perfCards = buildPerfBudgetCards(effectivePerfSummary, effectiveHostBudget);
+  const { render: renderBudgetCards, hostProcess: hostProcessBudgetCards } = partitionPerfBudgetCards(perfCards);
   const subjectLinks = buildLifeformSubjectLinks({
     affinity: typeof pet?.affinity === "number" ? pet.affinity : null,
     energy: pet ? energy : null,
@@ -826,12 +847,27 @@ export function LifeformOverview({
           </div>
         ) : null}
 
-        {perfCards.length > 0 ? (
+        {renderBudgetCards.length > 0 ? (
           <div className="lifeform-sense-grid lifeform-perf-grid" aria-label="渲染预算">
             <span className="lifeform-section-label">渲染预算</span>
             <ul className="lifeform-sense-cards lifeform-perf-cards">
-              {perfCards.map((card) => (
+              {renderBudgetCards.map((card) => (
                 <li key={card.id} className={`lifeform-sense-card lifeform-perf-card tone-${card.tone}`}>
+                  <span className="lifeform-sense-label">{card.label}</span>
+                  <strong className="lifeform-sense-value">{card.value}</strong>
+                  {card.detail ? <small className="lifeform-sense-detail">{card.detail}</small> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {hostProcessBudgetCards.length > 0 ? (
+          <div className="lifeform-sense-grid lifeform-perf-grid lifeform-host-budget-grid" aria-label="主机进程预算">
+            <span className="lifeform-section-label">主机进程预算</span>
+            <ul className="lifeform-sense-cards lifeform-perf-cards lifeform-host-budget-cards">
+              {hostProcessBudgetCards.map((card) => (
+                <li key={card.id} className={`lifeform-sense-card lifeform-perf-card lifeform-host-budget-card tone-${card.tone}`}>
                   <span className="lifeform-sense-label">{card.label}</span>
                   <strong className="lifeform-sense-value">{card.value}</strong>
                   {card.detail ? <small className="lifeform-sense-detail">{card.detail}</small> : null}

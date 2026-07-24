@@ -117,7 +117,7 @@ describe("petSchema", () => {
   it("rejects vitals outside the domain range", () => {
     const result = petSchema.safeParse({
       id: "019bf2c6-4d40-7000-8000-000000000001",
-      name: "Aster",
+      name: "灵灵",
       state: "idle",
       emotion: "happy",
       position: { x: 0, y: 0 },
@@ -131,7 +131,7 @@ describe("petSchema", () => {
   it("defaults legacy care needs to a healthy low-pressure baseline", () => {
     const result = petSchema.parse({
       id: "019bf2c6-4d40-7000-8000-000000000001",
-      name: "Aster",
+      name: "灵灵",
       state: "idle",
       emotion: "happy",
       position: { x: 0, y: 0 },
@@ -154,7 +154,7 @@ describe("petSchema", () => {
   it("accepts only JSON-safe feedback generations", () => {
     const pet = {
       id: "019bf2c6-4d40-7000-8000-000000000001",
-      name: "Aster",
+      name: "灵灵",
       state: "interacting",
       emotion: "happy",
       position: { x: 0, y: 0 },
@@ -175,7 +175,7 @@ describe("petSchema", () => {
   it("accepts a finite optional home anchor", () => {
     const pet = {
       id: "019bf2c6-4d40-7000-8000-000000000001",
-      name: "Aster",
+      name: "灵灵",
       state: "idle",
       emotion: "happy",
       position: { x: 0, y: 0 },
@@ -191,7 +191,7 @@ describe("petSchema", () => {
   it("accepts only bounded, sorted, unique known inventory stacks", () => {
     const pet = {
       id: "019bf2c6-4d40-7000-8000-000000000001",
-      name: "Aster",
+      name: "灵灵",
       state: "idle",
       emotion: "happy",
       position: { x: 0, y: 0 },

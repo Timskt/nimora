@@ -51,7 +51,7 @@ pub const JUMP_PEAK_HEIGHT: f64 = 48.0;
 /// Default pet body width in physical pixels (overlay content size).
 pub const PET_BODY_WIDTH: u32 = 260;
 /// Default pet body height in physical pixels (overlay content size).
-pub const PET_BODY_HEIGHT: u32 = 300;
+pub const PET_BODY_HEIGHT: u32 = 320;
 /// Small inset used when parking the pet on the stage ground line.
 const GROUND_MARGIN_PX: i32 = 16;
 

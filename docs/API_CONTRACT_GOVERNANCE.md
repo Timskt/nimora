@@ -1,7 +1,7 @@
 # Nimora API、事件与契约治理规范
 
 > 版本：0.1.0-draft  
-> 更新日期：2026-07-17
+> 更新日期：2026-07-24
 
 ## 1. 契约范围
 
@@ -14,7 +14,7 @@
 
 ## 2. 命名规则
 
-- 契约标识：`deskpet.<domain>/<major>`。
+- 契约标识：`nimora.<domain>/<major>`。
 - Event：过去式事实，如 `pet.stats.changed`。
 - Command：动词意图，如 `pet.say`、`profile.switch`。
 - Package ID：反向域名或已验证发布者命名空间。

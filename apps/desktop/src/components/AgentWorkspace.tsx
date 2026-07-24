@@ -71,6 +71,159 @@ export function providerStatusLabel(status: AgentProviderStatus | null): string 
   return status.providerId === "provider:deterministic-local" ? "可用" : "服务在线";
 }
 
+/** Safe / Recovery Mode lock copy — Chinese, next-step oriented. */
+export function modeLockReason(safeMode: boolean, recoveryMode: boolean): string | null {
+  if (safeMode) return "安全模式已启用：执行类操作已锁定。退出安全模式后再试。";
+  if (recoveryMode) return "恢复模式仅允许查看与修复：退出恢复模式后再启动目标或运行任务。";
+  return null;
+}
+
+/** Browser preview / host lock for control actions. */
+export function controlActionLockReason(options: {
+  safeMode?: boolean;
+  recoveryMode?: boolean;
+  native?: boolean;
+  busy?: boolean;
+}): string | null {
+  const mode = modeLockReason(Boolean(options.safeMode), Boolean(options.recoveryMode));
+  if (mode) return mode;
+  if (options.native === false) return "浏览器预览不能提交控制操作。请在 Nimora 桌面端暂停、取消或对账。";
+  if (options.busy) return "上一项控制操作仍在提交，请稍候…";
+  return null;
+}
+
+/**
+ * Why the Run Task primary button is locked.
+ * Returns null when the owner can submit.
+ */
+export function runTaskLockReason(options: {
+  busy?: boolean;
+  prompt: string;
+  model: string;
+  providerStatus: AgentProviderStatus | null;
+  networkRequiresConsent?: boolean;
+  allowNetwork?: boolean;
+  safeMode?: boolean;
+  recoveryMode?: boolean;
+}): string | null {
+  const mode = modeLockReason(Boolean(options.safeMode), Boolean(options.recoveryMode));
+  if (mode) return mode;
+  if (options.busy) return "任务运行中，请等待当前轮次结束或取消。";
+  if (!options.prompt.trim()) return "请先填写任务内容。";
+  if (!options.model.trim()) return "请填写模型名称，或从列表中选择已探测到的模型。";
+  const status = options.providerStatus;
+  if (!status) return "正在检测 Provider，请稍候…";
+  if (status.state !== "ready") {
+    if (!status.serviceReachable) {
+      return "Provider 服务离线。请到「模型连接」检查地址/密钥，或改用本地模型。";
+    }
+    if (status.models.length === 0) {
+      return "该 Provider 暂无可用模型。请到「模型连接」配置默认模型，或确认服务已加载模型。";
+    }
+    return status.message?.trim()
+      ? `${status.message.trim()}。请到「模型连接」修复后重试。`
+      : "Provider 尚未就绪。请到「模型连接」完成 HTTPS 连接与模型配置。";
+  }
+  if (!status.models.some((item) => item.name === options.model.trim())) {
+    return `模型「${options.model.trim()}」不在当前 Provider 列表中。请从下拉建议中选择，或先在「模型连接」添加该模型。`;
+  }
+  if (options.networkRequiresConsent && !options.allowNetwork) {
+    return "网络 Provider 需要你勾选「允许本次请求联网」后才能发送任务内容。";
+  }
+  return null;
+}
+
+/**
+ * Owner-facing readiness line under the run / creator form.
+ * Always Chinese; always points at a next step when not ready.
+ */
+export function providerReadinessGuidance(
+  status: AgentProviderStatus | null,
+  options?: {
+    model?: string;
+    networkRequiresConsent?: boolean;
+    allowNetwork?: boolean;
+    hostMessage?: string | null;
+  },
+): string {
+  if (!status) return "正在检测 Provider 与模型列表…";
+  if (status.state === "ready") {
+    const model = options?.model?.trim() ?? "";
+    if (model && !status.models.some((item) => item.name === model)) {
+      return `模型「${model}」未出现在探测列表。可改选已有模型，或到「模型连接」声明默认模型。`;
+    }
+    if (options?.networkRequiresConsent && !options.allowNetwork) {
+      return "服务在线。勾选联网授权后即可发送（内容会出境到你配置的 HTTPS 服务）。";
+    }
+    return status.message?.trim() || "Provider 就绪，可以运行。";
+  }
+  if (!status.serviceReachable) {
+    return "服务离线：确认桌面宿主可访问该地址；公网必须是 HTTPS，本机可用 loopback。下一步：打开「模型连接」。";
+  }
+  if (status.models.length === 0) {
+    return "已连通但无模型：在「模型连接」填写默认模型，或确认 Ollama/兼容服务已拉取模型。";
+  }
+  const host = options?.hostMessage?.trim() || status.message?.trim();
+  if (host) return `${host}。若持续失败，请到「模型连接」检查 Base URL、凭据与默认模型。`;
+  return "Provider 未就绪。请到「模型连接」添加 HTTPS Provider 与模型后再试。";
+}
+
+/** Actionable Chinese notices for host IPC soft-failures (toast / banner). */
+export function agentCatalogUnavailableMessage(): string {
+  return "Agent 工具目录未能加载。请确认 Nimora 桌面端正在运行，然后点「重试加载」，或先到「模型连接」检查 Provider。";
+}
+
+export function controlCenterUnavailableMessage(): string {
+  return "目标控制中心未能同步。请确认桌面宿主可用后点「重新同步」；浏览器预览仅展示演示数据。";
+}
+
+export function agentHistoryUnavailableMessage(): string {
+  return "本机执行历史未能读取。可先运行一次对话任务生成记录，或稍后点「重试」。";
+}
+
+export function awaySummaryUnavailableMessage(): string {
+  return "离开摘要未能生成。请确认已有无人值守目标，或点「重试」；无目标时摘要会保持为空。";
+}
+
+export function providerStatusUnavailableMessage(providerId: string): string {
+  return `无法检测「${providerId}」。请到「模型连接」核对地址与凭据，或改用内置本地模型。`;
+}
+
+/**
+ * Why unattended goal start is locked.
+ * Returns null when the owner can open/submit start.
+ */
+export function unattendedStartLockReason(options: {
+  safeMode?: boolean;
+  recoveryMode?: boolean;
+  startBusy?: boolean;
+  title?: string;
+  objective?: string;
+  stepCount?: number;
+  native?: boolean;
+}): string | null {
+  const mode = modeLockReason(Boolean(options.safeMode), Boolean(options.recoveryMode));
+  if (mode) return mode;
+  if (options.native === false) return "浏览器预览不能签发真实授权。请在 Nimora 桌面端启动无人值守目标。";
+  if (options.startBusy) return "正在启动目标并签发授权，请稍候…";
+  if (!(options.title ?? "").trim()) return "请填写目标标题。";
+  if (!(options.objective ?? "").trim()) return "请填写目标描述与完成标准。";
+  if ((options.stepCount ?? 0) <= 0) return "请至少添加一步计划（每行一步）。";
+  return null;
+}
+
+/** Module tool button lock reason (safe/recovery). */
+export function moduleToolLockReason(options: {
+  toolBusy?: boolean;
+  safeMode?: boolean;
+  recoveryMode?: boolean;
+}): string | null {
+  const mode = modeLockReason(Boolean(options.safeMode), Boolean(options.recoveryMode));
+  if (mode) return mode;
+  if (options.toolBusy) return "上一项模块操作仍在处理…";
+  return null;
+}
+
 type ReasoningChoice = "adaptive" | "cost_saver" | "quality_first" | `fixed:${ConcreteReasoningEffort}`;
 
 export function reasoningPolicyForChoice(choice: ReasoningChoice): ModelReasoningPolicy {
@@ -1062,7 +1215,12 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
   const [pendingControl, setPendingControl] = useState<PendingControl | null>(null);
   const [controlReason, setControlReason] = useState("");
   const [controlBusy, setControlBusy] = useState(false);
+  const [controlLoading, setControlLoading] = useState(false);
+  const [controlError, setControlError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [prompt, setPrompt] = useState("总结一下当前可用的本地能力");
   const [providerId, setProviderId] = useState("provider:deterministic-local");
   const [model, setModel] = useState("model:echo-v1");
@@ -1137,19 +1295,37 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
     && planSteps.length > 0
     && !startBusy
     && !safeMode
-    && !recoveryMode,
+    && !recoveryMode
+    && desktopApi.native,
   );
+  const runLockReason = runTaskLockReason({
+    busy,
+    prompt,
+    model,
+    providerStatus,
+    networkRequiresConsent: activeProvider?.locality === "network",
+    allowNetwork,
+    safeMode,
+    recoveryMode,
+  });
+  const controlLockReason = controlActionLockReason({
+    safeMode,
+    recoveryMode,
+    native: desktopApi.native,
+    busy: controlBusy,
+  });
+  const toolLockReason = moduleToolLockReason({ toolBusy, safeMode, recoveryMode });
 
   useEffect(() => {
     void refreshCatalog();
-    void desktopApi.agentHistory(5).then(setHistory).catch(() => onNotice("Agent 历史暂时不可用"));
+    void loadHistory();
   }, [onNotice]);
 
   useEffect(() => setView(initialView), [initialView]);
 
   useEffect(() => {
     if (view !== "control") return;
-    void refreshControlCenter().catch(() => onNotice("目标控制中心暂时不可用"));
+    void refreshControlCenter().catch(() => undefined);
     void refreshAwaySummary().catch(() => undefined);
   }, [view, onNotice]);
 
@@ -1180,55 +1356,80 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [pendingDangerAck, pendingControl, startBusy, controlBusy]);
 
+  async function loadHistory() {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      setHistory(await desktopApi.agentHistory(5));
+    } catch {
+      setHistoryError(agentHistoryUnavailableMessage());
+      onNotice(agentHistoryUnavailableMessage());
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
   async function refreshHistory() {
-    setHistory(await desktopApi.agentHistory(5));
+    await loadHistory();
   }
 
   async function refreshCatalog() {
+    setCatalogError(null);
     try {
       setCatalog(await desktopApi.agentCatalog());
     } catch {
-      onNotice("Agent 工具目录暂时不可用");
+      setCatalogError(agentCatalogUnavailableMessage());
+      onNotice(agentCatalogUnavailableMessage());
     }
   }
 
   async function refreshControlCenter() {
-    const center = await desktopApi.autoModeControlCenter();
+    setControlLoading(true);
+    setControlError(null);
     try {
-      const grants = await desktopApi.listAuthorizationGrants();
-      setAuthorizationGrants(grants);
-      const byGoal = new Map(grants.map((grant) => [grant.goalId, grant]));
-      setControlCenter({
-        ...center,
-        entries: center.entries.map((entry) => ({
-          ...entry,
-          grant: entry.grant ?? byGoal.get(entry.goal.id) ?? null,
-        })),
-      });
+      const center = await desktopApi.autoModeControlCenter();
+      try {
+        const grants = await desktopApi.listAuthorizationGrants();
+        setAuthorizationGrants(grants);
+        const byGoal = new Map(grants.map((grant) => [grant.goalId, grant]));
+        setControlCenter({
+          ...center,
+          entries: center.entries.map((entry) => ({
+            ...entry,
+            grant: entry.grant ?? byGoal.get(entry.goal.id) ?? null,
+          })),
+        });
+      } catch {
+        setAuthorizationGrants([]);
+        setControlCenter(center);
+      }
+      // Surface Goal/Auto Mode phase on the companion strip without re-applying pet
+      // directives on every control-center poll (start/pause/cancel still publish).
+      const focus = center.entries.find((entry) => (
+        entry.session.status === "running"
+        || entry.session.status === "paused"
+        || entry.job.status === "starting"
+        || entry.job.status === "running"
+        || entry.job.status === "pausing"
+        || entry.job.status === "cancelling"
+        || entry.attempt?.status === "indeterminate"
+      )) ?? center.entries[0] ?? null;
+      if (focus) {
+        const nextStatus = companionStatusFromAutoMode(
+          focus.attempt?.status === "indeterminate" ? "indeterminate" : focus.job.status,
+          {
+            pauseReason: focus.job.pauseReason ?? focus.session.pauseReason,
+            indeterminate: focus.attempt?.status === "indeterminate",
+          },
+        );
+        setCompanionSignal(createAgentCompanionSignal(nextStatus, focus.job.jobId));
+      }
     } catch {
-      setAuthorizationGrants([]);
-      setControlCenter(center);
-    }
-    // Surface Goal/Auto Mode phase on the companion strip without re-applying pet
-    // directives on every control-center poll (start/pause/cancel still publish).
-    const focus = center.entries.find((entry) => (
-      entry.session.status === "running"
-      || entry.session.status === "paused"
-      || entry.job.status === "starting"
-      || entry.job.status === "running"
-      || entry.job.status === "pausing"
-      || entry.job.status === "cancelling"
-      || entry.attempt?.status === "indeterminate"
-    )) ?? center.entries[0] ?? null;
-    if (focus) {
-      const nextStatus = companionStatusFromAutoMode(
-        focus.attempt?.status === "indeterminate" ? "indeterminate" : focus.job.status,
-        {
-          pauseReason: focus.job.pauseReason ?? focus.session.pauseReason,
-          indeterminate: focus.attempt?.status === "indeterminate",
-        },
-      );
-      setCompanionSignal(createAgentCompanionSignal(nextStatus, focus.job.jobId));
+      setControlError(controlCenterUnavailableMessage());
+      onNotice(controlCenterUnavailableMessage());
+      throw new Error("control-center-unavailable");
+    } finally {
+      setControlLoading(false);
     }
   }
 
@@ -1251,8 +1452,8 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
       setAwaySummary(await desktopApi.getAwaySummary(goalId ?? undefined));
     } catch {
       setAwaySummary(null);
-      setAwayError("宿主未能返回离开摘要，请稍后重试。");
-      onNotice("离开摘要暂时不可用");
+      setAwayError(awaySummaryUnavailableMessage());
+      onNotice(awaySummaryUnavailableMessage());
     } finally {
       setAwayBusy(false);
     }
@@ -1399,7 +1600,17 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
           setModel(firstModel.name);
         }
       }
-    }).catch(() => current && setProviderStatus({ spec: "nimora.desktop-agent-provider-status/1", providerId, state: "unavailable", workerVerified: false, serviceReachable: false, locality: "local", credentialPresent: false, models: [], message: "Provider 状态不可用" }));
+    }).catch(() => current && setProviderStatus({
+      spec: "nimora.desktop-agent-provider-status/1",
+      providerId,
+      state: "unavailable",
+      workerVerified: false,
+      serviceReachable: false,
+      locality: "local",
+      credentialPresent: false,
+      models: [],
+      message: providerStatusUnavailableMessage(providerId),
+    }));
     return () => { current = false; };
   }, [providerId]);
 
@@ -1525,12 +1736,35 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
         <h2>指挥活着的伙伴：目标、授权与每一次执行，都有据可查。</h2>
       </div>
       <div className="control-header-actions">
-        <span>{controlCenter?.entries.length ?? 0} 个任务</span>
-        <button className="primary-button" disabled={safeMode || recoveryMode || startBusy} onClick={openStartPanel} type="button">启动无人值守目标</button>
+        <span>{controlLoading ? "同步中…" : `${controlCenter?.entries.length ?? 0} 个任务`}</span>
+        <button
+          className="secondary-button"
+          disabled={controlLoading || controlBusy}
+          onClick={() => void refreshControlCenter().catch(() => undefined)}
+          title={controlLoading ? "正在同步控制中心…" : "从宿主重新拉取 Goal / Job / Grant 事实"}
+          type="button"
+        >
+          {controlLoading ? "同步中…" : "重新同步"}
+        </button>
+        <button
+          className="primary-button"
+          disabled={safeMode || recoveryMode || startBusy || !desktopApi.native}
+          onClick={openStartPanel}
+          title={modeLockReason(safeMode, recoveryMode) ?? (!desktopApi.native ? "浏览器预览不能签发真实授权，请使用桌面端" : "启动无人值守目标并签发绑定 Goal 的执行授权")}
+          type="button"
+        >
+          启动无人值守目标
+        </button>
       </div>
     </header>
     {tabs}
-    {(safeMode || recoveryMode || !desktopApi.native) && <div className="control-readonly" role="status">{!desktopApi.native ? "浏览器预览仅展示演示数据，真实控制需要桌面宿主" : "当前运行模式仅允许查看，控制操作已锁定"}</div>}
+    {(safeMode || recoveryMode || !desktopApi.native) && (
+      <div className="control-readonly" role="status">
+        {!desktopApi.native
+          ? "浏览器预览仅展示演示数据：可浏览界面，但不能签发授权、暂停/取消任务或完成对账。请打开 Nimora 桌面端。"
+          : modeLockReason(safeMode, recoveryMode)}
+      </div>
+    )}
     <CompanionStatusStrip bubble={companionBubble} />
     <AwaySummaryPanel
       summary={awaySummary}
@@ -1702,7 +1936,17 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
           className="primary-button"
           disabled={!canStartUnattended}
           onClick={requestStartUnattended}
-          title={canStartUnattended ? "签发绑定 Goal 的执行授权并启动" : "请填写标题、目标描述，并至少添加一步计划"}
+          title={
+            unattendedStartLockReason({
+              safeMode,
+              recoveryMode,
+              startBusy,
+              title: goalTitle,
+              objective: goalObjective,
+              stepCount: planSteps.length,
+              native: desktopApi.native,
+            }) ?? "签发绑定 Goal 的执行授权并启动"
+          }
           type="button"
         >
           {startBusy ? "启动中…" : tierRequiresDangerAck(authorizationTier) ? "核对风险并启动" : "启动并签发授权"}
@@ -1722,8 +1966,9 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
             <button
               aria-label="撤销全部有效授权"
               className="grant-revoke-all"
-              disabled={safeMode || recoveryMode || controlBusy}
+              disabled={Boolean(controlLockReason)}
               onClick={() => void revokeAllActiveGrants()}
+              title={controlLockReason ?? "立即撤销全部有效授权，阻止后续自动派发"}
               type="button"
             >
               撤销全部有效
@@ -1763,8 +2008,16 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
       ) : (
         <div className="authorization-grants-empty" role="status">
           <strong>还没有授权 Grant</strong>
-          <p>启动无人值守目标时会签发绑定 Goal 的执行授权。可随时在此查看档位与撤销。</p>
-          <button className="primary-button" disabled={safeMode || recoveryMode || startBusy} onClick={openStartPanel} type="button">启动目标并签发授权</button>
+          <p>下一步：启动无人值守目标时会签发绑定 Goal 的执行授权。高风险档位会先展示 NeverAskWithinGrant 风险清单，确认后才生效；可随时在此撤销。</p>
+          <button
+            className="primary-button"
+            disabled={safeMode || recoveryMode || startBusy || !desktopApi.native}
+            onClick={openStartPanel}
+            title={modeLockReason(safeMode, recoveryMode) ?? (!desktopApi.native ? "请在桌面端签发授权" : "启动目标并签发授权")}
+            type="button"
+          >
+            启动目标并签发授权
+          </button>
         </div>
       )}
     </section>
@@ -1859,17 +2112,51 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
           ) : null}
           <ol aria-label="计划步骤">{entry.plan.steps.map((step) => <li key={step.id} data-status={step.status}><i /><span>{step.description}</span><em>{planStepStatusLabel(step.status)}</em></li>)}</ol>
           <footer><code>{entry.session.policy.workspaceRevision}</code><span>{pauseReasonLabel(entry.job.pauseReason ?? entry.session.pauseReason)}</span></footer>
-          {grant && <div className="control-grant-meta"><span>授权 · {tierLabel(grant.tier)}</span><span className="grant-policy-chip">{tierApprovalLabel(grant.tier)}</span>{tierUsesNeverAsk(grant.tier) && grantActive ? <span className="grant-policy-chip never-ask" title={tierSleepSafeCopy(grant.tier)}>NeverAsk · 睡眠安全</span> : null}{grant.workspaceRoot && <code>{grant.workspaceRoot}</code>}{grantActive && <button disabled={safeMode || recoveryMode || controlBusy} onClick={() => void revokeGrant(grant.grantId)} type="button">撤销授权</button>}</div>}
-          {entry.attempt?.status === "indeterminate" && <div className="control-risk" role="alert"><strong>外部执行结果未知，禁止自动重试</strong><p>Attempt {entry.attempt.id} · Checkpoint #{entry.attempt.checkpointSequence}</p><code>{entry.attempt.requestFingerprint}</code><div><button disabled={safeMode || recoveryMode || !desktopApi.native || controlBusy} onClick={() => prepareControl({ kind: "resolve", entry, decision: "confirmed_not_executed" })} type="button">确认未执行并暂停</button><button disabled={safeMode || recoveryMode || !desktopApi.native || controlBusy} onClick={() => prepareControl({ kind: "resolve", entry, decision: "accept_external_effect_and_cancel" })} type="button">接受副作用并取消</button></div></div>}
-          {!entry.attempt && ["starting", "running"].includes(entry.job.status) && <div className="control-actions"><button disabled={safeMode || recoveryMode || !desktopApi.native || controlBusy} onClick={() => prepareControl({ kind: "pause", entry })} type="button">暂停</button><button disabled={safeMode || recoveryMode || !desktopApi.native || controlBusy} onClick={() => prepareControl({ kind: "cancel", entry })} type="button">取消任务</button></div>}
+          {grant && <div className="control-grant-meta"><span>授权 · {tierLabel(grant.tier)}</span><span className="grant-policy-chip">{tierApprovalLabel(grant.tier)}</span>{tierUsesNeverAsk(grant.tier) && grantActive ? <span className="grant-policy-chip never-ask" title={tierSleepSafeCopy(grant.tier)}>NeverAsk · 睡眠安全</span> : null}{grant.workspaceRoot && <code>{grant.workspaceRoot}</code>}{grantActive && <button disabled={Boolean(controlLockReason)} onClick={() => void revokeGrant(grant.grantId)} title={controlLockReason ?? "立即撤销此授权，阻止后续自动派发"} type="button">撤销授权</button>}</div>}
+          {entry.attempt?.status === "indeterminate" && <div className="control-risk" role="alert"><strong>外部执行结果未知，禁止自动重试</strong><p>Attempt {entry.attempt.id} · Checkpoint #{entry.attempt.checkpointSequence}</p><code>{entry.attempt.requestFingerprint}</code><p className="control-risk-next">下一步：根据你掌握的外部证据，二选一完成对账；理由会永久写入审计。</p><div><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "resolve", entry, decision: "confirmed_not_executed" })} title={controlLockReason ?? "确认外部操作未执行，并安全暂停"} type="button">确认未执行并暂停</button><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "resolve", entry, decision: "accept_external_effect_and_cancel" })} title={controlLockReason ?? "接受可能已产生的副作用并取消任务"} type="button">接受副作用并取消</button></div></div>}
+          {!entry.attempt && ["starting", "running"].includes(entry.job.status) && <div className="control-actions"><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "pause", entry })} title={controlLockReason ?? "在当前原子步骤结束后暂停，保留 Checkpoint"} type="button">暂停</button><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "cancel", entry })} title={controlLockReason ?? "取消不可恢复为同一运行；已产生副作用不会自动回滚"} type="button">取消任务</button></div>}
           {entry.resolutions.length > 0 && <details className="resolution-history"><summary>不可变对账记录 · {entry.resolutions.length}</summary>{entry.resolutions.map((resolution) => <article key={resolution.id}><strong>{resolution.decision}</strong><p>{resolution.reason}</p><small>{resolution.actor} · {new Date(resolution.resolvedAtMs).toLocaleString("zh-CN")}</small></article>)}</details>}
         </article>
         );
-      }) : <div className="control-empty">
-        <strong>伙伴还没有执行中的目标</strong>
-        <p>签发授权后，伙伴会按计划推进；控制中心只展示宿主持久化并验证过的事实。浏览器预览使用明确的演示数据。</p>
-        <button className="primary-button" disabled={safeMode || recoveryMode || startBusy} onClick={openStartPanel} type="button">启动第一个无人值守目标</button>
-      </div>}
+      }) : controlLoading ? (
+        <div className="control-empty control-loading" role="status" aria-live="polite">
+          <strong>正在同步目标控制中心…</strong>
+          <p>读取 Goal、Job、Session、Checkpoint 与授权事实，请稍候。</p>
+        </div>
+      ) : controlError ? (
+        <div className="control-empty control-error" role="alert">
+          <strong>控制中心暂时连不上</strong>
+          <p>{controlError}</p>
+          <button
+            className="primary-button"
+            disabled={controlLoading || controlBusy}
+            onClick={() => void refreshControlCenter().catch(() => undefined)}
+            type="button"
+          >
+            {controlLoading ? "重试中…" : "重新同步"}
+          </button>
+        </div>
+      ) : (
+        <div className="control-empty">
+          <strong>伙伴还没有执行中的目标</strong>
+          <p>
+            下一步：点「启动无人值守目标」，填写标题、完成标准与计划步骤，选择授权档位后签发 Grant。
+            控制中心只展示宿主持久化并验证过的事实；浏览器预览使用明确的演示数据。
+          </p>
+          <button
+            className="primary-button"
+            disabled={safeMode || recoveryMode || startBusy || !desktopApi.native}
+            onClick={openStartPanel}
+            title={modeLockReason(safeMode, recoveryMode) ?? (!desktopApi.native ? "请在桌面端启动" : "启动第一个无人值守目标")}
+            type="button"
+          >
+            启动第一个无人值守目标
+          </button>
+          {(safeMode || recoveryMode || !desktopApi.native) && (
+            <p className="control-empty-lock">{modeLockReason(safeMode, recoveryMode) ?? "浏览器预览不能签发真实授权。"}</p>
+          )}
+        </div>
+      )}
     </section>
     {pendingControl && <div className="control-dialog-backdrop"><section aria-labelledby="control-dialog-title" aria-modal="true" className={pendingControl.kind === "pause" ? "control-dialog" : "control-dialog danger"} role="dialog"><p className="card-label">参数绑定确认</p><h3 id="control-dialog-title">{pendingControl.kind === "pause" ? "暂停这个任务？" : pendingControl.kind === "cancel" ? "取消这个任务？" : pendingControl.decision === "confirmed_not_executed" ? "确认外部操作未执行？" : "接受潜在副作用并取消？"}</h3><p>{pendingControl.kind === "pause" ? "任务会在当前原子步骤结束后暂停，不会丢弃 Checkpoint。" : pendingControl.kind === "cancel" ? "取消不可恢复为同一个运行；已产生的外部副作用不会自动回滚。" : "此决议将绑定当前 Attempt、Checkpoint 与请求指纹，并永久写入审计记录。"}</p><dl><div><dt>Goal</dt><dd>{pendingControl.entry.goal.title}</dd></div><div><dt>Session</dt><dd><code>{pendingControl.entry.session.id}</code></dd></div>{pendingControl.kind === "resolve" && <div><dt>Attempt</dt><dd><code>{pendingControl.entry.attempt?.id}</code></dd></div>}</dl>{pendingControl.kind === "resolve" && <label><span>对账理由（必填）</span><textarea autoFocus maxLength={2048} onChange={(event) => setControlReason(event.target.value)} placeholder="说明你核对了什么证据，以及为什么选择此决议" value={controlReason} /></label>}<div><button disabled={controlBusy} onClick={() => setPendingControl(null)} type="button">返回检查</button><button className="primary-button" disabled={controlBusy || (pendingControl.kind === "resolve" && !controlReason.trim())} onClick={() => void executeControl()} type="button">{controlBusy ? "提交中…" : "确认提交"}</button></div></section></div>}
     {pendingDangerAck && <div className="control-dialog-backdrop"><section aria-labelledby="danger-grant-title" aria-describedby="danger-grant-desc" aria-modal="true" className={`control-dialog danger${authorizationTier === "full_device" ? " full-device" : ""}`} role="dialog">

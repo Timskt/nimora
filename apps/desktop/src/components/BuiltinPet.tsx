@@ -12,7 +12,7 @@ export function BuiltinPet({ state, emotion, mood, animation }: BuiltinPetProps)
       className={`builtin-pet overlay-pet ${state} emotion-${emotion}`}
       viewBox="0 0 220 248"
       role="img"
-      aria-label="Aster 内置桌面伙伴"
+      aria-label="灵灵 · Nimora 内置桌面伙伴"
       data-state={state}
       data-emotion={emotion}
       data-mood={mood == null ? undefined : String(mood)}

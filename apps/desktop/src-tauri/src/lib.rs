@@ -22,7 +22,7 @@ use asset_protocol::{AssetProtocolRequest, AssetProtocolStatus, serve_asset};
 #[cfg(test)]
 use asset_selection::{ACTIVE_CHARACTER_FILE, ACTIVE_THEME_FILE, ACTIVE_VOICE_FILE};
 use asset_selection::{
-    ACTIVE_THEME_SPEC, ACTIVE_VOICE_SPEC, BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID, BUILTIN_VOICE_ID,
+    ACTIVE_THEME_SPEC, ACTIVE_VOICE_SPEC, BUILTIN_CHARACTER_ID, BUILTIN_CHARACTER_LEGACY_ID, BUILTIN_THEME_ID, BUILTIN_VOICE_ID,
     CHARACTER_SELECTION, ResolvedAssetSelection, THEME_SELECTION, VOICE_SELECTION,
     persist_asset_selection, resolve_asset_selection,
 };
@@ -140,7 +140,6 @@ use nimora_runtime_core::{
     Pet, PetAction, PetAutonomyDecision, PetAutonomyPolicy, PetCareAction, PetError, PetItemId,
     PetVitalsPolicy, PointerButton, Position, Profile, ProfileId, ProfileMode, ProfilePolicy,
     RuntimeMode, SafeModeReason, SafetySnapshot, StructuredPetDirective,
-    skill_worker_busy_directive, skill_worker_done_directive, connector_sensory_directive,
     ConnectorSenseKind, battery_directive, idle_user_directive, meeting_sensory_directive,
     notification_sensory_directive,
     user_code_directive, UserCodePhase,
@@ -1092,7 +1091,7 @@ impl DesktopState {
         let events = RuntimeEventBus::default();
         let runtime = RuntimeService::initialize_with_event_bus(
             SqlitePetRepository::open(database_path)?,
-            "Aster",
+            "灵灵",
             events.clone(),
         )?;
         let profiles = ProfileService::initialize(
@@ -1205,7 +1204,7 @@ impl DesktopState {
         let events = RuntimeEventBus::default();
         let runtime = RuntimeService::initialize_with_event_bus(
             SqlitePetRepository::in_memory()?,
-            "Aster",
+            "灵灵",
             events.clone(),
         )?;
         let profiles =
@@ -8815,10 +8814,10 @@ fn activate_character_inner(
         .active_asset_selection_write
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?;
-    if asset_id != BUILTIN_CHARACTER_ID && !valid_asset_identifier(asset_id) {
+    if asset_id != BUILTIN_CHARACTER_ID && asset_id != BUILTIN_CHARACTER_LEGACY_ID && !valid_asset_identifier(asset_id) {
         return Err(DesktopError::InvalidAssetIdentifier);
     }
-    if asset_id != BUILTIN_CHARACTER_ID {
+    if asset_id != BUILTIN_CHARACTER_ID && asset_id != BUILTIN_CHARACTER_LEGACY_ID {
         let asset = inspect_asset_package(&state.asset_store.join(asset_id))?;
         if asset.id != asset_id || asset.asset_type != "character" {
             return Err(DesktopError::AssetIsNotCharacter);
@@ -9251,7 +9250,7 @@ fn execute_skill_inner(
     // Skill/Worker busy → pet work body language (Subject path).
     let _ = apply_lifeform_directive_from_host(
         app,
-        skill_worker_busy_directive(Some(request.skill_id.as_str())),
+        companion_directive::skill_worker_busy_host_directive(Some(request.skill_id.as_str())),
     );
     let _execution_guard = ActiveSkillExecutionGuard {
         executions: &state.active_skill_executions,
@@ -9303,10 +9302,10 @@ fn execute_skill_inner(
     );
     match &receipt {
         Ok(_) => {
-            let _ = apply_lifeform_directive_from_host(app, skill_worker_done_directive(true));
+            let _ = apply_lifeform_directive_from_host(app, companion_directive::skill_worker_done_host_directive(true));
         }
         Err(_) => {
-            let _ = apply_lifeform_directive_from_host(app, skill_worker_done_directive(false));
+            let _ = apply_lifeform_directive_from_host(app, companion_directive::skill_worker_done_host_directive(false));
         }
     }
     receipt
@@ -9527,10 +9526,10 @@ fn approve_skill_execution(
     let receipt = approve_skill_execution_inner(&state, &request);
     match &receipt {
         Ok(_) => {
-            let _ = apply_lifeform_directive_from_host(&app, skill_worker_done_directive(true));
+            let _ = apply_lifeform_directive_from_host(&app, companion_directive::skill_worker_done_host_directive(true));
         }
         Err(_) => {
-            let _ = apply_lifeform_directive_from_host(&app, skill_worker_done_directive(false));
+            let _ = apply_lifeform_directive_from_host(&app, companion_directive::skill_worker_done_host_directive(false));
         }
     }
     receipt
@@ -13742,8 +13741,8 @@ fn publish_lifeform_connector_sensory_from_snapshot(
     use std::sync::atomic::{AtomicU8, Ordering};
     static LAST_PHASE: AtomicU8 = AtomicU8::new(0);
     // 0 = unknown, 1 = healthy, 2 = degraded, 3 = offline-like
-    let phase: u8 = match snapshot {
-        None => 3,
+    let (snapshot_present, sensor_degraded, low_battery) = match snapshot {
+        None => (false, false, false),
         Some(snap) => {
             let sensor_degraded = snap.degradation_reason.is_some()
                 || matches!(
@@ -13755,33 +13754,27 @@ fn publish_lifeform_connector_sensory_from_snapshot(
                     && !power.charging
                     && power.battery_percent.is_some_and(|percent| percent <= 15)
             });
-            if sensor_degraded || low_battery {
-                2
-            } else {
-                1
-            }
+            (true, sensor_degraded, low_battery)
         }
     };
+    let phase = companion_directive::connector_sensory_phase(
+        snapshot_present,
+        sensor_degraded,
+        low_battery,
+    );
     let previous = LAST_PHASE.load(Ordering::Relaxed);
-    if previous == phase {
-        return;
-    }
-    // Stay quiet on first healthy sample; announce stress and recovery only.
-    if previous == 0 && phase == 1 {
-        LAST_PHASE.store(phase, Ordering::Relaxed);
-        return;
-    }
-    let kind = match (previous, phase) {
-        (_, 3) => ConnectorSenseKind::Offline,
-        (_, 2) => ConnectorSenseKind::Degraded,
-        (2 | 3, 1) => ConnectorSenseKind::OnlineRestored,
-        _ => {
+    let Some(kind) = companion_directive::connector_sensory_kind_for_transition(previous, phase)
+    else {
+        if previous != phase {
             LAST_PHASE.store(phase, Ordering::Relaxed);
-            return;
         }
+        return;
     };
     LAST_PHASE.store(phase, Ordering::Relaxed);
-    let _ = apply_lifeform_directive_from_host(app, connector_sensory_directive(kind));
+    let _ = apply_lifeform_directive_from_host(
+        app,
+        companion_directive::connector_sensory_host_directive(kind),
+    );
 }
 
 fn publish_lifeform_battery_sensory(
@@ -13945,7 +13938,7 @@ fn notify_lifeform_connector_event(app: &AppHandle, event_type: &str) {
     LAST_MS.store(now_ms, Ordering::Relaxed);
     let _ = apply_lifeform_directive_from_host(
         app,
-        connector_sensory_directive(ConnectorSenseKind::EventReceived),
+        companion_directive::connector_sensory_host_directive(ConnectorSenseKind::EventReceived),
     );
 }
 
@@ -18973,8 +18966,8 @@ mod tests {
         })
         .expect("valid policy");
         assert_eq!(
-            user_program_input(&policy, Some(json!({"name": "Aster"})), None, None),
-            json!({"schemaVersion": 1, "pet": {"name": "Aster"}})
+            user_program_input(&policy, Some(json!({"name": "灵灵"})), None, None),
+            json!({"schemaVersion": 1, "pet": {"name": "灵灵"}})
         );
     }
 

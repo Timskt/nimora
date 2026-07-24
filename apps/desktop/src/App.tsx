@@ -243,7 +243,7 @@ export function App() {
     }
     await desktopApi.playAction(action);
     void playVoiceCue(action === "celebrate" ? "pet.celebrate" : "pet.work", quiet).catch(() => undefined);
-    setNotice(action === "celebrate" ? `${desktopSnapshot?.pet.name ?? "Aster"} 正在回应你` : "专注场景已启动");
+    setNotice(action === "celebrate" ? `${desktopSnapshot?.pet.name ?? "灵灵"} 正在回应你` : "专注场景已启动");
   }
 
   async function runCare(action: PetCareAction) {
@@ -252,9 +252,9 @@ export function App() {
       return;
     }
     const labels: Record<PetCareAction, string> = {
-      feed: `已为 ${desktopSnapshot?.pet.name ?? "Aster"} 补充能量`,
-      play: `${desktopSnapshot?.pet.name ?? "Aster"} 玩得很开心`,
-      groom: `${desktopSnapshot?.pet.name ?? "Aster"} 已经整理好啦`,
+      feed: `已为 ${desktopSnapshot?.pet.name ?? "灵灵"} 补充能量`,
+      play: `${desktopSnapshot?.pet.name ?? "灵灵"} 玩得很开心`,
+      groom: `${desktopSnapshot?.pet.name ?? "灵灵"} 已经整理好啦`,
     };
     try {
       await desktopApi.carePet(action);
@@ -370,7 +370,7 @@ export function App() {
             <div className="stage-copy">
               <span className="pill">{notice}</span>
               <h2 id="pet-heading">我是桌面上的生命体，不是网页小窗口。</h2>
-              <p>{desktopSnapshot?.pet.name ?? "Aster"} 是系统主体：感知窗口与电量、驱动 Agent/Skill/Worker，也能在桌面自己玩耍。本地优先，断网也能陪着你。</p>
+              <p>{desktopSnapshot?.pet.name ?? "灵灵"} 是系统主体：感知窗口与电量、驱动 Agent/Skill/Worker，也能在桌面自己玩耍。本地优先，断网也能陪着你。</p>
               <div className="stage-actions">
                 <button className="primary-button" type="button" disabled={recoveryMode} onClick={() => void runAction("celebrate")}>开始互动</button>
                 <button className="secondary-button" type="button" disabled={recoveryMode} onClick={() => void runAction("work")}>进入专注</button>

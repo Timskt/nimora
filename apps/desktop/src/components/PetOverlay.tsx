@@ -12,6 +12,7 @@ import {
   type PetSurface,
 } from "../platform/desktop";
 import { RendererErrorBoundary } from "./RendererErrorBoundary";
+import type { PetAmbientDesktopContext, PetStatusOptions } from "./petPresentation";
 import {
   PET_BODY_HEIGHT_PX,
   PET_BODY_WIDTH_PX,
@@ -26,7 +27,6 @@ import {
   petStatusMessage,
   resolveOverlayStage,
   resolvePetRenderState,
-  resolvePetSubjectMotion,
 } from "./petPresentation";
 import {
   appendPetGesturePoint,
@@ -42,7 +42,7 @@ import {
 import { SpriteRenderer } from "./SpriteRenderer";
 import { petInventoryQuantity, petItemPresentation } from "./petItems";
 import { focusMenuItem, isPetMenuShortcut, nextMenuItemIndex } from "./petMenu";
-import { agentCompanionPresentation } from "./agentCompanion";
+import { agentCompanionPresentation, resolveSubjectMotionForWorkerFeedback } from "./agentCompanion";
 import { canPresentPetBubble, usePetBubble } from "./petBubble";
 import { subscribeReducedMotion } from "./reducedMotion";
 import { BuiltinPet } from "./BuiltinPet";
@@ -57,6 +57,35 @@ const BuiltinPet3D = lazy(async () => {
   return { default: module.BuiltinPet3D };
 });
 const PET_WINDOW_HEARTBEAT_INTERVAL_MS = 15_000;
+
+
+function petAmbientFromSnapshot(value: DesktopSnapshot): PetAmbientDesktopContext | null {
+  const sense = value.lifeformSense;
+  if (!sense) return null;
+  const desktop: PetAmbientDesktopContext = {
+    meetingActive: sense.meetingActive,
+    onBattery: sense.onBattery,
+    charging: sense.charging,
+    idleMs: sense.idleMs,
+    displayCount: sense.displayCount,
+  };
+  if (sense.meetingHint !== undefined) desktop.meetingHint = sense.meetingHint ?? null;
+  if (sense.batteryPercent !== undefined) desktop.batteryPercent = sense.batteryPercent ?? null;
+  if (sense.notificationUnread !== undefined) desktop.notificationUnread = sense.notificationUnread;
+  if (sense.degradationReason !== undefined) desktop.degradationReason = sense.degradationReason ?? null;
+  return desktop;
+}
+
+function petStatusOptionsFromSnapshot(
+  value: DesktopSnapshot,
+  directiveSpeech: string | null,
+): PetStatusOptions {
+  return {
+    directiveSpeech,
+    sequence: value.pet.autonomy?.sequence ?? value.pet.feedbackSequence ?? null,
+    desktop: petAmbientFromSnapshot(value),
+  };
+}
 
 export function PetOverlay() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
@@ -93,12 +122,13 @@ export function PetOverlay() {
   directiveSpeechRef.current = directiveSpeech;
   const ambientMutedRef = useRef(false);
   const lastNoticeAt = useRef(Number.NEGATIVE_INFINITY);
-  // Subject rule: directive.animation/action > companion signal > lifecycle.
-  const subjectMotion = resolvePetSubjectMotion({
+  // Subject rule: directive > companion > lifecycle; WorkCrash beats pet.work for dizzy.
+  const subjectMotion = resolveSubjectMotionForWorkerFeedback({
     directiveAnimation: directive?.animation ?? null,
     directiveAction: directive?.action ?? null,
     companionAction,
     lifecycleState: snapshot?.pet.state ?? null,
+    emotion: snapshot?.pet.emotion ?? null,
   });
   const lifeform = petLifeformTokens(
     snapshot?.pet
@@ -247,7 +277,7 @@ export function PetOverlay() {
       setNameDraft(value.pet.name);
       setRenderer(descriptor);
       setRendererFailed(false);
-      presentBubble(desktopApi.native ? petStatusMessage(value.pet, { directiveSpeech: directiveSpeechRef.current }) : "浏览器预览", "status");
+      presentBubble(desktopApi.native ? petStatusMessage(value.pet, petStatusOptionsFromSnapshot(value, directiveSpeechRef.current)) : "浏览器预览", "status");
     }).catch(() => {
       if (disposed) return;
       presentBubble("角色资源不可用，已使用内置角色", "error");
@@ -271,7 +301,7 @@ export function PetOverlay() {
           if (!disposed) {
             applySnapshot(value);
             void desktopApi.requestAttention("autonomy", "bubble", "ambient").then((attention) => {
-              if (!disposed && attention.allowed && !ambientMutedRef.current) presentBubble(petStatusMessage(value.pet, { directiveSpeech: directiveSpeechRef.current }), "status");
+              if (!disposed && attention.allowed && !ambientMutedRef.current) presentBubble(petStatusMessage(value.pet, petStatusOptionsFromSnapshot(value, directiveSpeechRef.current)), "status");
             }).catch(() => undefined);
           }
         });
@@ -285,7 +315,7 @@ export function PetOverlay() {
         void desktopApi.snapshot().then((value) => {
           if (!disposed) {
             applySnapshot(value);
-            if (!ambientMutedRef.current) presentBubble(petStatusMessage(value.pet, { directiveSpeech: directiveSpeechRef.current }), "status");
+            if (!ambientMutedRef.current) presentBubble(petStatusMessage(value.pet, petStatusOptionsFromSnapshot(value, directiveSpeechRef.current)), "status");
           }
         });
       }).then((disposeListener) => {
@@ -335,7 +365,7 @@ export function PetOverlay() {
             setCompanionAction(null);
             lastCompanionSpeechRef.current = null;
             void desktopApi.snapshot().then((value) => {
-              if (!disposed && !ambientMutedRef.current) presentBubble(petStatusMessage(value.pet, { directiveSpeech: directiveSpeechRef.current }), "status");
+              if (!disposed && !ambientMutedRef.current) presentBubble(petStatusMessage(value.pet, petStatusOptionsFromSnapshot(value, directiveSpeechRef.current)), "status");
             });
           }, 4200);
         }
@@ -520,7 +550,7 @@ export function PetOverlay() {
   async function moveLogicalDrag(screenX: number, screenY: number) {
     const session = dragSession.current;
     if (!session) return;
-    // Optimistic multi-monitor clamp keeps the 260×300 body inside the stage work area.
+    // Optimistic multi-monitor clamp keeps the 260×320 body inside the stage work area.
     const next = clampPetScreenToStage(
       {
         x: screenX - session.grabOffsetX,
@@ -750,7 +780,7 @@ export function PetOverlay() {
           suppressClick.current = true;
           openPetMenu();
         }}
-        aria-label={`与 ${snapshot?.pet.name ?? "Aster"} 互动、抚摸或拖动 · Nimora Q版小黄人伙伴`}
+        aria-label={`与 ${snapshot?.pet.name ?? "灵灵"} 互动、抚摸或拖动 · Nimora Q版小黄人伙伴`}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
       >
@@ -781,7 +811,7 @@ export function PetOverlay() {
               />
             )
           ) : !builtin3dFailed ? (
-            <RendererErrorBoundary resetKey="builtin.aster.3d" onFailure={handleBuiltin3dFailure}>
+            <RendererErrorBoundary resetKey="builtin.nimora.3d" onFailure={handleBuiltin3dFailure}>
               <Suspense fallback={<BuiltinPet state={renderState} emotion={lifeform.emotion} mood={lifeform.mood} animation={lifeform.animation} />}>
                 <BuiltinPet3D
                   state={renderState}
@@ -823,7 +853,7 @@ export function PetOverlay() {
               <button className="inventory-back" type="button" role="menuitem" onClick={() => setMenuPage("root")}><span>‹</span>返回径向菜单</button>
               <button type="button" role="menuitem" onClick={() => void desktopApi.openControlCenter("agent_chat")}><span>◌</span>和我聊天</button>
               <button type="button" role="menuitem" onClick={() => void desktopApi.openControlCenter("agent_task")}><span>▶</span>开始任务</button>
-              <button type="button" role="menuitem" onClick={() => { setNameDraft(snapshot?.pet.name ?? "Aster"); setMenuPage("rename"); }}><span>✎</span>改名字</button>
+              <button type="button" role="menuitem" onClick={() => { setNameDraft(snapshot?.pet.name ?? "灵灵"); setMenuPage("rename"); }}><span>✎</span>改名字</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void setHome(); }}><span>⌖</span>这里设为家</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("perch"); }}><span>⌄</span>在边缘栖息</button>
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void play("climb"); }}><span>↥</span>沿侧边攀爬</button>
@@ -850,15 +880,15 @@ export function PetOverlay() {
         </div>
       ) : null}
       {!menuOpen && !occlusion.fullyHidden ? <div className="overlay-actions" aria-label="宠物快捷操作">
-        <button type="button" onClick={() => void care("feed")} aria-label={`给 ${snapshot?.pet.name ?? "Aster"} 喂食`}>◒</button>
-        <button type="button" onClick={() => void care("play")} aria-label={`陪 ${snapshot?.pet.name ?? "Aster"} 玩耍`}>✧</button>
-        <button type="button" onClick={() => void care("groom")} aria-label={`为 ${snapshot?.pet.name ?? "Aster"} 梳理`}>♢</button>
+        <button type="button" onClick={() => void care("feed")} aria-label={`给 ${snapshot?.pet.name ?? "灵灵"} 喂食`}>◒</button>
+        <button type="button" onClick={() => void care("play")} aria-label={`陪 ${snapshot?.pet.name ?? "灵灵"} 玩耍`}>✧</button>
+        <button type="button" onClick={() => void care("groom")} aria-label={`为 ${snapshot?.pet.name ?? "灵灵"} 梳理`}>♢</button>
         <button
           type="button"
           onClick={(event) => void interact(event.screenX, event.screenY)}
-          aria-label={`和 ${snapshot?.pet.name ?? "Aster"} 互动`}
+          aria-label={`和 ${snapshot?.pet.name ?? "灵灵"} 互动`}
         >✦</button>
-        <button type="button" onClick={() => void play("sleep")} aria-label={`让 ${snapshot?.pet.name ?? "Aster"} 休息`}>☾</button>
+        <button type="button" onClick={() => void play("sleep")} aria-label={`让 ${snapshot?.pet.name ?? "灵灵"} 休息`}>☾</button>
         <button type="button" onClick={() => void toggleClickThrough()} aria-label="切换鼠标穿透">⌁</button>
       </div> : null}
       </div>

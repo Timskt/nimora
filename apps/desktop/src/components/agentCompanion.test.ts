@@ -8,11 +8,20 @@ import {
   agentCompanionPresentation,
   agentCompanionStatusLabel,
   agentCompanionTone,
+  autoModeCompanionDirective,
   autoModePhaseLabel,
   companionAnimationLabel,
   companionBubbleFromAutoMode,
+  connectorCompanionDirective,
+  connectorCompanionNarrative,
+  connectorCompanionPhaseFromStatus,
   createAgentCompanionSignal,
   companionStatusFromAutoMode,
+  resolvePetWorkVisual,
+  resolveSubjectMotionForWorkerFeedback,
+  workerCompanionDirective,
+  workerCompanionNarrative,
+  workerCompanionPhaseFromStatus,
 } from "./agentCompanion";
 import type { AgentCompanionStatus } from "../platform/desktop";
 import { isAgentCompanionSignal } from "../platform/desktop";
@@ -287,5 +296,153 @@ describe("companionAnimationLabel", () => {
     expect(companionAnimationLabel("yawn")).toBe("打哈欠");
     expect(companionAnimationLabel("pet.work")).toBe("出汗干活");
     expect(companionAnimationLabel(null)).toBe("安静待命");
+  });
+});
+
+
+describe("worker companion mapping", () => {
+  it("maps busy / done / failed with Chinese chips and host tokens", () => {
+    expect(workerCompanionPhaseFromStatus("busy")).toBe("busy");
+    expect(workerCompanionPhaseFromStatus("WORKING")).toBe("busy");
+    expect(workerCompanionPhaseFromStatus("completed")).toBe("done");
+    expect(workerCompanionPhaseFromStatus("crash")).toBe("failed");
+
+    const busy = workerCompanionNarrative("busy", "summarize");
+    expect(busy.phaseLabel).toBe("出汗忙碌");
+    expect(busy.actionLabel).toBe("出汗干活");
+    expect(busy.moodLabel).toBe("疲惫");
+    expect(busy.speech).toContain("summarize");
+
+    const failed = workerCompanionNarrative("failed");
+    expect(failed.actionLabel).toBe("晕倒缓缓");
+    expect(failed.moodLabel).toBe("低落");
+    expect(failed.speech).toBe("刚才绊了一下");
+  });
+
+  it("builds nimora.pet_directive/1 for busy sweat and crash dizzy", () => {
+    const busy = workerCompanionDirective("busy");
+    expect(busy).toMatchObject({
+      spec: "nimora.pet_directive/1",
+      action: "work_busy",
+      animation: "pet.work",
+      attention: "user",
+    });
+    expect(busy?.speech).toBe("技能跑起来了");
+
+    const crash = workerCompanionDirective("failed");
+    expect(crash).toMatchObject({
+      spec: "nimora.pet_directive/1",
+      action: "work_crash",
+      animation: "pet.work",
+      moodDelta: { mood: -8 },
+    });
+
+    const done = workerCompanionDirective("done");
+    expect(done?.action).toBe("celebrate");
+  });
+
+  it("fail-closed: unknown status → idle and no directive", () => {
+    expect(workerCompanionPhaseFromStatus(null)).toBe("idle");
+    expect(workerCompanionPhaseFromStatus("")).toBe("idle");
+    expect(workerCompanionPhaseFromStatus("mystery-worker")).toBe("idle");
+    expect(workerCompanionDirective("idle")).toBeNull();
+    expect(workerCompanionNarrative("idle").hostAction).toBeNull();
+  });
+});
+
+describe("connector companion mapping", () => {
+  it("maps offline to sad rest and degraded to alert observe", () => {
+    expect(connectorCompanionPhaseFromStatus("offline")).toBe("offline");
+    expect(connectorCompanionPhaseFromStatus("degraded")).toBe("degraded");
+    expect(connectorCompanionPhaseFromStatus("restored")).toBe("restored");
+
+    const offline = connectorCompanionNarrative("offline");
+    expect(offline.phaseLabel).toBe("感官离线");
+    expect(offline.actionLabel).toBe("休息调整");
+    expect(offline.moodLabel).toBe("低落");
+    expect(offline.speech).toBe("线路好像断了");
+
+    const degraded = connectorCompanionNarrative("degraded");
+    expect(degraded.actionLabel).toBe("警戒观察");
+    expect(degraded.moodLabel).toBe("警惕");
+  });
+
+  it("builds structured directives with Chinese speech", () => {
+    expect(connectorCompanionDirective("offline")).toMatchObject({
+      spec: "nimora.pet_directive/1",
+      action: "rest",
+      animation: "pet.idle",
+      attention: "idle_scene",
+      speech: "线路好像断了",
+      moodDelta: { mood: -10 },
+    });
+    expect(connectorCompanionDirective("degraded")?.action).toBe("observe");
+    expect(connectorCompanionDirective("restored")?.action).toBe("celebrate");
+    expect(connectorCompanionDirective("event")?.attention).toBe("notification_area");
+  });
+
+  it("fail-closed: healthy / unknown emit no directive", () => {
+    expect(connectorCompanionPhaseFromStatus("healthy")).toBe("healthy");
+    expect(connectorCompanionPhaseFromStatus("wat")).toBe("unknown");
+    expect(connectorCompanionPhaseFromStatus(null)).toBe("unknown");
+    expect(connectorCompanionDirective("healthy")).toBeNull();
+    expect(connectorCompanionDirective("unknown")).toBeNull();
+  });
+});
+
+describe("autoModeCompanionDirective structured emit", () => {
+  it("emits nimora.pet_directive/1 for Running / Paused / Failed", () => {
+    const running = autoModeCompanionDirective("running");
+    expect(running.spec).toBe("nimora.pet_directive/1");
+    expect(running.action).toBe("work_busy");
+    expect(running.speech).toMatch(/自动模式/);
+
+    const paused = autoModeCompanionDirective("paused", { pauseReason: "user_paused" });
+    expect(paused.spec).toBe("nimora.pet_directive/1");
+    expect(paused.action).toBe("perch");
+    expect(paused.speech).toMatch(/暂停|Checkpoint/);
+
+    const failed = autoModeCompanionDirective("failed");
+    expect(failed.spec).toBe("nimora.pet_directive/1");
+    expect(failed.action).toBe("rest");
+    expect(failed.speech).toMatch(/失败|再试/);
+  });
+});
+
+describe("pet work visual feedback (sweat / dizzy)", () => {
+  it("maps work_busy and working lifecycle to sweat", () => {
+    expect(resolvePetWorkVisual({ directiveAction: "work_busy" })).toBe("sweat");
+    expect(resolvePetWorkVisual({ lifecycleState: "working" })).toBe("sweat");
+    expect(resolvePetWorkVisual({ directiveAnimation: "pet.work" })).toBe("sweat");
+  });
+
+  it("maps work_crash and recovering lifecycle to dizzy even when animation is pet.work", () => {
+    expect(resolvePetWorkVisual({
+      directiveAction: "work_crash",
+      directiveAnimation: "pet.work",
+    })).toBe("dizzy");
+    expect(resolvePetWorkVisual({
+      directiveAnimation: "pet.work",
+      lifecycleState: "recovering",
+      emotion: "sad",
+    })).toBe("dizzy");
+    expect(resolvePetWorkVisual({ emotion: "dizzy" })).toBe("dizzy");
+  });
+
+  it("resolveSubjectMotionForWorkerFeedback prefers crash over pet.work", () => {
+    expect(resolveSubjectMotionForWorkerFeedback({
+      directiveAnimation: "pet.work",
+      lifecycleState: "recovering",
+      emotion: "sad",
+    })).toBe("work_crash");
+    expect(resolveSubjectMotionForWorkerFeedback({
+      directiveAnimation: "pet.work",
+      lifecycleState: "working",
+    })).toBe("work_busy");
+    expect(resolveSubjectMotionForWorkerFeedback({
+      directiveAnimation: "pet.celebrate",
+      lifecycleState: "idle",
+    })).toBe("pet.celebrate");
+    expect(resolveSubjectMotionForWorkerFeedback({})).toBe("idle");
   });
 });

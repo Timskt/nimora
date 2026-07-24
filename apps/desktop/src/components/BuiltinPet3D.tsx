@@ -92,6 +92,8 @@ export interface BuiltinPetMotionSample {
   hairSway: number;
   /** 0..1 cheek flush / blush intensity. */
   cheekFlush: number;
+  /** Mouth arc: +1 smile, -1 frown (connector offline / sad). */
+  mouthSmile: number;
 }
 
 export function clampGaze(value: number): number {
@@ -123,19 +125,19 @@ export const Q_MINION_COLORS = {
 /** Tall warm pill + dual goggle layout (classic Q-minion proportions). */
 export const Q_MINION_LAYOUT = {
   /** Cylinder radius of the yellow capsule. */
-  bodyRadius: 0.86,
+  bodyRadius: 0.88,
   /** Cylinder length between hemispheres (total height ≈ length + 2r). */
-  bodyLength: 1.14,
-  bodyY: -0.36,
-  headY: 0.54,
-  goggleRadius: 0.42,
-  goggleSpacing: 0.4,
-  goggleZ: 0.94,
-  overallY: -0.86,
-  bootY: -1.4,
-  armX: 0.94,
-  hairY: 0.94,
-  shadowY: -1.54,
+  bodyLength: 1.12,
+  bodyY: -0.34,
+  headY: 0.56,
+  goggleRadius: 0.45,
+  goggleSpacing: 0.43,
+  goggleZ: 0.96,
+  overallY: -0.84,
+  bootY: -1.36,
+  armX: 0.96,
+  hairY: 0.96,
+  shadowY: -1.5,
 } as const;
 
 export type QMinionVec3 = readonly [number, number, number];
@@ -333,6 +335,12 @@ export function isDazedState(state: string, emotion: string): boolean {
   );
 }
 
+/** Connector offline / low mood → soft sad silhouette (not crash daze). */
+export function isSadEmotion(emotion: string): boolean {
+  const e = emotion.toLowerCase();
+  return e === "sad" || e === "low" || e === "lonely" || e === "upset";
+}
+
 export function builtinPetPose(state: string, emotion: string): BuiltinPetPose {
   if (isDazedState(state, emotion)) {
     return {
@@ -349,6 +357,23 @@ export function builtinPetPose(state: string, emotion: string): BuiltinPetPose {
       shadowPulse: 0.03,
       slump: 0.18,
       sweat: 0.48,
+    };
+  }
+  if (isSadEmotion(emotion) && !isWorking(state) && !isPlaying(state)) {
+    return {
+      bounce: 0.028,
+      bodyTilt: 0.07,
+      eyeScale: 0.84,
+      tailSpeed: 0.55,
+      breath: 0.022,
+      armRest: 0.28,
+      hop: 0,
+      squash: 1.04,
+      stretch: 0.96,
+      lookAround: 0.22,
+      shadowPulse: 0.03,
+      slump: 0.14,
+      sweat: 0.06,
     };
   }
   if (isSleeping(state, emotion)) {
@@ -625,15 +650,15 @@ export function idlePerformancePhase(elapsed: number): {
   /** 0..1 soft hop-lite micro-act while idle. */
   hopLite: number;
 } {
-  const blinkCycle = ((elapsed * 0.52) % 3.9);
+  const blinkCycle = ((elapsed * 0.58) % 3.55);
   // Primary blink plus a rarer double-blink tail so eyes stay alive.
-  const blinkBoth = (blinkCycle > 3.55 && blinkCycle < 3.72)
-    || (blinkCycle > 3.78 && blinkCycle < 3.86);
+  const blinkBoth = (blinkCycle > 3.18 && blinkCycle < 3.36)
+    || (blinkCycle > 3.4 && blinkCycle < 3.48);
   // Asymmetric extras: left leads the close; rare right-only wink.
-  const winkCycle = ((elapsed * 0.34) % 6.8);
-  const winkR = winkCycle > 6.2 && winkCycle < 6.42;
-  const blinkL = blinkBoth || (blinkCycle > 3.52 && blinkCycle < 3.62);
-  const blinkR = blinkBoth || winkR || (blinkCycle > 3.62 && blinkCycle < 3.76);
+  const winkCycle = ((elapsed * 0.38) % 5.9);
+  const winkR = winkCycle > 5.35 && winkCycle < 5.58;
+  const blinkL = blinkBoth || (blinkCycle > 3.14 && blinkCycle < 3.26);
+  const blinkR = blinkBoth || winkR || (blinkCycle > 3.24 && blinkCycle < 3.4);
   const blink = blinkL || blinkR;
   // Yawn ~every 7.4s with a readable open window.
   const yawn = cycleEnvelope(elapsed, 7.4, 5.85, 7.05);
@@ -763,6 +788,7 @@ export function sampleBuiltinPetMotion(
   const working = isWorking(state);
   const observing = isObserving(state, emotion);
   const dazedAmt = isDazedState(state, emotion) ? 1 : 0;
+  const sadAmt = (!dazedAmt && isSadEmotion(emotion)) ? 1 : 0;
   const directedYawn = isDirectedYawn(state);
   const directedDig = isDirectedDigNose(state);
   const directedAnts = isDirectedCountAnts(state);
@@ -817,7 +843,7 @@ export function sampleBuiltinPetMotion(
 
   const breathRate = sleeping ? 0.85 : working ? 2.4 : 1.7;
   const breath = Math.sin(elapsed * breathRate) * pose.breath;
-  const slumpDrop = pose.slump * 0.22 + dazedAmt * 0.04 + ants * 0.035;
+  const slumpDrop = pose.slump * 0.22 + dazedAmt * 0.04 + sadAmt * 0.03 + ants * 0.035;
   const rootY = (
     -0.02
     + hopWave
@@ -886,6 +912,7 @@ export function sampleBuiltinPetMotion(
     + digAmt * 0.16 * (idleish ? 1 : 0)
     + ants * 0.26
     + dazedAmt * 0.14
+    + sadAmt * 0.1
     + idleBounce * -0.022 * (idleish ? 1 : 0)
     + fidgetAmt * 0.04
     + (working ? 0.06 : 0)
@@ -893,7 +920,7 @@ export function sampleBuiltinPetMotion(
 
   const blinkGateL = micro.blinkL || Math.sin(elapsed * 1.08) > 0.986;
   const blinkGateR = micro.blinkR || Math.sin(elapsed * 1.08 + 0.18) > 0.988;
-  const openEye = pose.eyeScale * (1 - yawnAmt * 0.4 - digAmt * 0.15 * (idleish ? 1 : 0));
+  const openEye = pose.eyeScale * (1 - yawnAmt * 0.4 - digAmt * 0.15 * (idleish ? 1 : 0) - sadAmt * 0.08);
   const eyeScaleYLRaw = (
     sleeping
       ? 0.07 + Math.sin(elapsed * 0.85) * 0.012
@@ -1016,9 +1043,20 @@ export function sampleBuiltinPetMotion(
       : yawnAmt * 0.62
         + (playing ? 0.14 + Math.sin(elapsed * 4) * 0.06 : 0.02)
         + dazedAmt * 0.1
+        + sadAmt * 0.04
         + (idleish ? digAmt * 0.12 : 0)
         + ants * 0.04 * Math.max(0, Math.sin(elapsed * 3.1))
   ) * m;
+  // +1 smile (classic) · -1 frown for sad / connector offline mood.
+  const mouthSmile = MathUtils.clamp(
+    (playing || emotion === "happy" || emotion === "excited" ? 1 : 0.82)
+      - sadAmt * 1.7
+      - dazedAmt * 0.55
+      - yawnAmt * 0.12
+      + (idleish ? micro.cheekPulse * 0.08 : 0),
+    -1,
+    1,
+  ) * m + 0.82 * (1 - m);
 
   const sweatPulse = working || dazedAmt
     ? pose.sweat * (0.55 + 0.45 * (0.5 + 0.5 * Math.sin(elapsed * 4.2)))
@@ -1059,6 +1097,7 @@ export function sampleBuiltinPetMotion(
       + waveLiteAmt * 0.18
       + hopLiteAmt * 0.1
       + (emotion === "happy" || emotion === "excited" ? 0.22 : 0)
+      - sadAmt * 0.18
     ) * m,
     0,
     1,
@@ -1093,6 +1132,7 @@ export function sampleBuiltinPetMotion(
     countAnts,
     hairSway,
     cheekFlush,
+    mouthSmile,
   };
 }
 
@@ -1129,8 +1169,9 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
     const scene = new Scene();
     scene.background = null;
     // Frustum frames tall dual-goggle pill + boots (transparent, no plate).
-    const camera = new OrthographicCamera(-2.05, 2.05, 2.62, -2.18, 0.1, 100);
-    camera.position.set(0, 0.06, 8);
+    // Extra vertical room so crown tufts + boots + dual contact shadow never clip.
+    const camera = new OrthographicCamera(-2.55, 2.55, 3.15, -2.75, 0.1, 100);
+    camera.position.set(0, -0.12, 8);
     scene.add(new AmbientLight(0xfff6e0, 2.45));
     const keyLight = new DirectionalLight(0xfff8ee, 4.0);
     keyLight.position.set(-2.8, 5.2, 6.8);
@@ -1143,7 +1184,9 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
     scene.add(rimLight);
 
     const root = new Group();
-    root.position.y = -0.02;
+    // Fit full Q-minion (crown tufts → boots → dual shadow) inside ortho frustum.
+    root.scale.setScalar(0.82);
+    root.position.y = 0.02;
     scene.add(root);
 
     const layout = Q_MINION_LAYOUT;
@@ -1175,22 +1218,22 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
     head.position.set(0, layout.headY, 0.05);
     body.add(head);
 
-    // Warmer #F5D547 yellow + soft denim + brown boots (classic Q-minion).
-    const yellow = material(colors.yellow, 0.34, 0.82, colors.yellowEmissive, 0.1);
-    const yellowLight = material(colors.yellowLight, 0.3, 0.86, colors.yellowEmissive, 0.12);
-    const graphite = material(colors.graphite, 0.28, 0.58);
-    const goggleBand = material(colors.goggleBand, 0.36, 0.42);
-    const metal = metallicMaterial(colors.metal, 0.28, 0.72);
-    const glass = material(colors.iris, 0.12, 0.9, colors.irisEmissive, 0.28);
-    const white = material(colors.sclera, 0.62, 0.28);
-    const coral = material(colors.blush, 0.55, 0.36, "#d83d2c", 0.06);
-    const denim = material(colors.denim, 0.72, 0.18);
-    const denimSoft = material(colors.denimSoft, 0.68, 0.22);
-    const denimDeep = material(colors.denimDeep, 0.74, 0.16);
-    const gloveMat = material(colors.glove, 0.48, 0.22);
-    const bootMat = material(colors.boot, 0.58, 0.18);
-    const bootSoleMat = material(colors.bootSole, 0.7, 0.1);
-    const hairMat = material(colors.hair, 0.42, 0.2);
+    // Soft warm Q-minion materials: gentle clearcoat, muted metal (no chrome plate).
+    const yellow = material(colors.yellow, 0.38, 0.78, colors.yellowEmissive, 0.09);
+    const yellowLight = material(colors.yellowLight, 0.34, 0.84, colors.yellowEmissive, 0.11);
+    const graphite = material(colors.graphite, 0.34, 0.48);
+    const goggleBand = material(colors.goggleBand, 0.42, 0.36);
+    const metal = metallicMaterial(colors.metal, 0.36, 0.58);
+    const glass = material(colors.iris, 0.16, 0.86, colors.irisEmissive, 0.24);
+    const white = material(colors.sclera, 0.55, 0.34);
+    const coral = material(colors.blush, 0.58, 0.32, "#d83d2c", 0.05);
+    const denim = material(colors.denim, 0.76, 0.14);
+    const denimSoft = material(colors.denimSoft, 0.72, 0.18);
+    const denimDeep = material(colors.denimDeep, 0.78, 0.12);
+    const gloveMat = material(colors.glove, 0.52, 0.18);
+    const bootMat = material(colors.boot, 0.62, 0.14);
+    const bootSoleMat = material(colors.bootSole, 0.74, 0.08);
+    const hairMat = material(colors.hair, 0.48, 0.16);
 
     // Tall warm yellow capsule body (classic pill silhouette, not a box/plate).
     const torso = makeMesh(
@@ -1408,7 +1451,20 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
     const perfEmitGate = createPerfEmitGate();
     let frame = 0;
     let disposed = false;
-    // Spring-damper secondary only (hair + antenna). Pose applies sample values directly — no lerp.
+    // Spring-damper body + secondary (no linear body lerp). High omega tracks hop liveliness.
+    const springRootY = createSpringState(-0.02);
+    const springScaleX = createSpringState(1);
+    const springScaleY = createSpringState(1);
+    const springBodyTilt = createSpringState(0);
+    const springBodyYaw = createSpringState(0);
+    const springHeadYaw = createSpringState(0);
+    const springHeadPitch = createSpringState(0);
+    const springArmL = createSpringState(0);
+    const springArmR = createSpringState(0);
+    const springEyeL = createSpringState(1);
+    const springEyeR = createSpringState(1);
+    const springSweat = createSpringState(0);
+    const springMouthSmile = createSpringState(0.82);
     const springHair = createSpringState(0);
     const springAntenna = createSpringState(0);
 
@@ -1440,15 +1496,30 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
       const sample = sampleBuiltinPetMotion(current.state, current.emotion, elapsed, softGazeX, softGazeY, motion);
       const playing = isPlaying(current.state);
 
-      // Hop/bounce live on pose → rootY/scale; apply sample (already continuous), never lerp.
-      root.position.y = sample.rootY;
-      body.scale.set(sample.scaleX, sample.scaleY, 1);
-      body.rotation.z = sample.bodyTilt;
-      body.rotation.y = sample.bodyYaw;
+      // Body channels: spring-damper only (never linear lerp). Play spin stays snappy via higher omega.
+      const bodyOmega = playing ? 22 : 16.5;
+      const softRootY = springToward(springRootY, sample.rootY, dt, bodyOmega, 0.86);
+      const softScaleX = springToward(springScaleX, sample.scaleX, dt, bodyOmega, 0.84);
+      const softScaleY = springToward(springScaleY, sample.scaleY, dt, bodyOmega, 0.84);
+      const softBodyTilt = springToward(springBodyTilt, sample.bodyTilt, dt, 15.5, 0.86);
+      const softBodyYaw = springToward(springBodyYaw, sample.bodyYaw, dt, playing ? 20 : 13.5, 0.88);
+      const softHeadYaw = springToward(springHeadYaw, sample.headYaw, dt, 14.5, 0.86);
+      const softHeadPitch = springToward(springHeadPitch, sample.headPitch, dt, 14.5, 0.86);
+      const softArmL = springToward(springArmL, sample.armL, dt, 13.5, 0.88);
+      const softArmR = springToward(springArmR, sample.armR, dt, 13.5, 0.88);
+      const softEyeL = springToward(springEyeL, sample.eyeScaleYL, dt, 22, 0.78);
+      const softEyeR = springToward(springEyeR, sample.eyeScaleYR, dt, 22, 0.78);
+      const softSweat = springToward(springSweat, sample.sweat, dt, 9.5, 0.9);
+      const softMouthSmile = springToward(springMouthSmile, sample.mouthSmile, dt, 11, 0.88);
 
-      head.rotation.y = sample.headYaw;
-      head.rotation.x = sample.headPitch;
-      // Hair lag: spring-damper secondary only (bounce stays pose-only via rootY).
+      root.position.y = softRootY;
+      body.scale.set(softScaleX, softScaleY, 1);
+      body.rotation.z = softBodyTilt;
+      body.rotation.y = softBodyYaw;
+
+      head.rotation.y = softHeadYaw;
+      head.rotation.x = softHeadPitch;
+      // Hair lag: spring-damper secondary (follows soft head pitch targets).
       const hairLean = springToward(springHair, sample.hairSway, dt, 8.2, 0.9);
       hairGroup.rotation.x = hairLean;
       hairGroup.rotation.z = Math.sin(elapsed * 1.7) * 0.05 * motion + sample.bodyTilt * 0.12;
@@ -1470,9 +1541,9 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
       antennaTip.position.x = 0.16 + Math.sin(elapsed * 2.8) * 0.014 * motion + antennaLean * 0.02;
       antennaTip.scale.setScalar(1 + Math.sin(elapsed * 3.4) * 0.06 * motion);
 
-      // Dual goggles: asymmetric blink + shared gaze from sample.
-      eyeGroups[0]!.scale.y = sample.eyeScaleYL;
-      eyeGroups[1]!.scale.y = sample.eyeScaleYR;
+      // Dual goggles: livelier asymmetric blink via spring + shared gaze IK.
+      eyeGroups[0]!.scale.y = softEyeL;
+      eyeGroups[1]!.scale.y = softEyeR;
       for (let i = 0; i < eyeGroups.length; i += 1) {
         const sideSign = i === 0 ? -1 : 1;
         const eyeIrisX = sample.irisX + sideSign * 0.004 * motion;
@@ -1482,12 +1553,15 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
         pupils[i]!.position.y = -0.004 + sample.irisY * 1.1;
       }
 
+      // Smile (π) ↔ frown (0) spring; open for yawn / play.
+      const smileT = MathUtils.clamp((softMouthSmile + 1) * 0.5, 0, 1);
+      mouth.rotation.z = Math.PI * smileT;
       mouth.scale.y = 0.7 + sample.mouthOpen * 0.9;
-      mouth.position.y = -0.4 - sample.mouthOpen * 0.04;
-      mouth.scale.x = 1.05 + sample.digNose * 0.08 + sample.countAnts * 0.05;
+      mouth.position.y = -0.4 - sample.mouthOpen * 0.04 + (1 - smileT) * 0.03;
+      mouth.scale.x = 1.05 + sample.digNose * 0.08 + sample.countAnts * 0.05 + (1 - smileT) * 0.06;
 
-      arms[0]!.rotation.z = sample.armL;
-      arms[1]!.rotation.z = sample.armR;
+      arms[0]!.rotation.z = softArmL;
+      arms[1]!.rotation.z = softArmR;
       const armXIdleL = sample.digNose * 0.35 + sample.countAnts * 0.28;
       const armXIdleR = sample.digNose * -0.2 + sample.countAnts * 0.72;
       arms[0]!.rotation.x = playing ? -0.55 : armXIdleL;
@@ -1506,7 +1580,7 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
       shadowCore.scale.z = 0.54 * sample.shadowScale;
       (shadowCore.material as MeshBasicMaterial).opacity = MathUtils.clamp(sample.shadowOpacity * 0.82, 0.3, 0.88);
 
-      const lagSweat = sample.sweat;
+      const lagSweat = softSweat;
       const lagSparkle = sample.sparkle;
       const lagDazed = sample.dazed;
 
@@ -1577,15 +1651,15 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
     };
   }, [onFailure]);
 
-  return <canvas ref={canvasRef} className="builtin-pet-3d" aria-label="Aster · Nimora Q版小黄人伙伴" />;
+  return <canvas ref={canvasRef} className="builtin-pet-3d" aria-label="灵灵 · Nimora Q版小黄人伙伴" />;
 }
 
 function material(color: string, roughness: number, clearcoat: number, emissive = "#000000", emissiveIntensity = 0): MeshPhysicalMaterial {
-  return new MeshPhysicalMaterial({ color: new Color(color), roughness, clearcoat, clearcoatRoughness: 0.34, emissive: new Color(emissive), emissiveIntensity });
+  return new MeshPhysicalMaterial({ color: new Color(color), roughness, clearcoat, clearcoatRoughness: 0.42, emissive: new Color(emissive), emissiveIntensity });
 }
 
 function metallicMaterial(color: string, roughness: number, clearcoat: number): MeshPhysicalMaterial {
-  return new MeshPhysicalMaterial({ color: new Color(color), roughness, metalness: 0.78, clearcoat, clearcoatRoughness: 0.16 });
+  return new MeshPhysicalMaterial({ color: new Color(color), roughness, metalness: 0.62, clearcoat, clearcoatRoughness: 0.28 });
 }
 
 function makeMesh(

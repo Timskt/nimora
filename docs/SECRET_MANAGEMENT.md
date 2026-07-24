@@ -49,4 +49,8 @@ NIMORA_RUN_SYSTEM_SECRET_STORE_TEST=1 cargo test -p nimora-secret-store system_s
 
 ## 7. 当前实现边界
 
-`nimora-secret-store` 已实现严格引用、系统后端、零化读取、内存测试后端和显式真机门禁。桌面 Provider 配置仓储、凭据设置与撤销 UI、OpenAI-compatible 隔离 Worker、动态 Registry 和逐请求联网确认均已接线；API Key 不进入 SQLite、IPC 响应、命令行、环境变量或日志。Auto Mode Context Cache 使用固定非敏感引用 `secret:cache:auto-mode-context-v1` 管理独立 256-bit 系统密钥；每条记录采用随机 nonce 的 XChaCha20-Poly1305 信封，并以 Cache Key、Provider、模型、Workspace fingerprint、Plan revision、数据等级和时间边界作为 AAD。旧明文版本直接失效删除，错误密钥或元数据篡改 fail-closed，系统密钥不可用时不会降级写入明文。仍未完成的是授权签名材料接线，以及 Windows Credential Manager、Linux Secret Service 和签名桌面包的发布机验收。
+`nimora-secret-store` 已实现严格引用、系统后端、零化读取、内存测试后端和显式真机门禁。桌面 Provider 配置仓储、凭据设置与撤销 UI、OpenAI-compatible 隔离 Worker、动态 Registry 和逐请求联网确认均已接线；API Key 不进入 SQLite、IPC 响应、命令行、环境变量或日志。Auto Mode Context Cache 使用固定非敏感引用 `secret:cache:auto-mode-context-v1` 管理独立 256-bit 系统密钥；每条记录采用随机 nonce 的 XChaCha20-Poly1305 信封，并以 Cache Key、Provider、模型、Workspace fingerprint、Plan revision、数据等级和时间边界作为 AAD。旧明文版本直接失效删除，错误密钥或元数据篡改 fail-closed，系统密钥不可用时不会降级写入明文。
+
+**Authorization Grant at-rest key**：桌面宿主通过 `authorization_grant_key` 从系统密钥后端加载或生成固定引用 `secret:cache:authorization-grant-v1`（256-bit，hex 编码存储），并传入 `SqliteAuthorizationGrantRepository::open_with_key`。Grant payload 以 `nimora.encrypted-authorization-grant/1`（XChaCha20-Poly1305）落库；issue/list/revoke/control-center/auto-mode 均走该密钥。密钥串不可用或解析失败时 fail-closed 回退 `AuthorizationGrantKey::app_local_default`（仅本地/测试环境，不写明文 Grant）。密钥材料永不进入 IPC 响应、日志、模型上下文或 FE。
+
+仍未完成的是 Windows Credential Manager、Linux Secret Service 和签名桌面包的发布机验收。

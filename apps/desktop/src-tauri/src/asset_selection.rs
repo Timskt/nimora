@@ -6,7 +6,10 @@ use uuid::Uuid;
 
 use crate::{DesktopError, valid_asset_identifier};
 
-pub(crate) const BUILTIN_CHARACTER_ID: &str = "builtin.aster";
+/// Canonical built-in character id (Nimora product naming).
+pub(crate) const BUILTIN_CHARACTER_ID: &str = "builtin.nimora";
+/// Legacy id kept for dual-read of older selections / inventory.
+pub(crate) const BUILTIN_CHARACTER_LEGACY_ID: &str = "builtin.aster";
 pub(crate) const ACTIVE_CHARACTER_SPEC: &str = "nimora.active-character/1";
 pub(crate) const ACTIVE_CHARACTER_FILE: &str = ".active-character.json";
 pub(crate) const BUILTIN_THEME_ID: &str = "builtin.nimora";
@@ -85,7 +88,10 @@ pub(crate) fn resolve_asset_selection(
             });
         }
     };
-    if stored.asset_id == policy.builtin_id {
+    if stored.asset_id == policy.builtin_id
+        || (policy.builtin_id == BUILTIN_CHARACTER_ID
+            && stored.asset_id == BUILTIN_CHARACTER_LEGACY_ID)
+    {
         return Ok(ResolvedAssetSelection::BuiltIn {
             fallback_reason: None,
         });

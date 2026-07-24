@@ -39,7 +39,30 @@ describe("petStatusMessage", () => {
     expect(petStatusMessage({ state: "idle", energy: 80, mood: 80, satiety: 25, cleanliness: 10 })).toBe("肚子有点空，陪我吃点东西吧");
     expect(petStatusMessage({ state: "idle", energy: 80, mood: 80, satiety: 80, cleanliness: 25 })).toBe("想整理一下，保持清清爽爽");
     expect(petStatusMessage({ state: "idle", energy: 80, mood: 25, satiety: 80, cleanliness: 80 })).toBe("今天想和你待一会儿");
-    expect(petStatusMessage({ state: "idle", energy: 80, mood: 80, satiety: 80, cleanliness: 80 })).toBe("本地陪伴中");
+    expect(petStatusMessage({ state: "idle", energy: 80, mood: 80, satiety: 80, cleanliness: 80 })).toBe("在桌面上陪着你呢～");
+    expect(petStatusMessage(
+      { state: "idle", energy: 80, mood: 80, satiety: 80, cleanliness: 80 },
+      { sequence: 2 },
+    )).toBe("想不想摸摸我的护目镜？");
+  });
+
+  it("reacts to desktop lifeform sense without leaking titles", () => {
+    expect(petStatusMessage(
+      { state: "idle", energy: 80, mood: 80, satiety: 80, cleanliness: 80 },
+      { desktop: { meetingActive: true, meetingHint: "zoom" } },
+    )).toBe("会议中，我先安静靠边～");
+    expect(petStatusMessage(
+      { state: "idle", energy: 80, mood: 80, satiety: 80, cleanliness: 80 },
+      { desktop: { onBattery: true, batteryPercent: 12, charging: false } },
+    )).toBe("电量有点低，我轻一点活动");
+    expect(petStatusMessage(
+      { state: "walking", energy: 80, mood: 80, satiety: 80, cleanliness: 80 },
+      { desktop: { displayCount: 2 } },
+    )).toBe("去隔壁屏幕逛逛");
+    expect(petStatusMessage(
+      { state: "idle", energy: 80, mood: 80, satiety: 80, cleanliness: 80 },
+      { desktop: { notificationUnread: true } },
+    )).toBe("好像有事等你看一眼～");
   });
 
   it("prefers directive speech over ambient vitals status", () => {

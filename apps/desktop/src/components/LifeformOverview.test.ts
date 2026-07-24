@@ -24,6 +24,7 @@ import {
 } from "./LifeformOverview";
 import {
   buildPerfBudgetCards,
+  hostProcessBudgetFromDesktopSnapshot,
   shouldWarnIdleBudget,
 } from "./lifeformPerf";
 
@@ -430,6 +431,44 @@ describe("lifeform snapshot-derived sense bindings", () => {
     } as never);
     const cards = buildLifeformSenseCards(withUnread);
     expect(cards.some((c) => c.id === "notification" && c.value === "有未读")).toBe(true);
+
+    const cleared = buildLifeformSenseHintsFromSnapshot({
+      lifeformSense: {
+        batteryPercent: 80,
+        onBattery: false,
+        charging: false,
+        idleMs: 0,
+        meetingActive: false,
+        displayCount: 1,
+        notificationUnread: false,
+        freshness: "fresh",
+        observedAtMs: 1,
+        expiresAtMs: 2,
+      },
+    } as never);
+    expect(
+      buildLifeformSenseCards(cleared).some((c) => c.id === "notification" && c.value === "已清空"),
+    ).toBe(true);
+  });
+
+  it("accepts snake_case notification_unread from defensive IPC shapes", () => {
+    const hints: Parameters<typeof applyLifeformSenseSnapshot>[0] = {};
+    applyLifeformSenseSnapshot(hints, {
+      batteryPercent: 50,
+      onBattery: true,
+      charging: false,
+      idleMs: 0,
+      meetingActive: false,
+      displayCount: 1,
+      notification_unread: true,
+      freshness: "fresh",
+      observedAtMs: 1,
+      expiresAtMs: 2,
+    } as never);
+    expect(hints.notificationUnread).toBe(true);
+    expect(
+      buildLifeformSenseCards(hints).some((c) => c.id === "notification" && c.value === "有未读"),
+    ).toBe(true);
   });
 
   it("merges explicit senseHints over snapshot and pet.working", () => {
@@ -466,5 +505,25 @@ describe("渲染预算 perf cards", () => {
     );
     expect(cards.every((c) => c.tone === "ok")).toBe(true);
     expect(cards.find((c) => c.id === "idle-budget")?.value).toBe("充裕");
+  });
+
+  it("surfaces host processBudget RSS/CPU on 渲染预算 cards", () => {
+    const budget = hostProcessBudgetFromDesktopSnapshot({
+      lifeformSense: { notificationUnread: true },
+      processBudget: {
+        rssBytes: 160 * 1024 * 1024,
+        rssMb: 160,
+        cpuPercentApprox: 0.9,
+        withinMemoryBudget: true,
+        observedAtMs: 1,
+      },
+    });
+    expect(budget).toEqual({ processRssMb: 160, processCpuPercent: 0.9 });
+    const cards = buildPerfBudgetCards(
+      { fps: 58, avgFrameMs: 17, maxFrameMs: 20, sampleCount: 30 },
+      budget,
+    );
+    expect(cards.find((c) => c.id === "memory")?.value).toMatch(/160/);
+    expect(cards.find((c) => c.id === "cpu")?.value).toMatch(/0\.9|0.9/);
   });
 });

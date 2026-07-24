@@ -1305,7 +1305,7 @@ const previewRecoveryMode = typeof window !== "undefined"
 const previewSnapshot: DesktopSnapshot = {
   pet: {
     id: "00000000-0000-4000-8000-000000000001",
-    name: "Aster",
+    name: "灵灵",
     state: "idle",
     emotion: "neutral",
     position: { x: 80, y: 80 },
@@ -1339,7 +1339,7 @@ const previewSnapshot: DesktopSnapshot = {
   petPresentation: { statusBubblesEnabled: true },
   windowPolicy: { visible: true, alwaysOnTop: true, clickThrough: false },
   overlayStage: { originX: 0, originY: 0, width: 1280, height: 800 },
-  petBody: { width: 260, height: 300 },
+  petBody: { width: 260, height: 320 },
   lifeformSense: {
     batteryPercent: 86,
     onBattery: false,
@@ -2029,11 +2029,11 @@ export function createDesktopApi(
       async setClickThrough() {},
       async setReducedMotion() {},
       async assetCatalog() { return { assets: [], rejected: [] }; },
-      async activeCharacter() { return { assetId: "builtin.aster", source: "built-in", fallbackReason: null }; },
+      async activeCharacter() { return { assetId: "builtin.nimora", source: "built-in", fallbackReason: null }; },
       async activeCharacterRenderer() {
         return {
           spec: "nimora.renderer/1",
-          assetId: "builtin.aster",
+          assetId: "builtin.nimora",
           assetBaseUrl: null,
           backend: "built-in",
           canvas: { width: 320, height: 360 },
@@ -2048,7 +2048,7 @@ export function createDesktopApi(
           fallbackReason: null,
         };
       },
-      async activateCharacter(assetId) { return { assetId, source: assetId === "builtin.aster" ? "built-in" : "installed", fallbackReason: null }; },
+      async activateCharacter(assetId) { return { assetId, source: assetId === "builtin.nimora" || assetId === "builtin.aster" ? "built-in" : "installed", fallbackReason: null }; },
       async activeTheme() { return builtInThemeSnapshot(); },
       async activateTheme() { return builtInThemeSnapshot(); },
       async activeVoice() { return { spec: "nimora.active-voice/1", assetId: "builtin.silent", source: "built-in", voice: null, fallbackReason: null }; },
