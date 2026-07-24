@@ -4,6 +4,7 @@ import { PresenceSettings } from "./components/PresenceSettings";
 import { StartupSettings } from "./components/StartupSettings";
 import { LazyWorkspace } from "./components/LazyWorkspace";
 import { LifeformOverview, buildLifeformSenseHintsFromSnapshot } from "./components/LifeformOverview";
+import { hostProcessBudgetFromDesktopSnapshot } from "./components/lifeformPerf";
 import { petItemPresentation } from "./components/petItems";
 import type { PetRelationshipStage } from "@nimora/schemas";
 import type { ActiveThemeSnapshot, AssetPreviewAudio, DesktopSnapshot, OutboxSnapshot, PetCareAction, PetItemId, ThemeDescriptor } from "./platform/desktop";
@@ -383,6 +384,7 @@ export function App() {
               overlayStage={desktopSnapshot?.overlayStage}
               directiveSpeech={directiveSpeech}
               senseHints={buildLifeformSenseHintsFromSnapshot(desktopSnapshot)}
+              hostProcessBudget={hostProcessBudgetFromDesktopSnapshot(desktopSnapshot)}
             />
           </section>
 

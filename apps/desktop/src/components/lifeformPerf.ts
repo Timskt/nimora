@@ -209,7 +209,8 @@ function cpuTone(percent: number): LifeformPerfCardTone {
 
 /**
  * Defensively project optional host process fields from a loose sense snapshot.
- * Accepts `processRssMb` / `processCpuPercent` or nested `processBudget`.
+ * Accepts flat `processRssMb` / `processCpuPercent`, nested `processBudget`, or the
+ * desktop `ProcessBudgetSnapshot` shape (`rssMb` / `cpuPercentApprox` at root).
  */
 export function hostProcessBudgetFromSense(sense: unknown): LifeformHostProcessBudget | null {
   if (!sense || typeof sense !== "object") return null;
@@ -221,13 +222,18 @@ export function hostProcessBudgetFromSense(sense: unknown): LifeformHostProcessB
 
   const processRssMb = pickFiniteNumber(
     root.processRssMb,
+    root.rssMb,
+    root.memoryMb,
     nested?.processRssMb,
     nested?.rssMb,
     nested?.memoryMb,
   );
   const processCpuPercent = pickFiniteNumber(
     root.processCpuPercent,
+    root.cpuPercentApprox,
+    root.cpuPercent,
     nested?.processCpuPercent,
+    nested?.cpuPercentApprox,
     nested?.cpuPercent,
   );
   const idleCpuPercent = pickFiniteNumber(
@@ -244,6 +250,22 @@ export function hostProcessBudgetFromSense(sense: unknown): LifeformHostProcessB
   if (processCpuPercent != null) budget.processCpuPercent = processCpuPercent;
   if (idleCpuPercent != null) budget.idleCpuPercent = idleCpuPercent;
   return budget;
+}
+
+/**
+ * Project Control Center 「渲染预算」 host RSS/CPU from a full `DesktopSnapshot`.
+ * Prefers root `processBudget` (always sampled by host), then lifeformSense flat fields.
+ */
+export function hostProcessBudgetFromDesktopSnapshot(
+  snapshot: unknown,
+): LifeformHostProcessBudget | null {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  const root = snapshot as Record<string, unknown>;
+  return (
+    hostProcessBudgetFromSense(root.processBudget)
+    ?? hostProcessBudgetFromSense(root.lifeformSense)
+    ?? hostProcessBudgetFromSense(root)
+  );
 }
 
 function pickFiniteNumber(...values: unknown[]): number | null {

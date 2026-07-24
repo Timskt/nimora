@@ -12,6 +12,7 @@ import {
   formatFrameMs,
   formatMemoryMb,
   hostProcessBudgetFromSense,
+  hostProcessBudgetFromDesktopSnapshot,
   recordFrame,
   shouldWarnIdleBudget,
   summarize,
@@ -190,6 +191,55 @@ describe("lifeformPerf", () => {
     ).toEqual({
       processRssMb: 210,
       processCpuPercent: 3.2,
+    });
+    // Native ProcessBudgetSnapshot shape (rssMb + cpuPercentApprox).
+    expect(
+      hostProcessBudgetFromSense({
+        rssBytes: 96 * 1024 * 1024,
+        rssMb: 96,
+        cpuPercentApprox: 0.4,
+        withinMemoryBudget: true,
+        observedAtMs: 1,
+      }),
+    ).toEqual({
+      processRssMb: 96,
+      processCpuPercent: 0.4,
+    });
+    expect(
+      hostProcessBudgetFromSense({
+        processBudget: { rssMb: 140, cpuPercentApprox: 1.1 },
+      }),
+    ).toEqual({
+      processRssMb: 140,
+      processCpuPercent: 1.1,
+    });
+  });
+
+  it("prefers DesktopSnapshot.processBudget over lifeformSense", () => {
+    expect(hostProcessBudgetFromDesktopSnapshot(null)).toBeNull();
+    expect(
+      hostProcessBudgetFromDesktopSnapshot({
+        lifeformSense: { notificationUnread: true, batteryPercent: 50 },
+        processBudget: {
+          rssBytes: 180 * 1024 * 1024,
+          rssMb: 180,
+          cpuPercentApprox: 1.5,
+          withinMemoryBudget: true,
+          observedAtMs: 9,
+        },
+      }),
+    ).toEqual({
+      processRssMb: 180,
+      processCpuPercent: 1.5,
+    });
+    // lifeformSense alone still works when processBudget is absent.
+    expect(
+      hostProcessBudgetFromDesktopSnapshot({
+        lifeformSense: { processRssMb: 90, processCpuPercent: 0.2 },
+      }),
+    ).toEqual({
+      processRssMb: 90,
+      processCpuPercent: 0.2,
     });
   });
 

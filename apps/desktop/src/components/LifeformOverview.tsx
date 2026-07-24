@@ -11,7 +11,7 @@ import {
 import { BuiltinPet } from "./BuiltinPet";
 import {
   buildPerfBudgetCards,
-  hostProcessBudgetFromSense,
+  hostProcessBudgetFromDesktopSnapshot,
   LIFEFORM_PERF_EVENT,
   type LifeformHostProcessBudget,
   type LifeformPerfSummary,
@@ -445,6 +445,14 @@ export function buildLifeformSenseHintsFromSnapshot(
   return Object.keys(hints).length > 0 ? hints : null;
 }
 
+/** Prefer first defined boolean among loose IPC aliases. */
+function readOptionalBoolean(...values: unknown[]): boolean | null {
+  for (const value of values) {
+    if (value === true || value === false) return value;
+  }
+  return null;
+}
+
 /** Map privacy-safe host lifeform aggregates into Control Center sense cards. */
 export function applyLifeformSenseSnapshot(
   hints: LifeformSenseHints,
@@ -465,9 +473,14 @@ export function applyLifeformSenseSnapshot(
     hints.meeting = true;
   }
 
-  if (sense.notificationUnread === true) {
+  // Host serializes camelCase; accept snake_case for defensive preview/IPC shapes.
+  const notificationUnread = readOptionalBoolean(
+    sense.notificationUnread,
+    (sense as { notification_unread?: unknown }).notification_unread,
+  );
+  if (notificationUnread === true) {
     hints.notificationUnread = true;
-  } else if (sense.notificationUnread === false) {
+  } else if (notificationUnread === false) {
     hints.notificationUnread = false;
   }
 
@@ -611,8 +624,8 @@ export function LifeformOverview({
         const snapshot = await desktopApi.snapshot();
         if (cancelled) return;
         setSnapshotHints(buildLifeformSenseHintsFromSnapshot(snapshot));
-        // Defensive: processRssMb / processBudget may land concurrently on lifeformSense.
-        setSnapshotProcessBudget(hostProcessBudgetFromSense(snapshot.lifeformSense ?? snapshot));
+        // Prefer DesktopSnapshot.processBudget (always sampled); never hide behind lifeformSense.
+        setSnapshotProcessBudget(hostProcessBudgetFromDesktopSnapshot(snapshot));
       } catch {
         if (!cancelled) {
           setSnapshotHints(null);
