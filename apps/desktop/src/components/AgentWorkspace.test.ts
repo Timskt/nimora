@@ -54,6 +54,7 @@ import {
   tierSandboxLabel,
   tierSleepSafeCopy,
   tierUsesNeverAsk,
+  unattendedStartFailureMessage,
   UNATTENDED_REASONING_CHOICE_STORAGE_KEY,
 } from "./AgentWorkspace";
 
@@ -554,3 +555,20 @@ describe("Tier danger risk copy + grant list helpers", () => {
   });
 });
 
+
+describe("unattendedStartFailureMessage", () => {
+  it("maps grant key / keychain failures to Chinese recovery guidance", () => {
+    expect(
+      unattendedStartFailureMessage(
+        new Error(
+          "Agent runtime failed: Authorization grant key unavailable (system secret store unavailable). Restore OS keychain access, or set NIMORA_ALLOW_LOCAL_GRANT_KEY=1 only for local dogfood (not production).",
+        ),
+      ),
+    ).toContain("系统密钥库");
+    expect(unattendedStartFailureMessage("secret store rejected grant key write")).toContain("钥匙串");
+  });
+
+  it("keeps a safe generic fallback when the host message is opaque", () => {
+    expect(unattendedStartFailureMessage(null)).toBe("启动无人值守目标失败；未创建新的授权或任务");
+  });
+});

@@ -7003,8 +7003,13 @@ pub(crate) fn context_cache_key(state: &DesktopState) -> Result<ContextCacheKey,
 
 /// Loads or creates the OS secret-store key used for Authorization Grant at-rest encryption.
 ///
-/// When the system secret store is unavailable (headless tests, locked keychain), falls back to
-/// [`AuthorizationGrantKey::app_local_default`] so grants remain encrypted offline-first.
+/// Production is **fail-closed**: if the system secret store cannot hold or return a real key,
+/// NeverAsk / unattended / full_device grants refuse to start instead of encrypting with a
+/// predictable process-local key.
+///
+/// Opt-in dogfood / headless tests only:
+/// - `cfg(test)` unit tests may use [`AuthorizationGrantKey::app_local_default`]
+/// - `NIMORA_ALLOW_LOCAL_GRANT_KEY=1` enables the same explicit fallback for local dogfood
 pub(crate) fn authorization_grant_key(
     state: &DesktopState,
 ) -> Result<AuthorizationGrantKey, DesktopError> {
@@ -7016,22 +7021,55 @@ pub(crate) fn authorization_grant_key(
             DesktopError::Agent("Authorization grant key lock is unavailable".to_owned())
         })?;
     let Ok(reference) = SecretReference::parse(AUTHORIZATION_GRANT_SECRET) else {
-        return Ok(AuthorizationGrantKey::app_local_default());
+        return local_grant_key_fallback_or_err("invalid secret reference");
     };
     match state.secret_store.0.resolve(&reference) {
         Ok(value) => AuthorizationGrantKey::from_hex(&value).map_err(Into::into),
         Err(SecretStoreError::Missing) => match AuthorizationGrantKey::generate() {
             Ok(key) => {
-                if state.secret_store.0.put(&reference, key.to_hex()).is_err() {
-                    return Ok(AuthorizationGrantKey::app_local_default());
+                if let Err(error) = state.secret_store.0.put(&reference, key.to_hex()) {
+                    return local_grant_key_fallback_or_err(&format!(
+                        "secret store rejected grant key write: {error}"
+                    ));
                 }
                 Ok(key)
             }
-            Err(_) => Ok(AuthorizationGrantKey::app_local_default()),
+            Err(error) => local_grant_key_fallback_or_err(&format!(
+                "grant key generation failed: {error}"
+            )),
         },
-        Err(SecretStoreError::Unavailable) => Ok(AuthorizationGrantKey::app_local_default()),
+        Err(SecretStoreError::Unavailable) => {
+            local_grant_key_fallback_or_err("system secret store unavailable")
+        }
         Err(error) => Err(error.into()),
     }
+}
+
+/// Whether predictable local grant material is allowed (tests / explicit dogfood only).
+fn allow_local_grant_key_fallback() -> bool {
+    if cfg!(test) {
+        return true;
+    }
+    std::env::var_os("NIMORA_ALLOW_LOCAL_GRANT_KEY").is_some_and(|value| {
+        value == "1" || value.eq_ignore_ascii_case("true")
+    })
+}
+
+fn local_grant_key_fallback_or_err(context: &str) -> Result<AuthorizationGrantKey, DesktopError> {
+    resolve_local_grant_key_fallback(allow_local_grant_key_fallback(), context)
+}
+
+/// Pure grant-key fallback decision (unit-tested for production fail-closed).
+pub(crate) fn resolve_local_grant_key_fallback(
+    allow_local: bool,
+    context: &str,
+) -> Result<AuthorizationGrantKey, DesktopError> {
+    if allow_local {
+        return Ok(AuthorizationGrantKey::app_local_default());
+    }
+    Err(DesktopError::Agent(format!(
+        "Authorization grant key unavailable ({context}). Restore OS keychain access, or set NIMORA_ALLOW_LOCAL_GRANT_KEY=1 only for local dogfood (not production)."
+    )))
 }
 
 /// Opens the grant repository with the host secret-store key (falls back only if open fails upstream).
@@ -14407,6 +14445,8 @@ mod tests {
         complete_window_initialization, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
         lifeform_sense_from_env, LifeformSenseSnapshot,
         process_budget,
+        authorization_grant_key, resolve_local_grant_key_fallback,
+        AuthorizationGrantKey,
         consume_creator_approval_from, creator_capability_catalog, creator_capability_risk,
         creator_composition_graph, current_time_ms, default_agent_model, default_agent_provider_id,
         delete_openai_provider_inner, desktop_provider_registry, desktop_tool_registry,
@@ -14504,6 +14544,64 @@ mod tests {
         )
         .expect("normal desktop state");
         (root, state)
+    }
+
+    #[test]
+    fn grant_key_fallback_allows_app_local_default_when_explicitly_permitted() {
+        let key = resolve_local_grant_key_fallback(true, "unit-test-allow")
+            .expect("allowed fallback");
+        assert_eq!(
+            key.to_hex(),
+            AuthorizationGrantKey::app_local_default().to_hex()
+        );
+    }
+
+    #[test]
+    fn grant_key_fallback_fail_closed_without_local_permission() {
+        let error = resolve_local_grant_key_fallback(false, "system secret store unavailable")
+            .expect_err("production must refuse predictable local material");
+        let message = error.to_string();
+        assert!(
+            message.contains("Authorization grant key unavailable"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            message.contains("system secret store unavailable"),
+            "context must surface: {message}"
+        );
+        assert!(
+            message.contains("NIMORA_ALLOW_LOCAL_GRANT_KEY"),
+            "must document explicit dogfood escape hatch: {message}"
+        );
+    }
+
+    #[test]
+    fn authorization_grant_key_round_trips_through_memory_secret_store() {
+        let (root, mut state) = normal_desktop_state();
+        state.secret_store =
+            DesktopSecretStore(Arc::new(nimora_secret_store::MemorySecretStore::default()));
+
+        let first = authorization_grant_key(&state).expect("create grant key");
+        let second = authorization_grant_key(&state).expect("reload grant key");
+        assert_eq!(first.to_hex(), second.to_hex());
+        assert_ne!(
+            first.to_hex(),
+            AuthorizationGrantKey::app_local_default().to_hex(),
+            "memory secret store must mint real key material, not silent app_local_default"
+        );
+
+        let reference = nimora_secret_store::SecretReference::parse(
+            "secret:cache:authorization-grant-v1",
+        )
+        .expect("grant secret reference");
+        let stored = state
+            .secret_store
+            .0
+            .resolve(&reference)
+            .expect("persisted grant key");
+        assert_eq!(stored.as_str(), first.to_hex().as_str());
+
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]

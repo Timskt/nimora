@@ -51,6 +51,14 @@ NIMORA_RUN_SYSTEM_SECRET_STORE_TEST=1 cargo test -p nimora-secret-store system_s
 
 `nimora-secret-store` 已实现严格引用、系统后端、零化读取、内存测试后端和显式真机门禁。桌面 Provider 配置仓储、凭据设置与撤销 UI、OpenAI-compatible 隔离 Worker、动态 Registry 和逐请求联网确认均已接线；API Key 不进入 SQLite、IPC 响应、命令行、环境变量或日志。Auto Mode Context Cache 使用固定非敏感引用 `secret:cache:auto-mode-context-v1` 管理独立 256-bit 系统密钥；每条记录采用随机 nonce 的 XChaCha20-Poly1305 信封，并以 Cache Key、Provider、模型、Workspace fingerprint、Plan revision、数据等级和时间边界作为 AAD。旧明文版本直接失效删除，错误密钥或元数据篡改 fail-closed，系统密钥不可用时不会降级写入明文。
 
-**Authorization Grant at-rest key**：桌面宿主通过 `authorization_grant_key` 从系统密钥后端加载或生成固定引用 `secret:cache:authorization-grant-v1`（256-bit，hex 编码存储），并传入 `SqliteAuthorizationGrantRepository::open_with_key`。Grant payload 以 `nimora.encrypted-authorization-grant/1`（XChaCha20-Poly1305）落库；issue/list/revoke/control-center/auto-mode 均走该密钥。密钥串不可用或解析失败时 fail-closed 回退 `AuthorizationGrantKey::app_local_default`（仅本地/测试环境，不写明文 Grant）。密钥材料永不进入 IPC 响应、日志、模型上下文或 FE。
+**Authorization Grant at-rest key**：桌面宿主通过 `authorization_grant_key` 从系统密钥后端加载或生成固定引用 `secret:cache:authorization-grant-v1`（256-bit，hex 编码存储），并传入 `SqliteAuthorizationGrantRepository::open_with_key`。Grant payload 以 `nimora.encrypted-authorization-grant/1`（XChaCha20-Poly1305）落库；issue/list/revoke/control-center/auto-mode 均走该密钥。
+
+**生产 fail-closed**：密钥串不可用、拒绝写入、生成失败或引用非法时，**拒绝**签发 / 打开 Grant 仓储，而不是静默使用可预测的 `AuthorizationGrantKey::app_local_default`。这保证 NeverAskWithinGrant / unattended / full_device 不会在密钥库失效时以假加密材料继续运行。
+
+**显式本地回退（非生产）**：
+- 单元测试（`cfg!(test)`）允许 `app_local_default`，以便无钥匙串环境完成仓储与 Auto Mode 门禁。
+- 本机 dogfood 可设置环境变量 `NIMORA_ALLOW_LOCAL_GRANT_KEY=1`（或 `true`）启用同一回退；**禁止**在发布包或面向用户的默认路径开启。
+
+密钥材料永不进入 IPC 响应、日志、模型上下文或 FE。Control Center / Agent 在签发失败时应展示中文引导：恢复系统钥匙串 / 凭据管理器访问后重试。
 
 仍未完成的是 Windows Credential Manager、Linux Secret Service 和签名桌面包的发布机验收。

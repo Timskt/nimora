@@ -78,6 +78,38 @@ export function modeLockReason(safeMode: boolean, recoveryMode: boolean): string
   return null;
 }
 
+
+/** Map host errors from unattended start / grant issue into Chinese next-step copy. */
+export function unattendedStartFailureMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  const lower = raw.toLowerCase();
+  if (
+    lower.includes("authorization grant key unavailable")
+    || lower.includes("secret store")
+    || lower.includes("keychain")
+    || lower.includes("nimora_allow_local_grant_key")
+  ) {
+    return "无法签发授权：系统密钥库不可用或无法保存授权密钥。请恢复 macOS 钥匙串 / Windows 凭据管理器访问后重试；未创建新的授权或任务。";
+  }
+  if (lower.includes("safe mode")) {
+    return "安全模式已启用，无法签发无人值守授权。请退出安全模式后重试。";
+  }
+  if (lower.includes("recovery mode")) {
+    return "恢复模式仅允许修复操作，无法签发无人值守授权。请退出恢复模式后重试。";
+  }
+  if (lower.includes("workspace") && lower.includes("invalid")) {
+    return "工作区路径无效或不可用。请选择可写工作区后重试。";
+  }
+  if (raw.trim()) {
+    // Prefer a short host message without leaking stack; keep Chinese wrapper.
+    const clipped = raw.replace(/^Agent runtime failed:\s*/i, "").trim();
+    if (clipped && clipped.length < 180 && !clipped.includes("\n")) {
+      return `启动无人值守目标失败：${clipped}；未创建新的授权或任务。`;
+    }
+  }
+  return "启动无人值守目标失败；未创建新的授权或任务";
+}
+
 /** Browser preview / host lock for control actions. */
 export function controlActionLockReason(options: {
   safeMode?: boolean;
@@ -1582,8 +1614,8 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
       await refreshAwaySummary().catch(() => undefined);
       await publishCompanionStatus("running", started.jobId).catch(() => undefined);
       onNotice(`无人值守目标已启动 · Grant ${started.grantId.slice(0, 8)} · Job ${started.jobId.slice(0, 8)}`);
-    } catch {
-      onNotice("启动无人值守目标失败；未创建新的授权或任务");
+    } catch (error) {
+      onNotice(unattendedStartFailureMessage(error));
     } finally {
       setStartBusy(false);
     }
