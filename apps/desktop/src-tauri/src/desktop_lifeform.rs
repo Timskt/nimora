@@ -534,12 +534,14 @@ fn sanitize_lifeform_windows(
 }
 
 /// Work-area stage rects for multi-monitor overlay rebinding.
+#[cfg(test)]
 #[must_use]
 pub fn lifeform_work_area_stages(displays: &[DesktopDisplay]) -> Vec<WorkArea> {
     work_area_stages(displays)
 }
 
 /// Union work-area bounds for cross-display spring walks (None when empty).
+#[cfg(test)]
 #[must_use]
 pub fn lifeform_union_work_area(displays: &[DesktopDisplay]) -> Option<WorkArea> {
     union_work_areas(displays)
@@ -786,6 +788,7 @@ pub fn spring_position_frames_multi_display(
 /// Plans a cross-display walk target and returns spring frames toward it.
 ///
 /// Returns `None` when a multi-monitor destination cannot be chosen.
+#[cfg(test)]
 #[must_use]
 pub fn plan_cross_display_walk_frames(
     sequence: u64,
