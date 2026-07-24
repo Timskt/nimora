@@ -1,19 +1,38 @@
 # Nimora 全量实现状态与证据矩阵
 
-## 当前门禁（2026-07-24 本地验证 · 不得标 goal complete）
+## 当前门禁（2026-07-25 本地验证 · 不得标 goal complete）
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run src/components` | **235** passed（21 files） |
-| `cargo test -p nimora-desktop-context --lib` | **45** passed |
+| FE `pnpm exec vitest run`（全量） | **313** passed（25 files） |
+| FE `pnpm exec vitest run src/components` | **277** passed（22 files） |
+| `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
 | `cargo test -p nimora-desktop --lib process_budget` | **7** passed |
-| `cargo test -p nimora-desktop --lib desktop_lifeform` | **18** passed |
-| `cargo test -p nimora-desktop --lib`（全量） | **259** passed |
+| `cargo test -p nimora-desktop --lib desktop_lifeform` | **21** passed |
+| `cargo test -p nimora-desktop --lib`（全量） | **270** passed（多线程默认，无死锁） |
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — Activity-Scene 创作工坊 + 生活化临在 + 测试 Keychain 死锁根因修复（本切片）
+
+### DONE
+- **Activity-Scene 创作工坊**：`apps/desktop/src/components/activityScenes.ts` / `ActivitySceneWorkshop.tsx` 用户自建情境舞台（速度/道具/调色板/粒子偏置），本地优先（localStorage），无网络/第三方 IP 资产依赖。
+- **舞台联动**：`PetOverlay` 读取激活情境 → `sceneCssVariables` 调色板、`pickSceneSpeech` 情境台词、道具图标与粒子层，`data-scene-*` 属性驱动样式。
+- **生活化临在**：`lifeformLiving.ts` `composeLivingMoment` / `livingAmbientSpeech` 经 `petPresentation.ts` 注入环境台词，避免「3 句循环 + 机械 idle」；隐私安全（不下发窗口标题/路径/OS 正文）。
+- **测试死锁根因修复**：`DesktopState::open` 原硬编码 `SystemSecretStore`，测试二进制里 `authorization_grant_key` → `SystemSecretStore::resolve` 触发**阻塞式 macOS Keychain 调用**（等待 GUI 授权，永久挂起整套 suite）。新增 `DesktopSecretStore::host_default()`：`cfg!(test)` 绑 `MemorySecretStore`，生产绑真实 keychain（与 `open_recovery` / grant-key fallback 既有约定一致）。
+- **死尸导入清理**：移除 `PetOverlay.tsx` 未使用的 `composeLivingMoment` 导入。
+
+### 门禁（本切片本地 · 已跑）
+- 见本文顶部当前门禁表：FE 全量 **313** · desktop 全量 **270**（多线程无死锁）· desktop_lifeform **21** · grant encrypt **10** · `tsc -b` clean。
+
+### 仍须原生验收（不得标 goal complete）
+- `pnpm tauri:dev` 真机：透明无框、拖拽、穿透、遮挡、跨屏手感、情境舞台调色板/道具/粒子与生活化台词观感。
+- Idle CPU/内存预算真机实测；Windows 签名包与 processBudget 真机验收；Grant 生产密钥轮换/设备绑定。
 
 ---
 
