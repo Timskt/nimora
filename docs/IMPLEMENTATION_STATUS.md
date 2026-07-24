@@ -11,10 +11,32 @@
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
 | `cargo test -p nimora-desktop --lib process_budget` | **7** passed |
 | `cargo test -p nimora-desktop --lib desktop_lifeform` | **21** passed |
-| `cargo test -p nimora-desktop --lib`（全量） | **270** passed（多线程默认，无死锁；跨屏 test-only wrapper 已 cfg(test)） |
+| `cargo test -p nimora-desktop --lib`（全量） | **275** passed（多线程默认，无死锁；含 GrantExpiryWatch +5） |
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 死码告警审计三修（防抖接线 / 授权到期 pet 事件 / cfg(test) 收敛）本切片
+
+### DONE
+- **防抖闸门接线（真实未接线修复）**：`PresenceBooleanGate` 已定义却未接入生产——`lib.rs` 的 macOS/Windows 传感循环把每 5s 的全屏/勿扰/游戏原始采样直接喂给 presence 策略，瞬时抖动即翻转宠物 suppress/可见态（即「宠物一闪一闪」）。新增 `observe_gated_sensor`（lib.rs ~7656）经闸门去抖、稳定值每周期续租、翻转稳定期间加速重采样；`SensorController::expedite_next_sample`（`system-context-sensor`）配套 + 测试。
+- **授权到期 pet 事件（真实缺口修复）**：`GrantCompanionEvent::Expired` 已定义并映射到宠物指令却从未被构造。到期本身在上游强制（过期 grant 加载为 `None`、supervisor fail-closed），但宠物从不示意。新增纯 `GrantExpiryWatch` 状态机 + 5 单测（`auto_mode_runner.rs`），把 `Some(expiry)→None` 失效沿转成一次性 `Expired` 事件，新 grant 到达时重新武装。
+- **cfg(test) 收敛（超集/镜像函数）**：`plan_cursor_approach_target`/`rounded_bounded_step`（生产走 `plan_lifeform_wander_goal`）、`pose_for_local`（生产仅用 `pose_for_screen`）、`auto_mode_pet_event_for_status`（生产经 phase 路径 + budget/crash 特例覆盖同一事件词汇，全部调用点在 `#[cfg(test)]` 内）均标 `#[cfg(test)]`。
+
+### 门禁（本切片本地 · 已跑）
+- desktop lib 全量 **275** passed（270 → +5 GrantExpiryWatch）· `system-context-sensor` **6** passed · desktop lib 警告 **20 → 10**（余 10 为 FE-对齐奇偶镜像与纯测试访问器，按原则保留）。
+
+### 余留 10 告警分类（按原则保留，非缺口）
+- `is_sleep_safe_tier`/`is_sleep_safe_approval`：FE 本地 `tierSleepSafeCopy`/`tierUsesNeverAsk` 派生的奇偶镜像。
+- `worker_outcome_from_status`/`worker_status_is_busy`：FE `agentCompanion.ts` 镜像；生产走类型化 Result 路径。
+- `last_phase`/`last_auto_event`/`step_ok_count`：`CompanionPhaseTracker` 纯测试访问器。
+- `PRESENCE_SAMPLE_CADENCE_MS`/`force`/`presence_raw_from_result`/`presence_sample_delay_ms`/`presence_values_agree`：`observe_gated_sensor` 未取用的单发便利封装，纯测试余项。
+
+### 仍须原生验收（不得标 goal complete）
+- `pnpm tauri:dev` 真机：透明无框、拖拽、穿透、遮挡、跨屏手感、情境舞台观感。
+- Idle CPU/内存预算真机实测；Windows 签名包与 processBudget 真机验收；Grant 生产密钥轮换/设备绑定。
 
 ---
 
