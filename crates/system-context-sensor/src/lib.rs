@@ -188,6 +188,17 @@ impl SensorController {
         self.health.availability = SensorAvailability::Stopped;
         self.health.next_sample_at_ms = None;
     }
+
+    /// Brings the next sample forward (e.g. while a presence flip is stabilizing),
+    /// never pushing an imminent sample later. Overdue or far-future schedules are
+    /// pulled to `now + within_ms` so the caller neither hammers nor stalls.
+    pub fn expedite_next_sample(&mut self, now_ms: u64, within_ms: u64) {
+        let candidate = now_ms.saturating_add(within_ms);
+        self.health.next_sample_at_ms = Some(match self.health.next_sample_at_ms {
+            Some(scheduled) if scheduled > now_ms && scheduled <= candidate => scheduled,
+            _ => candidate,
+        });
+    }
 }
 
 fn duration_ms(duration: Duration) -> Result<u64, SensorScheduleError> {
@@ -240,6 +251,22 @@ mod tests {
             controller.health().availability,
             SensorAvailability::Unavailable
         );
+    }
+
+    #[test]
+    fn expedite_only_pulls_the_next_sample_earlier() {
+        let mut controller = controller(0);
+        let _ = controller.record_success(true, 0).unwrap();
+        assert_eq!(controller.health().next_sample_at_ms, Some(5_000));
+        controller.expedite_next_sample(1_000, 1_000);
+        assert_eq!(controller.health().next_sample_at_ms, Some(2_000));
+        // Never pushes an imminent sample later than it is already scheduled.
+        controller.expedite_next_sample(1_000, 9_000);
+        assert_eq!(controller.health().next_sample_at_ms, Some(2_000));
+        // Overdue schedules are pulled forward to now + within (no hammering).
+        controller.record_failure("sample-timeout", 0);
+        controller.expedite_next_sample(20_000, 1_000);
+        assert_eq!(controller.health().next_sample_at_ms, Some(21_000));
     }
 
     #[test]

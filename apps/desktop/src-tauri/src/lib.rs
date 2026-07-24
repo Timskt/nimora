@@ -7648,6 +7648,30 @@ fn observe_sensor_success(
         })
 }
 
+/// Feeds a raw platform sample through an anti-flicker debounce gate before it
+/// reaches the presence policy. The stable (published) value is renewed every
+/// cadence so the signal lease never lapses, and a pending flip pulls the next
+/// sample forward so genuine transitions still settle quickly.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn observe_gated_sensor(
+    state: &DesktopState,
+    controller: &mut SensorController,
+    gate: &mut system_context_sensor::PresenceBooleanGate,
+    raw: bool,
+    now_ms: u64,
+) {
+    let (next, _emitted) = gate.observe(raw, now_ms);
+    *gate = next;
+    let stable = gate.published().unwrap_or(false);
+    let _ = observe_sensor_success(state, controller, stable, now_ms);
+    if gate.is_holding() {
+        controller.expedite_next_sample(
+            now_ms,
+            system_context_sensor::PRESENCE_SAMPLE_CADENCE_UNSTABLE_MS,
+        );
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn start_system_context_sensors(app: AppHandle) {
     std::thread::spawn(move || {
@@ -7671,6 +7695,8 @@ fn start_system_context_sensors(app: AppHandle) {
         ) else {
             return;
         };
+        let mut fullscreen_gate = system_context_sensor::PresenceBooleanGate::default();
+        let mut do_not_disturb_gate = system_context_sensor::PresenceBooleanGate::default();
         while let Some(state) = app.try_state::<DesktopState>() {
             publish_sensor_health(&state, &[&fullscreen, &do_not_disturb]);
             if state.lifecycle.autonomy_stop.load(Ordering::Acquire) {
@@ -7688,7 +7714,13 @@ fn start_system_context_sensors(app: AppHandle) {
                 sampled = true;
                 match system_context_sensor::sample_fullscreen(schedule.sample_timeout) {
                     Ok(active) => {
-                        let _ = observe_sensor_success(&state, &mut fullscreen, active, now_ms);
+                        observe_gated_sensor(
+                            &state,
+                            &mut fullscreen,
+                            &mut fullscreen_gate,
+                            active,
+                            now_ms,
+                        );
                     }
                     Err(_) => fullscreen.record_failure("fullscreen-sample-failed", now_ms),
                 }
@@ -7697,7 +7729,13 @@ fn start_system_context_sensors(app: AppHandle) {
                 sampled = true;
                 match system_context_sensor::sample_do_not_disturb(schedule.sample_timeout) {
                     Ok(active) => {
-                        let _ = observe_sensor_success(&state, &mut do_not_disturb, active, now_ms);
+                        observe_gated_sensor(
+                            &state,
+                            &mut do_not_disturb,
+                            &mut do_not_disturb_gate,
+                            active,
+                            now_ms,
+                        );
                     }
                     Err(_) => {
                         do_not_disturb.record_failure("do-not-disturb-sample-failed", now_ms);
@@ -7731,6 +7769,9 @@ fn start_system_context_sensors(app: AppHandle) {
         ) else {
             return;
         };
+        let mut fullscreen_gate = system_context_sensor::PresenceBooleanGate::default();
+        let mut do_not_disturb_gate = system_context_sensor::PresenceBooleanGate::default();
+        let mut game_gate = system_context_sensor::PresenceBooleanGate::default();
         while let Some(state) = app.try_state::<DesktopState>() {
             publish_sensor_health(&state, &[&fullscreen, &do_not_disturb, &game]);
             if state.lifecycle.autonomy_stop.load(Ordering::Acquire) {
@@ -7749,7 +7790,13 @@ fn start_system_context_sensors(app: AppHandle) {
                 sampled = true;
                 match system_context_sensor::sample_fullscreen(schedule.sample_timeout) {
                     Ok(active) => {
-                        let _ = observe_sensor_success(&state, &mut fullscreen, active, now_ms);
+                        observe_gated_sensor(
+                            &state,
+                            &mut fullscreen,
+                            &mut fullscreen_gate,
+                            active,
+                            now_ms,
+                        );
                     }
                     Err(_) => fullscreen.record_failure("fullscreen-sample-failed", now_ms),
                 }
@@ -7759,13 +7806,20 @@ fn start_system_context_sensors(app: AppHandle) {
                 if let Ok(activity) =
                     system_context_sensor::sample_activity(schedule.sample_timeout)
                 {
-                    let _ = observe_sensor_success(
+                    observe_gated_sensor(
                         &state,
                         &mut do_not_disturb,
+                        &mut do_not_disturb_gate,
                         activity.do_not_disturb,
                         now_ms,
                     );
-                    let _ = observe_sensor_success(&state, &mut game, activity.game, now_ms);
+                    observe_gated_sensor(
+                        &state,
+                        &mut game,
+                        &mut game_gate,
+                        activity.game,
+                        now_ms,
+                    );
                 } else {
                     do_not_disturb.record_failure("activity-sample-failed", now_ms);
                     game.record_failure("activity-sample-failed", now_ms);
