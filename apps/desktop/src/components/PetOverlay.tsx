@@ -756,33 +756,13 @@ export function PetOverlay() {
         data-ambient-muted={ambientMuted ? "true" : "false"}
         data-directive-revision={directive?.revision ?? ""}
       >
-      {/* Bubble is a sibling of the body hit-area so ellipse clip-path never trims speech. */}
+      {/* Speech + visual are siblings of the hit button so ellipse clip-path never trims the lifeform. */}
       <span className="overlay-status pet-speech-bubble" role="status" aria-live="polite" aria-atomic="true">{message}</span>
-      <button
-        ref={petButton}
-        className={`overlay-drag-region pet-hit-area${stroking ? " is-stroking" : ""}${isDragging ? " is-dragging" : ""}`}
-        type="button"
-        onPointerEnter={notice}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={finishPointerGesture}
-        onPointerCancel={cancelPointerGesture}
-        onClick={handlePetClick}
-        onKeyDown={(event) => {
-          if (!isPetMenuShortcut(event.key, event.shiftKey)) return;
-          event.preventDefault();
-          event.stopPropagation();
-          openPetMenu();
-        }}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          clearLongPress();
-          suppressClick.current = true;
-          openPetMenu();
-        }}
-        aria-label={`与 ${snapshot?.pet.name ?? "灵灵"} 互动、抚摸或拖动 · Nimora Q版小黄人伙伴`}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
+      <div
+        className="pet-character-shell"
+        data-state={renderState}
+        data-emotion={lifeform.emotion}
+        data-subject-motion={subjectMotion}
       >
         <span
           className={`pet-character-stage facing-${facing} surface-${surface ?? "free"} state-${renderState}`}
@@ -794,6 +774,7 @@ export function PetOverlay() {
           data-facing={facing}
           data-surface={surface ?? "free"}
           data-subject-motion={subjectMotion}
+          aria-hidden="true"
         >
           {/* Default chain: BuiltinPet3D → fox GLB → SVG. Custom packs still win when selected. */}
           {renderer && renderer.backend !== "built-in" && !rendererFailed ? (
@@ -835,7 +816,34 @@ export function PetOverlay() {
           )}
         </span>
         <span className="overlay-shadow" aria-hidden="true" />
-      </button>
+        {/* Empty hit target: ellipse clip only affects hit-testing, never the 3D canvas. */}
+        <button
+          ref={petButton}
+          className={`overlay-drag-region pet-hit-area${stroking ? " is-stroking" : ""}${isDragging ? " is-dragging" : ""}`}
+          type="button"
+          onPointerEnter={notice}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={finishPointerGesture}
+          onPointerCancel={cancelPointerGesture}
+          onClick={handlePetClick}
+          onKeyDown={(event) => {
+            if (!isPetMenuShortcut(event.key, event.shiftKey)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            openPetMenu();
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            clearLongPress();
+            suppressClick.current = true;
+            openPetMenu();
+          }}
+          aria-label={`与 ${snapshot?.pet.name ?? "灵灵"} 互动、抚摸或拖动 · Nimora Q版小黄人伙伴`}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+        />
+      </div>
       {menuOpen ? (
         <div ref={menu} className={`overlay-pet-menu ${menuPage}-page`} role={menuPage === "rename" ? "dialog" : "menu"} aria-label={menuPage === "inventory" ? "随身背包" : menuPage === "rename" ? "修改伙伴名字" : menuPage === "more" ? "更多宠物操作" : "宠物径向菜单"} onKeyDown={handleMenuKeyDown}>
           {menuPage === "root" ? (

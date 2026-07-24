@@ -54,6 +54,7 @@ import {
   tierSandboxLabel,
   tierSleepSafeCopy,
   tierUsesNeverAsk,
+  controlEmptyGuidance,
   unattendedStartFailureMessage,
   UNATTENDED_REASONING_CHOICE_STORAGE_KEY,
 } from "./AgentWorkspace";
@@ -572,3 +573,26 @@ describe("unattendedStartFailureMessage", () => {
     expect(unattendedStartFailureMessage(null)).toBe("启动无人值守目标失败；未创建新的授权或任务");
   });
 });
+
+describe("controlEmptyGuidance", () => {
+  it("offers dual next steps for native empty control center", () => {
+    const g = controlEmptyGuidance({ native: true, hasProviderCatalog: true });
+    expect(g.title).toContain("目标");
+    expect(g.primaryLabel).toContain("无人值守");
+    expect(g.secondaryLabel).toContain("模型");
+    expect(g.lockHint).toBeNull();
+  });
+
+  it("guides browser preview without real grants", () => {
+    const g = controlEmptyGuidance({ native: false });
+    expect(g.lockHint).toContain("浏览器");
+    expect(g.body).toContain("桌面端");
+  });
+
+  it("surfaces safe/recovery lock before start", () => {
+    const g = controlEmptyGuidance({ safeMode: true, native: true });
+    expect(g.lockHint).toBeTruthy();
+    expect(g.title).toContain("不能启动");
+  });
+});
+

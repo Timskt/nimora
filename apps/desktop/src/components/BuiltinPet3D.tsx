@@ -102,42 +102,44 @@ export function clampGaze(value: number): number {
 
 /** Warm classic Q-minion palette (no chrome plate / no square frame). */
 export const Q_MINION_COLORS = {
-  yellow: "#F5D547",
-  yellowLight: "#FFE56A",
-  yellowEmissive: "#E8B830",
-  denim: "#3A7AB3",
-  denimSoft: "#5693C6",
-  denimDeep: "#2A5F8F",
-  goggleBand: "#12141A",
-  metal: "#D2D7DF",
-  sclera: "#FFFEF7",
-  /** Warm brown iris — classic minion, not cyan tech eye. */
-  iris: "#7A4A28",
-  irisEmissive: "#4A2C16",
-  glove: "#1A1B1F",
-  boot: "#6E4728",
-  bootSole: "#3F2816",
-  hair: "#17181C",
-  blush: "#FF8A78",
-  graphite: "#1A1D24",
+  /** Classic film minion yellow — saturated, warm, candy-like. */
+  yellow: "#F7D117",
+  yellowLight: "#FFE94A",
+  yellowEmissive: "#F0C010",
+  denim: "#2E7DB5",
+  denimSoft: "#4C97C8",
+  denimDeep: "#246594",
+  goggleBand: "#101218",
+  metal: "#E8ECF1",
+  sclera: "#FFFEF8",
+  /** Warm cocoa iris — soft Q-minion, not tech cyan. */
+  iris: "#6B3F22",
+  irisEmissive: "#3D2412",
+  glove: "#15161A",
+  boot: "#6A4326",
+  bootSole: "#3A2514",
+  hair: "#14151A",
+  blush: "#FF8E7A",
+  graphite: "#171A20",
 } as const;
 
 /** Tall warm pill + dual goggle layout (classic Q-minion proportions). */
 export const Q_MINION_LAYOUT = {
   /** Cylinder radius of the yellow capsule. */
-  bodyRadius: 0.88,
+  bodyRadius: 0.9,
   /** Cylinder length between hemispheres (total height ≈ length + 2r). */
-  bodyLength: 1.12,
-  bodyY: -0.34,
-  headY: 0.56,
-  goggleRadius: 0.45,
-  goggleSpacing: 0.43,
-  goggleZ: 0.96,
-  overallY: -0.84,
-  bootY: -1.36,
-  armX: 0.96,
-  hairY: 0.96,
-  shadowY: -1.5,
+  bodyLength: 1.08,
+  bodyY: -0.32,
+  headY: 0.58,
+  /** Larger dual goggles = cuter Q face. */
+  goggleRadius: 0.48,
+  goggleSpacing: 0.45,
+  goggleZ: 0.98,
+  overallY: -0.82,
+  bootY: -1.34,
+  armX: 0.98,
+  hairY: 0.98,
+  shadowY: -1.48,
 } as const;
 
 export type QMinionVec3 = readonly [number, number, number];
@@ -1170,8 +1172,8 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
     scene.background = null;
     // Frustum frames tall dual-goggle pill + boots (transparent, no plate).
     // Extra vertical room so crown tufts + boots + dual contact shadow never clip.
-    const camera = new OrthographicCamera(-2.55, 2.55, 3.15, -2.75, 0.1, 100);
-    camera.position.set(0, -0.12, 8);
+    const camera = new OrthographicCamera(-2.65, 2.65, 3.2, -2.7, 0.1, 100);
+    camera.position.set(0, -0.08, 8);
     scene.add(new AmbientLight(0xfff6e0, 2.45));
     const keyLight = new DirectionalLight(0xfff8ee, 4.0);
     keyLight.position.set(-2.8, 5.2, 6.8);
@@ -1185,8 +1187,8 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
 
     const root = new Group();
     // Fit full Q-minion (crown tufts → boots → dual shadow) inside ortho frustum.
-    root.scale.setScalar(0.82);
-    root.position.y = 0.02;
+    root.scale.setScalar(0.88);
+    root.position.y = 0.04;
     scene.add(root);
 
     const layout = Q_MINION_LAYOUT;

@@ -400,7 +400,7 @@ describe("directive motion vocabulary", () => {
 
 describe("Q-minion silhouette palette", () => {
   it("uses warm yellow, soft denim, brown boots, and dual goggles layout", () => {
-    expect(Q_MINION_COLORS.yellow.toUpperCase()).toBe("#F5D547");
+    expect(Q_MINION_COLORS.yellow.toUpperCase()).toBe("#F7D117");
     expect(Q_MINION_COLORS.denim).toMatch(/^#[0-9A-Fa-f]{6}$/);
     expect(Q_MINION_COLORS.boot).toMatch(/^#[0-9A-Fa-f]{6}$/);
     expect(Q_MINION_COLORS.boot.toLowerCase()).not.toBe("#000000");

@@ -9286,10 +9286,7 @@ fn execute_skill_inner(
         &cancellation,
     )?;
     // Skill/Worker busy → pet work body language (Subject path).
-    let _ = apply_lifeform_directive_from_host(
-        app,
-        companion_directive::skill_worker_busy_host_directive(Some(request.skill_id.as_str())),
-    );
+    companion_directive::apply_skill_worker_busy(app, Some(request.skill_id.as_str()));
     let _execution_guard = ActiveSkillExecutionGuard {
         executions: &state.active_skill_executions,
         execution_id,
@@ -9339,12 +9336,8 @@ fn execute_skill_inner(
         Some(&cancellation),
     );
     match &receipt {
-        Ok(_) => {
-            let _ = apply_lifeform_directive_from_host(app, companion_directive::skill_worker_done_host_directive(true));
-        }
-        Err(_) => {
-            let _ = apply_lifeform_directive_from_host(app, companion_directive::skill_worker_done_host_directive(false));
-        }
+        Ok(_) => companion_directive::apply_skill_worker_done(app, true),
+        Err(_) => companion_directive::apply_skill_worker_done(app, false),
     }
     receipt
 }
@@ -9563,12 +9556,8 @@ fn approve_skill_execution(
     ensure_normal_mode(&state)?;
     let receipt = approve_skill_execution_inner(&state, &request);
     match &receipt {
-        Ok(_) => {
-            let _ = apply_lifeform_directive_from_host(&app, companion_directive::skill_worker_done_host_directive(true));
-        }
-        Err(_) => {
-            let _ = apply_lifeform_directive_from_host(&app, companion_directive::skill_worker_done_host_directive(false));
-        }
+        Ok(_) => companion_directive::apply_skill_worker_done(&app, true),
+        Err(_) => companion_directive::apply_skill_worker_done(&app, false),
     }
     receipt
 }
@@ -13809,10 +13798,7 @@ fn publish_lifeform_connector_sensory_from_snapshot(
         return;
     };
     LAST_PHASE.store(phase, Ordering::Relaxed);
-    let _ = apply_lifeform_directive_from_host(
-        app,
-        companion_directive::connector_sensory_host_directive(kind),
-    );
+    companion_directive::apply_connector_sensory(app, kind);
 }
 
 fn publish_lifeform_battery_sensory(
@@ -13974,10 +13960,7 @@ fn notify_lifeform_connector_event(app: &AppHandle, event_type: &str) {
         return;
     }
     LAST_MS.store(now_ms, Ordering::Relaxed);
-    let _ = apply_lifeform_directive_from_host(
-        app,
-        companion_directive::connector_sensory_host_directive(ConnectorSenseKind::EventReceived),
-    );
+    companion_directive::apply_connector_sensory(app, ConnectorSenseKind::EventReceived);
 }
 
 

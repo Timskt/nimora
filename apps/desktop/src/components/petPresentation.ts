@@ -362,7 +362,7 @@ export function resolveOverlayStage(stage?: OverlayStageOrigin | null): Required
 }
 
 export interface PetLocalPositionOptions {
-  /** Keep the 260×300 body inside the stage work area when dimensions are known. */
+  /** Keep the 260×320 body inside the stage work area when dimensions are known. */
   clampToStage?: boolean;
   bodyWidth?: number;
   bodyHeight?: number;

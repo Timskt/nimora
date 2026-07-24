@@ -110,6 +110,45 @@ export function unattendedStartFailureMessage(error: unknown): string {
   return "启动无人值守目标失败；未创建新的授权或任务";
 }
 
+
+/** Empty control-center next steps: primary start + secondary provider setup. */
+export function controlEmptyGuidance(options: {
+  safeMode?: boolean;
+  recoveryMode?: boolean;
+  native?: boolean;
+  hasProviderCatalog?: boolean;
+}): { title: string; body: string; primaryLabel: string; secondaryLabel: string; lockHint: string | null } {
+  const lock = modeLockReason(Boolean(options.safeMode), Boolean(options.recoveryMode));
+  const native = options.native !== false;
+  if (lock) {
+    return {
+      title: "伙伴暂时不能启动新目标",
+      body: `${lock}。解除后可填写标题、完成标准与计划步骤，签发授权后开始无人值守。`,
+      primaryLabel: "启动无人值守目标",
+      secondaryLabel: "先配置模型连接",
+      lockHint: lock,
+    };
+  }
+  if (!native) {
+    return {
+      title: "伙伴还没有执行中的目标",
+      body: "浏览器预览只展示演示事实。请在桌面端启动 Nimora，点「启动无人值守目标」签发真实 Grant；也可先到「模型连接」接上你的 AI。",
+      primaryLabel: "启动第一个无人值守目标",
+      secondaryLabel: "配置模型连接",
+      lockHint: "浏览器预览不能签发真实授权。",
+    };
+  }
+  return {
+    title: "伙伴还没有执行中的目标",
+    body: options.hasProviderCatalog === false
+      ? "下一步：先到「模型连接」接入本地或云端模型，再启动无人值守目标；也可直接用内置本地模型开始。"
+      : "下一步：启动无人值守目标，填写标题、完成标准与计划步骤，选择授权档位后签发 Grant。也可先到「模型连接」接上你习惯的模型。",
+    primaryLabel: "启动第一个无人值守目标",
+    secondaryLabel: "配置模型连接",
+    lockHint: null,
+  };
+}
+
 /** Browser preview / host lock for control actions. */
 export function controlActionLockReason(options: {
   safeMode?: boolean;
@@ -1761,7 +1800,14 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
     {(["run", "control", "providers", "history"] as const).map((item) => <button aria-current={view === item ? "page" : undefined} key={item} onClick={() => setView(item)} type="button">{{ run: "对话运行", control: "目标控制", providers: "模型连接", history: "执行历史" }[item]}</button>)}
   </nav>;
 
-  if (view === "control") return <>
+  if (view === "control") {
+    const emptyGuidance = controlEmptyGuidance({
+      safeMode,
+      recoveryMode,
+      native: desktopApi.native,
+      hasProviderCatalog: Boolean(catalog?.providers.length),
+    });
+    return <>
     <header className="agent-section-header">
       <div>
         <p className="card-label">GOAL CONTROL CENTER · SUBJECT</p>
@@ -2040,16 +2086,27 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
       ) : (
         <div className="authorization-grants-empty" role="status">
           <strong>还没有授权 Grant</strong>
-          <p>下一步：启动无人值守目标时会签发绑定 Goal 的执行授权。高风险档位会先展示 NeverAskWithinGrant 风险清单，确认后才生效；可随时在此撤销。</p>
-          <button
-            className="primary-button"
-            disabled={safeMode || recoveryMode || startBusy || !desktopApi.native}
-            onClick={openStartPanel}
-            title={modeLockReason(safeMode, recoveryMode) ?? (!desktopApi.native ? "请在桌面端签发授权" : "启动目标并签发授权")}
-            type="button"
-          >
-            启动目标并签发授权
-          </button>
+          <p>下一步：启动无人值守目标时会签发绑定 Goal 的执行授权。高风险档位会先展示 NeverAskWithinGrant 风险清单，确认后才生效；可随时在此撤销。也可先配置模型连接。</p>
+          <div className="control-empty-actions">
+            <button
+              className="primary-button"
+              disabled={safeMode || recoveryMode || startBusy || !desktopApi.native}
+              onClick={openStartPanel}
+              title={modeLockReason(safeMode, recoveryMode) ?? (!desktopApi.native ? "请在桌面端签发授权" : "启动目标并签发授权")}
+              type="button"
+            >
+              启动目标并签发授权
+            </button>
+            <button
+              className="secondary-button"
+              disabled={safeMode || recoveryMode}
+              onClick={() => setView("providers")}
+              title="打开模型连接"
+              type="button"
+            >
+              配置模型连接
+            </button>
+          </div>
         </div>
       )}
     </section>
@@ -2170,24 +2227,31 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
         </div>
       ) : (
         <div className="control-empty">
-          <strong>伙伴还没有执行中的目标</strong>
-          <p>
-            下一步：点「启动无人值守目标」，填写标题、完成标准与计划步骤，选择授权档位后签发 Grant。
-            控制中心只展示宿主持久化并验证过的事实；浏览器预览使用明确的演示数据。
-          </p>
-          <button
-            className="primary-button"
-            disabled={safeMode || recoveryMode || startBusy || !desktopApi.native}
-            onClick={openStartPanel}
-            title={modeLockReason(safeMode, recoveryMode) ?? (!desktopApi.native ? "请在桌面端启动" : "启动第一个无人值守目标")}
-            type="button"
-          >
-            启动第一个无人值守目标
-          </button>
-          {(safeMode || recoveryMode || !desktopApi.native) && (
-            <p className="control-empty-lock">{modeLockReason(safeMode, recoveryMode) ?? "浏览器预览不能签发真实授权。"}</p>
-          )}
-        </div>
+              <strong>{emptyGuidance.title}</strong>
+              <p>{emptyGuidance.body}</p>
+              <div className="control-empty-actions">
+                <button
+                  className="primary-button"
+                  disabled={safeMode || recoveryMode || startBusy || !desktopApi.native}
+                  onClick={openStartPanel}
+                  title={emptyGuidance.lockHint ?? "启动第一个无人值守目标"}
+                  type="button"
+                >
+                  {emptyGuidance.primaryLabel}
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={safeMode || recoveryMode}
+                  onClick={() => setView("providers")}
+                  title="打开模型连接，配置本地或云端 Provider"
+                  type="button"
+                >
+                  {emptyGuidance.secondaryLabel}
+                </button>
+              </div>
+              {emptyGuidance.lockHint ? <p className="control-empty-lock">{emptyGuidance.lockHint}</p> : null}
+              <p className="control-empty-footnote">控制中心只展示宿主持久化并验证过的事实；浏览器预览使用明确的演示数据。</p>
+            </div>
       )}
     </section>
     {pendingControl && <div className="control-dialog-backdrop"><section aria-labelledby="control-dialog-title" aria-modal="true" className={pendingControl.kind === "pause" ? "control-dialog" : "control-dialog danger"} role="dialog"><p className="card-label">参数绑定确认</p><h3 id="control-dialog-title">{pendingControl.kind === "pause" ? "暂停这个任务？" : pendingControl.kind === "cancel" ? "取消这个任务？" : pendingControl.decision === "confirmed_not_executed" ? "确认外部操作未执行？" : "接受潜在副作用并取消？"}</h3><p>{pendingControl.kind === "pause" ? "任务会在当前原子步骤结束后暂停，不会丢弃 Checkpoint。" : pendingControl.kind === "cancel" ? "取消不可恢复为同一个运行；已产生的外部副作用不会自动回滚。" : "此决议将绑定当前 Attempt、Checkpoint 与请求指纹，并永久写入审计记录。"}</p><dl><div><dt>Goal</dt><dd>{pendingControl.entry.goal.title}</dd></div><div><dt>Session</dt><dd><code>{pendingControl.entry.session.id}</code></dd></div>{pendingControl.kind === "resolve" && <div><dt>Attempt</dt><dd><code>{pendingControl.entry.attempt?.id}</code></dd></div>}</dl>{pendingControl.kind === "resolve" && <label><span>对账理由（必填）</span><textarea autoFocus maxLength={2048} onChange={(event) => setControlReason(event.target.value)} placeholder="说明你核对了什么证据，以及为什么选择此决议" value={controlReason} /></label>}<div><button disabled={controlBusy} onClick={() => setPendingControl(null)} type="button">返回检查</button><button className="primary-button" disabled={controlBusy || (pendingControl.kind === "resolve" && !controlReason.trim())} onClick={() => void executeControl()} type="button">{controlBusy ? "提交中…" : "确认提交"}</button></div></section></div>}
@@ -2235,6 +2299,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
       </div>
     </section></div>}
   </>;
+  }
 
   if (view === "history") return <><header className="agent-section-header"><div><p className="card-label">LOCAL EXECUTION HISTORY</p><h2>本机记录，清晰、私密、可删除。</h2></div></header>{tabs}<section className="history-page" aria-labelledby="history-page-heading"><div><h3 id="history-page-heading">最近完成</h3><button disabled={busy || !history?.records.length} onClick={() => void clearHistory()} type="button">清除全部</button></div>{history?.records.length ? history.records.map((record) => <article key={record.task.id}><strong>{record.prompt}</strong><p>{record.response || "任务已完成，无文本回答"}</p><small>{record.model} · {record.usage.inputTokens + record.usage.outputTokens} tokens · {new Date(record.completedAtMs).toLocaleString("zh-CN")}</small></article>) : <p>完成一次任务后，记录会安全保存在本机。</p>}</section></>;
 
