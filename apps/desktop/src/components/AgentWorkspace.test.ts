@@ -10,9 +10,12 @@ import {
   awaySummaryViewState,
   awaySummaryWindowLabel,
   buildPlanSteps,
+  coerceReasoningChoice,
   controlBudgetFillRatio,
   controlBudgetSlices,
   controlEffectiveStatusLabel,
+  countActiveGrants,
+  dangerRiskItems,
   defaultModelForProvider,
   deriveContextBudgetUsage,
   deriveWorkspaceTrackingSnapshot,
@@ -28,12 +31,19 @@ import {
   grantStatusLabel,
   goalStatusLabel,
   grantTierBadgeText,
+  loadReasoningChoice,
+  parseReasoningChoice,
   pauseReasonLabel,
   planStepStatusLabel,
   providerStatusLabel,
   reasoningEffortChip,
   reasoningEffortLabel,
+  reasoningPolicyForChoice,
+  REASONING_CHOICE_STORAGE_KEY,
+  saveReasoningChoice,
   shortFingerprint,
+  shortGoalId,
+  sortAuthorizationGrants,
   tierApprovalLabel,
   workspaceTrackingSummary,
   tierApprovalPolicy,
@@ -44,6 +54,7 @@ import {
   tierSandboxLabel,
   tierSleepSafeCopy,
   tierUsesNeverAsk,
+  UNATTENDED_REASONING_CHOICE_STORAGE_KEY,
 } from "./AgentWorkspace";
 
 describe("AgentWorkspace", () => {
@@ -390,6 +401,13 @@ describe("Context compaction + workspace tracking helpers", () => {
       droppedMessageCount: 12,
     })).toContain("已压缩 12 条");
     expect(formatContextBudget({
+      inputTokens: 100,
+      outputTokens: 20,
+      droppedMessageCount: 12,
+      retainedMessageCount: 8,
+      sourceMessageCount: 20,
+    })).toMatch(/已压缩 12 条 · 保留 8\/20/);
+    expect(formatContextBudget({
       messageCount: 40,
       maxMessages: 128,
     })).toMatch(/消息 40 \/ 128/);
@@ -400,6 +418,12 @@ describe("Context compaction + workspace tracking helpers", () => {
     expect(formatContextBudget({
       compactionState: "compacted",
     })).toContain("已压缩");
+    // Prefer retained over raw messageCount after compaction.
+    expect(formatContextBudget({
+      messageCount: 2,
+      retainedMessageCount: 8,
+      sourceMessageCount: 20,
+    })).toMatch(/已压缩 12 条 · 保留 8\/20/);
   });
 
   it("summarizes workspace tracking snapshot fields", () => {
@@ -437,6 +461,7 @@ describe("Context compaction + workspace tracking helpers", () => {
     expect(context.messageCount).toBe(2);
     expect(context.droppedMessageCount).toBe(13);
     expect(formatContextBudget(context)).toMatch(/已压缩 13 条/);
+    expect(formatContextBudget(context)).toMatch(/保留 8\/20/);
     expect(formatContextBudget(context)).toContain("缓存命中 3");
 
     const snap = deriveWorkspaceTrackingSnapshot({
@@ -465,3 +490,67 @@ describe("Context compaction + workspace tracking helpers", () => {
     expect(reasoningEffortChip(null)).toBeNull();
   });
 });
+
+describe("Reasoning effort selector persistence", () => {
+  it("parses strategy and fixed effort choices fail-closed", () => {
+    expect(parseReasoningChoice("adaptive")).toBe("adaptive");
+    expect(parseReasoningChoice("cost_saver")).toBe("cost_saver");
+    expect(parseReasoningChoice("quality_first")).toBe("quality_first");
+    expect(parseReasoningChoice("fixed:high")).toBe("fixed:high");
+    expect(parseReasoningChoice("fixed:nope")).toBeNull();
+    expect(parseReasoningChoice("mystery")).toBeNull();
+    expect(parseReasoningChoice("")).toBeNull();
+    expect(parseReasoningChoice(null)).toBeNull();
+  });
+
+  it("loads and saves preferences through a storage shim", () => {
+    const mem = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => mem.get(key) ?? null,
+      setItem: (key: string, value: string) => { mem.set(key, value); },
+    };
+    expect(loadReasoningChoice(REASONING_CHOICE_STORAGE_KEY, "adaptive", storage)).toBe("adaptive");
+    saveReasoningChoice(REASONING_CHOICE_STORAGE_KEY, "fixed:medium", storage);
+    expect(loadReasoningChoice(REASONING_CHOICE_STORAGE_KEY, "adaptive", storage)).toBe("fixed:medium");
+    saveReasoningChoice(UNATTENDED_REASONING_CHOICE_STORAGE_KEY, "cost_saver", storage);
+    expect(loadReasoningChoice(UNATTENDED_REASONING_CHOICE_STORAGE_KEY, "adaptive", storage)).toBe("cost_saver");
+  });
+
+  it("coerces fixed efforts when provider no longer supports them", () => {
+    expect(coerceReasoningChoice("fixed:high", ["low", "medium", "high"])).toBe("fixed:high");
+    expect(coerceReasoningChoice("fixed:very_high", ["low", "medium"])).toBe("adaptive");
+    expect(coerceReasoningChoice("quality_first", ["low"])).toBe("quality_first");
+    expect(reasoningPolicyForChoice("fixed:high")).toEqual({
+      strategy: "fixed",
+      requested: "high",
+      allowAutomaticDowngrade: false,
+    });
+  });
+});
+
+describe("Tier danger risk copy + grant list helpers", () => {
+  it("exposes Chinese NeverAsk-aware risk bullets by tier", () => {
+    const unattended = dangerRiskItems("unattended");
+    expect(unattended.some((item) => /NeverAskWithinGrant|免确认/.test(item))).toBe(true);
+    expect(unattended.some((item) => /根目录|8 小时/.test(item))).toBe(true);
+    const full = dangerRiskItems("full_device");
+    expect(full.some((item) => /整机|可达路径/.test(item))).toBe(true);
+    expect(full.length).toBeGreaterThan(unattended.length);
+    const trusted = dangerRiskItems("trusted_workspace");
+    expect(trusted.some((item) => /NeverAskWithinGrant|睡眠|离开/.test(item))).toBe(true);
+  });
+
+  it("sorts active grants first and counts them", () => {
+    const grants = [
+      { status: "revoked" as const, issuedAtMs: 30, grantId: "a", goalId: "g1", tier: "workspace" as const, workspaceRoot: null, expiresAtMs: null, revokedAtMs: 1, spec: "nimora.authorization-grant-summary/1" as const },
+      { status: "active" as const, issuedAtMs: 10, grantId: "b", goalId: "goal-long-identifier", tier: "unattended" as const, workspaceRoot: null, expiresAtMs: null, revokedAtMs: null, spec: "nimora.authorization-grant-summary/1" as const },
+      { status: "active" as const, issuedAtMs: 40, grantId: "c", goalId: "g3", tier: "full_device" as const, workspaceRoot: null, expiresAtMs: null, revokedAtMs: null, spec: "nimora.authorization-grant-summary/1" as const },
+      { status: "expired" as const, issuedAtMs: 50, grantId: "d", goalId: "g4", tier: "trusted_workspace" as const, workspaceRoot: null, expiresAtMs: 1, revokedAtMs: null, spec: "nimora.authorization-grant-summary/1" as const },
+    ];
+    expect(countActiveGrants(grants)).toBe(2);
+    expect(sortAuthorizationGrants(grants).map((g) => g.grantId)).toEqual(["c", "b", "d", "a"]);
+    expect(shortGoalId("goal-long-identifier", 10)).toBe("goal-long-…");
+    expect(shortGoalId("short")).toBe("short");
+  });
+});
+
