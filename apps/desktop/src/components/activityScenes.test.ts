@@ -2,17 +2,44 @@ import { describe, expect, it, beforeEach } from "vitest";
 import {
   builtinActivityScenes,
   createUserActivityScene,
+  loadActiveSceneId,
+  loadStoredScenes,
   mergeSceneCatalog,
+  persistActiveSceneId,
+  persistScenes,
   pickSceneSpeech,
-  sceneTemplateForPrompt,
-  updateUserScene,
   removeUserScene,
   resolveActiveScene,
+  sceneCssVariables,
+  sceneTemplateForPrompt,
+  updateUserScene,
 } from "./activityScenes";
+
+class MemoryStorage {
+  private store = new Map<string, string>();
+  get length(): number {
+    return this.store.size;
+  }
+  clear(): void {
+    this.store.clear();
+  }
+  getItem(key: string): string | null {
+    return this.store.has(key) ? (this.store.get(key) as string) : null;
+  }
+  setItem(key: string, value: string): void {
+    this.store.set(key, String(value));
+  }
+  removeItem(key: string): void {
+    this.store.delete(key);
+  }
+  key(index: number): string | null {
+    return [...this.store.keys()][index] ?? null;
+  }
+}
 
 describe("activityScenes workshop domain", () => {
   beforeEach(() => {
-    // jsdom localStorage is fine; no shared state in pure helpers
+    (globalThis as { localStorage?: Storage }).localStorage = new MemoryStorage() as unknown as Storage;
   });
 
   it("ships original themed builtins including sports and esports", () => {
@@ -73,5 +100,56 @@ describe("activityScenes workshop domain", () => {
     expect(sceneTemplateForPrompt("世界杯决赛").category).toBe("sports");
     expect(sceneTemplateForPrompt("英雄联盟排位").category).toBe("esports");
     expect(sceneTemplateForPrompt("写 skill 通宵").category).toBe("geek");
+  });
+
+  it("exposes palette as scene css variables and empty for null", () => {
+    const scene = builtinActivityScenes()[0]!;
+    const vars = sceneCssVariables(scene);
+    expect(vars["--scene-primary"]).toBe(scene.palette.primary);
+    expect(vars["--scene-secondary"]).toBe(scene.palette.secondary);
+    expect(vars["--scene-accent"]).toBe(scene.palette.accent);
+    expect(vars["--scene-ground"]).toBe(scene.palette.ground);
+    expect(vars["--scene-sky"]).toBe(scene.palette.sky);
+    expect(sceneCssVariables(null)).toEqual({});
+  });
+
+  it("never surfaces speech for a disabled scene", () => {
+    const scene = builtinActivityScenes()[0]!;
+    expect(pickSceneSpeech({ ...scene, enabled: false }, 0)).toBeNull();
+    expect(pickSceneSpeech(null, 0)).toBeNull();
+    expect(pickSceneSpeech({ ...scene, speechLines: ["  ", ""] }, 0)).toBeNull();
+  });
+
+  it("round-trips user scenes through localStorage persistence", () => {
+    localStorage.clear();
+    const user = createUserActivityScene({ name: "存档夜" })!;
+    persistScenes([user, builtinActivityScenes()[0]!]);
+    const restored = loadStoredScenes();
+    expect(restored.some((scene) => scene.id === user.id)).toBe(true);
+    expect(restored.some((scene) => scene.id.startsWith("scene.builtin."))).toBe(true);
+  });
+
+  it("round-trips active scene id and clears on null", () => {
+    localStorage.clear();
+    persistActiveSceneId("scene.user.demo");
+    expect(loadActiveSceneId()).toBe("scene.user.demo");
+    persistActiveSceneId(null);
+    expect(loadActiveSceneId()).toBeNull();
+  });
+
+  it("loads a merged catalog when storage is empty or corrupt", () => {
+    localStorage.clear();
+    expect(loadStoredScenes().length).toBe(builtinActivityScenes().length);
+    localStorage.setItem("nimora.activity-scenes/v1", "not-json{");
+    expect(loadStoredScenes().length).toBe(builtinActivityScenes().length);
+  });
+
+  it("applies stored builtin override enabled flag without losing identity", () => {
+    const builtin = builtinActivityScenes()[0]!;
+    const merged = mergeSceneCatalog([{ ...builtin, enabled: false, updatedAt: builtin.updatedAt + 10 }]);
+    const overridden = merged.find((scene) => scene.id === builtin.id);
+    expect(overridden?.enabled).toBe(false);
+    expect(overridden?.source).toBe("builtin");
+    expect(overridden?.name).toBe(builtin.name);
   });
 });
