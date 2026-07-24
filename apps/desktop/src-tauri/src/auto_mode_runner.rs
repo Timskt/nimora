@@ -1,7 +1,7 @@
 use super::{
     companion_directive::{
-        auto_mode_companion_status, pause_reason_is_budget, CompanionPhase,
-        CompanionPhaseTracker,
+        apply_grant_event, auto_mode_companion_status, pause_reason_is_budget, CompanionPhase,
+        CompanionPhaseTracker, GrantCompanionEvent,
     },
     AppHandle, AutoModeExecutionError, AutoModeExecutionService, AutoModeHostControl,
     AutoModeHostControlService, AutoModeJobControl, AutoModeJobStatus, AutoModeLoopRequest,
@@ -85,6 +85,7 @@ fn run_inner(
     .map_err(|error| (AutoModeJobStatus::Failed, error.to_string()))?;
     let loop_service = AutoModeLoopService::new(execution);
     let host_control = AutoModeHostControlService::new(database_path);
+    let mut grant_expiry_watch = GrantExpiryWatch::default();
     loop {
         if control.requested() != AutoModeJobControl::Continue {
             return commit_requested_control(
@@ -101,6 +102,12 @@ fn run_inner(
         let goal_id = turn.session.goal_id;
         let authorization_grant =
             load_active_authorization_grant(state, database_path, goal_id, logical_now);
+        if grant_expiry_watch.observe(
+            authorization_grant.as_ref().map(|grant| grant.expires_at_ms),
+            logical_now,
+        ) {
+            apply_grant_event(app, GrantCompanionEvent::Expired);
+        }
         let result = loop_service.run(
             &providers,
             &tools,
@@ -394,6 +401,44 @@ fn apply_finish_companion(
     }
 }
 
+/// Tracks the active grant's expiry so the pet signals a lapse exactly once.
+///
+/// The auto-mode loop reloads the active grant each batch; expiry is enforced
+/// upstream (an expired grant loads as `None`, and the supervisor fails closed).
+/// This watch converts the observed `Some(expiry) -> None` transition into a
+/// single `Expired` pet event, and re-arms when a fresh grant is observed.
+#[derive(Debug, Default)]
+struct GrantExpiryWatch {
+    last_expiry_ms: Option<u64>,
+    signaled: bool,
+}
+
+impl GrantExpiryWatch {
+    /// Records the freshly loaded grant expiry (outer `Option` = grant present,
+    /// inner `Option` = that grant's optional expiry) and returns `true` exactly
+    /// once when a previously time-bounded grant has lapsed.
+    fn observe(&mut self, grant_expiry_ms: Option<Option<u64>>, now_ms: u64) -> bool {
+        match grant_expiry_ms {
+            Some(expiry_ms) => {
+                self.last_expiry_ms = expiry_ms;
+                self.signaled = false;
+                false
+            }
+            None => {
+                let lapsed = self
+                    .last_expiry_ms
+                    .is_some_and(|expires_at_ms| now_ms >= expires_at_ms);
+                if lapsed && !self.signaled {
+                    self.signaled = true;
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+}
+
 fn time_failure() -> (AutoModeJobStatus, String) {
     (AutoModeJobStatus::Failed, "clock-unavailable".to_owned())
 }
@@ -414,4 +459,55 @@ fn pause_reason_code(reason: AutoModePauseReason) -> String {
         AutoModePauseReason::UserRequested => "user_requested",
     }
     .to_owned()
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::GrantExpiryWatch;
+
+    #[test]
+    fn signals_expiry_once_after_a_time_bounded_grant_lapses() {
+        let mut watch = GrantExpiryWatch::default();
+        // Active grant with an expiry in the future: no signal, watch armed.
+        assert!(!watch.observe(Some(Some(10_000)), 5_000));
+        // Grant now loads as None and the clock has passed expiry: signal once.
+        assert!(watch.observe(None, 10_000));
+        // Still gone on the next batch: do not repeat the signal.
+        assert!(!watch.observe(None, 12_000));
+    }
+
+    #[test]
+    fn does_not_signal_when_no_grant_was_ever_active() {
+        let mut watch = GrantExpiryWatch::default();
+        assert!(!watch.observe(None, 1_000));
+        assert!(!watch.observe(None, 2_000));
+    }
+
+    #[test]
+    fn does_not_signal_for_a_session_grant_without_expiry() {
+        let mut watch = GrantExpiryWatch::default();
+        // Session-lifetime grant (no expiry timestamp).
+        assert!(!watch.observe(Some(None), 1_000));
+        // Grant gone (e.g. revoked): expiry watch stays silent; revoke path owns that event.
+        assert!(!watch.observe(None, 2_000));
+    }
+
+    #[test]
+    fn re_arms_after_a_fresh_grant_is_issued() {
+        let mut watch = GrantExpiryWatch::default();
+        assert!(!watch.observe(Some(Some(10_000)), 1_000));
+        assert!(watch.observe(None, 10_000));
+        // A new grant is issued for a follow-up goal, then lapses again: signal again.
+        assert!(!watch.observe(Some(Some(30_000)), 20_000));
+        assert!(watch.observe(None, 30_000));
+    }
+
+    #[test]
+    fn does_not_signal_before_the_expiry_timestamp() {
+        let mut watch = GrantExpiryWatch::default();
+        assert!(!watch.observe(Some(Some(10_000)), 1_000));
+        // Grant briefly loads as None (e.g. transient repo miss) before expiry: stay silent.
+        assert!(!watch.observe(None, 9_000));
+    }
 }
