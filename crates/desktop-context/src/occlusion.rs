@@ -502,6 +502,19 @@ mod tests {
     }
 
     #[test]
+    fn strip_merge_empty_does_not_panic() {
+        // Direct merge path (no occluders / empty band list) must be fail-closed.
+        let merged = super::merge_vertical_strips(Vec::new());
+        assert!(merged.is_empty());
+        let zero = compute_pet_occlusion(pet(0, 0, 0, 0), &[]);
+        assert_eq!(zero.coverage, 0.0);
+        assert!(zero.strips.is_empty());
+        let empty_union = super::union_coverage_and_strips(&[], 100, 100);
+        assert_eq!(empty_union.0, 0);
+        assert!(empty_union.1.is_empty());
+    }
+
+    #[test]
     fn partial_overlap_coverage_and_strip() {
         // Pet 100x100; occluder covers left half.
         let result = compute_pet_occlusion(pet(0, 0, 100, 100), &[occ(0, 0, 50, 100, 1)]);

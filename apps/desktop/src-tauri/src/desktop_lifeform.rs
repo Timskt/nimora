@@ -180,6 +180,20 @@ fn point_in_work_area(x: i32, y: i32, area: WorkArea) -> bool {
     px >= left && px < right && py >= top && py < bottom
 }
 
+/// Full display bounds containment (includes menu bar / dock chrome outside work area).
+fn point_in_display_bounds(x: i32, y: i32, display: &DesktopDisplay) -> bool {
+    point_in_work_area(
+        x,
+        y,
+        WorkArea {
+            x: display.x,
+            y: display.y,
+            width: display.width,
+            height: display.height,
+        },
+    )
+}
+
 fn pet_center(x: i32, y: i32, w: u32, h: u32) -> (i32, i32) {
     let cx = i64::from(x).saturating_add(i64::from(w) / 2);
     let cy = i64::from(y).saturating_add(i64::from(h) / 2);
@@ -191,8 +205,8 @@ fn pet_center(x: i32, y: i32, w: u32, h: u32) -> (i32, i32) {
 
 /// Finds the display whose work area contains the origin point.
 ///
-/// Prefers work-area containment of the point; if none match, returns the first
-/// (primary) display when present, else `None`.
+/// Prefers work-area containment, then full display bounds (menu bar / dock chrome),
+/// and only then the primary (first) display when present.
 #[must_use]
 pub fn display_containing_origin<'a>(
     origin_x: i32,
@@ -202,14 +216,19 @@ pub fn display_containing_origin<'a>(
     displays
         .iter()
         .find(|display| point_in_work_area(origin_x, origin_y, display.work_area))
+        .or_else(|| {
+            displays
+                .iter()
+                .find(|display| point_in_display_bounds(origin_x, origin_y, display))
+        })
         .or_else(|| displays.first())
 }
 
 /// Selects the overlay stage for the pet based on multi-monitor work areas.
 ///
-/// If the pet body center lies inside a display work area, that work area becomes
-/// the stage; otherwise falls back to the host work area via
-/// [`overlay_stage_from_work_area`].
+/// Prefers the work area containing the pet body center. When the center sits in
+/// display chrome outside any work area (menu bar / dock), uses that display's
+/// work area so multi-monitor rebind does not snap back to the primary fallback.
 #[must_use]
 pub fn overlay_stage_for_pet(
     pet_x: i32,
@@ -223,6 +242,11 @@ pub fn overlay_stage_for_pet(
     if let Some(display) = displays
         .iter()
         .find(|display| point_in_work_area(cx, cy, display.work_area))
+        .or_else(|| {
+            displays
+                .iter()
+                .find(|display| point_in_display_bounds(cx, cy, display))
+        })
     {
         return overlay_stage_from_work_area(HostWorkArea {
             x: display.work_area.x,
@@ -1292,5 +1316,169 @@ mod tests {
         assert!(!is_connector_event_type("connector"));
         assert!(!is_connector_event_type("connector.github"));
         assert!(!is_connector_event_type("skill.worker.busy"));
+    }
+
+    fn usable_dual_snapshot(now_ms: u64) -> LifeformDesktopContext {
+        let displays = dual_displays();
+        let sample = LifeformSampleInput {
+            windows: vec![],
+            foreground: None,
+            idle_ms: 0,
+            power: None,
+            meeting_active: false,
+            meeting_hint: MeetingHint::None,
+            observed_at_ms: now_ms,
+            displays,
+            cursor: None,
+        };
+        lifeform_snapshot_from_sample(sample, now_ms.saturating_add(LIFEFORM_LEASE_MS))
+            .expect("usable dual snapshot")
+    }
+
+    #[test]
+    fn even_sequence_prefers_cross_display_wander_goal() {
+        let snap = usable_dual_snapshot(1_000);
+        let work = WorkArea {
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 800,
+        };
+        // Every 2nd sequence (even) prefers a destination on the other monitor.
+        let even = plan_lifeform_wander_goal(
+            2,
+            100,
+            400,
+            PET_BODY_WIDTH,
+            PET_BODY_HEIGHT,
+            work,
+            None,
+            Some(&snap),
+            1_000,
+        )
+        .expect("even goal");
+        assert!(
+            even.target_x >= 1280,
+            "even sequence should park on other display, got {:?}",
+            even
+        );
+        assert!(matches!(even.mode, MotionMode::Walk | MotionMode::Jump));
+
+        // Odd sequences keep local (same-display) wander planning.
+        let odd = plan_lifeform_wander_goal(
+            3,
+            100,
+            400,
+            PET_BODY_WIDTH,
+            PET_BODY_HEIGHT,
+            work,
+            None,
+            Some(&snap),
+            1_000,
+        )
+        .expect("odd goal");
+        assert!(
+            odd.target_x < 1280,
+            "odd sequence should stay on current display, got {:?}",
+            odd
+        );
+    }
+
+    #[test]
+    fn park_slot_variety_follows_sequence_mod_five() {
+        let displays = dual_displays();
+        let mut xs = Vec::new();
+        for sequence in 0..5u64 {
+            let (x, _y) = plan_cross_display_wander_target(
+                sequence,
+                100,
+                400,
+                PET_BODY_WIDTH,
+                PET_BODY_HEIGHT,
+                &displays,
+            )
+            .expect("cross target");
+            // Destination remains on the other display for dual topology.
+            assert!(x >= 1280, "seq={sequence} x={x}");
+            xs.push(x);
+        }
+        // sequence % 5 should yield distinct horizontal park slots on a wide display.
+        let unique: std::collections::BTreeSet<_> = xs.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            5,
+            "expected 5 distinct park slots from sequence % 5, got {xs:?}"
+        );
+        // Sequence 5 reuses slot 0.
+        let (x5, _) = plan_cross_display_wander_target(
+            5,
+            100,
+            400,
+            PET_BODY_WIDTH,
+            PET_BODY_HEIGHT,
+            &displays,
+        )
+        .expect("seq5");
+        assert_eq!(x5, xs[0]);
+    }
+
+    #[test]
+    fn stage_rebind_prefers_display_bounds_over_primary_fallback() {
+        // Secondary has a top menu-bar chrome strip outside its work area.
+        let displays = vec![
+            DesktopDisplay {
+                id: "primary".into(),
+                x: 0,
+                y: 0,
+                width: 1280,
+                height: 800,
+                work_area: WorkArea {
+                    x: 0,
+                    y: 25,
+                    width: 1280,
+                    height: 775,
+                },
+                scale_factor: 1.0,
+            },
+            DesktopDisplay {
+                id: "secondary".into(),
+                x: 1280,
+                y: 0,
+                width: 1280,
+                height: 800,
+                work_area: WorkArea {
+                    x: 1280,
+                    y: 25,
+                    width: 1280,
+                    height: 775,
+                },
+                scale_factor: 1.0,
+            },
+        ];
+        let fallback = HostWorkArea {
+            x: 0,
+            y: 25,
+            width: 1280,
+            height: 775,
+        };
+        // Pet center (1530, 10) sits in secondary menu-bar chrome (y < work_area.y=25)
+        // but still inside full display bounds so rebind must not snap to primary.
+        let pet_x = 1400;
+        let pet_y = -140;
+        let stage = overlay_stage_for_pet(
+            pet_x,
+            pet_y,
+            PET_BODY_WIDTH,
+            PET_BODY_HEIGHT,
+            &displays,
+            fallback,
+        );
+        assert_eq!(
+            stage.origin_x, 1280,
+            "should rebind to secondary work area, not primary fallback"
+        );
+        assert_eq!(stage.origin_y, 25);
+        let containing = display_containing_origin(1500, 10, &displays).expect("display");
+        assert_eq!(containing.id, "secondary");
     }
 }

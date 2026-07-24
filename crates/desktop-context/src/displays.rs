@@ -454,4 +454,29 @@ mod cross_display_tests {
         assert_eq!(union.width, 2560);
         assert_eq!(union.height, 800);
     }
+
+    #[test]
+    fn park_slot_variety_sequence_mod_five() {
+        let displays = dual();
+        let pet_w = 260u32;
+        let pet_h = 300u32;
+        let mut xs = Vec::new();
+        for sequence in 0..5u64 {
+            let (x, y) =
+                plan_cross_display_target(sequence, 100, 400, pet_w, pet_h, &displays)
+                    .expect("target");
+            let dest = displays[1].work_area;
+            assert!(x >= dest.x);
+            assert!(y >= dest.y);
+            assert!(i64::from(x) + i64::from(pet_w) <= i64::from(dest.x) + i64::from(dest.width));
+            assert!(i64::from(y) + i64::from(pet_h) <= i64::from(dest.y) + i64::from(dest.height));
+            xs.push(x);
+        }
+        let unique: std::collections::BTreeSet<_> = xs.iter().copied().collect();
+        assert_eq!(unique.len(), 5, "slots={xs:?}");
+        // sequence % 5 wraps: 5 → same park x as 0.
+        let (x5, _) =
+            plan_cross_display_target(5, 100, 400, pet_w, pet_h, &displays).expect("x5");
+        assert_eq!(x5, xs[0]);
+    }
 }
