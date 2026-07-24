@@ -2732,6 +2732,7 @@ dependencies = [
  "nimora-agent-tools",
  "nimora-agent-workspace-host",
  "nimora-persistence-sqlite",
+ "rusqlite",
  "serde",
  "serde_json",
  "uuid",
@@ -2768,6 +2769,7 @@ dependencies = [
 name = "nimora-desktop"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "nimora-agent-auto-host",
  "nimora-agent-provider-worker",
  "nimora-agent-runtime",
@@ -2780,6 +2782,9 @@ dependencies = [
  "nimora-capability-contract",
  "nimora-creator-composition",
  "nimora-creator-draft",
+ "nimora-desktop-context",
+ "nimora-desktop-context-macos",
+ "nimora-desktop-context-windows",
  "nimora-diagnostics-bundle",
  "nimora-model-importer",
  "nimora-module-agent-adapter",
@@ -2810,7 +2815,35 @@ dependencies = [
  "time",
  "uuid",
  "wait-timeout",
+ "windows-sys 0.61.2",
  "zeroize",
+]
+
+[[package]]
+name = "nimora-desktop-context"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "nimora-desktop-context-macos"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "nimora-desktop-context-windows"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

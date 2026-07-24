@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   assetPackageSchema,
   assetManifestSchema,
+  authorizationGrantSchema,
+  authorizationGrantSummarySchema,
   eventSchema,
   modelAnimationMapSchema,
   petSchema,
@@ -10,6 +12,8 @@ import {
   profileSnapshotSchema,
   safetySnapshotSchema,
   spriteClipsSchema,
+  startUnattendedAutoModeRequestSchema,
+  structuredPetDirectiveSchema,
   vrmExpressionMapSchema,
 } from "./index";
 
@@ -449,5 +453,158 @@ describe("assetPackageSchema", () => {
       totalBytes: 10,
     });
     expect(result.success).toBe(false);
+  });
+});
+
+
+describe("pet lifeform fields", () => {
+  it("accepts optional personality and directive snapshot fields", () => {
+    const result = petSchema.safeParse({
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "灵栖",
+      state: "idle",
+      emotion: "happy",
+      position: { x: 10, y: 20 },
+      energy: 80,
+      mood: 70,
+      affinity: 50,
+      personality: { energy: 55, curiosity: 60, laziness: 30, pride: 40 },
+      lastDirectiveSpeech: "正在陪你干活",
+      lastDirectiveAnimation: "pet.work",
+      lastAttention: "user",
+      directiveRevision: 3,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.personality?.curiosity).toBe(60);
+      expect(result.data.lastDirectiveSpeech).toBe("正在陪你干活");
+      expect(result.data.directiveRevision).toBe(3);
+    }
+  });
+});
+
+
+describe("structuredPetDirectiveSchema", () => {
+  it("accepts a companion work directive", () => {
+    const result = structuredPetDirectiveSchema.safeParse({
+      spec: "nimora.pet_directive/1",
+      speech: "正在陪你干活",
+      action: "work_busy",
+      animation: "pet.work",
+      attention: "user",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown animation tokens and oversized speech", () => {
+    expect(structuredPetDirectiveSchema.safeParse({
+      spec: "nimora.pet_directive/1",
+      speech: "x".repeat(121),
+      action: "rest",
+      attention: "idle_scene",
+    }).success).toBe(false);
+    expect(structuredPetDirectiveSchema.safeParse({
+      spec: "nimora.pet_directive/1",
+      action: "play",
+      animation: "pet.secret",
+      attention: "user",
+    }).success).toBe(false);
+  });
+});
+
+describe("authorizationGrantSummarySchema", () => {
+  it("accepts control-center grant summaries", () => {
+    expect(authorizationGrantSummarySchema.safeParse({
+      spec: "nimora.authorization-grant-summary/1",
+      grantId: "11111111-1111-4111-8111-111111111111",
+      goalId: "22222222-2222-4222-8222-222222222222",
+      tier: "unattended",
+      status: "active",
+      workspaceRoot: "/tmp/ws",
+      issuedAtMs: 1_000,
+      expiresAtMs: 1_000 + 8 * 60 * 60 * 1_000,
+      revokedAtMs: null,
+    }).success).toBe(true);
+  });
+});
+
+describe("authorizationGrantSchema", () => {
+  const baseGrant = {
+    spec: "nimora.authorization-grant/1" as const,
+    id: "11111111-1111-4111-8111-111111111111",
+    goalId: "22222222-2222-4222-8222-222222222222",
+    planRevision: 1,
+    workspaceFingerprint: `sha256:${"a".repeat(64)}`,
+    sandbox: "workspace_write" as const,
+    approval: "never_ask_within_grant" as const,
+    network: { kind: "offline" as const },
+    selectedRoots: [] as string[],
+    toolAllowlist: ["pet.state.read"],
+    providerAllowlist: ["provider:local"],
+    modelAllowlist: ["model:local"],
+    maximumDataClassification: "personal" as const,
+    budget: {
+      maxSteps: 24,
+      maxToolCalls: 16,
+      maxElapsedMs: 600_000,
+      maxInputTokens: 64_000,
+      maxOutputTokens: 16_000,
+      maxCostMicrounits: 5_000_000,
+    },
+    lifetime: "session" as const,
+    issuedAtMs: 1_000,
+    expiresAtMs: null,
+    revokedAtMs: null,
+  };
+
+  it("accepts a trusted workspace grant", () => {
+    expect(authorizationGrantSchema.safeParse(baseGrant).success).toBe(true);
+  });
+
+  it("requires selectedRoots for selected_roots sandbox", () => {
+    expect(authorizationGrantSchema.safeParse({
+      ...baseGrant,
+      sandbox: "selected_roots",
+      selectedRoots: [],
+      lifetime: "until_timestamp",
+      expiresAtMs: 2_000,
+    }).success).toBe(false);
+    expect(authorizationGrantSchema.safeParse({
+      ...baseGrant,
+      sandbox: "selected_roots",
+      selectedRoots: ["/tmp/ws"],
+      lifetime: "until_timestamp",
+      expiresAtMs: 2_000,
+    }).success).toBe(true);
+  });
+});
+
+describe("startUnattendedAutoModeRequestSchema", () => {
+  it("accepts a bounded unattended start request", () => {
+    expect(startUnattendedAutoModeRequestSchema.safeParse({
+      title: "Night build",
+      objective: "Run tests and fix failures",
+      steps: ["scan", "test", "fix"],
+      workspaceRoot: "/Users/dev/project",
+      tier: "unattended",
+      offline: true,
+    }).success).toBe(true);
+  });
+
+  it("rejects empty steps or title", () => {
+    expect(startUnattendedAutoModeRequestSchema.safeParse({
+      title: " ",
+      objective: "obj",
+      steps: ["a"],
+      workspaceRoot: "/tmp",
+      tier: "workspace",
+    }).success).toBe(false);
+    expect(startUnattendedAutoModeRequestSchema.safeParse({
+      title: "t",
+      objective: "obj",
+      steps: [],
+      workspaceRoot: "/tmp",
+      tier: "workspace",
+    }).success).toBe(false);
   });
 });

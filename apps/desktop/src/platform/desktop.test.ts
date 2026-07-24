@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDesktopApi, type UserProgramExecutionReceipt } from "./desktop";
+import { createDesktopApi, EMPTY_PET_OCCLUSION, type UserProgramExecutionReceipt } from "./desktop";
 
 describe("desktop platform adapter", () => {
   it("maps the pet heartbeat without exposing recovery controls", async () => {
@@ -148,6 +148,46 @@ describe("desktop platform adapter", () => {
       sessionId: "018f0000-0000-7000-8000-000000000012",
       workspaceRoot: "/preview/workspace",
     })).rejects.toThrow("desktop-host-required");
+    await expect(api.startUnattendedAutoMode({
+      title: "夜间回归",
+      objective: "跑完测试并汇总",
+      steps: ["准备", "执行", "汇总"],
+      workspaceRoot: "/preview/workspace",
+      tier: "unattended",
+      offline: true,
+      maxTurnsPerBatch: 4,
+    })).resolves.toMatchObject({
+      sessionId: "preview-session-unattended",
+      jobId: "preview-job-unattended",
+      grantId: "preview-grant-unattended",
+    });
+    await expect(api.listAuthorizationGrants("preview-goal")).resolves.toEqual([
+      expect.objectContaining({
+        grantId: "preview-grant",
+        goalId: "preview-goal",
+        tier: "workspace",
+        status: "active",
+      }),
+    ]);
+    await expect(api.getAwaySummary("preview-goal")).resolves.toMatchObject({
+      completedGoals: 1,
+      pendingConfirmations: 1,
+      companionMoments: 2,
+      highlights: expect.arrayContaining([
+        expect.stringContaining("夜间回归"),
+      ]),
+    });
+    await expect(api.getAwaySummary("other-goal")).resolves.toBeNull();
+    await expect(api.revokeAuthorizationGrant("preview-grant")).resolves.toEqual({
+      grantId: "preview-grant",
+      revoked: true,
+    });
+    const center = await api.autoModeControlCenter();
+    expect(center.entries[0]?.grant).toMatchObject({
+      grantId: "preview-grant",
+      tier: "workspace",
+      status: "active",
+    });
     await expect(api.autoModeAttemptDetail("018f0000-0000-7000-8000-000000000012"))
       .rejects.toThrow("desktop-host-required");
     await expect(api.resolveAutoModeAttempt({
@@ -342,8 +382,7 @@ describe("desktop platform adapter", () => {
     const invoke = vi.fn(async (command: string) => command === "delete_agent_history"
       ? { spec: "nimora.desktop-agent-history-delete/1", deleted: 1 }
       : null);
-    const startDragging = vi.fn(async () => undefined);
-    const api = createDesktopApi(true, invoke, startDragging);
+    const api = createDesktopApi(true, invoke);
     const reasoningPolicy = { strategy: "fixed", requested: "high", allowAutomaticDowngrade: false } as const;
     await api.automationGovernanceCatalog();
     await api.automationCostReconciliationCatalog();
@@ -614,18 +653,77 @@ describe("desktop platform adapter", () => {
       } }],
       ["stop_user_program", { executionId: envelope.executionId }],
     ]);
-    expect(startDragging).toHaveBeenCalledOnce();
   });
 
-  it("recovers runtime drag state when native dragging fails", async () => {
+  it("maps logical stage drag without native window dragging", async () => {
     const invoke = vi.fn(async () => null);
-    const api = createDesktopApi(true, invoke, async () => {
-      throw new Error("native drag failed");
-    });
-    await expect(api.dragPet()).rejects.toThrow("native drag failed");
+    const api = createDesktopApi(true, invoke);
+    await api.beginPetDrag();
+    await api.movePet(120, 240);
+    await api.finishPetDrag();
     expect(invoke.mock.calls).toEqual([
       ["begin_pet_drag"],
+      ["move_pet", { request: { x: 120, y: 240 } }],
       ["finish_pet_drag"],
     ]);
+  });
+
+  it("exposes occlusion and directive listeners without preview payloads", async () => {
+    const preview = createDesktopApi(false);
+    expect(EMPTY_PET_OCCLUSION).toEqual({ coverage: 0, fullyHidden: false, strips: [] });
+    await expect(preview.onPetOcclusionChanged(() => undefined)).resolves.toEqual(expect.any(Function));
+    await expect(preview.onPetDirectiveChanged(() => undefined)).resolves.toEqual(expect.any(Function));
+  });
+
+  it("applies structured pet directives in browser preview", async () => {
+    const api = createDesktopApi(false);
+    await expect(api.onPetDirectiveChanged(() => undefined)).resolves.toEqual(expect.any(Function));
+    await api.applyPetDirective({
+      spec: "nimora.pet_directive/1",
+      speech: "完成啦！",
+      action: "celebrate",
+      animation: "pet.celebrate",
+      attention: "user",
+      moodDelta: { mood: 6 },
+    });
+    const snapshot = await api.snapshot();
+    expect(snapshot.pet.state).toBe("interacting");
+    expect(snapshot.pet.emotion).toBe("happy");
+    expect(snapshot.pet.mood).toBeGreaterThanOrEqual(82);
+    const pet = snapshot.pet as typeof snapshot.pet & {
+      lastDirectiveSpeech?: string | null;
+      lastDirectiveAnimation?: string | null;
+      lastAttention?: string | null;
+      directiveRevision?: number;
+    };
+    expect(pet.lastDirectiveSpeech).toBe("完成啦！");
+    expect(pet.lastDirectiveAnimation).toBe("pet.celebrate");
+    expect(pet.lastAttention).toBe("user");
+    expect(pet.directiveRevision).toBe(1);
+  });
+
+  it("invokes host apply_pet_directive with camelCase payload", async () => {
+    const invoke = vi.fn(async () => null);
+    const api = createDesktopApi(true, invoke);
+    const directive = {
+      spec: "nimora.pet_directive/1" as const,
+      speech: "我在想…",
+      action: "observe",
+      animation: "pet.observe",
+      attention: "user",
+      moodDelta: { mood: 1 },
+    };
+    await api.applyPetDirective(directive);
+    expect(invoke).toHaveBeenCalledWith("apply_pet_directive", { directive });
+  });
+
+  it("keeps preview drag local by mutating in-memory pet pose", async () => {
+    const api = createDesktopApi(false);
+    await api.beginPetDrag();
+    expect((await api.snapshot()).pet.state).toBe("dragged");
+    await api.movePet(400, 300);
+    expect((await api.snapshot()).pet.position).toEqual({ x: 400, y: 300 });
+    await api.finishPetDrag();
+    expect((await api.snapshot()).pet.state).toBe("idle");
   });
 });

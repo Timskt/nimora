@@ -1,7 +1,7 @@
 # Nimora 文档控制中心
 
 > 版本：0.1.0-draft  
-> 更新日期：2026-07-19
+> 更新日期：2026-07-24
 > 所有者：产品与架构负责人
 
 ## 1. 文档优先级
@@ -34,9 +34,11 @@ Provider、Connector、缓存与授权材料的系统密钥存储、非敏感引
 
 面向广大用户的持续需求发现、新技术准入、Adapter 替换、稳定版前后兼容和退出演练统一遵循 [`FUTURE_EVOLUTION_GOVERNANCE.md`](FUTURE_EVOLUTION_GOVERNANCE.md)。
 
-Coding Agent 竞品能力吸收、持久 Goal、无人值守预授权和模型推理策略分别以 [`AGENT_COMPETITIVE_DESIGN.md`](AGENT_COMPETITIVE_DESIGN.md)、[`AUTO_AUTHORIZATION.md`](AUTO_AUTHORIZATION.md) 与 [`MODEL_REASONING_POLICY.md`](MODEL_REASONING_POLICY.md) 为实现基线。
+Coding Agent 竞品能力吸收、持久 Goal、无人值守预授权（五档 Grant、`NeverAskWithinGrant` sleep-safe、SQLite 仓储与桌面签发）和模型推理策略分别以 [`AGENT_COMPETITIVE_DESIGN.md`](AGENT_COMPETITIVE_DESIGN.md)、[`AUTO_AUTHORIZATION.md`](AUTO_AUTHORIZATION.md) 与 [`MODEL_REASONING_POLICY.md`](MODEL_REASONING_POLICY.md) 为实现基线。
 
 原生桌宠必须以类似经典 QQ 宠物的独立桌面生命体为产品核心，而不是普通聊天窗口；窗口模型、自主行为、照料成长、环境互动、离线能力和真机验收统一以 [`DESKTOP_PET_EXPERIENCE.md`](DESKTOP_PET_EXPERIENCE.md) 为基线。
+
+桌面生命体情境（几何采样、弹簧运动规划、人格与结构化指令）的库级范围、Host 部分接线与未完成边界以 [`DESKTOP_LIFEFORM_CONTEXT.md`](DESKTOP_LIFEFORM_CONTEXT.md) 为准；不得与 Presence 栈（[`SYSTEM_CONTEXT_ADAPTERS.md`](SYSTEM_CONTEXT_ADAPTERS.md)）混写证据。
 
 阶段性方向校准、偏差纠正、GitHub Actions 分钟复核与下一纵切硬验收统一记录在 [`MILESTONE_REVIEWS.md`](MILESTONE_REVIEWS.md)，不得只存在于对话或提交说明中。
 

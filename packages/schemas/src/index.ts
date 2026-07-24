@@ -123,6 +123,23 @@ export const petSchema = z.object({
     activeIntent: z.enum(["observe", "explore", "play", "stretch", "rest"]).nullable(),
     resumeAction: z.enum(["perch", "climb", "peek"]).nullable().optional(),
   }).optional(),
+  personality: z.object({
+    energy: z.number().int().min(0).max(100),
+    curiosity: z.number().int().min(0).max(100),
+    laziness: z.number().int().min(0).max(100),
+    pride: z.number().int().min(0).max(100),
+  }).optional(),
+  lastDirectiveSpeech: z.string().max(120).nullable().optional(),
+  lastDirectiveAnimation: z.string().max(64).nullable().optional(),
+  lastAttention: z.enum([
+    "cursor",
+    "foreground_window",
+    "notification_area",
+    "user",
+    "idle_scene",
+    "obstacle",
+  ]).nullable().optional(),
+  directiveRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
 });
 
 export const profileModeSchema = z.enum([
@@ -372,6 +389,208 @@ export const assetPackageSchema = z.object({
   }
 });
 
+
+/** Animation tokens accepted by structured pet directives (mirrors runtime-core whitelist). */
+export const petAnimationTokenSchema = z.enum([
+  "pet.idle",
+  "pet.observe",
+  "pet.walk",
+  "pet.play",
+  "pet.perch",
+  "pet.climb",
+  "pet.peek",
+  "pet.stretch",
+  "pet.sleep",
+  "pet.wake",
+  "pet.work",
+  "pet.celebrate",
+  "pet.click",
+]);
+
+export const attentionFocusSchema = z.enum([
+  "cursor",
+  "foreground_window",
+  "notification_area",
+  "user",
+  "idle_scene",
+  "obstacle",
+]);
+
+export const petDirectiveActionSchema = z.enum([
+  "wander",
+  "approach_cursor",
+  "rest",
+  "play",
+  "observe",
+  "perch",
+  "celebrate",
+  "work_busy",
+  "work_crash",
+]);
+
+/** Host IPC payload: `nimora.pet_directive/1` (camelCase wire). */
+export const structuredPetDirectiveSchema = z.object({
+  spec: z.literal("nimora.pet_directive/1"),
+  speech: z.string().max(120).nullable().optional(),
+  moodDelta: z.object({ mood: z.number().int().min(-20).max(20) }).nullable().optional(),
+  action: petDirectiveActionSchema,
+  animation: petAnimationTokenSchema.nullable().optional(),
+  attention: attentionFocusSchema,
+});
+
+export const authorizationTierSchema = z.enum([
+  "observe",
+  "workspace",
+  "trusted_workspace",
+  "unattended",
+  "full_device",
+]);
+
+export const authorizationGrantStatusSchema = z.enum(["active", "revoked", "expired"]);
+
+export const sandboxScopeSchema = z.enum([
+  "read_only",
+  "workspace_write",
+  "selected_roots",
+  "full_device",
+]);
+
+export const approvalPolicySchema = z.enum([
+  "always_ask",
+  "ask_risky",
+  "auto_review",
+  "never_ask_within_grant",
+]);
+
+export const grantLifetimeSchema = z.enum([
+  "one_action",
+  "one_turn",
+  "session",
+  "until_timestamp",
+]);
+
+export const dataClassificationSchema = z.enum([
+  "public",
+  "internal",
+  "personal",
+  "sensitive",
+  "restricted",
+]);
+
+export const networkPolicySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("offline") }),
+  z.object({ kind: z.literal("loopback_only") }),
+  z.object({
+    kind: z.literal("allowlisted"),
+    domains: z.array(z.string().min(1).max(253)).min(1).max(128),
+  }),
+  z.object({ kind: z.literal("unrestricted") }),
+]);
+
+export const agentBudgetSchema = z.object({
+  maxSteps: z.number().int().positive().max(256),
+  maxToolCalls: z.number().int().nonnegative(),
+  maxElapsedMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  maxInputTokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  maxOutputTokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  maxCostMicrounits: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+});
+
+const workspaceFingerprintSchema = z
+  .string()
+  .regex(/^sha256:[0-9a-fA-F]{64}$/, "must be sha256:<64 hex>");
+
+/** Full immutable grant: `nimora.authorization-grant/1`. */
+export const authorizationGrantSchema = z
+  .object({
+    spec: z.literal("nimora.authorization-grant/1"),
+    id: z.uuid(),
+    goalId: z.uuid(),
+    planRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    workspaceFingerprint: workspaceFingerprintSchema,
+    sandbox: sandboxScopeSchema,
+    approval: approvalPolicySchema,
+    network: networkPolicySchema,
+    selectedRoots: z.array(z.string().min(1).max(1024)).max(32),
+    toolAllowlist: z.array(z.string().min(1).max(128)).min(1).max(256),
+    providerAllowlist: z.array(z.string().min(1).max(128)).min(1).max(64),
+    modelAllowlist: z.array(z.string().min(1).max(128)).min(1).max(64),
+    maximumDataClassification: dataClassificationSchema,
+    budget: agentBudgetSchema,
+    lifetime: grantLifetimeSchema,
+    issuedAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    expiresAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+    revokedAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+  })
+  .superRefine((grant, context) => {
+    const timed = grant.lifetime === "until_timestamp";
+    if (timed !== (grant.expiresAtMs != null)) {
+      context.addIssue({
+        code: "custom",
+        message: "until_timestamp lifetime requires expiresAtMs; other lifetimes must omit it",
+        path: ["expiresAtMs"],
+      });
+    }
+    if (grant.expiresAtMs != null && grant.expiresAtMs <= grant.issuedAtMs) {
+      context.addIssue({
+        code: "custom",
+        message: "expiresAtMs must be greater than issuedAtMs",
+        path: ["expiresAtMs"],
+      });
+    }
+    if (grant.revokedAtMs != null && grant.revokedAtMs < grant.issuedAtMs) {
+      context.addIssue({
+        code: "custom",
+        message: "revokedAtMs must be >= issuedAtMs",
+        path: ["revokedAtMs"],
+      });
+    }
+    if (grant.sandbox === "selected_roots" && grant.selectedRoots.length === 0) {
+      context.addIssue({
+        code: "custom",
+        message: "selected_roots sandbox requires non-empty selectedRoots",
+        path: ["selectedRoots"],
+      });
+    }
+    if (grant.sandbox !== "selected_roots" && grant.selectedRoots.length > 0) {
+      context.addIssue({
+        code: "custom",
+        message: "selectedRoots must be empty unless sandbox is selected_roots",
+        path: ["selectedRoots"],
+      });
+    }
+  });
+
+/** Control-center summary: `nimora.authorization-grant-summary/1`. */
+export const authorizationGrantSummarySchema = z.object({
+  spec: z.literal("nimora.authorization-grant-summary/1"),
+  grantId: z.uuid(),
+  goalId: z.uuid(),
+  tier: authorizationTierSchema,
+  status: authorizationGrantStatusSchema,
+  workspaceRoot: z.string().min(1).max(1024).nullable(),
+  issuedAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  expiresAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+  revokedAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+});
+
+export const startUnattendedAutoModeRequestSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  objective: z.string().trim().min(1).max(4000),
+  steps: z.array(z.string().trim().min(1).max(500)).min(1).max(32),
+  workspaceRoot: z.string().min(1).max(1024),
+  tier: authorizationTierSchema,
+  offline: z.boolean().optional(),
+  maxTurnsPerBatch: z.number().int().positive().max(256).optional(),
+  maxOutputTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+});
+
+export const startUnattendedAutoModeResultSchema = z.object({
+  sessionId: z.uuid(),
+  jobId: z.uuid(),
+  grantId: z.uuid(),
+});
+
 export type NimoraEvent = z.infer<typeof eventSchema>;
 export type NimoraCommand = z.infer<typeof commandSchema>;
 export type Pet = z.infer<typeof petSchema>;
@@ -393,3 +612,18 @@ export type AssetManifest = z.infer<typeof assetManifestSchema>;
 export type AssetFile = z.infer<typeof assetFileSchema>;
 export type AssetDependency = z.infer<typeof assetDependencySchema>;
 export type AssetPackage = z.infer<typeof assetPackageSchema>;
+
+export type StructuredPetDirective = z.infer<typeof structuredPetDirectiveSchema>;
+export type PetDirectiveAction = z.infer<typeof petDirectiveActionSchema>;
+export type AttentionFocus = z.infer<typeof attentionFocusSchema>;
+export type AuthorizationTier = z.infer<typeof authorizationTierSchema>;
+export type AuthorizationGrantStatus = z.infer<typeof authorizationGrantStatusSchema>;
+export type AuthorizationGrant = z.infer<typeof authorizationGrantSchema>;
+export type AuthorizationGrantSummary = z.infer<typeof authorizationGrantSummarySchema>;
+export type SandboxScope = z.infer<typeof sandboxScopeSchema>;
+export type ApprovalPolicy = z.infer<typeof approvalPolicySchema>;
+export type GrantLifetime = z.infer<typeof grantLifetimeSchema>;
+export type NetworkPolicy = z.infer<typeof networkPolicySchema>;
+export type AgentBudget = z.infer<typeof agentBudgetSchema>;
+export type StartUnattendedAutoModeRequest = z.infer<typeof startUnattendedAutoModeRequestSchema>;
+export type StartUnattendedAutoModeResult = z.infer<typeof startUnattendedAutoModeResultSchema>;

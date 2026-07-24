@@ -741,3 +741,342 @@ fn auto_mode_cli_persists_and_revalidates_resume_bindings() {
     let _ = fs::remove_file(database);
     fs::remove_dir_all(workspace).expect("remove workspace");
 }
+
+
+#[test]
+fn authorization_grant_cli_issues_lists_shows_and_revokes() {
+    let database = temporary_database("grant-lifecycle");
+    let database_path = database.to_str().expect("database path");
+    let workspace = temporary_directory("grant-workspace");
+    fs::write(workspace.join("notes.txt"), b"grant workspace").expect("workspace file");
+    let workspace_root = workspace.to_str().expect("workspace root");
+
+    let created = nimora_with_stdin(
+        &[
+            "ai",
+            "goal",
+            "create",
+            "--database",
+            database_path,
+            "--input",
+            "-",
+        ],
+        br#"{"title":"Grant lifecycle","objective":"Issue and revoke an authorization grant","steps":["Issue grant"]}"#,
+    );
+    assert!(
+        created.status.success(),
+        "create goal failed: {}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let created: Value = serde_json::from_slice(&created.stdout).expect("create output");
+    let goal_id = created["goal"]["id"].as_str().expect("goal id");
+
+    let issued = nimora()
+        .args([
+            "ai",
+            "goal",
+            "grant",
+            "issue",
+            "--database",
+            database_path,
+            "--goal-id",
+            goal_id,
+            "--tier",
+            "unattended",
+            "--workspace-root",
+            workspace_root,
+            "--reason",
+            "cli-test-unattended",
+            "--offline",
+            "--tool",
+            "pet.state.read",
+        ])
+        .output()
+        .expect("issue grant");
+    assert!(
+        issued.status.success(),
+        "issue failed: {}",
+        String::from_utf8_lossy(&issued.stderr)
+    );
+    assert!(issued.stderr.is_empty());
+    let issued: Value = serde_json::from_slice(&issued.stdout).expect("issue output");
+    assert_eq!(issued["spec"], "nimora.ai-authorization-grant/1");
+    assert_eq!(issued["summary"]["spec"], "nimora.authorization-grant-summary/1");
+    assert_eq!(issued["summary"]["tier"], "unattended");
+    assert_eq!(issued["summary"]["status"], "active");
+    assert_eq!(issued["summary"]["goalId"], goal_id);
+    assert_eq!(issued["grant"]["approval"], "never_ask_within_grant");
+    assert_eq!(issued["grant"]["sandbox"], "selected_roots");
+    assert_eq!(issued["grant"]["network"]["kind"], "offline");
+    assert!(issued["grant"]["expiresAtMs"].as_u64().is_some());
+    let grant_id = issued["grant"]["id"].as_str().expect("grant id");
+
+    let listed = nimora()
+        .args([
+            "ai",
+            "goal",
+            "grant",
+            "list",
+            "--database",
+            database_path,
+            "--goal-id",
+            goal_id,
+        ])
+        .output()
+        .expect("list grants");
+    assert!(listed.status.success());
+    let listed: Value = serde_json::from_slice(&listed.stdout).expect("list output");
+    assert_eq!(listed["spec"], "nimora.ai-authorization-grant-list/1");
+    assert_eq!(listed["grants"][0]["grantId"], grant_id);
+    assert_eq!(listed["grants"][0]["status"], "active");
+
+    let shown = nimora()
+        .args([
+            "ai",
+            "goal",
+            "grant",
+            "show",
+            "--database",
+            database_path,
+            "--id",
+            grant_id,
+        ])
+        .output()
+        .expect("show grant");
+    assert!(shown.status.success());
+    let shown: Value = serde_json::from_slice(&shown.stdout).expect("show output");
+    assert_eq!(shown["spec"], "nimora.ai-authorization-grant/1");
+    assert_eq!(shown["grant"]["id"], grant_id);
+    assert_eq!(shown["summary"]["status"], "active");
+
+    let revoked = nimora()
+        .args([
+            "ai",
+            "goal",
+            "grant",
+            "revoke",
+            "--database",
+            database_path,
+            "--id",
+            grant_id,
+        ])
+        .output()
+        .expect("revoke grant");
+    assert!(
+        revoked.status.success(),
+        "revoke failed: {}",
+        String::from_utf8_lossy(&revoked.stderr)
+    );
+    let revoked: Value = serde_json::from_slice(&revoked.stdout).expect("revoke output");
+    assert_eq!(revoked["spec"], "nimora.ai-authorization-grant-revoke/1");
+    assert_eq!(revoked["grantId"], grant_id);
+    assert_eq!(revoked["revoked"], true);
+    assert_eq!(revoked["summary"]["status"], "revoked");
+    assert!(revoked["grant"]["revokedAtMs"].as_u64().is_some());
+
+    let shown_revoked = nimora()
+        .args([
+            "ai",
+            "goal",
+            "grant",
+            "show",
+            "--database",
+            database_path,
+            "--id",
+            grant_id,
+        ])
+        .output()
+        .expect("show revoked grant");
+    assert!(shown_revoked.status.success());
+    let shown_revoked: Value =
+        serde_json::from_slice(&shown_revoked.stdout).expect("show revoked output");
+    assert_eq!(shown_revoked["summary"]["status"], "revoked");
+
+    let missing = nimora()
+        .args([
+            "ai",
+            "goal",
+            "grant",
+            "show",
+            "--database",
+            database_path,
+            "--id",
+            "00000000-0000-7000-8000-000000000001",
+        ])
+        .output()
+        .expect("missing grant");
+    assert_eq!(missing.status.code(), Some(5));
+    assert!(missing.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&missing.stderr).expect("missing error");
+    assert_eq!(error["error"], "grant-not-found");
+    assert!(
+        error["message"]
+            .as_str()
+            .expect("message")
+            .contains("未找到"),
+        "expected Chinese error message, got {}",
+        error["message"]
+    );
+
+    let usage = nimora()
+        .args(["ai", "goal", "grant", "issue", "--database", database_path])
+        .output()
+        .expect("usage error");
+    assert_eq!(usage.status.code(), Some(2));
+    assert!(usage.stdout.is_empty());
+    let usage_error: Value = serde_json::from_slice(&usage.stderr).expect("usage error json");
+    assert_eq!(usage_error["error"], "usage");
+    assert!(
+        usage_error["message"]
+            .as_str()
+            .expect("message")
+            .contains("授权"),
+        "expected Chinese usage message"
+    );
+
+    let _ = fs::remove_file(database);
+    fs::remove_dir_all(workspace).expect("remove workspace");
+}
+
+#[test]
+fn auto_mode_away_summary_aggregates_goal_sessions_and_grants() {
+    let database = temporary_database("away-summary");
+    let database_path = database.to_str().expect("database path");
+    let (goal_id, session_id, workspace) = create_auto_mode_session(database_path);
+    let workspace_root = workspace.to_str().expect("workspace root");
+
+    let issued = nimora()
+        .args([
+            "ai",
+            "goal",
+            "grant",
+            "issue",
+            "--database",
+            database_path,
+            "--goal-id",
+            &goal_id,
+            "--tier",
+            "trusted_workspace",
+            "--workspace-root",
+            workspace_root,
+            "--reason",
+            "away-summary-test",
+            "--tool",
+            "pet.state.read",
+        ])
+        .output()
+        .expect("issue grant");
+    assert!(
+        issued.status.success(),
+        "issue failed: {}",
+        String::from_utf8_lossy(&issued.stderr)
+    );
+    let issued: Value = serde_json::from_slice(&issued.stdout).expect("issue output");
+    let grant_id = issued["grant"]["id"].as_str().expect("grant id");
+
+    let paused = nimora()
+        .args([
+            "ai",
+            "goal",
+            "auto",
+            "pause",
+            "--database",
+            database_path,
+            "--session-id",
+            &session_id,
+        ])
+        .output()
+        .expect("pause session");
+    assert!(paused.status.success());
+
+    let summary = nimora()
+        .args([
+            "ai",
+            "goal",
+            "auto",
+            "away-summary",
+            "--database",
+            database_path,
+            "--goal-id",
+            &goal_id,
+        ])
+        .output()
+        .expect("away summary");
+    assert!(
+        summary.status.success(),
+        "away-summary failed: {}",
+        String::from_utf8_lossy(&summary.stderr)
+    );
+    assert!(summary.stderr.is_empty());
+    let summary: Value = serde_json::from_slice(&summary.stdout).expect("summary output");
+    assert_eq!(summary["spec"], "nimora.ai-away-summary/1");
+    assert_eq!(summary["goalId"], goal_id);
+    assert_eq!(summary["goal"]["id"], goal_id);
+    assert_eq!(summary["plan"]["totalSteps"], 1);
+    assert!(summary["autoSessions"].as_array().expect("sessions").len() >= 1);
+    assert_eq!(summary["autoSessions"][0]["sessionId"], session_id);
+    assert_eq!(summary["autoSessions"][0]["status"], "paused");
+    assert!(summary["pauses"].as_array().expect("pauses").len() >= 1);
+    assert!(
+        summary["grants"]
+            .as_array()
+            .expect("grants")
+            .iter()
+            .any(|grant| grant["grantId"] == grant_id)
+    );
+    assert!(
+        summary["revokeGrantIds"]
+            .as_array()
+            .expect("revoke ids")
+            .iter()
+            .any(|id| id == grant_id)
+    );
+    assert!(summary["tokenUsage"]["cycles"].is_number());
+    assert!(summary["highlights"].as_array().expect("highlights").len() >= 2);
+    assert!(
+        summary["highlights"]
+            .as_array()
+            .expect("highlights")
+            .iter()
+            .any(|item| item.as_str().unwrap_or_default().contains("目标"))
+    );
+    assert!(
+        summary["riskNotes"]
+            .as_array()
+            .expect("risk notes")
+            .iter()
+            .any(|item| item.as_str().unwrap_or_default().contains("trusted_workspace"))
+    );
+    // Away Summary must not leak secret-looking fields.
+    let rendered = summary.to_string();
+    assert!(!rendered.contains("credential"));
+    assert!(!rendered.contains("secret"));
+
+    let missing = nimora()
+        .args([
+            "ai",
+            "goal",
+            "auto",
+            "away-summary",
+            "--database",
+            database_path,
+            "--goal-id",
+            "00000000-0000-7000-8000-000000000099",
+        ])
+        .output()
+        .expect("missing goal summary");
+    assert_eq!(missing.status.code(), Some(5));
+    assert!(missing.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&missing.stderr).expect("error json");
+    assert_eq!(error["error"], "goal-not-found");
+    assert!(
+        error["message"]
+            .as_str()
+            .expect("message")
+            .contains("未找到"),
+        "expected Chinese goal-not-found message"
+    );
+
+    let _ = fs::remove_file(database);
+    fs::remove_dir_all(workspace).expect("remove workspace");
+}

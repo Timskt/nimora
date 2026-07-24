@@ -2,8 +2,8 @@
 
 use nimora_agent_runtime::{
     AgentCoordinator, AgentGoal, AgentPlan, AgentPlanStepStatus, AgentTask, AgentTaskStatus,
-    AutoModeCheckpoint, AutoModePauseReason, AutoModeSession, AutoModeStatus, AutoModeTurnError,
-    AutoModeTurnOutcome, AutoModeTurnSupervisor, CompactedContext, ContextAnchor,
+    AuthorizationGrant, AutoModeCheckpoint, AutoModePauseReason, AutoModeSession, AutoModeStatus,
+    AutoModeTurnError, AutoModeTurnOutcome, AutoModeTurnSupervisor, CompactedContext, ContextAnchor,
     ContextCompactionPolicy, ContextCompactor, ContextManagementError, DataClassification,
     ProviderExecutionContext, ProviderMessage, ProviderMessageRole, ProviderRegistry,
     ProviderStepInput, ReasoningMapping, ToolBackend, ToolDescriptor, ToolRegistry,
@@ -141,6 +141,7 @@ pub struct AutoModeExecutionRequest {
     pub data_classification: DataClassification,
     pub maximum_data_classification: DataClassification,
     pub now_ms: u64,
+    pub authorization_grant: Option<AuthorizationGrant>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -254,7 +255,10 @@ impl AutoModeExecutionService {
             now_ms: request.now_ms,
         };
         let coordinator = AgentCoordinator::new(providers, tools);
-        let supervisor = AutoModeTurnSupervisor::new(coordinator, tools, backend);
+        let mut supervisor = AutoModeTurnSupervisor::new(coordinator, tools, backend);
+        if let Some(grant) = request.authorization_grant.clone() {
+            supervisor = supervisor.with_authorization_grant(grant);
+        }
         let outcome = supervisor
             .advance(&mut turn.session, &mut turn.task, input)
             .map_err(|source| {
@@ -327,6 +331,7 @@ pub struct AutoModeLoopRequest {
     pub data_classification: DataClassification,
     pub maximum_data_classification: DataClassification,
     pub max_turns: u16,
+    pub authorization_grant: Option<AuthorizationGrant>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -401,6 +406,7 @@ impl AutoModeLoopService {
                     data_classification: request.data_classification,
                     maximum_data_classification: request.maximum_data_classification,
                     now_ms: now_ms(),
+                    authorization_grant: request.authorization_grant.clone(),
                 },
             )?;
             match result {
@@ -1048,11 +1054,12 @@ pub enum AutoModeRecoveryError {
 mod tests {
     use super::*;
     use nimora_agent_runtime::{
-        AgentBudget, AgentPlanStep, AgentTaskOrigin, AutoModePolicy, AutoModeStepRequest,
-        AutoModeUsage, CancellationFlag, ProviderAdapter, ProviderCapabilities, ProviderCapability,
+        AgentBudget, AgentPlanStep, AgentTaskOrigin, ApprovalPolicy, AuthorizationGrant,
+        AutoModePolicy, AutoModeStepRequest, AutoModeUsage, CancellationFlag, GrantLifetime,
+        NetworkPolicy, ProviderAdapter, ProviderCapabilities, ProviderCapability,
         ProviderDescriptor, ProviderError, ProviderErrorKind, ProviderFinishReason,
         ProviderLocality, ProviderMessageRole, ProviderRequest, ProviderResponse, ProviderToolCall,
-        ProviderUsage, ToolEffect, ToolInvocation,
+        ProviderUsage, SandboxScope, ToolEffect, ToolInvocation,
     };
     use nimora_persistence_sqlite::StoredWorkspaceSnapshot;
     use nimora_runtime_core::CommandRisk;
@@ -1320,6 +1327,7 @@ mod tests {
             data_classification: DataClassification::Personal,
             maximum_data_classification: DataClassification::Personal,
             now_ms,
+            authorization_grant: None,
         }
     }
 
@@ -1343,6 +1351,7 @@ mod tests {
             data_classification: DataClassification::Personal,
             maximum_data_classification: DataClassification::Personal,
             max_turns,
+            authorization_grant: None,
         }
     }
 
@@ -1536,6 +1545,60 @@ mod tests {
             }
         ));
         assert_eq!(backend.0.load(Ordering::SeqCst), 0);
+        fs::remove_file(database).expect("database cleanup");
+        fs::remove_dir_all(workspace).expect("workspace cleanup");
+    }
+
+    fn test_authorization_grant(turn: &RecoveredAutoModeTurn) -> AuthorizationGrant {
+        let grant = AuthorizationGrant {
+            spec: "nimora.authorization-grant/1".to_owned(),
+            id: Uuid::now_v7(),
+            goal_id: turn.session.goal_id,
+            plan_revision: turn.session.plan_revision,
+            workspace_fingerprint: turn.session.policy.workspace_revision.clone(),
+            sandbox: SandboxScope::WorkspaceWrite,
+            approval: ApprovalPolicy::NeverAskWithinGrant,
+            network: NetworkPolicy::Offline,
+            selected_roots: BTreeSet::new(),
+            tool_allowlist: ["pet.state.read".parse().expect("tool")]
+                .into_iter()
+                .collect(),
+            provider_allowlist: BTreeSet::from(["provider:local".to_owned()]),
+            model_allowlist: BTreeSet::from(["model:local".to_owned()]),
+            maximum_data_classification: DataClassification::Personal,
+            budget: AgentBudget::default(),
+            lifetime: GrantLifetime::Session,
+            issued_at_ms: 1_000,
+            expires_at_ms: None,
+            revoked_at_ms: None,
+        };
+        grant.validate().expect("grant valid");
+        grant
+    }
+
+    #[test]
+    fn execution_service_dispatches_write_with_never_ask_grant() {
+        let (database, workspace, session_id) = fixture();
+        let turn = running_turn(&database, &workspace, session_id);
+        let grant = test_authorization_grant(&turn);
+        let tool = test_tool(ToolEffect::ReversibleWrite);
+        let (providers, _) = provider_registry(TestProviderMode::Tool(tool.clone()));
+        let mut tools = ToolRegistry::default();
+        tools.register(tool).expect("register tool");
+        let backend = TestBackend::default();
+        let mut request = execution_request(turn, &workspace, 1_102);
+        request.authorization_grant = Some(grant);
+        let result = execution_service(&database)
+            .execute(&providers, &tools, &backend, request)
+            .expect("execute");
+        assert!(matches!(
+            result,
+            AutoModeExecutionResult::Committed {
+                turn: CommittedAutoModeTurn::Continue(_),
+                ..
+            }
+        ));
+        assert_eq!(backend.0.load(Ordering::SeqCst), 1);
         fs::remove_file(database).expect("database cleanup");
         fs::remove_dir_all(workspace).expect("workspace cleanup");
     }

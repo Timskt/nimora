@@ -157,6 +157,46 @@ impl SqliteAutoModeRepository {
     ///
     /// # Errors
     ///
+    /// Lists sessions for a Goal, newest first (bounded).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `limit` is out of range or storage is corrupt.
+    pub fn list_for_goal(
+        &self,
+        goal_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<AutoModeSession>, SqlitePersistenceError> {
+        if limit == 0 || limit > 256 {
+            return Err(SqlitePersistenceError::InvalidAutoModeSession);
+        }
+        let connection = self.lock()?;
+        let query_limit = i64::try_from(limit)
+            .map_err(|_| SqlitePersistenceError::InvalidAutoModeSession)?;
+        let ids = {
+            let mut statement = connection.prepare(
+                "SELECT session_id FROM auto_mode_session
+                 WHERE goal_id = ?1
+                 ORDER BY updated_at_ms DESC, session_id DESC
+                 LIMIT ?2",
+            )?;
+            statement
+                .query_map(params![goal_id.to_string(), query_limit], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let mut sessions = Vec::with_capacity(ids.len());
+        for id in ids {
+            let id =
+                Uuid::parse_str(&id).map_err(|_| SqlitePersistenceError::InvalidAutoModeSession)?;
+            if let Some(session) = load(&connection, id)? {
+                sessions.push(session);
+            }
+        }
+        Ok(sessions)
+    }
+
     /// Returns an error if any session is corrupt or time would move backwards.
     pub fn pause_running_after_restart(
         &self,
@@ -386,4 +426,22 @@ mod tests {
         drop(repository);
         std::fs::remove_file(path).expect("cleanup");
     }
+    #[test]
+    fn list_for_goal_returns_created_session() {
+        let (path, repository, session) = stores(1_000);
+        repository.create(&session).expect("create");
+        let listed = repository
+            .list_for_goal(session.goal_id, 10)
+            .expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, session.id);
+        assert_eq!(listed[0].goal_id, session.goal_id);
+        assert!(repository
+            .list_for_goal(Uuid::now_v7(), 10)
+            .expect("empty list")
+            .is_empty());
+        drop(repository);
+        std::fs::remove_file(path).expect("cleanup");
+    }
+
 }

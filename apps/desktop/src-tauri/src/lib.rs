@@ -2,6 +2,9 @@ mod asset_protocol;
 mod asset_selection;
 pub mod auto_mode_jobs;
 mod auto_mode_runner;
+mod unattended_auto_mode;
+mod companion_directive;
+mod away_summary;
 mod backup_service;
 mod creator_workspace;
 mod desktop_lifecycle;
@@ -10,6 +13,8 @@ mod fail_closed_convergence;
 mod pet_window_recovery;
 mod reversible_transition;
 mod system_context_sensor;
+mod desktop_lifeform;
+mod process_budget;
 
 #[cfg(test)]
 use asset_protocol::parse_asset_protocol_path;
@@ -112,11 +117,12 @@ use nimora_persistence_sqlite::{
     AutomationAgentJournalStatus, AutomationApprovalEntry, AutomationApprovalStatus,
     AutomationCostReconciliationReason, AutomationCostReservation, AutomationJournalEntry,
     AutomationRunAdmission, AutomationRunStart, BackupCoordinator, BackupHealth, BackupPolicy,
-    BackupRecord, ContextCacheKey, ContextCachePolicy, DATABASE_VERSION, OutboxSnapshot,
+    AuthorizationGrantKey, BackupRecord, ContextCacheKey, ContextCachePolicy, DATABASE_VERSION,
+    OutboxSnapshot,
     ProgramPermissionGrant, ProviderConfig, ReconcileAutomationCostRequest,
     ResolveAutoModeAttemptRequest, SkillApprovalJournalEntry, SkillApprovalJournalStatus,
     SkillExecutionHistoryRecord, SkillExecutionHistoryStatus, SkillStateRecord,
-    SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
+    SqliteAgentGoalRepository, SqliteAgentHistoryRepository, SqliteAuthorizationGrantRepository,
     SqliteAutoModeAttemptResolutionRepository, SqliteAutoModeCheckpointRepository,
     SqliteAutoModeRepository, SqliteAutoModeTurnAttemptRepository, SqliteAutomationAgentJournal,
     SqliteAutomationApprovalJournal, SqliteAutomationCatalog, SqliteAutomationGovernance,
@@ -130,10 +136,15 @@ use nimora_runtime_app::{
     RuntimeEventBus, RuntimeEventSubscription, RuntimeService, SafetyService, SafetyServiceError,
 };
 use nimora_runtime_core::{
-    CareNeedsMode, Command, CommandRisk, CommandStatus, Event, EventSource, Pet, PetAction,
-    PetAutonomyDecision, PetAutonomyPolicy, PetCareAction, PetError, PetItemId, PetVitalsPolicy,
-    PointerButton, Position, Profile, ProfileId, ProfileMode, ProfilePolicy, RuntimeMode,
-    SafeModeReason, SafetySnapshot,
+    CareNeedsMode, Command, CommandRisk, CommandStatus, DesktopBehaviorHints, Event, EventSource,
+    Pet, PetAction, PetAutonomyDecision, PetAutonomyPolicy, PetCareAction, PetError, PetItemId,
+    PetVitalsPolicy, PointerButton, Position, Profile, ProfileId, ProfileMode, ProfilePolicy,
+    RuntimeMode, SafeModeReason, SafetySnapshot, StructuredPetDirective,
+    skill_worker_busy_directive, skill_worker_done_directive, connector_sensory_directive,
+    ConnectorSenseKind, battery_directive, idle_user_directive, meeting_sensory_directive,
+    notification_sensory_directive,
+    user_code_directive, UserCodePhase,
+    AutomationPhase,
 };
 use nimora_secret_store::{
     MemorySecretStore, SecretPresence, SecretReference, SecretStore, SecretStoreError,
@@ -204,6 +215,10 @@ const PROFILE_CHANGED_EVENT: &str = "nimora://profile-changed";
 const SYSTEM_CONTEXT_CHANGED_EVENT: &str = "nimora://system-context-changed";
 const PET_VITALS_CHANGED_EVENT: &str = "nimora://pet-vitals-changed";
 const PET_SURFACE_CHANGED_EVENT: &str = "nimora://pet-surface-changed";
+const PET_POSITION_CHANGED_EVENT: &str = "nimora://pet-position-changed";
+const PET_STAGE_CHANGED_EVENT: &str = "nimora://pet-stage-changed";
+const PET_OCCLUSION_CHANGED_EVENT: &str = "nimora://pet-occlusion-changed";
+const PET_DIRECTIVE_CHANGED_EVENT: &str = "nimora://pet-directive-changed";
 const PET_VITALS_INTERVAL_MS: u64 = 10 * 60 * 1_000;
 const PET_VITALS_MAX_OFFLINE_INTERVALS: u64 = 24 * 60 / 10;
 const PET_CARE_COOLDOWN_MS: u64 = 30_000;
@@ -212,6 +227,7 @@ const ASSET_PROTOCOL: &str = "nimora-asset";
 const DETERMINISTIC_PROVIDER_ID: &str = "provider:deterministic-local";
 const DEFAULT_AGENT_MODEL: &str = "model:echo-v1";
 const AUTO_MODE_CONTEXT_CACHE_SECRET: &str = "secret:cache:auto-mode-context-v1";
+const AUTHORIZATION_GRANT_SECRET: &str = "secret:cache:authorization-grant-v1";
 const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
 const NOTICE_FEEDBACK_DURATION: Duration = Duration::from_millis(900);
@@ -269,8 +285,7 @@ const AUTOMATION_EVENT_QUEUE_CAPACITY: usize = 32;
 const AUTOMATION_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const AUTO_MODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const AUTOMATION_AGENT_REQUESTER: &str = "automation:desktop";
-const PET_WANDER_FRAMES: i32 = 12;
-const PET_WANDER_FRAME_DURATION: Duration = Duration::from_millis(25);
+// Wander animation is spring-driven via desktop_lifeform::spring_position_frames.
 const PET_EDGE_SNAP_THRESHOLD: i64 = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -630,6 +645,10 @@ struct DesktopState {
     position_revision: AtomicU64,
     dragging: AtomicBool,
     reduced_motion: AtomicBool,
+    /// Fullscreen overlay stage covering the active monitor work area.
+    overlay_stage: Mutex<Option<desktop_lifeform::OverlayStage>>,
+    /// Latest privacy-preserving desktop lifeform environment snapshot.
+    lifeform_env: Mutex<Option<nimora_desktop_context::DesktopSnapshot>>,
     lifecycle: DesktopLifecycleCoordinator,
     asset_store: PathBuf,
     active_asset_selection_write: Mutex<()>,
@@ -1128,6 +1147,8 @@ impl DesktopState {
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
             reduced_motion: AtomicBool::new(false),
+            overlay_stage: Mutex::new(None),
+            lifeform_env: Mutex::new(None),
             lifecycle: DesktopLifecycleCoordinator::default(),
             asset_store,
             active_asset_selection_write: Mutex::new(()),
@@ -1223,6 +1244,8 @@ impl DesktopState {
             position_revision: AtomicU64::new(0),
             dragging: AtomicBool::new(false),
             reduced_motion: AtomicBool::new(false),
+            overlay_stage: Mutex::new(None),
+            lifeform_env: Mutex::new(None),
             lifecycle: DesktopLifecycleCoordinator::default(),
             asset_store,
             active_asset_selection_write: Mutex::new(()),
@@ -1331,6 +1354,44 @@ struct DesktopSnapshot {
     system_context_sensors: Vec<SensorHealth>,
     safety: SafetySnapshot,
     startup: StartupStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overlay_stage: Option<desktop_lifeform::OverlayStage>,
+    pet_body: PetBodyMetrics,
+    /// Privacy-preserving OS lifeform aggregates for Control Center (no titles).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lifeform_sense: Option<LifeformSenseSnapshot>,
+    /// Current host process RSS / optional CPU vs product budget (always sampled).
+    process_budget: process_budget::ProcessBudgetSnapshot,
+}
+
+/// Aggregated desktop lifeform sense for IPC — battery/idle/meeting/displays only.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct LifeformSenseSnapshot {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    battery_percent: Option<u8>,
+    on_battery: bool,
+    charging: bool,
+    idle_ms: u64,
+    meeting_active: bool,
+    /// Privacy-safe meeting family only: zoom/teams/meet/webex/unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    meeting_hint: Option<String>,
+    display_count: u32,
+    /// Privacy-safe app-local unread hint (outbox/approvals only — never titles).
+    notification_unread: bool,
+    freshness: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    degradation_reason: Option<String>,
+    observed_at_ms: u64,
+    expires_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PetBodyMetrics {
+    width: u32,
+    height: u32,
 }
 
 const ATTENTION_WINDOW_MS: u64 = 60_000;
@@ -1478,6 +1539,7 @@ impl AttentionBudget {
             decided_at_ms,
         }
     }
+
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -2323,6 +2385,7 @@ struct DesktopAutoModeControlEntry {
     checkpoint: Option<nimora_agent_runtime::AutoModeCheckpoint>,
     attempt: Option<AutoModeTurnAttempt>,
     resolutions: Vec<AutoModeAttemptResolution>,
+    grant: Option<unattended_auto_mode::AuthorizationGrantSummary>,
 }
 
 const fn default_auto_mode_output_tokens() -> u64 {
@@ -2588,17 +2651,26 @@ fn execute_live_automation_event_with_id(
         .checked_add(definition.policy.timeout_ms)
         .and_then(|value| value.checked_add(60_000))
         .ok_or(SqlitePersistenceError::InvalidAutomationGovernance)?;
-    state
-        .automation_governance
-        .admit_run(&AutomationRunAdmission {
-            run_id,
-            automation_id: definition.id.clone(),
-            max_concurrent_runs: definition.policy.max_concurrent_runs,
-            cooldown_ms: definition.policy.cooldown_ms,
-            daily_cost_budget_microunits: definition.policy.daily_cost_budget_microunits,
-            now_ms: started_at_ms,
-            lease_expires_at_ms,
-        })?;
+    if let Err(error) = state.automation_governance.admit_run(&AutomationRunAdmission {
+        run_id,
+        automation_id: definition.id.clone(),
+        max_concurrent_runs: definition.policy.max_concurrent_runs,
+        cooldown_ms: definition.policy.cooldown_ms,
+        daily_cost_budget_microunits: definition.policy.daily_cost_budget_microunits,
+        now_ms: started_at_ms,
+        lease_expires_at_ms,
+    }) {
+        if matches!(
+            error,
+            SqlitePersistenceError::AutomationCooldownActive
+                | SqlitePersistenceError::AutomationConcurrencyExceeded
+        ) {
+            if let Some(app) = state.native_app.as_ref() {
+                companion_directive::apply_automation_phase(app, AutomationPhase::Throttled);
+            }
+        }
+        return Err(error.into());
+    }
     let execution = execute_admitted_automation_event(
         state,
         run_id,
@@ -2626,6 +2698,10 @@ fn execute_admitted_automation_event(
     agent_policy: AgentTaskGatewayPolicy,
     started_at_ms: u64,
 ) -> Result<AutomationRun, DesktopError> {
+    if let Some(app) = state.native_app.as_ref() {
+        notify_lifeform_connector_event(app, &event.event_type);
+        companion_directive::apply_automation_phase(app, AutomationPhase::Triggered);
+    }
     state.automation_journal.start(&AutomationRunStart {
         run_id,
         automation_id: definition.id.clone(),
@@ -2658,6 +2734,9 @@ fn execute_admitted_automation_event(
     let run = match result {
         Ok(run) => run,
         Err(error) => {
+            if let Some(app) = state.native_app.as_ref() {
+                companion_directive::apply_automation_phase(app, AutomationPhase::Failed);
+            }
             state.automation_journal.interrupt(
                 run_id,
                 current_time_ms()?,
@@ -2669,6 +2748,24 @@ fn execute_admitted_automation_event(
     state
         .automation_journal
         .complete(&run, current_time_ms()?)?;
+    if let Some(app) = state.native_app.as_ref() {
+        let phase = match run.status {
+            nimora_automation_runtime::AutomationRunStatus::Succeeded => {
+                Some(AutomationPhase::Succeeded)
+            }
+            nimora_automation_runtime::AutomationRunStatus::Failed
+            | nimora_automation_runtime::AutomationRunStatus::CompensationFailed
+            | nimora_automation_runtime::AutomationRunStatus::TimedOut
+            | nimora_automation_runtime::AutomationRunStatus::Cancelled => {
+                Some(AutomationPhase::Failed)
+            }
+            // Unmatched / planned / approval paths do not need terminal body language.
+            _ => None,
+        };
+        if let Some(phase) = phase {
+            companion_directive::apply_automation_phase(app, phase);
+        }
+    }
     Ok(run)
 }
 
@@ -3817,6 +3914,37 @@ fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, D
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?
         .clone();
+    let outbox_for_sense = state.outbox.snapshot().ok();
+    let (outbox_pending, outbox_dead) = outbox_for_sense
+        .map(|snap| {
+            (
+                u32::try_from(snap.pending).unwrap_or(u32::MAX),
+                u32::try_from(snap.dead_letter).unwrap_or(u32::MAX),
+            )
+        })
+        .unwrap_or((0, 0));
+    let agent_pending_for_sense = state
+        .pending_agent_tools
+        .lock()
+        .ok()
+        .map(|guard| u32::try_from(guard.len()).unwrap_or(u32::MAX))
+        .unwrap_or(0);
+    let creator_pending_for_sense = state
+        .pending_creator_approvals
+        .lock()
+        .ok()
+        .map(|guard| u32::try_from(guard.len()).unwrap_or(u32::MAX))
+        .unwrap_or(0);
+    let notification_unread = desktop_lifeform::lifeform_notification_unread_from_counts(
+        outbox_pending,
+        outbox_dead,
+        agent_pending_for_sense.saturating_add(creator_pending_for_sense),
+    );
+    let lifeform_sense = state
+        .lifeform_env
+        .lock()
+        .ok()
+        .and_then(|guard| lifeform_sense_from_env(guard.as_ref(), notification_unread));
     let profile_snapshot = state.profiles.snapshot()?;
     let profile_policy = active_profile_policy(&profile_snapshot)?;
     Ok(DesktopSnapshot {
@@ -3831,12 +3959,77 @@ fn desktop_snapshot(state: State<'_, DesktopState>) -> Result<DesktopSnapshot, D
         system_context_sensors,
         safety,
         startup: state.startup.clone(),
+        overlay_stage: state
+            .overlay_stage
+            .lock()
+            .ok()
+            .and_then(|guard| *guard),
+        pet_body: PetBodyMetrics {
+            width: desktop_lifeform::PET_BODY_WIDTH,
+            height: desktop_lifeform::PET_BODY_HEIGHT,
+        },
+        lifeform_sense,
+        process_budget: process_budget::sample_process_budget(
+            current_time_ms().unwrap_or(0),
+        ),
+    })
+}
+
+/// Project privacy-safe OS aggregates from the latest lifeform environment sample.
+fn lifeform_sense_from_env(
+    env: Option<&nimora_desktop_context::DesktopSnapshot>,
+    notification_unread: bool,
+) -> Option<LifeformSenseSnapshot> {
+    let env = env?;
+    let (on_battery, charging, battery_percent) = match env.power {
+        Some(power) => (power.on_battery, power.charging, power.battery_percent),
+        None => (false, false, None),
+    };
+    let meeting_hint = {
+        let label = nimora_desktop_context::meeting_hint_label(env.meeting.hint);
+        if label.is_empty() {
+            None
+        } else {
+            Some(label.to_owned())
+        }
+    };
+    let freshness = match env.freshness {
+        nimora_desktop_context::Freshness::Fresh => "fresh",
+        nimora_desktop_context::Freshness::Stale => "stale",
+        nimora_desktop_context::Freshness::Degraded => "degraded",
+    }
+    .to_owned();
+    let degradation_reason = env.degradation_reason.map(|reason| match reason {
+        nimora_desktop_context::DegradationReason::Timeout => "timeout".to_owned(),
+        nimora_desktop_context::DegradationReason::PermissionDenied => {
+            "permission_denied".to_owned()
+        }
+        nimora_desktop_context::DegradationReason::PlatformUnavailable => {
+            "platform_unavailable".to_owned()
+        }
+        nimora_desktop_context::DegradationReason::PartialSample => "partial_sample".to_owned(),
+        nimora_desktop_context::DegradationReason::ClockSkew => "clock_skew".to_owned(),
+    });
+    Some(LifeformSenseSnapshot {
+        battery_percent,
+        on_battery,
+        charging,
+        idle_ms: env.idle_ms,
+        meeting_active: env.meeting.active,
+        meeting_hint,
+        display_count: u32::try_from(env.displays.len()).unwrap_or(u32::MAX),
+        notification_unread,
+        freshness,
+        degradation_reason,
+        observed_at_ms: env.observed_at_ms,
+        expires_at_ms: env.expires_at_ms,
     })
 }
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn request_attention(
+    app: AppHandle,
     state: State<'_, DesktopState>,
     request: AttentionRequest,
 ) -> Result<AttentionDecision, DesktopError> {
@@ -3851,12 +4044,17 @@ fn request_attention(
         .lock()
         .map_err(|_| DesktopError::StatePoisoned)?
         .suppress_autonomy;
-    state
+    let decision = state
         .lifecycle
         .attention_budget
         .lock()
-        .map_err(|_| DesktopError::StatePoisoned)
-        .map(|mut budget| budget.decide(&request, context_suppressed, now_ms))
+        .map_err(|_| DesktopError::StatePoisoned)?
+        .decide(&request, context_suppressed, now_ms);
+    // Notification channel grants → pet looks toward notification area (privacy-safe boolean only).
+    if decision.allowed && matches!(request.channel, AttentionChannel::Notification) {
+        let _ = apply_lifeform_directive_from_host(&app, notification_sensory_directive(true));
+    }
+    Ok(decision)
 }
 
 #[tauri::command]
@@ -5467,6 +5665,8 @@ fn auto_mode_control_center_inner(
     let checkpoints = SqliteAutoModeCheckpointRepository::open(database_path)?;
     let attempts = SqliteAutoModeTurnAttemptRepository::open(database_path)?;
     let resolutions = SqliteAutoModeAttemptResolutionRepository::open(database_path)?;
+    let grants = open_authorization_grant_repository(state)?;
+    let now_ms = current_time_ms()?;
     let mut entries = Vec::new();
     for job in state.auto_mode_jobs.snapshots().map_err(agent_error)? {
         let session = sessions.get(job.session_id)?.ok_or_else(|| {
@@ -5481,6 +5681,9 @@ fn auto_mode_control_center_inner(
                 DesktopError::Agent("Auto Mode session plan revision is unavailable".to_owned())
             })?;
         let projection_stale = !auto_mode_projection_matches(job.status, session.status);
+        let grant = grants
+            .get_active_for_goal(session.goal_id, now_ms)?
+            .map(|grant| unattended_auto_mode::grant_summary(&grant, None, now_ms));
         entries.push(DesktopAutoModeControlEntry {
             checkpoint: checkpoints.get(session.id)?,
             attempt: attempts.get(session.id)?,
@@ -5491,6 +5694,7 @@ fn auto_mode_control_center_inner(
             session,
             goal: goal_snapshot.goal,
             plan,
+            grant,
         });
     }
     Ok(DesktopAutoModeControlCenter {
@@ -5689,6 +5893,16 @@ fn resume_auto_mode_turn_inner(
             &providers,
             &tools,
             &backend,
+            {
+            let goal_id_for_grant = running.session.goal_id;
+            let authorization_grant = open_authorization_grant_repository(state)
+                .ok()
+                .and_then(|repository| {
+                    repository
+                        .get_active_for_goal(goal_id_for_grant, now_ms)
+                        .ok()
+                })
+                .flatten();
             AutoModeExecutionRequest {
                 reasoning,
                 provider_context: ProviderExecutionContext {
@@ -5707,6 +5921,8 @@ fn resume_auto_mode_turn_inner(
                 data_classification: DataClassification::Personal,
                 maximum_data_classification: DataClassification::Personal,
                 now_ms,
+                authorization_grant,
+            }
             },
         )
         .map_err(agent_error)?;
@@ -6786,6 +7002,53 @@ pub(crate) fn context_cache_key(state: &DesktopState) -> Result<ContextCacheKey,
     }
 }
 
+/// Loads or creates the OS secret-store key used for Authorization Grant at-rest encryption.
+///
+/// When the system secret store is unavailable (headless tests, locked keychain), falls back to
+/// [`AuthorizationGrantKey::app_local_default`] so grants remain encrypted offline-first.
+pub(crate) fn authorization_grant_key(
+    state: &DesktopState,
+) -> Result<AuthorizationGrantKey, DesktopError> {
+    static KEY_CREATION: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = KEY_CREATION
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| {
+            DesktopError::Agent("Authorization grant key lock is unavailable".to_owned())
+        })?;
+    let Ok(reference) = SecretReference::parse(AUTHORIZATION_GRANT_SECRET) else {
+        return Ok(AuthorizationGrantKey::app_local_default());
+    };
+    match state.secret_store.0.resolve(&reference) {
+        Ok(value) => AuthorizationGrantKey::from_hex(&value).map_err(Into::into),
+        Err(SecretStoreError::Missing) => match AuthorizationGrantKey::generate() {
+            Ok(key) => {
+                if state.secret_store.0.put(&reference, key.to_hex()).is_err() {
+                    return Ok(AuthorizationGrantKey::app_local_default());
+                }
+                Ok(key)
+            }
+            Err(_) => Ok(AuthorizationGrantKey::app_local_default()),
+        },
+        Err(SecretStoreError::Unavailable) => Ok(AuthorizationGrantKey::app_local_default()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Opens the grant repository with the host secret-store key (falls back only if open fails upstream).
+pub(crate) fn open_authorization_grant_repository(
+    state: &DesktopState,
+) -> Result<SqliteAuthorizationGrantRepository, DesktopError> {
+    let database_path = state.database_path.as_ref().ok_or_else(|| {
+        DesktopError::Agent("Authorization grant persistence is unavailable".to_owned())
+    })?;
+    let key = authorization_grant_key(state)?;
+    Ok(SqliteAuthorizationGrantRepository::open_with_key(
+        database_path,
+        key,
+    )?)
+}
+
 fn register_openai_provider(
     providers: &mut ProviderRegistry,
     executable: &Path,
@@ -7705,32 +7968,31 @@ fn move_pet(
     request: MovePetRequest,
 ) -> Result<Command, DesktopError> {
     ensure_normal_mode(&state)?;
-    let screen_x = screen_coordinate(request.x)?;
-    let screen_y = screen_coordinate(request.y)?;
-    let position = Position {
-        x: request.x,
-        y: request.y,
-    };
-    let window = app
-        .get_webview_window(PET_WINDOW_LABEL)
-        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
-    let previous = state.runtime.snapshot()?.position;
-    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-        screen_x, screen_y,
-    )))?;
-    match state.runtime.move_pet(position) {
-        Ok(command) => Ok(command),
-        Err(error) => {
-            if let (Ok(previous_x), Ok(previous_y)) =
-                (screen_coordinate(previous.x), screen_coordinate(previous.y))
-            {
-                let _ = window.set_position(tauri::Position::Physical(
-                    tauri::PhysicalPosition::new(previous_x, previous_y),
-                ));
-            }
-            Err(error.into())
-        }
+    let _ = screen_coordinate(request.x)?;
+    let _ = screen_coordinate(request.y)?;
+    if current_overlay_stage(&state).is_none() {
+        let _ = sync_overlay_stage_to_monitor(&app, None);
     }
+    let stage = current_overlay_stage(&state).ok_or_else(|| {
+        DesktopError::WindowUnavailable("overlay-stage".to_owned())
+    })?;
+    let pose = desktop_lifeform::pose_for_screen(
+        screen_coordinate(request.x)?,
+        screen_coordinate(request.y)?,
+        stage,
+    );
+    let position = Position {
+        x: f64::from(pose.x),
+        y: f64::from(pose.y),
+    };
+    let command = state.runtime.move_pet(position)?;
+    let stage = rebind_overlay_stage_for_pet_if_needed(&app, pose.x, pose.y).unwrap_or(stage);
+    let pose = desktop_lifeform::pose_for_screen(pose.x, pose.y, stage);
+    emit_pet_position(&app, pose);
+    publish_lifeform_occlusion(&app);
+    schedule_position_persistence(app.clone());
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_SURFACE_CHANGED_EVENT, ());
+    Ok(command)
 }
 
 #[tauri::command]
@@ -7750,29 +8012,30 @@ fn return_pet_home(
     ensure_normal_mode(&state)?;
     let snapshot = state.runtime.snapshot()?;
     let home = snapshot.home_position.unwrap_or(snapshot.position);
-    let window = app
-        .get_webview_window(PET_WINDOW_LABEL)
-        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
-    let previous = window.outer_position()?;
-    let requested =
-        tauri::PhysicalPosition::new(screen_coordinate(home.x)?, screen_coordinate(home.y)?);
-    let target = visible_position_for_window(&window, requested)?.unwrap_or(requested);
-    window.set_position(tauri::Position::Physical(target))?;
-    let position = Position {
-        x: f64::from(target.x),
-        y: f64::from(target.y),
-    };
-    match state.runtime.return_pet_home(position) {
-        Ok(command) => {
-            let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
-            let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
-            Ok(command)
-        }
-        Err(error) => {
-            let _ = window.set_position(tauri::Position::Physical(previous));
-            Err(error.into())
-        }
+    if current_overlay_stage(&state).is_none() {
+        let _ = sync_overlay_stage_to_monitor(&app, None);
     }
+    let stage = current_overlay_stage(&state).ok_or_else(|| {
+        DesktopError::WindowUnavailable("overlay-stage".to_owned())
+    })?;
+    let pose = desktop_lifeform::pose_for_screen(
+        screen_coordinate(home.x)?,
+        screen_coordinate(home.y)?,
+        stage,
+    );
+    let position = Position {
+        x: f64::from(pose.x),
+        y: f64::from(pose.y),
+    };
+    let command = state.runtime.return_pet_home(position)?;
+    let stage = rebind_overlay_stage_for_pet_if_needed(&app, pose.x, pose.y).unwrap_or(stage);
+    let pose = desktop_lifeform::pose_for_screen(pose.x, pose.y, stage);
+    emit_pet_position(&app, pose);
+    publish_lifeform_occlusion(&app);
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_SURFACE_CHANGED_EVENT, ());
+    Ok(command)
 }
 
 fn screen_coordinate(value: f64) -> Result<i32, DesktopError> {
@@ -7781,6 +8044,59 @@ fn screen_coordinate(value: f64) -> Result<i32, DesktopError> {
     }
     #[allow(clippy::cast_possible_truncation)]
     Ok(value.round() as i32)
+}
+
+/// Host-internal lifeform directive application (Auto Mode, skills, connectors).
+/// Mirrors the `apply_pet_directive` command without requiring a Tauri State inject.
+pub(crate) fn apply_lifeform_directive_from_host(
+    app: &AppHandle,
+    directive: StructuredPetDirective,
+) -> Result<Command, DesktopError> {
+    let state = app.state::<DesktopState>();
+    let before_rev = state
+        .runtime
+        .snapshot()
+        .map(|pet| pet.directive_revision)
+        .unwrap_or(0);
+    let now_ms = current_time_ms().unwrap_or(0);
+    let command = state.runtime.apply_pet_directive(directive, now_ms)?;
+    if let Ok(pet) = state.runtime.snapshot() {
+        if pet.directive_revision > before_rev {
+            emit_pet_directive_from_pet(app, &pet);
+        }
+        let _ = app.emit_to(PET_WINDOW_LABEL, PET_AUTONOMY_CHANGED_EVENT, ());
+        let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
+        let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
+    }
+    Ok(command)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn apply_pet_directive(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    directive: StructuredPetDirective,
+) -> Result<Command, DesktopError> {
+    let before_rev = state
+        .runtime
+        .snapshot()
+        .map(|pet| pet.directive_revision)
+        .unwrap_or(0);
+    let now_ms = current_time_ms().unwrap_or(0);
+    let command = state.runtime.apply_pet_directive(directive, now_ms)?;
+    if let Ok(pet) = state.runtime.snapshot() {
+        if pet.directive_revision > before_rev {
+            emit_pet_directive_from_pet(&app, &pet);
+        }
+        let _ = app.emit_to(PET_WINDOW_LABEL, PET_AUTONOMY_CHANGED_EVENT, ());
+        let _ = app.emit_to(PET_WINDOW_LABEL, PET_VITALS_CHANGED_EVENT, ());
+        let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_VITALS_CHANGED_EVENT, ());
+        if pet.state == nimora_runtime_core::PetState::Walking {
+            let _ = execute_pet_wander(&app);
+        }
+    }
+    Ok(command)
 }
 
 #[tauri::command]
@@ -8000,29 +8316,31 @@ fn finish_pet_drag(
     state: State<'_, DesktopState>,
 ) -> Result<Command, DesktopError> {
     ensure_normal_mode(&state)?;
-    let window = app
-        .get_webview_window(PET_WINDOW_LABEL)
-        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
-    let drop = resolve_pet_drop(&window, &state)?;
-    if drop.target != drop.original {
-        window.set_position(tauri::Position::Physical(drop.target))?;
-    }
-    let command = match state.runtime.drop_pet_with_action(
-        Position {
-            x: f64::from(drop.target.x),
-            y: f64::from(drop.target.y),
-        },
-        settle_action_for_surface(drop.surface),
-    ) {
-        Ok(command) => command,
-        Err(error) => {
-            if drop.target != drop.original {
-                window.set_position(tauri::Position::Physical(drop.original))?;
-            }
-            return Err(error.into());
+    let drop = resolve_pet_drop_logical(&state)?;
+    // Drop may land on another monitor; rebind the stage before localizing.
+    let stage = rebind_overlay_stage_for_pet_if_needed(&app, drop.target.x, drop.target.y)
+        .or_else(|| current_overlay_stage(&state));
+    let pose = if let Some(stage) = stage {
+        desktop_lifeform::pose_for_screen(drop.target.x, drop.target.y, stage)
+    } else {
+        desktop_lifeform::PetScreenPose {
+            x: drop.target.x,
+            y: drop.target.y,
+            local_x: drop.target.x,
+            local_y: drop.target.y,
         }
     };
+    let command = state.runtime.drop_pet_with_action(
+        Position {
+            x: f64::from(pose.x),
+            y: f64::from(pose.y),
+        },
+        settle_action_for_surface(drop.surface),
+    )?;
     state.dragging.store(false, Ordering::Release);
+    emit_pet_position(&app, pose);
+    publish_lifeform_occlusion(&app);
+    schedule_position_persistence(app.clone());
     let _ = app.emit_to(PET_WINDOW_LABEL, PET_SURFACE_CHANGED_EVENT, ());
     Ok(command)
 }
@@ -8930,6 +9248,11 @@ fn execute_skill_inner(
         created_at_ms,
         &cancellation,
     )?;
+    // Skill/Worker busy → pet work body language (Subject path).
+    let _ = apply_lifeform_directive_from_host(
+        app,
+        skill_worker_busy_directive(Some(request.skill_id.as_str())),
+    );
     let _execution_guard = ActiveSkillExecutionGuard {
         executions: &state.active_skill_executions,
         execution_id,
@@ -8951,7 +9274,7 @@ fn execute_skill_inner(
             CommandRisk::Medium | CommandRisk::High | CommandRisk::Critical
         )
     }) {
-        return queue_skill_execution_approval(
+        let receipt = queue_skill_execution_approval(
             state,
             request.skill_id,
             execution_id,
@@ -8959,9 +9282,17 @@ fn execute_skill_inner(
             command_allowlist,
             output,
             approval_commands,
+        )?;
+        // Waiting for user confirmation of skill side-effects.
+        let _ = apply_lifeform_directive_from_host(
+            app,
+            companion_directive::companion_phase_directive(
+                companion_directive::CompanionPhase::WaitingForConfirmation,
+            ),
         );
+        return Ok(receipt);
     }
-    complete_skill_execution(
+    let receipt = complete_skill_execution(
         state,
         execution_id,
         request.skill_id,
@@ -8969,7 +9300,16 @@ fn execute_skill_inner(
         output,
         created_at_ms,
         Some(&cancellation),
-    )
+    );
+    match &receipt {
+        Ok(_) => {
+            let _ = apply_lifeform_directive_from_host(app, skill_worker_done_directive(true));
+        }
+        Err(_) => {
+            let _ = apply_lifeform_directive_from_host(app, skill_worker_done_directive(false));
+        }
+    }
+    receipt
 }
 
 fn register_active_skill_execution(
@@ -9179,11 +9519,21 @@ fn complete_skill_execution(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn approve_skill_execution(
+    app: AppHandle,
     state: State<'_, DesktopState>,
     request: ResolveSkillApprovalRequest,
 ) -> Result<SkillExecutionReceipt, DesktopError> {
     ensure_normal_mode(&state)?;
-    approve_skill_execution_inner(&state, &request)
+    let receipt = approve_skill_execution_inner(&state, &request);
+    match &receipt {
+        Ok(_) => {
+            let _ = apply_lifeform_directive_from_host(&app, skill_worker_done_directive(true));
+        }
+        Err(_) => {
+            let _ = apply_lifeform_directive_from_host(&app, skill_worker_done_directive(false));
+        }
+    }
+    receipt
 }
 
 #[tauri::command]
@@ -9511,7 +9861,7 @@ fn ensure_skill_execution_active(cancellation: &ExecutionCancellation) -> Result
 
 fn skill_command_risk(command: &str) -> Option<CommandRisk> {
     match command {
-        "safe.pet.animate" => Some(CommandRisk::Safe),
+        "safe.pet.animate" | "safe.pet.directive" => Some(CommandRisk::Safe),
         "safe.pet.care" | "safe.pet.move" => Some(CommandRisk::Low),
         "safe.profile.switch" | "safe.character.switch" => Some(CommandRisk::Medium),
         "safe.program.execute" => Some(CommandRisk::High),
@@ -10250,6 +10600,7 @@ fn run_skill_event_session(
         if cancellation.is_cancelled() {
             break;
         }
+        notify_lifeform_connector_event(app, &event.event_type);
         let activation_event = format!("onEvent:{}", event.event_type);
         let Ok(input) = serde_json::to_value(event) else {
             continue;
@@ -10400,6 +10751,7 @@ fn run_automation_event_session(
         if cancellation.is_cancelled() {
             break;
         }
+        notify_lifeform_connector_event(app, &event.event_type);
         let state = app.state::<DesktopState>();
         if run_live_automation_event(
             &state,
@@ -10633,6 +10985,11 @@ fn execute_user_program_source_with_cancellation(
         workers: &state.active_user_program_workers,
         execution_id,
     };
+    // User Program sandbox run → pet work body language (Subject path).
+    let _ = apply_lifeform_directive_from_host(
+        app,
+        user_code_directive(UserCodePhase::SandboxRun),
+    );
     let input = authorized_user_program_input(state, &policy, event)?;
     let request = WorkerMessage::Run {
         manifest: serde_json::to_value(manifest)?,
@@ -10643,10 +11000,31 @@ fn execute_user_program_source_with_cancellation(
         .map_err(|error| DesktopError::UserCodeHost(error.to_string()))?;
     let response = worker
         .wait()
-        .map_err(|error| DesktopError::UserCodeHost(error.to_string()))?;
-    let value = terminal_user_program_worker_value(response)?;
+        .map_err(|error| {
+            let _ = apply_lifeform_directive_from_host(
+                app,
+                user_code_directive(UserCodePhase::Crashed),
+            );
+            DesktopError::UserCodeHost(error.to_string())
+        })?;
+    let value = match terminal_user_program_worker_value(response) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = apply_lifeform_directive_from_host(
+                app,
+                user_code_directive(UserCodePhase::Crashed),
+            );
+            return Err(error);
+        }
+    };
     let plan = parse_user_program_plan(value)?;
-    ensure_user_program_agent_capability(&policy, plan.agent_tasks.len())?;
+    if let Err(error) = ensure_user_program_agent_capability(&policy, plan.agent_tasks.len()) {
+        let _ = apply_lifeform_directive_from_host(
+            app,
+            user_code_directive(UserCodePhase::Denied),
+        );
+        return Err(error);
+    }
     let gateway = CapabilityGateway::new(DesktopCapabilityBackend { state });
     let mut responses = Vec::with_capacity(plan.storage.len() + plan.commands.len());
     for operation in plan.storage {
@@ -10699,12 +11077,27 @@ fn execute_user_program_source_with_cancellation(
         &execution,
         execution_id,
         plan.agent_tasks,
-    )?;
-    Ok(UserProgramExecutionReceipt {
-        execution_id,
-        responses,
-        agent_results,
-    })
+    );
+    match agent_results {
+        Ok(agent_results) => {
+            let _ = apply_lifeform_directive_from_host(
+                app,
+                user_code_directive(UserCodePhase::Approved),
+            );
+            Ok(UserProgramExecutionReceipt {
+                execution_id,
+                responses,
+                agent_results,
+            })
+        }
+        Err(error) => {
+            let _ = apply_lifeform_directive_from_host(
+                app,
+                user_code_directive(UserCodePhase::Crashed),
+            );
+            Err(error)
+        }
+    }
 }
 
 fn terminal_user_program_worker_value(
@@ -11219,11 +11612,69 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
             .into_iter()
             .map(|action| serde_json::to_value(action).map_err(|error| error.to_string()))
             .collect::<Result<Vec<_>, _>>()?;
+        // Structured Subject path: user programs / skills can drive speech+mood+action.
+        let directive_actions = [
+            "wander",
+            "approach_cursor",
+            "rest",
+            "play",
+            "observe",
+            "perch",
+            "celebrate",
+            "work_busy",
+            "work_crash",
+        ];
+        let attention = [
+            "idle_scene",
+            "cursor",
+            "foreground_window",
+            "user",
+            "notification_area",
+            "obstacle",
+        ];
+        // Keep in sync with runtime-core ANIMATION_TOKEN_WHITELIST (+ micro-performance tokens).
+        let animations = [
+            "pet.idle",
+            "pet.observe",
+            "pet.walk",
+            "pet.play",
+            "pet.perch",
+            "pet.climb",
+            "pet.peek",
+            "pet.stretch",
+            "pet.sleep",
+            "pet.wake",
+            "pet.work",
+            "pet.celebrate",
+            "pet.click",
+            "pet.yawn",
+            "pet.dig_nose",
+            "pet.count_ants",
+            "pet.wave",
+            "pet.look_around",
+            "pet.hop",
+        ];
         Ok(serde_json::json!({
             "spec": "nimora.pet-action-catalog/1",
             "actions": actions,
             "commandTool": "pet.animation.play",
-            "argument": "action"
+            "argument": "action",
+            "commands": {
+                "animate": "safe.pet.animate",
+                "care": "safe.pet.care",
+                "move": "safe.pet.move",
+                "directive": "safe.pet.directive"
+            },
+            "directive": {
+                "spec": "nimora.pet_directive/1",
+                "commandTool": "safe.pet.directive",
+                "argument": "directive",
+                "actions": directive_actions,
+                "attention": attention,
+                "animations": animations,
+                "maxSpeechChars": 120,
+                "maxMoodDeltaAbs": 20
+            }
         }))
     }
 
@@ -11407,6 +11858,7 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
                     .play_action(action)
                     .map_err(|error| error.to_string())
             }
+            "safe.pet.directive" => invoke_safe_pet_directive(self.state, &arguments),
             "safe.pet.care" => invoke_pet_care_command(self.state, &arguments),
             "safe.pet.move" => {
                 let position = serde_json::from_value::<Position>(arguments)
@@ -11489,6 +11941,36 @@ impl CapabilityBackend for DesktopCapabilityBackend<'_> {
             .map_err(|error| error.to_string())?;
         result.idempotency_key = idempotency_key.map(ToOwned::to_owned);
         serde_json::to_value(result).map_err(|error| error.to_string())
+    }
+}
+
+/// Applies a validated `nimora.pet_directive/1` from user-code / skill capability path.
+///
+/// Accepts either `{ "directive": { ... } }` or a flat directive object.
+fn invoke_safe_pet_directive(
+    state: &DesktopState,
+    arguments: &serde_json::Value,
+) -> Result<Command, String> {
+    let payload = arguments
+        .get("directive")
+        .cloned()
+        .unwrap_or_else(|| arguments.clone());
+    let mut directive: StructuredPetDirective =
+        serde_json::from_value(payload).map_err(|error| error.to_string())?;
+    if directive.spec.trim().is_empty() {
+        directive.spec = "nimora.pet_directive/1".to_owned();
+    }
+    directive
+        .validate()
+        .map_err(|error| error.to_string())?;
+    let now_ms = current_time_ms().map_err(|error| error.to_string())?;
+    if let Some(app) = state.native_app.as_ref() {
+        apply_lifeform_directive_from_host(app, directive).map_err(|error| error.to_string())
+    } else {
+        state
+            .runtime
+            .apply_pet_directive(directive, now_ms)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -11930,25 +12412,36 @@ struct PetDropResolution {
     surface: PetSurface,
 }
 
+#[allow(dead_code)]
 fn resolve_pet_drop(
     window: &WebviewWindow,
     state: &DesktopState,
 ) -> Result<PetDropResolution, DesktopError> {
-    let original = window.outer_position()?;
-    let window_size = window.outer_size()?;
-    let monitor = window.current_monitor()?;
+    // Legacy path retained for tests that pass a window; logical path is preferred.
+    let _ = window;
+    resolve_pet_drop_logical(state)
+}
+
+fn resolve_pet_drop_logical(state: &DesktopState) -> Result<PetDropResolution, DesktopError> {
+    let original = logical_pet_position(state)?;
+    let body = pet_body_physical_size();
+    let stage = current_overlay_stage(state);
+    let work_area = stage.map(|stage| PhysicalArea {
+        x: stage.origin_x,
+        y: stage.origin_y,
+        width: stage.width,
+        height: stage.height,
+    });
     let target = if active_profile_policy(&state.profiles.snapshot()?)?
         .edge_snap
         .unwrap_or(true)
     {
-        monitor.as_ref().map_or(original, |monitor| {
-            plan_edge_snap_position(original, window_size, monitor_work_area(monitor))
-        })
+        work_area.map_or(original, |area| plan_edge_snap_position(original, body, area))
     } else {
         original
     };
-    let surface = monitor.as_ref().map_or(PetSurface::Free, |monitor| {
-        classify_pet_surface(target, window_size, monitor_work_area(monitor))
+    let surface = work_area.map_or(PetSurface::Free, |area| {
+        classify_pet_surface(target, body, area)
     });
     Ok(PetDropResolution {
         original,
@@ -11961,10 +12454,6 @@ fn persist_pet_window_position(
     app: &AppHandle,
     mode: PositionPersistenceMode,
 ) -> Result<(), DesktopError> {
-    let window = app
-        .get_webview_window(PET_WINDOW_LABEL)
-        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
-    let position = window.outer_position()?;
     let state = app.state::<DesktopState>();
     if mode == PositionPersistenceMode::DebouncedMove && state.dragging.load(Ordering::Acquire) {
         return Ok(());
@@ -11973,7 +12462,7 @@ fn persist_pet_window_position(
     if mode == PositionPersistenceMode::ShutdownFlush
         && snapshot.state == nimora_runtime_core::PetState::Dragged
     {
-        let drop = resolve_pet_drop(&window, &state)?;
+        let drop = resolve_pet_drop_logical(&state)?;
         state.runtime.drop_pet_with_action(
             Position {
                 x: f64::from(drop.target.x),
@@ -11984,6 +12473,15 @@ fn persist_pet_window_position(
         state.dragging.store(false, Ordering::Release);
         return Ok(());
     }
+    // Overlay mode: logical pet position is already the source of truth in runtime.
+    // Stage window moves must not overwrite pet.position.
+    if current_overlay_stage(&state).is_some() {
+        return Ok(());
+    }
+    let window = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
+    let position = window.outer_position()?;
     let target = Position {
         x: f64::from(position.x),
         y: f64::from(position.y),
@@ -12023,16 +12521,30 @@ fn schedule_position_persistence(app: AppHandle) {
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-fn pet_surface_snapshot(window: WebviewWindow) -> Result<PetSurfaceSnapshot, DesktopError> {
+fn pet_surface_snapshot(
+    app: AppHandle,
+    window: WebviewWindow,
+) -> Result<PetSurfaceSnapshot, DesktopError> {
     if window.label() != PET_WINDOW_LABEL {
         return Err(DesktopError::WindowForbidden);
     }
-    let surface = if let Some(monitor) = window.current_monitor()? {
+    let state = app.state::<DesktopState>();
+    let body = pet_body_physical_size();
+    let surface = if let Some(stage) = current_overlay_stage(&state) {
+        let pos = logical_pet_position(&state)?;
         Some(classify_pet_surface(
-            window.outer_position()?,
-            window.outer_size()?,
-            monitor_work_area(&monitor),
+            pos,
+            body,
+            PhysicalArea {
+                x: stage.origin_x,
+                y: stage.origin_y,
+                width: stage.width,
+                height: stage.height,
+            },
         ))
+    } else if let Some(monitor) = window.current_monitor()? {
+        let pos = logical_pet_position(&state).unwrap_or(window.outer_position()?);
+        Some(classify_pet_surface(pos, body, monitor_work_area(&monitor)))
     } else {
         None
     };
@@ -12071,14 +12583,316 @@ fn complete_window_initialization<E>(
     }
 }
 
+fn pet_body_physical_size() -> tauri::PhysicalSize<u32> {
+    tauri::PhysicalSize::new(
+        desktop_lifeform::PET_BODY_WIDTH,
+        desktop_lifeform::PET_BODY_HEIGHT,
+    )
+}
+
+fn host_work_area_from_physical(area: PhysicalArea) -> desktop_lifeform::HostWorkArea {
+    desktop_lifeform::HostWorkArea {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: area.height,
+    }
+}
+
+fn current_overlay_stage(state: &DesktopState) -> Option<desktop_lifeform::OverlayStage> {
+    state.overlay_stage.lock().ok().and_then(|guard| *guard)
+}
+
+fn store_overlay_stage(state: &DesktopState, stage: desktop_lifeform::OverlayStage) {
+    if let Ok(mut guard) = state.overlay_stage.lock() {
+        *guard = Some(stage);
+    }
+}
+
+fn emit_pet_position(app: &AppHandle, pose: desktop_lifeform::PetScreenPose) {
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_POSITION_CHANGED_EVENT, pose);
+    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_POSITION_CHANGED_EVENT, pose);
+}
+
+fn emit_pet_stage(app: &AppHandle, stage: desktop_lifeform::OverlayStage) {
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_STAGE_CHANGED_EVENT, stage);
+}
+
+fn emit_pet_occlusion(app: &AppHandle, occlusion: nimora_desktop_context::PetOcclusion) {
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_OCCLUSION_CHANGED_EVENT, occlusion);
+}
+
+fn emit_pet_directive_from_pet(app: &AppHandle, pet: &Pet) {
+    if pet.directive_revision == 0 {
+        return;
+    }
+    let payload = serde_json::json!({
+        "speech": pet.last_directive_speech,
+        "animation": pet.last_directive_animation,
+        "attention": pet.last_attention,
+        "action": pet.state,
+        "mood": pet.mood,
+        "revision": pet.directive_revision,
+    });
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_DIRECTIVE_CHANGED_EVENT, payload.clone());
+    let _ = app.emit_to(CONTROL_CENTER_LABEL, PET_DIRECTIVE_CHANGED_EVENT, payload);
+}
+
+fn current_lifeform_hints(state: &DesktopState, now_ms: u64) -> DesktopBehaviorHints {
+    let snapshot = state.lifeform_env.lock().ok().and_then(|guard| guard.clone());
+    let suppress = state
+        .presence_decision
+        .lock()
+        .map(|decision| decision.suppress_autonomy)
+        .unwrap_or(false);
+    desktop_lifeform::behavior_hints_from_lifeform(snapshot.as_ref(), now_ms, suppress)
+}
+
+fn publish_lifeform_occlusion(app: &AppHandle) {
+    let state = app.state::<DesktopState>();
+    let Ok(now_ms) = current_time_ms() else {
+        return;
+    };
+    let Ok(pet) = state.runtime.snapshot() else {
+        return;
+    };
+    let snapshot = state.lifeform_env.lock().ok().and_then(|guard| guard.clone());
+    let pose_x = pet.position.x.round() as i32;
+    let pose_y = pet.position.y.round() as i32;
+    let owner_pid = std::process::id();
+    let occlusion = desktop_lifeform::pet_occlusion_for_pose(
+        pose_x,
+        pose_y,
+        snapshot.as_ref(),
+        now_ms,
+        owner_pid,
+    );
+    emit_pet_occlusion(app, occlusion);
+}
+
+fn rebind_overlay_stage_for_pet_if_needed(app: &AppHandle, pet_x: i32, pet_y: i32) -> Option<desktop_lifeform::OverlayStage> {
+    let state = app.state::<DesktopState>();
+    let snapshot = state.lifeform_env.lock().ok().and_then(|guard| guard.clone());
+    let mut displays = snapshot.as_ref().map(|snap| snap.displays.clone()).unwrap_or_default();
+    // Fall back to live monitor enumeration when the lifeform sample is empty
+    // so multi-monitor walk still rebinds the overlay stage.
+    if displays.is_empty() {
+        displays = current_lifeform_displays(app);
+    }
+    if displays.is_empty() {
+        return current_overlay_stage(&state);
+    }
+    let fallback = current_overlay_stage(&state)
+        .map(|stage| desktop_lifeform::HostWorkArea {
+            x: stage.origin_x,
+            y: stage.origin_y,
+            width: stage.width,
+            height: stage.height,
+        })
+        .or_else(|| {
+            // Prefer the display that currently contains the pet origin.
+            desktop_lifeform::display_containing_origin(pet_x, pet_y, &displays).map(|display| {
+                desktop_lifeform::context_work_area_to_host(display.work_area)
+            })
+        })
+        .or_else(|| {
+            resolve_primary_work_area(app).ok().map(|area| desktop_lifeform::HostWorkArea {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: area.height,
+            })
+        })?;
+    let next = desktop_lifeform::overlay_stage_for_pet(
+        pet_x,
+        pet_y,
+        desktop_lifeform::PET_BODY_WIDTH,
+        desktop_lifeform::PET_BODY_HEIGHT,
+        &displays,
+        fallback,
+    );
+    let previous = current_overlay_stage(&state);
+    if previous.is_some_and(|stage| stage == next) {
+        return Some(next);
+    }
+    if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
+        let _ = apply_overlay_stage_window(&window, next);
+    }
+    store_overlay_stage(&state, next);
+    emit_pet_stage(app, next);
+    Some(next)
+}
+
+fn resolve_primary_work_area(app: &AppHandle) -> Result<PhysicalArea, DesktopError> {
+    let window = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .or_else(|| app.get_webview_window(CONTROL_CENTER_LABEL));
+    if let Some(window) = window {
+        if let Some(monitor) = window.current_monitor()?.or(window.primary_monitor()?) {
+            return Ok(monitor_work_area(&monitor));
+        }
+        if let Some(monitor) = window.primary_monitor()? {
+            return Ok(monitor_work_area(&monitor));
+        }
+    }
+    if let Some(monitor) = app.primary_monitor()? {
+        return Ok(monitor_work_area(&monitor));
+    }
+    if let Some(monitor) = app.available_monitors()?.into_iter().next() {
+        return Ok(monitor_work_area(&monitor));
+    }
+    Err(DesktopError::WindowUnavailable("primary-monitor".to_owned()))
+}
+
+fn resolve_stage_work_area_for_builder(
+    app: &AppHandle,
+) -> Result<PhysicalArea, DesktopError> {
+    if let Ok(area) = resolve_primary_work_area(app) {
+        return Ok(area);
+    }
+    // Last resort defaults for headless tests / CI without display.
+    Ok(PhysicalArea {
+        x: 0,
+        y: 0,
+        width: 1280,
+        height: 800,
+    })
+}
+
+fn apply_overlay_stage_window(
+    window: &tauri::WebviewWindow,
+    stage: desktop_lifeform::OverlayStage,
+) -> Result<(), DesktopError> {
+    window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+        stage.width,
+        stage.height,
+    )))?;
+    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+        stage.origin_x,
+        stage.origin_y,
+    )))?;
+    Ok(())
+}
+
+/// Updates durable pet screen position and notifies the overlay (does not move the stage window).
+#[allow(dead_code)]
+fn apply_logical_pet_position(
+    app: &AppHandle,
+    state: &DesktopState,
+    x: f64,
+    y: f64,
+    commit_runtime: bool,
+) -> Result<desktop_lifeform::PetScreenPose, DesktopError> {
+    let stage = current_overlay_stage(state).ok_or_else(|| {
+        DesktopError::WindowUnavailable("overlay-stage".to_owned())
+    })?;
+    let pose = desktop_lifeform::pose_for_screen(
+        screen_coordinate(x)?,
+        screen_coordinate(y)?,
+        stage,
+    );
+    if commit_runtime {
+        state.runtime.move_pet(Position {
+            x: f64::from(pose.x),
+            y: f64::from(pose.y),
+        })?;
+    }
+    emit_pet_position(app, pose);
+    Ok(pose)
+}
+
+fn sync_overlay_stage_to_monitor(
+    app: &AppHandle,
+    preferred: Option<PhysicalArea>,
+) -> Result<desktop_lifeform::OverlayStage, DesktopError> {
+    let state = app.state::<DesktopState>();
+    let work_area = if let Some(area) = preferred {
+        area
+    } else if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
+        let monitor = window
+            .current_monitor()?
+            .or(window.primary_monitor()?)
+            .ok_or_else(|| DesktopError::WindowUnavailable("current-monitor".to_owned()))?;
+        monitor_work_area(&monitor)
+    } else {
+        resolve_stage_work_area_for_builder(app)?
+    };
+    let stage = desktop_lifeform::overlay_stage_from_work_area(host_work_area_from_physical(
+        work_area,
+    ));
+    if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
+        apply_overlay_stage_window(&window, stage)?;
+    }
+    store_overlay_stage(&state, stage);
+    emit_pet_stage(app, stage);
+    Ok(stage)
+}
+
+fn logical_pet_position(state: &DesktopState) -> Result<tauri::PhysicalPosition<i32>, DesktopError> {
+    let snapshot = state.runtime.snapshot()?;
+    Ok(tauri::PhysicalPosition::new(
+        screen_coordinate(snapshot.position.x)?,
+        screen_coordinate(snapshot.position.y)?,
+    ))
+}
+
+fn refresh_overlay_hit_testing(app: &AppHandle) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    let Ok(policy) = current_window_policy(&state) else {
+        return;
+    };
+    if policy.click_through {
+        if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
+            let _ = window.set_ignore_cursor_events(true);
+        }
+        return;
+    }
+    let Ok(pet) = state.runtime.snapshot() else {
+        return;
+    };
+    let Ok(pet_x) = screen_coordinate(pet.position.x) else {
+        return;
+    };
+    let Ok(pet_y) = screen_coordinate(pet.position.y) else {
+        return;
+    };
+    let Ok(cursor) = app.cursor_position() else {
+        return;
+    };
+    let hits = desktop_lifeform::cursor_hits_pet(
+        cursor.x.round() as i32,
+        cursor.y.round() as i32,
+        pet_x,
+        pet_y,
+        desktop_lifeform::pet_body_size(),
+        36,
+    );
+    let interactive = hits || state.dragging.load(Ordering::Acquire);
+    if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
+        let _ = window.set_ignore_cursor_events(!interactive);
+    }
+}
+
 fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
     let policy = current_window_policy(&app.state::<DesktopState>())?;
     let snapshot = app.state::<DesktopState>().runtime.snapshot()?;
+    // Full-monitor transparent stage; pet body is logical, not the window size.
+    let work_area = resolve_stage_work_area_for_builder(app).unwrap_or(PhysicalArea {
+        x: 0,
+        y: 0,
+        width: 1280,
+        height: 800,
+    });
+    let stage = desktop_lifeform::overlay_stage_from_work_area(host_work_area_from_physical(
+        work_area,
+    ));
     let window =
         WebviewWindowBuilder::new(app, PET_WINDOW_LABEL, WebviewUrl::App("/?view=pet".into()))
             .title(&snapshot.name)
-            .inner_size(260.0, 300.0)
-            .min_inner_size(180.0, 210.0)
+            .inner_size(f64::from(stage.width.max(320)), f64::from(stage.height.max(240)))
+            .min_inner_size(320.0, 240.0)
             .resizable(false)
             .decorations(false)
             .transparent(true)
@@ -12089,15 +12903,45 @@ fn create_pet_window(app: &AppHandle) -> Result<(), DesktopError> {
             .build()?;
     complete_window_initialization(
         || {
-            let position = snapshot.position;
-            window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-                screen_coordinate(position.x)?,
-                screen_coordinate(position.y)?,
-            )))?;
+            apply_overlay_stage_window(&window, stage)?;
+            store_overlay_stage(&app.state::<DesktopState>(), stage);
+            emit_pet_stage(app, stage);
+            // Ensure logical pet is on-stage; seed ground pose if origin is (0,0) default empty.
+            let mut pet_x = screen_coordinate(snapshot.position.x)?;
+            let mut pet_y = screen_coordinate(snapshot.position.y)?;
+            if pet_x == 0 && pet_y == 0 {
+                let (gx, gy) = desktop_lifeform::default_ground_pose(stage);
+                pet_x = gx;
+                pet_y = gy;
+                let _ = app.state::<DesktopState>().runtime.move_pet(Position {
+                    x: f64::from(pet_x),
+                    y: f64::from(pet_y),
+                });
+            } else {
+                let (cx, cy) = desktop_lifeform::clamp_pet_origin_to_stage(
+                    pet_x,
+                    pet_y,
+                    stage,
+                    desktop_lifeform::pet_body_size(),
+                );
+                if cx != pet_x || cy != pet_y {
+                    pet_x = cx;
+                    pet_y = cy;
+                    let _ = app.state::<DesktopState>().runtime.move_pet(Position {
+                        x: f64::from(pet_x),
+                        y: f64::from(pet_y),
+                    });
+                }
+            }
+            emit_pet_position(
+                app,
+                desktop_lifeform::pose_for_screen(pet_x, pet_y, stage),
+            );
             if policy.visible {
                 let _ = ensure_pet_window_visible(app)?;
             }
-            window.set_ignore_cursor_events(policy.click_through)?;
+            // Hit-tested interactivity for fullscreen stage (not whole-stage capture).
+            window.set_ignore_cursor_events(true)?;
             Ok::<(), DesktopError>(())
         },
         || {
@@ -12293,7 +13137,9 @@ pub fn run() {
             if let WindowEvent::Moved(_) = event
                 && window.label() == PET_WINDOW_LABEL
             {
-                schedule_position_persistence(window.app_handle().clone());
+                // Overlay stage should stay pinned; re-anchor if the OS moved it.
+                let app = window.app_handle().clone();
+                let _ = sync_overlay_stage_to_monitor(&app, None);
             }
             if matches!(event, WindowEvent::Destroyed) && window.label() == PET_WINDOW_LABEL {
                 schedule_pet_window_recovery(window.app_handle().clone());
@@ -12345,6 +13191,10 @@ pub fn run() {
             install_creator_draft,
             resume_auto_mode_turn,
             start_auto_mode_job,
+            unattended_auto_mode::start_unattended_auto_mode,
+            unattended_auto_mode::revoke_authorization_grant,
+            unattended_auto_mode::list_authorization_grants,
+            away_summary::get_away_summary,
             auto_mode_job_status,
             auto_mode_job_history,
             auto_mode_control_center,
@@ -12376,6 +13226,7 @@ pub fn run() {
             set_pet_home,
             return_pet_home,
             play_pet_action,
+            apply_pet_directive,
             care_pet,
             use_pet_item,
             rename_pet,
@@ -12559,6 +13410,9 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
 
 fn start_pet_autonomy(app: AppHandle) {
     std::thread::spawn(move || {
+        // Wall-clock cadence (not wall-second modulo) so 1s sleep cannot skip samples.
+        const LIFEFORM_SAMPLE_INTERVAL_MS: u64 = 5_000;
+        let mut last_lifeform_sample_ms: u64 = 0;
         while let Some(state) = app.try_state::<DesktopState>() {
             if state.lifecycle.autonomy_stop.load(Ordering::Acquire) {
                 break;
@@ -12570,6 +13424,20 @@ fn start_pet_autonomy(app: AppHandle) {
             let visible = current_window_policy(&state).is_ok_and(|policy| policy.visible);
             if normal && visible && !state.dragging.load(Ordering::Acquire) {
                 let _ = ensure_pet_window_visible(&app);
+            }
+            if normal && visible {
+                refresh_overlay_hit_testing(&app);
+            }
+            // Lifeform OS sensing (~every 5s): windows, idle, power, meeting.
+            if normal {
+                if let Ok(now_ms) = current_time_ms() {
+                    if last_lifeform_sample_ms == 0
+                        || now_ms.saturating_sub(last_lifeform_sample_ms) >= LIFEFORM_SAMPLE_INTERVAL_MS
+                    {
+                        last_lifeform_sample_ms = now_ms;
+                        sample_lifeform_environment(&app);
+                    }
+                }
             }
             let before = state.runtime.snapshot().ok();
             if normal
@@ -12589,6 +13457,12 @@ fn start_pet_autonomy(app: AppHandle) {
                 )
             {
                 let _ = app.emit_to(PET_WINDOW_LABEL, PET_AUTONOMY_CHANGED_EVENT, ());
+                if let Ok(after) = state.runtime.snapshot() {
+                    let before_rev = before.as_ref().map(|pet| pet.directive_revision).unwrap_or(0);
+                    if after.directive_revision > before_rev {
+                        emit_pet_directive_from_pet(&app, &after);
+                    }
+                }
                 if before.is_some_and(|pet| pet.state != nimora_runtime_core::PetState::Walking)
                     && state
                         .runtime
@@ -12628,13 +13502,19 @@ fn tick_pet_autonomy_with_attention(
     mut policy: PetAutonomyPolicy,
     now_ms: u64,
 ) -> Result<Option<Command>, DesktopError> {
-    let decision = state.runtime.snapshot()?.autonomy_decision(policy, now_ms);
+    let hints = current_lifeform_hints(state, now_ms);
+    let decision = state
+        .runtime
+        .snapshot()?
+        .autonomy_decision_with_lifeform(policy, now_ms, Some(hints));
     if matches!(decision, PetAutonomyDecision::Start { .. }) {
         let context_suppressed = state
             .presence_decision
             .lock()
             .map_err(|_| DesktopError::StatePoisoned)?
-            .suppress_autonomy;
+            .suppress_autonomy
+            || hints.suppress_autonomy
+            || hints.meeting_active;
         let request = AttentionRequest {
             spec: "nimora.attention-request/1".to_owned(),
             source: AttentionSource::Autonomy,
@@ -12648,13 +13528,13 @@ fn tick_pet_autonomy_with_attention(
             .map_err(|_| DesktopError::StatePoisoned)?
             .decide(&request, context_suppressed, now_ms)
             .allowed;
-        if !allowed {
+        if !allowed || context_suppressed {
             policy.quiet = true;
         }
     }
     state
         .runtime
-        .tick_autonomy(policy, now_ms)
+        .tick_autonomy_with_lifeform(policy, now_ms, Some(hints))
         .map_err(Into::into)
 }
 
@@ -12709,17 +13589,37 @@ fn ensure_pet_window_visible(app: &AppHandle) -> Result<bool, DesktopError> {
     let window = app
         .get_webview_window(PET_WINDOW_LABEL)
         .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
-    let current = window.outer_position()?;
-    let Some(target) = visible_position_for_window(&window, current)? else {
-        return Ok(false);
-    };
-    if target != current {
-        window.set_position(tauri::Position::Physical(target))?;
-        return Ok(true);
+    // Re-anchor fullscreen stage to the active work area; clamp logical pet body.
+    let stage = sync_overlay_stage_to_monitor(app, None)?;
+    let state = app.state::<DesktopState>();
+    let current = logical_pet_position(&state)?;
+    let (cx, cy) = desktop_lifeform::clamp_pet_origin_to_stage(
+        current.x,
+        current.y,
+        stage,
+        desktop_lifeform::pet_body_size(),
+    );
+    let mut changed = false;
+    // Stage window should sit at stage origin.
+    if let Ok(outer) = window.outer_position() {
+        if outer.x != stage.origin_x || outer.y != stage.origin_y {
+            apply_overlay_stage_window(&window, stage)?;
+            changed = true;
+        }
     }
-    Ok(false)
+    if cx != current.x || cy != current.y {
+        let pose = desktop_lifeform::pose_for_screen(cx, cy, stage);
+        let _ = state.runtime.move_pet(Position {
+            x: f64::from(pose.x),
+            y: f64::from(pose.y),
+        });
+        emit_pet_position(app, pose);
+        changed = true;
+    }
+    Ok(changed)
 }
 
+#[allow(dead_code)]
 fn visible_position_for_window(
     window: &tauri::WebviewWindow,
     position: tauri::PhysicalPosition<i32>,
@@ -12738,6 +13638,565 @@ fn visible_position_for_window(
     Ok(recover_visible_position(position, window_size, &monitors))
 }
 
+
+fn sample_lifeform_environment(app: &AppHandle) {
+    let Ok(now_ms) = current_time_ms() else {
+        return;
+    };
+    let snapshot = sample_lifeform_environment_inner(app, now_ms);
+    if let Ok(mut guard) = app.state::<DesktopState>().lifeform_env.lock() {
+        if let Some(ref snap) = snapshot {
+            if snap.meeting.active {
+                if let Ok(mut presence) = app.state::<DesktopState>().presence_decision.lock() {
+                    presence.suppress_autonomy = true;
+                }
+            }
+        }
+        *guard = snapshot.clone();
+    }
+    // Connector-style sensory: OS/power degradation becomes pet body language.
+    publish_lifeform_sensory_from_snapshot(app, snapshot.as_ref());
+    // Rebind stage if pet crossed monitors; then publish occlusion against latest env.
+    if let Ok(pet) = app.state::<DesktopState>().runtime.snapshot() {
+        let pet_x = pet.position.x.round() as i32;
+        let pet_y = pet.position.y.round() as i32;
+        let _ = rebind_overlay_stage_for_pet_if_needed(app, pet_x, pet_y);
+    }
+    publish_lifeform_occlusion(app);
+    // Control Center sense cards poll desktop_snapshot; nudge them when OS env changes.
+    let _ = app.emit_to(CONTROL_CENTER_LABEL, SYSTEM_CONTEXT_CHANGED_EVENT, ());
+}
+
+/// Tracks last sensory phase to avoid directive spam on every OS sample tick.
+/// Battery sensory band: 0=unknown, 1=critical(<=10), 2=low(<=20), 3=ok/AC, 4=charging.
+fn lifeform_battery_sensory_band(power: &nimora_desktop_context::PowerState) -> u8 {
+    if power.charging {
+        return 4;
+    }
+    if !power.on_battery {
+        return 3;
+    }
+    match power.battery_percent {
+        Some(percent) if percent <= 10 => 1,
+        Some(percent) if percent <= 20 => 2,
+        _ => 3,
+    }
+}
+
+/// Idle sensory band: 0=active, 1>=90s, 2>=5min, 3>=30min.
+fn lifeform_idle_sensory_band(idle_secs: u64) -> u8 {
+    if idle_secs >= 30 * 60 {
+        3
+    } else if idle_secs >= 5 * 60 {
+        2
+    } else if idle_secs >= 90 {
+        1
+    } else {
+        0
+    }
+}
+
+/// Whether battery sensory should emit: threshold/charging changes always; same band max 60s.
+fn lifeform_battery_should_emit(
+    previous_band: u8,
+    band: u8,
+    last_emit_ms: u64,
+    now_ms: u64,
+) -> bool {
+    const THROTTLE_MS: u64 = 60_000;
+    if band == 0 {
+        return false;
+    }
+    if previous_band != band {
+        // Threshold / charging transitions always win over the 60s throttle.
+        return matches!(band, 1 | 2 | 4) || matches!(previous_band, 1 | 2 | 4);
+    }
+    // Same low/critical band: re-emit at most once per 60s.
+    matches!(band, 1 | 2) && now_ms.saturating_sub(last_emit_ms) >= THROTTLE_MS
+}
+
+/// Whether idle sensory should emit: only when crossing into a higher idle band.
+fn lifeform_idle_should_emit(previous_band: u8, band: u8) -> bool {
+    band > previous_band
+}
+
+fn publish_lifeform_sensory_from_snapshot(
+    app: &AppHandle,
+    snapshot: Option<&nimora_desktop_context::DesktopSnapshot>,
+) {
+    publish_lifeform_connector_sensory_from_snapshot(app, snapshot);
+    if let Some(snap) = snapshot {
+        publish_lifeform_battery_sensory(app, snap);
+        publish_lifeform_idle_sensory(app, snap);
+        publish_lifeform_meeting_sensory(app, snap);
+    }
+    // App-local unread hint (outbox / dead-letter / attention) — privacy-safe boolean only.
+    publish_lifeform_notification_sensory(app);
+}
+
+/// Tracks last connector sensory phase to avoid directive spam on every OS sample tick.
+fn publish_lifeform_connector_sensory_from_snapshot(
+    app: &AppHandle,
+    snapshot: Option<&nimora_desktop_context::DesktopSnapshot>,
+) {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static LAST_PHASE: AtomicU8 = AtomicU8::new(0);
+    // 0 = unknown, 1 = healthy, 2 = degraded, 3 = offline-like
+    let phase: u8 = match snapshot {
+        None => 3,
+        Some(snap) => {
+            let sensor_degraded = snap.degradation_reason.is_some()
+                || matches!(
+                    snap.freshness,
+                    nimora_desktop_context::Freshness::Degraded
+                );
+            let low_battery = snap.power.is_some_and(|power| {
+                power.on_battery
+                    && !power.charging
+                    && power.battery_percent.is_some_and(|percent| percent <= 15)
+            });
+            if sensor_degraded || low_battery {
+                2
+            } else {
+                1
+            }
+        }
+    };
+    let previous = LAST_PHASE.load(Ordering::Relaxed);
+    if previous == phase {
+        return;
+    }
+    // Stay quiet on first healthy sample; announce stress and recovery only.
+    if previous == 0 && phase == 1 {
+        LAST_PHASE.store(phase, Ordering::Relaxed);
+        return;
+    }
+    let kind = match (previous, phase) {
+        (_, 3) => ConnectorSenseKind::Offline,
+        (_, 2) => ConnectorSenseKind::Degraded,
+        (2 | 3, 1) => ConnectorSenseKind::OnlineRestored,
+        _ => {
+            LAST_PHASE.store(phase, Ordering::Relaxed);
+            return;
+        }
+    };
+    LAST_PHASE.store(phase, Ordering::Relaxed);
+    let _ = apply_lifeform_directive_from_host(app, connector_sensory_directive(kind));
+}
+
+fn publish_lifeform_battery_sensory(
+    app: &AppHandle,
+    snapshot: &nimora_desktop_context::DesktopSnapshot,
+) {
+    use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static LAST_BAND: AtomicU8 = AtomicU8::new(0);
+    static LAST_EMIT_MS: AtomicU64 = AtomicU64::new(0);
+    let Some(power) = snapshot.power.as_ref() else {
+        return;
+    };
+    let band = lifeform_battery_sensory_band(power);
+    let previous = LAST_BAND.load(Ordering::Relaxed);
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let last_emit_ms = LAST_EMIT_MS.load(Ordering::Relaxed);
+    if !lifeform_battery_should_emit(previous, band, last_emit_ms, now_ms) {
+        // Still track band so recovery / charging-stop transitions are visible later.
+        if previous != band {
+            LAST_BAND.store(band, Ordering::Relaxed);
+        }
+        return;
+    }
+    LAST_BAND.store(band, Ordering::Relaxed);
+    LAST_EMIT_MS.store(now_ms, Ordering::Relaxed);
+    let level = power.battery_percent.unwrap_or(100);
+    let _ = apply_lifeform_directive_from_host(app, battery_directive(level, power.charging));
+}
+
+fn publish_lifeform_idle_sensory(
+    app: &AppHandle,
+    snapshot: &nimora_desktop_context::DesktopSnapshot,
+) {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static LAST_BAND: AtomicU8 = AtomicU8::new(0);
+    let idle_secs = snapshot.idle_ms / 1_000;
+    let band = lifeform_idle_sensory_band(idle_secs);
+    let previous = LAST_BAND.load(Ordering::Relaxed);
+    if band == previous {
+        return;
+    }
+    LAST_BAND.store(band, Ordering::Relaxed);
+    if !lifeform_idle_should_emit(previous, band) {
+        return;
+    }
+    let _ = apply_lifeform_directive_from_host(app, idle_user_directive(idle_secs));
+}
+
+/// Meeting sensory edge: quiet rest while conference apps are active; soft observe when cleared.
+fn publish_lifeform_meeting_sensory(
+    app: &AppHandle,
+    snapshot: &nimora_desktop_context::DesktopSnapshot,
+) {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static LAST: AtomicU8 = AtomicU8::new(0); // 0 unknown, 1 inactive, 2 active
+    let active = snapshot.meeting.active;
+    let phase: u8 = if active { 2 } else { 1 };
+    let previous = LAST.load(Ordering::Relaxed);
+    if previous == phase {
+        return;
+    }
+    // First healthy inactive sample stays quiet; only announce transitions.
+    if previous == 0 && phase == 1 {
+        LAST.store(phase, Ordering::Relaxed);
+        return;
+    }
+    LAST.store(phase, Ordering::Relaxed);
+    let hint_label = match snapshot.meeting.hint {
+        nimora_desktop_context::MeetingHint::Zoom => Some("zoom"),
+        nimora_desktop_context::MeetingHint::Teams => Some("teams"),
+        nimora_desktop_context::MeetingHint::Meet => Some("meet"),
+        nimora_desktop_context::MeetingHint::Webex => Some("webex"),
+        nimora_desktop_context::MeetingHint::Unknown => Some("unknown"),
+        nimora_desktop_context::MeetingHint::None => None,
+    };
+    let _ = apply_lifeform_directive_from_host(
+        app,
+        meeting_sensory_directive(active, hint_label),
+    );
+}
+
+/// Alert the pet when a connector-sourced runtime event is observed.
+///
+/// Throttled so bursty connector traffic does not spam directives / speech.
+/// Privacy-safe unread sensory: outbox pending / dead-letter / attention queue only.
+/// Never reads notification titles or bodies.
+fn publish_lifeform_notification_sensory(app: &AppHandle) {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static LAST: AtomicU8 = AtomicU8::new(0); // 0 unknown, 1 clear, 2 unread
+    let state = app.state::<DesktopState>();
+    let outbox = state.outbox.snapshot().ok();
+    let (pending, dead) = outbox
+        .map(|snap| {
+            (
+                u32::try_from(snap.pending).unwrap_or(u32::MAX),
+                u32::try_from(snap.dead_letter).unwrap_or(u32::MAX),
+            )
+        })
+        .unwrap_or((0, 0));
+    // Pending agent tools / creator approvals are privacy-safe "needs eyes" counts.
+    let agent_pending = state
+        .pending_agent_tools
+        .lock()
+        .ok()
+        .map(|guard| u32::try_from(guard.len()).unwrap_or(u32::MAX))
+        .unwrap_or(0);
+    let creator_pending = state
+        .pending_creator_approvals
+        .lock()
+        .ok()
+        .map(|guard| u32::try_from(guard.len()).unwrap_or(u32::MAX))
+        .unwrap_or(0);
+    let attention_pending = agent_pending.saturating_add(creator_pending);
+    let has_unread = desktop_lifeform::lifeform_notification_unread_from_counts(
+        pending,
+        dead,
+        attention_pending,
+    );
+    let phase: u8 = if has_unread { 2 } else { 1 };
+    let previous = LAST.load(Ordering::Relaxed);
+    if previous == phase {
+        return;
+    }
+    // First healthy clear sample stays quiet.
+    if previous == 0 && phase == 1 {
+        LAST.store(phase, Ordering::Relaxed);
+        return;
+    }
+    let previous_unread = previous == 2;
+    if !desktop_lifeform::lifeform_notification_should_emit(previous_unread, has_unread)
+        && previous != 0
+    {
+        LAST.store(phase, Ordering::Relaxed);
+        return;
+    }
+    LAST.store(phase, Ordering::Relaxed);
+    let _ = apply_lifeform_directive_from_host(app, notification_sensory_directive(has_unread));
+}
+
+
+fn notify_lifeform_connector_event(app: &AppHandle, event_type: &str) {
+    if !desktop_lifeform::is_connector_event_type(event_type) {
+        return;
+    }
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static LAST_MS: AtomicU64 = AtomicU64::new(0);
+    const THROTTLE_MS: u64 = 8_000;
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let previous = LAST_MS.load(Ordering::Relaxed);
+    if previous != 0 && now_ms.saturating_sub(previous) < THROTTLE_MS {
+        return;
+    }
+    LAST_MS.store(now_ms, Ordering::Relaxed);
+    let _ = apply_lifeform_directive_from_host(
+        app,
+        connector_sensory_directive(ConnectorSenseKind::EventReceived),
+    );
+}
+
+
+fn sample_lifeform_environment_inner(
+    app: &AppHandle,
+    now_ms: u64,
+) -> Option<nimora_desktop_context::DesktopSnapshot> {
+    #[cfg(target_os = "macos")]
+    {
+        match nimora_desktop_context_macos::sample(std::time::Duration::from_millis(1500)) {
+            Ok(env) => Some(map_macos_environment_sample(app, env, now_ms)),
+            Err(_) => Some(desktop_lifeform::degraded_lifeform_snapshot(
+                now_ms,
+                nimora_desktop_context::DegradationReason::PlatformUnavailable,
+            )),
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match nimora_desktop_context_windows::sample(std::time::Duration::from_millis(1500)) {
+            Ok(env) => Some(map_windows_environment_sample(app, env, now_ms)),
+            Err(_) => Some(desktop_lifeform::degraded_lifeform_snapshot(
+                now_ms,
+                nimora_desktop_context::DegradationReason::PlatformUnavailable,
+            )),
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = app;
+        Some(desktop_lifeform::degraded_lifeform_snapshot(
+            now_ms,
+            nimora_desktop_context::DegradationReason::PlatformUnavailable,
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn map_macos_environment_sample(
+    app: &AppHandle,
+    env: nimora_desktop_context_macos::EnvironmentSample,
+    now_ms: u64,
+) -> nimora_desktop_context::DesktopSnapshot {
+    let meeting_hint = desktop_lifeform::map_meeting_hint_label(match env.meeting.hint {
+        nimora_desktop_context_macos::MeetingHint::Zoom => "zoom",
+        nimora_desktop_context_macos::MeetingHint::Teams => "teams",
+        nimora_desktop_context_macos::MeetingHint::Meet => "meet",
+        nimora_desktop_context_macos::MeetingHint::Webex => "webex",
+        nimora_desktop_context_macos::MeetingHint::Unknown => "unknown",
+        nimora_desktop_context_macos::MeetingHint::None => "",
+    });
+    let sample = desktop_lifeform::LifeformSampleInput {
+        windows: env
+            .windows
+            .into_iter()
+            .map(|window| desktop_lifeform::LifeformWindowInput {
+                id: window.id,
+                x: window.x,
+                y: window.y,
+                width: window.width,
+                height: window.height,
+                z_order: window.z_order,
+                owner_pid: window.owner_pid,
+                owner_name: window.owner_name,
+                onscreen: window.onscreen,
+                is_minimized: window.is_minimized,
+                is_shell: window.is_shell,
+            })
+            .collect(),
+        foreground: env.foreground.map(|fg| desktop_lifeform::LifeformForegroundInput {
+            app_name: fg.app_name,
+            pid: fg.pid,
+        }),
+        idle_ms: env.idle_ms,
+        power: if env.power.available {
+            Some(nimora_desktop_context::PowerState {
+                on_battery: env.power.on_battery,
+                battery_percent: env.power.battery_percent,
+                charging: env.power.charging,
+            })
+        } else {
+            None
+        },
+        meeting_active: env.meeting.active,
+        meeting_hint,
+        observed_at_ms: env.observed_at_ms.max(now_ms),
+        displays: {
+            let adapter: Vec<nimora_desktop_context::DesktopDisplay> = env
+                .displays
+                .into_iter()
+                .map(|display| nimora_desktop_context::DesktopDisplay {
+                    id: display.id,
+                    x: display.x,
+                    y: display.y,
+                    width: display.width,
+                    height: display.height,
+                    work_area: desktop_lifeform::host_work_area_to_context(
+                        desktop_lifeform::HostWorkArea {
+                            x: display.work_area.x,
+                            y: display.work_area.y,
+                            width: display.work_area.width,
+                            height: display.work_area.height,
+                        },
+                    ),
+                    scale_factor: display.scale_factor,
+                })
+                .collect();
+            if adapter.is_empty() {
+                current_lifeform_displays(app)
+            } else {
+                adapter
+            }
+        },
+        cursor: app.cursor_position().ok().map(|position| {
+            nimora_desktop_context::CursorPosition {
+                x: f64::from(position.x),
+                y: f64::from(position.y),
+            }
+        }),
+    };
+    desktop_lifeform::lifeform_snapshot_from_sample(
+        sample,
+        desktop_lifeform::lifeform_expires_at(env.observed_at_ms.max(now_ms)),
+    )
+    .unwrap_or_else(|_| {
+        desktop_lifeform::degraded_lifeform_snapshot(
+            now_ms,
+            nimora_desktop_context::DegradationReason::PartialSample,
+        )
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn map_windows_environment_sample(
+    app: &AppHandle,
+    env: nimora_desktop_context_windows::EnvironmentSample,
+    now_ms: u64,
+) -> nimora_desktop_context::DesktopSnapshot {
+    let meeting_hint = desktop_lifeform::map_meeting_hint_label(match env.meeting.hint {
+        nimora_desktop_context_windows::MeetingHint::Zoom => "zoom",
+        nimora_desktop_context_windows::MeetingHint::Teams => "teams",
+        nimora_desktop_context_windows::MeetingHint::Meet => "meet",
+        nimora_desktop_context_windows::MeetingHint::Webex => "webex",
+        nimora_desktop_context_windows::MeetingHint::Unknown => "unknown",
+        nimora_desktop_context_windows::MeetingHint::None => "",
+    });
+    let sample = desktop_lifeform::LifeformSampleInput {
+        windows: env
+            .windows
+            .into_iter()
+            .map(|window| desktop_lifeform::LifeformWindowInput {
+                id: window.id,
+                x: window.x,
+                y: window.y,
+                width: window.width,
+                height: window.height,
+                z_order: window.z_order,
+                owner_pid: window.owner_pid,
+                owner_name: window.owner_name,
+                onscreen: window.onscreen,
+                is_minimized: window.is_minimized,
+                is_shell: window.is_shell,
+            })
+            .collect(),
+        foreground: env.foreground.map(|fg| desktop_lifeform::LifeformForegroundInput {
+            app_name: fg.app_name,
+            pid: fg.pid,
+        }),
+        idle_ms: env.idle_ms,
+        power: if env.power.available {
+            Some(nimora_desktop_context::PowerState {
+                on_battery: env.power.on_battery,
+                battery_percent: env.power.battery_percent,
+                charging: env.power.charging,
+            })
+        } else {
+            None
+        },
+        meeting_active: env.meeting.active,
+        meeting_hint,
+        observed_at_ms: env.observed_at_ms.max(now_ms),
+        displays: current_lifeform_displays(app),
+        cursor: app.cursor_position().ok().map(|position| {
+            nimora_desktop_context::CursorPosition {
+                x: f64::from(position.x),
+                y: f64::from(position.y),
+            }
+        }),
+    };
+    desktop_lifeform::lifeform_snapshot_from_sample(
+        sample,
+        desktop_lifeform::lifeform_expires_at(env.observed_at_ms.max(now_ms)),
+    )
+    .unwrap_or_else(|_| {
+        desktop_lifeform::degraded_lifeform_snapshot(
+            now_ms,
+            nimora_desktop_context::DegradationReason::PartialSample,
+        )
+    })
+}
+
+fn current_lifeform_displays(app: &AppHandle) -> Vec<nimora_desktop_context::DesktopDisplay> {
+    // Enumerate every attached monitor so multi-monitor stage rebind and
+    // cross-display wander can see the full desktop topology.
+    let monitors = app
+        .available_monitors()
+        .ok()
+        .filter(|monitors| !monitors.is_empty())
+        .or_else(|| {
+            let window = app
+                .get_webview_window(PET_WINDOW_LABEL)
+                .or_else(|| app.get_webview_window(CONTROL_CENTER_LABEL))?;
+            window.available_monitors().ok()
+        })
+        .unwrap_or_default();
+
+    let mut displays = Vec::with_capacity(monitors.len());
+    let mut seen = std::collections::BTreeSet::new();
+    for (index, monitor) in monitors.into_iter().enumerate() {
+        let position = monitor.position();
+        let size = monitor.size();
+        let work = monitor.work_area();
+        let name = monitor
+            .name()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| format!("display-{index}"));
+        let id = format!("monitor-{name}");
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        displays.push(nimora_desktop_context::DesktopDisplay {
+            id,
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+            work_area: desktop_lifeform::host_work_area_to_context(
+                desktop_lifeform::HostWorkArea {
+                    x: work.position.x,
+                    y: work.position.y,
+                    width: work.size.width,
+                    height: work.size.height,
+                },
+            ),
+            scale_factor: monitor.scale_factor(),
+        });
+    }
+    displays
+}
+
 fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
     if app
         .state::<DesktopState>()
@@ -12746,34 +14205,114 @@ fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
     {
         return Ok(());
     }
-    let window = app
-        .get_webview_window(PET_WINDOW_LABEL)
-        .ok_or_else(|| DesktopError::WindowUnavailable(PET_WINDOW_LABEL.to_owned()))?;
-    let current = window.outer_position()?;
-    let window_size = window.outer_size()?;
-    let monitor = window
-        .current_monitor()?
-        .ok_or_else(|| DesktopError::WindowUnavailable("current-monitor".to_owned()))?;
-    let sequence = app
-        .state::<DesktopState>()
-        .runtime
-        .snapshot()?
-        .autonomy
-        .sequence;
-    let work_area = monitor_work_area(&monitor);
-    let surface = classify_pet_surface(current, window_size, work_area);
-    let profile_snapshot = app.state::<DesktopState>().profiles.snapshot()?;
+    let state = app.state::<DesktopState>();
+    if current_overlay_stage(&state).is_none() {
+        let _ = sync_overlay_stage_to_monitor(app, None);
+    }
+    let stage = current_overlay_stage(&state).ok_or_else(|| {
+        DesktopError::WindowUnavailable("overlay-stage".to_owned())
+    })?;
+    let current = logical_pet_position(&state)?;
+    let body = pet_body_physical_size();
+    let work_area = PhysicalArea {
+        x: stage.origin_x,
+        y: stage.origin_y,
+        width: stage.width,
+        height: stage.height,
+    };
+    let sequence = state.runtime.snapshot()?.autonomy.sequence;
+    let surface = classify_pet_surface(current, body, work_area);
+    let profile_snapshot = state.profiles.snapshot()?;
     let cursor_approach_enabled =
         profile_cursor_approach_enabled(active_profile_policy(&profile_snapshot)?);
-    let target = if surface == PetSurface::Free && cursor_approach_enabled {
-        app.cursor_position()
-            .ok()
-            .and_then(|cursor| plan_cursor_approach_target(current, window_size, work_area, cursor))
-            .unwrap_or_else(|| plan_wander_target(current, window_size, work_area, sequence))
-    } else {
-        plan_surface_wander_target(current, window_size, work_area, surface, sequence)
+    let now_ms = current_time_ms().unwrap_or(0);
+
+    let lifeform = state
+        .lifeform_env
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone());
+
+    let cursor = app.cursor_position().ok().map(|position| {
+        nimora_desktop_context::CursorPosition {
+            x: f64::from(position.x),
+            y: f64::from(position.y),
+        }
+    });
+
+    // Prefer the current stage as the local motion bounds. Cross-display
+    // wander targets still come from lifeform displays via plan_lifeform_wander_goal.
+    let context_area = desktop_lifeform::host_work_area_to_context(desktop_lifeform::HostWorkArea {
+        x: work_area.x,
+        y: work_area.y,
+        width: work_area.width,
+        height: work_area.height,
+    });
+    let pet_size = nimora_desktop_context::Size {
+        width: body.width,
+        height: body.height,
     };
-    for frame in 1..=PET_WANDER_FRAMES {
+
+    let goal = if surface == PetSurface::Free {
+        desktop_lifeform::plan_lifeform_wander_goal(
+            sequence,
+            current.x,
+            current.y,
+            body.width,
+            body.height,
+            context_area,
+            if cursor_approach_enabled { cursor } else { None },
+            lifeform.as_ref(),
+            now_ms,
+        )
+        .unwrap_or_else(|| {
+            let target = plan_wander_target(current, body, work_area, sequence);
+            nimora_desktop_context::MotionGoal {
+                target_x: target.x,
+                target_y: target.y,
+                mode: nimora_desktop_context::MotionMode::Walk,
+            }
+        })
+    } else {
+        let target = plan_surface_wander_target(current, body, work_area, surface, sequence);
+        nimora_desktop_context::MotionGoal {
+            target_x: target.x,
+            target_y: target.y,
+            mode: nimora_desktop_context::MotionMode::Walk,
+        }
+    };
+
+    let displays = lifeform
+        .as_ref()
+        .map(|snap| snap.displays.clone())
+        .filter(|displays| !displays.is_empty())
+        .unwrap_or_else(|| current_lifeform_displays(app));
+    // Multi-display union bounds so cross-monitor walks are not trapped on one stage.
+    let frames = if displays.len() > 1 {
+        desktop_lifeform::spring_position_frames_multi_display(
+            current.x,
+            current.y,
+            goal.target_x,
+            goal.target_y,
+            goal.mode,
+            &displays,
+            context_area,
+            pet_size,
+        )
+    } else {
+        desktop_lifeform::spring_position_frames(
+            current.x,
+            current.y,
+            goal.target_x,
+            goal.target_y,
+            goal.mode,
+            context_area,
+            pet_size,
+        )
+    };
+    let mut last = current;
+    let mut stage = stage;
+    for frame in frames {
         let state = app.state::<DesktopState>();
         if state.reduced_motion.load(Ordering::Acquire)
             || state.dragging.load(Ordering::Acquire)
@@ -12782,17 +14321,43 @@ fn execute_pet_wander(app: &AppHandle) -> Result<(), DesktopError> {
         {
             break;
         }
-        let interpolate = |start: i32, end: i32| {
-            let delta = i64::from(end) - i64::from(start);
-            let value = i64::from(start) + delta * i64::from(frame) / i64::from(PET_WANDER_FRAMES);
-            i32::try_from(value).unwrap_or(start)
-        };
-        window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-            interpolate(current.x, target.x),
-            interpolate(current.y, target.y),
-        )))?;
-        std::thread::sleep(PET_WANDER_FRAME_DURATION);
+        let crossed = desktop_lifeform::pet_crosses_display_boundary(
+            last.x,
+            last.y,
+            frame.x,
+            frame.y,
+            body.width,
+            body.height,
+            &displays,
+        );
+        last = tauri::PhysicalPosition::new(frame.x, frame.y);
+        // Mid-walk stage rebind: multi-monitor "walk across" keeps the subject on the active stage.
+        if crossed || current_overlay_stage(&state).is_none() {
+            if let Some(next_stage) = rebind_overlay_stage_for_pet_if_needed(app, frame.x, frame.y) {
+                stage = next_stage;
+            }
+        } else if let Some(next_stage) = rebind_overlay_stage_for_pet_if_needed(app, frame.x, frame.y)
+        {
+            stage = next_stage;
+        }
+        let pose = desktop_lifeform::pose_for_screen(frame.x, frame.y, stage);
+        // Ephemeral visual frames: emit without durable write each tick.
+        emit_pet_position(app, pose);
+        std::thread::sleep(std::time::Duration::from_millis(
+            desktop_lifeform::SPRING_FRAME_DURATION_MS,
+        ));
     }
+    // Commit final logical position once; rebind stage if the pet crossed displays.
+    let stage = rebind_overlay_stage_for_pet_if_needed(app, last.x, last.y).unwrap_or(stage);
+    let final_pose = desktop_lifeform::pose_for_screen(last.x, last.y, stage);
+    let _ = app.state::<DesktopState>().runtime.move_pet(Position {
+        x: f64::from(final_pose.x),
+        y: f64::from(final_pose.y),
+    });
+    emit_pet_position(app, final_pose);
+    publish_lifeform_occlusion(app);
+    emit_pet_position(app, final_pose);
+    let _ = app.emit_to(PET_WINDOW_LABEL, PET_SURFACE_CHANGED_EVENT, ());
     Ok(())
 }
 
@@ -12847,6 +14412,8 @@ mod tests {
         cancel_all_pending_agent_tools, cancel_auto_mode_job_inner, cancel_automation_run_inner,
         cancel_skill_execution_inner, capability_set_diff, classify_pet_surface,
         complete_window_initialization, confirm_agent_tool_inner, confirm_agent_tool_with_registry,
+        lifeform_sense_from_env, LifeformSenseSnapshot,
+        process_budget,
         consume_creator_approval_from, creator_capability_catalog, creator_capability_risk,
         creator_composition_graph, current_time_ms, default_agent_model, default_agent_provider_id,
         delete_openai_provider_inner, desktop_provider_registry, desktop_tool_registry,
@@ -12944,6 +14511,117 @@ mod tests {
         )
         .expect("normal desktop state");
         (root, state)
+    }
+
+    #[test]
+    fn lifeform_sense_from_env_projects_privacy_safe_aggregates() {
+        use nimora_desktop_context::{
+            DesktopDisplay, DesktopSnapshotParts, Freshness, MeetingHint, MeetingState, PowerState,
+            WorkArea,
+        };
+
+        assert!(lifeform_sense_from_env(None, false).is_none());
+
+        let snapshot = nimora_desktop_context::DesktopSnapshot::new(DesktopSnapshotParts {
+            windows: Vec::new(),
+            foreground: None,
+            displays: vec![
+                DesktopDisplay {
+                    id: "main".to_owned(),
+                    x: 0,
+                    y: 0,
+                    width: 1920,
+                    height: 1080,
+                    work_area: WorkArea {
+                        x: 0,
+                        y: 0,
+                        width: 1920,
+                        height: 1040,
+                    },
+                    scale_factor: 2.0,
+                },
+                DesktopDisplay {
+                    id: "side".to_owned(),
+                    x: 1920,
+                    y: 0,
+                    width: 1440,
+                    height: 900,
+                    work_area: WorkArea {
+                        x: 1920,
+                        y: 0,
+                        width: 1440,
+                        height: 860,
+                    },
+                    scale_factor: 1.0,
+                },
+            ],
+            power: Some(PowerState {
+                on_battery: true,
+                battery_percent: Some(18),
+                charging: false,
+            }),
+            idle_ms: 5 * 60 * 1000,
+            meeting: MeetingState {
+                active: true,
+                hint: MeetingHint::Zoom,
+            },
+            cursor: None,
+            observed_at_ms: 1_000,
+            expires_at_ms: 6_000,
+            freshness: Freshness::Fresh,
+            degradation_reason: None,
+        })
+        .expect("fixture snapshot");
+
+        let sense = lifeform_sense_from_env(Some(&snapshot), false).expect("sense");
+        assert_eq!(
+            sense,
+            LifeformSenseSnapshot {
+                battery_percent: Some(18),
+                on_battery: true,
+                charging: false,
+                idle_ms: 300_000,
+                meeting_active: true,
+                meeting_hint: Some("zoom".to_owned()),
+                display_count: 2,
+                notification_unread: false,
+                freshness: "fresh".to_owned(),
+                degradation_reason: None,
+                observed_at_ms: 1_000,
+                expires_at_ms: 6_000,
+            }
+        );
+        // Never leak window titles: sense has no title fields by construction.
+        let json = serde_json::to_value(&sense).expect("serialize");
+        assert!(json.get("windows").is_none());
+        assert!(json.get("foreground").is_none());
+        assert_eq!(json.get("meetingHint").and_then(|v| v.as_str()), Some("zoom"));
+    }
+
+    #[test]
+    fn process_budget_sample_is_finite_and_under_idle_memory_budget() {
+        let snap = process_budget::sample_process_budget(42);
+        assert_eq!(snap.observed_at_ms, 42);
+        if let Some(cpu) = snap.cpu_percent_approx {
+            assert!(cpu.is_finite());
+            assert!(cpu >= 0.0);
+        }
+        let json = serde_json::to_value(&snap).expect("serialize process budget");
+        assert!(json.get("rssBytes").is_some());
+        assert!(json.get("rssMb").is_some());
+        assert!(json.get("withinMemoryBudget").is_some());
+        assert_eq!(json.get("observedAtMs").and_then(|v| v.as_u64()), Some(42));
+        assert!(json.get("rss_bytes").is_none(), "must serialize camelCase");
+
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            assert!(snap.rss_bytes > 0);
+            assert!(
+                snap.within_memory_budget,
+                "nimora-desktop test process should stay under 200 MiB RSS (got {} MiB)",
+                snap.rss_mb
+            );
+        }
     }
 
     #[test]
@@ -14508,6 +16186,72 @@ mod tests {
             ])
         );
         assert_eq!(value["commandTool"], "pet.animation.play");
+        assert_eq!(value["commands"]["directive"], "safe.pet.directive");
+        assert_eq!(value["directive"]["spec"], "nimora.pet_directive/1");
+        assert_eq!(value["directive"]["commandTool"], "safe.pet.directive");
+        assert!(value["directive"]["actions"]
+            .as_array()
+            .is_some_and(|actions| actions.iter().any(|item| item == "play")));
+        assert!(value["directive"]["animations"]
+            .as_array()
+            .is_some_and(|tokens| tokens.iter().any(|item| item == "pet.idle")));
+        assert_eq!(value["directive"]["maxSpeechChars"], 120);
+    }
+
+    #[test]
+    fn safe_pet_directive_applies_structured_subject_act() {
+        let (root, state) = normal_desktop_state();
+        let before = state.runtime.snapshot().expect("before");
+        let command = DesktopCapabilityBackend { state: &state }
+            .invoke_command(
+                "safe.pet.directive",
+                json!({
+                    "directive": {
+                        "spec": "nimora.pet_directive/1",
+                        "speech": "我来帮你一下！",
+                        "action": "play",
+                        "animation": "pet.play",
+                        "attention": "user",
+                        "moodDelta": { "mood": 3 }
+                    }
+                }),
+                &Uuid::now_v7().to_string(),
+                Some("safe-pet-directive-1"),
+            )
+            .expect("directive apply");
+        assert_eq!(command["commandId"], "pet.directive.apply");
+        // Runtime update publishes events without flipping CommandStatus; durable pet is the source of truth.
+        assert!(command["status"].as_str().is_some());
+        let after = state.runtime.snapshot().expect("after");
+        assert!(after.directive_revision > before.directive_revision);
+        assert_eq!(after.last_directive_speech.as_deref(), Some("我来帮你一下！"));
+        assert_eq!(after.last_directive_animation.as_deref(), Some("pet.play"));
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn safe_pet_directive_rejects_invalid_spec() {
+        let (root, state) = normal_desktop_state();
+        let error = DesktopCapabilityBackend { state: &state }
+            .invoke_command(
+                "safe.pet.directive",
+                json!({
+                    "spec": "nimora.pet_directive/0",
+                    "action": "play",
+                    "attention": "user"
+                }),
+                &Uuid::now_v7().to_string(),
+                Some("safe-pet-directive-bad"),
+            )
+            .expect_err("invalid spec");
+        assert!(
+            error.contains("unsupported")
+                || error.contains("Unsupported")
+                || error.contains("spec")
+                || error.contains("directive"),
+            "unexpected error: {error}"
+        );
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
     #[test]
@@ -17940,5 +19684,61 @@ mod tests {
         assert!(pet_autonomy_policy(&policy, Some(300)).quiet);
         assert!(!pet_autonomy_policy(&policy, Some(720)).quiet);
         assert!(!pet_autonomy_policy(&policy, None).quiet);
+    }
+
+    #[test]
+    fn lifeform_battery_idle_bands_for_companion_directive() {
+        use nimora_desktop_context::PowerState;
+
+        let critical = PowerState {
+            on_battery: true,
+            battery_percent: Some(8),
+            charging: false,
+        };
+        let low = PowerState {
+            on_battery: true,
+            battery_percent: Some(18),
+            charging: false,
+        };
+        let ok = PowerState {
+            on_battery: true,
+            battery_percent: Some(55),
+            charging: false,
+        };
+        let charging = PowerState {
+            on_battery: true,
+            battery_percent: Some(40),
+            charging: true,
+        };
+        let ac = PowerState {
+            on_battery: false,
+            battery_percent: Some(100),
+            charging: false,
+        };
+        assert_eq!(super::lifeform_battery_sensory_band(&critical), 1);
+        assert_eq!(super::lifeform_battery_sensory_band(&low), 2);
+        assert_eq!(super::lifeform_battery_sensory_band(&ok), 3);
+        assert_eq!(super::lifeform_battery_sensory_band(&charging), 4);
+        assert_eq!(super::lifeform_battery_sensory_band(&ac), 3);
+
+        // Threshold change always emits; same band waits 60s.
+        assert!(super::lifeform_battery_should_emit(0, 1, 0, 1_000));
+        assert!(super::lifeform_battery_should_emit(1, 2, 1_000, 2_000));
+        assert!(super::lifeform_battery_should_emit(3, 4, 1_000, 2_000));
+        assert!(super::lifeform_battery_should_emit(4, 3, 1_000, 2_000)); // charging stop
+        assert!(!super::lifeform_battery_should_emit(1, 1, 1_000, 30_000));
+        assert!(super::lifeform_battery_should_emit(1, 1, 1_000, 61_000));
+        assert!(!super::lifeform_battery_should_emit(0, 3, 0, 1_000)); // quiet first healthy
+
+        assert_eq!(super::lifeform_idle_sensory_band(0), 0);
+        assert_eq!(super::lifeform_idle_sensory_band(89), 0);
+        assert_eq!(super::lifeform_idle_sensory_band(90), 1);
+        assert_eq!(super::lifeform_idle_sensory_band(5 * 60), 2);
+        assert_eq!(super::lifeform_idle_sensory_band(30 * 60), 3);
+        assert!(super::lifeform_idle_should_emit(0, 1));
+        assert!(super::lifeform_idle_should_emit(1, 2));
+        assert!(!super::lifeform_idle_should_emit(2, 2));
+        assert!(!super::lifeform_idle_should_emit(2, 1));
+        assert!(!super::lifeform_idle_should_emit(3, 0));
     }
 }

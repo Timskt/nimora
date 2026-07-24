@@ -1,0 +1,29 @@
+[package]
+name = "nimora-desktop-context-macos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "macOS platform sampler for Nimora desktop-context observations"
+publish = false
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+# Residual unsafe is isolated to CoreFoundation / CoreGraphics / IOKit FFI
+# (see src/macos/). No third-party FFI crates; link system frameworks only.
+[lints.rust]
+unsafe_code = "allow"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

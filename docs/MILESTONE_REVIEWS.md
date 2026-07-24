@@ -1,4 +1,65 @@
+## 2026-07-24 — Unattended Grant + Lifeform Subject 纵切复盘
+
+**Verdict:** 无人值守授权从领域契约贯通到 SQLite + 桌面 Host + Auto Mode Runner + FE 控制面；桌宠 Subject（overlay stage + 逻辑体 + companion directives）产品路径已接线。**不得**宣称 Grant 安全闭环（密钥签名）或 lifeform 原生视觉 / 签名包 / idle CPU 已验收完成。
+
+**Shipped — Grants**
+- `AuthorizationGrant` + `NeverAskWithinGrant` sleep-safe 精确绑定评估
+- `SqliteAuthorizationGrantRepository`（issue / get / active-for-goal / revoke / list）
+- 桌面五档 `tier_policy`；`start_unattended_auto_mode` 原子签发 Goal+Session+Checkpoint+Workspace+Grant+Job
+- Runner 每批装载活跃 Grant；FE 档位 / 危险确认 / list / revoke
+- Schema：`nimora.authorization-grant/1`、`nimora.authorization-grant-summary/1`
+
+**Shipped — Lifeform Subject + multi-mon + FE**
+- Overlay stage ≠ body（260×300）；spring-damper 逻辑位姿；多屏 mid-walk rebind
+- **`current_lifeform_displays` 全显示器枚举 DONE**（`available_monitors` → DesktopDisplay[]）
+- Auto Mode `companion_directive` phase de-dupe → `nimora.pet_directive/1`
+- Agent / Skill / OS sensory / Connector EventReceived → structured directives
+- Control Center `LifeformOverview` + optional pet schema lifeform 字段
+- **FE spring-damper**（BuiltinPet3D `springToward`）+ **unattended grant UX**（档位/危险确认/badge/list/revoke）**DONE**
+
+**Gates（占位）**
+- auto-host **21** · grant store **6** · unattended unit **7** · runtime auto **13** · FE vitest **58**
+- `desktop_lifeform` **11**（lifeform 库级宿主）；与上表并列，不互相顶替
+
+**Remaining（具体完成标准）**
+1. Grant at-rest 系统密钥签名/加密（`SECRET_MANAGEMENT`）
+2. 独立 Auto-review 流水线（`AutoReview` 真接线，不可用 fail-closed）
+3. Away Summary 产品面（进度/自动批准/预算/撤销，无 Secret）
+4. CLI grant 管理面与桌面同契约
+5. 原生 visual QA · signed Windows package · idle CPU 预算测量
+
+**Risks**
+- 把 tier UI 模板误当成权限引擎（判断必须以 Grant 交集为准）
+- 撤销与在途 Runner 竞态须 fail-closed，不得在 revoke 后继续 NeverAsk
+- 文档禁止再写“尚未接入 SQLite Grant 仓储”
+
+---
+
+
+## Checkpoint — 2026-07-24 Overlay + Occlusion + Intent Host
+
+- Fullscreen overlay stage with logical pet subject is the durable architecture (no mini-window body).
+- Host now publishes occlusion + rebinds multi-monitor stages and ticks autonomy with lifeform hints.
+- Remaining product polish: cross-monitor walk choreography, richer agent directive loop, perf budgets.
+
 # Nimora 里程碑回顾
+
+## 2026-07-24 — 桌面生命体情境与弹簧运动纵切复盘
+
+- 产品意图：桌宠从“小窗口上的角色”推进为可观察桌面、弹簧运动、人格/结构化指令驱动的本地生命体。
+- 已交付：
+  - `nimora-desktop-context`：快照、新鲜度 fail-closed、弹簧-阻尼、障碍、`plan_wander`。
+  - `nimora-desktop-context-macos` / `nimora-desktop-context-windows`：隐私优先环境采样（标题默认不落盘；电源失败 fail-closed）。
+  - `runtime-core`：`PersonalityProfile`、`StructuredPetDirective`、`select_autonomous_intent`。
+  - Desktop Host：**部分接线** — ~5s 采样入 `lifeform_env`；Free 面漫游走 `plan_lifeform_wander_goal` + `spring_position_frames` 多帧 `set_position`。
+  - Frontend：Fox 接地取景 + 接触阴影；紧凑透明 pet 窗口（非全屏 overlay）。
+- 复盘纠正：早期“仅库级、Host 未接线”表述已过时；以 `desktop_lifeform` + `sample_lifeform_environment` / `execute_pet_wander` 为准。
+- 仍禁止标绿：
+  - 真全屏多显示器 overlay、真实窗口遮挡渲染。
+  - Agent structured acts 驱动宠物 UI；`select_autonomous_intent` 接入自主 Tick。
+  - 跨屏 walk 手感/混合 DPI 真机、端到端 perf 预算插桩、Windows 签名包环境样本验收。（全显示器枚举已落地）
+- 与 Presence：`system-context` 只管降扰显隐；lifeform 只管几何/运动输入。会议启发抑制自主是粗粒度旁路，不得替代正式 Presence 覆盖语义。
+- 下一硬验收：跨屏 walk **手感**/混合 DPI 真机；边缘 Surface 统一 lifeform 规划；Reduced Motion/拖拽/关停与弹簧帧竞态真机；采样与帧循环 P95 指标落盘。（全显示器枚举与 Agent directive 路径已接线）
 
 ## 2026-07-19 — 默认专业动画 3D 数字生命纵切复盘
 
@@ -936,3 +997,51 @@ Actions 分钟：
 - 架构：Installer 是唯一信任提升点，Desktop 只投影已验证描述符，Renderer 只消费封闭值；AI、Skill、用户程序和模型文件不能直接设置 Expression Manager。
 - 修正：审计发现 `CharacterRendererSnapshot` 遗漏已有 `animationMap` 字段，导致导入 glTF/VRM 动作映射可能无法抵达 WebView；本纵切同步修复并用原生回归测试锁定。
 - 验证：正常映射、默认回退、私有动作/预设、非法权重、未知字段、Inventory 加载、IPC 保留、缺失 Preset 和损坏 Manager 均有自动化证据。
+
+## 2026-07-23 — Lifeform productization checkpoint
+
+**Verdict:** Subject productization advanced overnight (directives + Control Center + connector sensory + idle polish); architecture holds. **No native visual / signed package / idle CPU proof** — lifeform goal remains open.
+
+**Landed (code paths)**
+- Transparent AOT overlay stage + logical 260×300 body (body is not the OS window); spring-damper motion; multi-monitor mid-walk rebind
+- Auto Mode → `companion_directive` structured pet directives (`work` / `wait` / `complete` / `fail` / `cancel`)
+- Skill worker busy/done petization; OS sensory offline/degraded/restored
+- Connector `EventReceived` on `connector.*` (throttled 8s) via automation/skill event sessions + admitted path when `AppHandle` present
+- Control Center `LifeformOverview`: BuiltinPet3D, vitals, personality, directive summary, Chinese attention labels; soft WebGL fallback
+- Schema: `personality`, `lastDirective*`, `lastAttention`, `directiveRevision`; preview snapshot enriched; FE `applyPetDirective` types fixed
+- Idle micro-acts: `yawn`, `digNose`, `countAnts`; Q-minion warm yellow
+
+**Gates (local)**
+- `desktop_lifeform` 11 tests green; FE related ~75; `tsc` clean
+
+**Still open**
+1. Native desktop visual QA (drag / click-through / spring feel / no square chrome)
+2. Signed Windows package sample
+3. Idle CPU budget measurement + broader perf instrumentation
+
+---
+
+## 2026-07-24 Lifeform Subject checkpoint
+
+**Verdict:** Architecture and product paths for pet-as-Subject are substantially landed in code; **native desktop visual proof** is the remaining gate before claiming the lifeform goal complete.
+
+**Shipped**
+- Overlay stage + logical body (260×300; body ≠ OS window) + spring-damper only + multi-mon mid-walk rebind
+- Structured directives: Agent, Auto Mode `companion_directive` (work/wait/complete/fail/cancel), Skill worker busy/done, OS sensory offline/degraded/restored, connector `EventReceived` (`connector.*`, 8s throttle)
+- Control Center `LifeformOverview`: BuiltinPet3D, vitals, personality, directive summary, Chinese attention labels; soft WebGL fallback
+- Schema: `personality` / `lastDirective*` / `lastAttention` / `directiveRevision`; preview snapshot enriched; FE `applyPetDirective` types fixed
+- BuiltinPet3D idle micro-acts: `yawn` / `digNose` / `countAnts`; Q-minion warm yellow
+- Local gates: `desktop_lifeform` 11, FE related ~75, `tsc` clean
+
+**Risks**
+- `lib.rs` size — keep surgical host wiring only
+- Directive spam — phase trackers + connector 8s throttle required
+- Schema vs host extras — optional lifeform fields must stay backward-compatible
+
+**Not proven**
+- Native visual QA, signed Windows package, idle CPU budget measurement
+
+**Next**
+1. Native Tauri run visual QA
+2. Perf / idle CPU instrumentation
+3. Multi-monitor walk polish + occlusion pixel refine

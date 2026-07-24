@@ -1,6 +1,7 @@
 //! `SQLite` persistence adapters for the `Nimora` runtime.
 
 mod agent_goal_store;
+mod authorization_grant_store;
 mod auto_mode_attempt_resolution_store;
 mod auto_mode_checkpoint_store;
 mod auto_mode_commit_store;
@@ -19,6 +20,7 @@ mod skill_execution_history;
 mod workspace_snapshot_store;
 
 pub use agent_goal_store::{AgentGoalSnapshot, SqliteAgentGoalRepository};
+pub use authorization_grant_store::{AuthorizationGrantKey, SqliteAuthorizationGrantRepository};
 pub use auto_mode_attempt_resolution_store::{
     AutoModeAttemptResolution, AutoModeAttemptResolutionDecision, ResolveAutoModeAttemptRequest,
     SqliteAutoModeAttemptResolutionRepository,
@@ -51,7 +53,8 @@ pub use backup::{
     apply_pending_restore,
 };
 pub use context_cache_store::{
-    ContextCacheKey, ContextCachePolicy, SqliteContextCacheRepository, StoredContextCacheEntry,
+    ContextCacheKey, ContextCacheMetrics, ContextCachePolicy, SqliteContextCacheRepository,
+    StoredContextCacheEntry,
 };
 pub use provider_config_store::{
     ProviderConfig, ProviderReasoningConfig, SqliteProviderConfigRepository,
@@ -1233,6 +1236,7 @@ fn ensure_current_schema_extensions(connection: &Connection) -> Result<(), Sqlit
     ensure_auto_mode_attempt_resolution_schema(connection)?;
     ensure_workspace_snapshot_schema(connection)?;
     ensure_context_cache_schema(connection)?;
+    ensure_authorization_grant_schema(connection)?;
     Ok(())
 }
 
@@ -1345,6 +1349,30 @@ fn ensure_context_cache_schema(connection: &Connection) -> Result<(), SqlitePers
             ON agent_context_cache(workspace_fingerprint, cache_key);
         CREATE INDEX IF NOT EXISTS agent_context_cache_expiry_idx
             ON agent_context_cache(expires_at_ms, cache_key);",
+    )?;
+    Ok(())
+}
+
+fn ensure_authorization_grant_schema(connection: &Connection) -> Result<(), SqlitePersistenceError> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS authorization_grant (
+            grant_id TEXT PRIMARY KEY,
+            goal_id TEXT NOT NULL,
+            plan_revision INTEGER NOT NULL CHECK (plan_revision > 0),
+            workspace_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
+            issued_at_ms INTEGER NOT NULL CHECK (issued_at_ms >= 0),
+            expires_at_ms INTEGER CHECK (expires_at_ms IS NULL OR expires_at_ms > issued_at_ms),
+            revoked_at_ms INTEGER CHECK (revoked_at_ms IS NULL OR revoked_at_ms >= issued_at_ms),
+            fingerprint TEXT NOT NULL UNIQUE,
+            schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS authorization_grant_goal_idx
+            ON authorization_grant(goal_id, issued_at_ms DESC, grant_id DESC);
+        CREATE INDEX IF NOT EXISTS authorization_grant_active_goal_idx
+            ON authorization_grant(goal_id, issued_at_ms DESC)
+            WHERE status = 'active';",
     )?;
     Ok(())
 }
@@ -1584,6 +1612,18 @@ pub enum SqlitePersistenceError {
     AgentGoalNotFound,
     #[error("Agent Goal was changed by another writer")]
     AgentGoalConflict,
+    #[error("Authorization grant record or request is invalid")]
+    InvalidAuthorizationGrant,
+    #[error("Authorization grant was not found")]
+    AuthorizationGrantNotFound,
+    #[error("Authorization grant already exists")]
+    AuthorizationGrantConflict,
+    #[error("Authorization grant was already revoked")]
+    AuthorizationGrantAlreadyRevoked,
+    #[error("Authorization grant version {0} is unsupported")]
+    UnsupportedAuthorizationGrantVersion(u32),
+    #[error("Authorization grant encryption failed closed")]
+    AuthorizationGrantEncryption,
     #[error("Auto Mode session record or request is invalid")]
     InvalidAutoModeSession,
     #[error("Auto Mode session was not found")]

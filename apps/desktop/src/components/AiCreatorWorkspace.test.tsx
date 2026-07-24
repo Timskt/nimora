@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { CapabilityGapPreview, ProfileDraftPreview, ThemeDraftPreview } from "./AiCreatorWorkspace";
+import { labelForUserCodeCapability, samplePetDirectiveProgramPlan } from "./CreatorStudio";
 import { CapabilityProposalGovernance } from "./CapabilityProposalGovernance";
 import type { CreatorDraftResult } from "../platform/desktop";
 
@@ -118,5 +119,14 @@ describe("CapabilityProposalGovernance", () => {
     expect(markup).toContain("不会创建 Handler");
     expect(markup).toContain("不代表能力已实现");
     expect(markup).not.toContain("维护者裁决理由");
+  });
+});
+
+describe("user program capability surface", () => {
+  it("exposes directive-driven plan helper used by Creator copy blocks", () => {
+    expect(labelForUserCodeCapability("safe.pet.directive")).toBe("结构化指令");
+    const plan = samplePetDirectiveProgramPlan();
+    expect(plan.commands[0]?.command).toBe("safe.pet.directive");
+    expect(String(plan.commands[0]?.arguments.speech)).toContain("专注完成啦");
   });
 });

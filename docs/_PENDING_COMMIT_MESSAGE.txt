@@ -1,0 +1,23 @@
+feat(lifeform): native pet subject stream — grants crypto, sensory, perf, FE polish
+
+Native pet-as-Subject delivery batch (Host + domain + FE), not tiny spam commits:
+
+- Subject shell: fullscreen transparent AOT overlay stage + 260×300 logical body;
+  spring/jump motion, multi-display stage rebind, occlusion path, companion directives
+- Grants at-rest crypto: AuthorizationGrantKey; XChaCha20-Poly1305 envelope
+  nimora.encrypted-authorization-grant/1; dual-read legacy plaintext; encrypt-on-write;
+  host authorization_grant_key from secret-store; open_with_key everywhere; app_local_default if keychain unavailable
+- Sensory: OS meeting/power/offline edges; privacy-safe notification unread from
+  outbox/approvals counts → notification_sensory_directive; LifeformSense.notification_unread
+- Perf budgets: lifeformPerf frame samples in BuiltinPet3D; Control Center 渲染预算 HUD;
+  processBudget IPC on DesktopSnapshot (macOS task_info RSS, Linux /proc VmRSS,
+  Windows GetProcessMemoryInfo WorkingSetSize); hostProcessBudgetFromSense defensive merge
+- Cross-display polish: varied park slots (sequence % 5), every 2nd wander prefers
+  other display, optional short-hop Jump parabola (no lerp)
+- Q-minion FE polish: no square chrome, ellipse hit-area, livelier idle micro-acts,
+  dual contact shadow; lifeformSense Control Center cards
+- User-code path retained: safe.pet.directive + micro-performance whitelist + Creator matrix
+
+Local gates (verified this pass): nimora-desktop --lib 259; FE components vitest 235;
+desktop-context 45; runtime-core behavior 30; grant encrypt suite 10; process_budget 7.
+Native visual QA still required — do not claim goal complete.

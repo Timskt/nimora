@@ -1,13 +1,18 @@
 use super::{
+    companion_directive::{
+        auto_mode_companion_status, CompanionPhase, CompanionPhaseTracker,
+    },
     AppHandle, AutoModeExecutionError, AutoModeExecutionService, AutoModeHostControl,
     AutoModeHostControlService, AutoModeJobControl, AutoModeJobStatus, AutoModeLoopRequest,
     AutoModeLoopService, AutoModeLoopStop, AutoModePauseReason, ContextCachePolicy,
     ContextCompactionPolicy, DataClassification, DesktopState, Duration, ProviderExecutionContext,
-    StartAutoModeJobRequest, Uuid, WorkspaceScanPolicy, auto_mode_jobs, context_cache_key,
-    current_time_ms, desktop_provider_registry, desktop_tool_backend, desktop_tool_registry,
-    provider_credential_reference, resolve_provider_reasoning,
+    StartAutoModeJobRequest, Uuid, WorkspaceScanPolicy, authorization_grant_key, auto_mode_jobs,
+    context_cache_key, current_time_ms, desktop_provider_registry, desktop_tool_backend,
+    desktop_tool_registry, provider_credential_reference, resolve_provider_reasoning,
 };
 use nimora_agent_auto_host::{AutoModeRecoveryService, RecoveredAutoModeTurn};
+use nimora_agent_runtime::AuthorizationGrant;
+use nimora_persistence_sqlite::SqliteAuthorizationGrantRepository;
 use tauri::Manager;
 
 pub(super) fn run(
@@ -17,7 +22,8 @@ pub(super) fn run(
     control: &auto_mode_jobs::AutoModeJobControlHandle,
 ) {
     let state = app.state::<DesktopState>();
-    let result = run_inner(&state, job_id, request, control);
+    let mut companion = CompanionPhaseTracker::default();
+    let result = run_inner(app, &state, job_id, request, control, &mut companion);
     if let Err((status, error_code)) = result {
         let now_ms = current_time_ms()
             .or_else(|_| {
@@ -29,15 +35,25 @@ pub(super) fn run(
             .unwrap_or_default();
         let _ = state
             .auto_mode_jobs
-            .finish(job_id, status, None, Some(error_code), now_ms);
+            .finish(job_id, status, None, Some(error_code.clone()), now_ms);
+        if matches!(
+            status,
+            AutoModeJobStatus::Failed | AutoModeJobStatus::Indeterminate
+        ) {
+            companion.apply_failed_if_changed(app, &state, Some(error_code.as_str()));
+        } else if let Some(phase) = auto_mode_companion_status(status, None) {
+            companion.apply_if_changed(app, &state, phase);
+        }
     }
 }
 
 fn run_inner(
+    app: &AppHandle,
     state: &DesktopState,
     job_id: Uuid,
     request: &StartAutoModeJobRequest,
     control: &auto_mode_jobs::AutoModeJobControlHandle,
+    companion: &mut CompanionPhaseTracker,
 ) -> Result<(), (AutoModeJobStatus, String)> {
     let database_path = state.database_path.as_ref().ok_or_else(|| {
         (
@@ -46,7 +62,7 @@ fn run_inner(
         )
     })?;
     let now_ms = current_time_ms().map_err(|_| time_failure())?;
-    mark_job_running(state, job_id, control, now_ms)?;
+    mark_job_running(app, state, job_id, control, now_ms, companion)?;
     let mut turn = recover_turn(database_path, request, now_ms)?;
     let reasoning = resolve_auto_mode_reasoning(state, request, &turn)?;
     let credential_reference = provider_credential_reference(state, &turn.task.provider_id)
@@ -70,9 +86,20 @@ fn run_inner(
     let host_control = AutoModeHostControlService::new(database_path);
     loop {
         if control.requested() != AutoModeJobControl::Continue {
-            return commit_requested_control(state, job_id, turn, control, &host_control);
+            return commit_requested_control(
+                app,
+                state,
+                job_id,
+                turn,
+                control,
+                &host_control,
+                companion,
+            );
         }
         let mut logical_now = current_time_ms().map_err(|_| time_failure())?;
+        let goal_id = turn.session.goal_id;
+        let authorization_grant =
+            load_active_authorization_grant(state, database_path, goal_id, logical_now);
         let result = loop_service.run(
             &providers,
             &tools,
@@ -92,6 +119,7 @@ fn run_inner(
                 data_classification: DataClassification::Personal,
                 maximum_data_classification: DataClassification::Personal,
                 max_turns: request.max_turns_per_batch,
+                authorization_grant,
             },
             || {
                 logical_now = current_time_ms().map_or_else(
@@ -114,28 +142,65 @@ fn run_inner(
             )
             .map_err(|_| registry_failure())?;
         match result.stop {
-            AutoModeLoopStop::Yielded(next) => turn = *next,
+            AutoModeLoopStop::Yielded(next) => {
+                // Re-assert work_busy only when phase actually changes (tracker de-dupes).
+                companion.apply_if_changed(app, state, CompanionPhase::RunningWork);
+                // Throttled domain StepOk so pet observes progress without speech spam.
+                if result.turns_executed > 0 {
+                    companion.apply_step_ok_throttled(app, state);
+                }
+                turn = *next;
+            }
             AutoModeLoopStop::Paused(paused) => {
+                let pause_reason = paused.session.pause_reason.map(pause_reason_code);
                 return finish(
+                    app,
                     state,
                     job_id,
                     AutoModeJobStatus::Paused,
-                    paused.session.pause_reason.map(pause_reason_code),
+                    pause_reason,
+                    companion,
+                    None,
                 );
             }
             AutoModeLoopStop::Completed(_) => {
-                return finish(state, job_id, AutoModeJobStatus::Completed, None);
+                return finish(
+                    app,
+                    state,
+                    job_id,
+                    AutoModeJobStatus::Completed,
+                    None,
+                    companion,
+                    None,
+                );
             }
             AutoModeLoopStop::WorkspaceDrift { .. } => {
                 return finish(
+                    app,
                     state,
                     job_id,
                     AutoModeJobStatus::Paused,
                     Some("workspace_changed".to_owned()),
+                    companion,
+                    None,
                 );
             }
         }
     }
+}
+
+
+fn load_active_authorization_grant(
+    state: &DesktopState,
+    database_path: &std::path::Path,
+    goal_id: Uuid,
+    now_ms: u64,
+) -> Option<AuthorizationGrant> {
+    let key = authorization_grant_key(state).ok()?;
+    SqliteAuthorizationGrantRepository::open_with_key(database_path, key)
+        .ok()
+        .and_then(|repository| repository.get_active_for_goal(goal_id, now_ms).ok())
+        .flatten()
 }
 
 fn recover_turn(
@@ -153,16 +218,19 @@ fn recover_turn(
 }
 
 fn mark_job_running(
+    app: &AppHandle,
     state: &DesktopState,
     job_id: Uuid,
     control: &auto_mode_jobs::AutoModeJobControlHandle,
     now_ms: u64,
+    companion: &mut CompanionPhaseTracker,
 ) -> Result<(), (AutoModeJobStatus, String)> {
     if control.requested() == AutoModeJobControl::Continue {
         state
             .auto_mode_jobs
             .mark_running(job_id, now_ms)
             .map_err(|_| registry_failure())?;
+        companion.apply_if_changed(app, state, CompanionPhase::RunningWork);
     }
     Ok(())
 }
@@ -218,11 +286,13 @@ fn checkpoint_sequence(stop: &AutoModeLoopStop) -> u64 {
 }
 
 fn commit_requested_control(
+    app: &AppHandle,
     state: &DesktopState,
     job_id: Uuid,
     turn: RecoveredAutoModeTurn,
     control: &auto_mode_jobs::AutoModeJobControlHandle,
     host_control: &AutoModeHostControlService,
+    companion: &mut CompanionPhaseTracker,
 ) -> Result<(), (AutoModeJobStatus, String)> {
     let requested = control.requested();
     let controlled = host_control
@@ -254,36 +324,78 @@ fn commit_requested_control(
             current_time_ms().map_err(|_| time_failure())?,
         )
         .map_err(|_| registry_failure())?;
+    let pause_reason =
+        (status == AutoModeJobStatus::Paused).then(|| "user_requested".to_owned());
     state
         .auto_mode_jobs
         .finish(
             job_id,
             status,
-            (status == AutoModeJobStatus::Paused).then(|| "user_requested".to_owned()),
+            pause_reason.clone(),
             None,
             current_time_ms().map_err(|_| time_failure())?,
         )
         .map_err(|_| registry_failure())?;
+    apply_finish_companion(app, state, status, pause_reason.as_deref(), None, companion);
     Ok(())
 }
 
 fn finish(
+    app: &AppHandle,
     state: &DesktopState,
     job_id: Uuid,
     status: AutoModeJobStatus,
     pause_reason: Option<String>,
+    companion: &mut CompanionPhaseTracker,
+    error_code: Option<&str>,
 ) -> Result<(), (AutoModeJobStatus, String)> {
     state
         .auto_mode_jobs
         .finish(
             job_id,
             status,
-            pause_reason,
-            None,
+            pause_reason.clone(),
+            error_code.map(str::to_owned),
             current_time_ms().map_err(|_| time_failure())?,
         )
         .map_err(|_| registry_failure())?;
+    apply_finish_companion(
+        app,
+        state,
+        status,
+        pause_reason.as_deref(),
+        error_code,
+        companion,
+    );
     Ok(())
+}
+
+fn apply_finish_companion(
+    app: &AppHandle,
+    state: &DesktopState,
+    status: AutoModeJobStatus,
+    pause_reason: Option<&str>,
+    error_code: Option<&str>,
+    companion: &mut CompanionPhaseTracker,
+) {
+    match status {
+        AutoModeJobStatus::Failed | AutoModeJobStatus::Indeterminate => {
+            companion.apply_failed_if_changed(app, state, error_code);
+        }
+        AutoModeJobStatus::Paused
+            if matches!(
+                pause_reason,
+                Some("budget_exhausted") | Some("budget") | Some("token_budget") | Some("cost_budget")
+            ) =>
+        {
+            companion.apply_budget_pause(app, state);
+        }
+        other => {
+            if let Some(phase) = auto_mode_companion_status(other, pause_reason) {
+                companion.apply_if_changed(app, state, phase);
+            }
+        }
+    }
 }
 
 fn time_failure() -> (AutoModeJobStatus, String) {

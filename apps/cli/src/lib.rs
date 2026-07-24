@@ -2,9 +2,11 @@ use nimora_agent_provider_worker::{OllamaEndpoint, WorkerOllamaProvider, verify_
 use nimora_agent_runtime::{
     AgentAutonomy, AgentBudget, AgentCoordinator, AgentGoal, AgentGoalStatus, AgentPlan,
     AgentPlanStep, AgentPlanStepStatus, AgentTask, AgentTaskGateway, AgentTaskGatewayPolicy,
-    AgentTaskOrigin, AgentTaskRequest, AutoModePauseReason, AutoModePolicy, AutoModeSession,
-    CancellationFlag, DataClassification, DeterministicLocalProvider, ProviderExecutionContext,
-    ProviderMessage, ProviderMessageRole, ProviderRegistry, ProviderStepInput, ProviderStepOutcome,
+    AgentTaskOrigin, AgentTaskRequest, ApprovalPolicy, AuthorizationGrant, AutoModeCheckpoint,
+    AutoModePauseReason, AutoModePolicy, AutoModeSession, CancellationFlag, DataClassification,
+    DeterministicLocalProvider, GrantLifetime, ModelReasoningPolicy, NetworkPolicy,
+    ProviderExecutionContext, ProviderMessage, ProviderMessageRole, ProviderRegistry,
+    ProviderStepInput, ProviderStepOutcome, SandboxScope, ToolId,
 };
 use nimora_agent_tools::production_tool_registry;
 use nimora_agent_workspace_host::{
@@ -12,11 +14,13 @@ use nimora_agent_workspace_host::{
 };
 use nimora_persistence_sqlite::{
     AgentHistoryRecord, SqliteAgentGoalRepository, SqliteAgentHistoryRepository,
+    SqliteAuthorizationGrantRepository, SqliteAutoModeCheckpointRepository,
     SqliteAutoModeRepository, SqliteWorkspaceSnapshotRepository, StoredWorkspaceSnapshot,
 };
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{
+    collections::{BTreeSet, HashSet},
     fs,
     io::{self, Read},
     path::Path,
@@ -117,6 +121,11 @@ pub fn run(arguments: &[String]) -> Result<String, CliError> {
         ["ai", "goal", "auto", "pause", rest @ ..] => goal_auto_pause(rest)?,
         ["ai", "goal", "auto", "resume", rest @ ..] => goal_auto_resume(rest)?,
         ["ai", "goal", "auto", "cancel", rest @ ..] => goal_auto_cancel(rest)?,
+        ["ai", "goal", "auto", "away-summary", rest @ ..] => goal_auto_away_summary(rest)?,
+        ["ai", "goal", "grant", "issue", rest @ ..] => goal_grant_issue(rest)?,
+        ["ai", "goal", "grant", "list", rest @ ..] => goal_grant_list(rest)?,
+        ["ai", "goal", "grant", "show", rest @ ..] => goal_grant_show(rest)?,
+        ["ai", "goal", "grant", "revoke", rest @ ..] => goal_grant_revoke(rest)?,
         ["ai", "run", rest @ ..] => run_task(rest)?,
         _ => return Err(CliError::new("usage", "unsupported command; use --help", 2)),
     };
@@ -145,7 +154,12 @@ fn help() -> Value {
             "nimora ai goal auto status --database <path> --session-id <uuid>",
             "nimora ai goal auto pause --database <path> --session-id <uuid>",
             "nimora ai goal auto resume --database <path> --session-id <uuid> --workspace-root <path>",
-            "nimora ai goal auto cancel --database <path> --session-id <uuid>"
+            "nimora ai goal auto cancel --database <path> --session-id <uuid>",
+            "nimora ai goal auto away-summary --database <path> --goal-id <uuid>",
+            "nimora ai goal grant issue --database <path> --goal-id <uuid> --tier <observe|workspace|trusted_workspace|unattended|full_device> --workspace-root <path> [--reason <text>] [--offline|--online] [--tool <id>]... [--provider-id <id>] [--model <id>] [--reasoning-policy <path|->]",
+            "nimora ai goal grant list --database <path> [--goal-id <uuid>] [--limit <1..200>]",
+            "nimora ai goal grant show --database <path> --id <uuid>",
+            "nimora ai goal grant revoke --database <path> --id <uuid>"
         ]
     })
 }
@@ -1229,6 +1243,915 @@ fn admit_cli_agent_task(
         .map_err(runtime_error)
 }
 
+const GRANT_SPEC: &str = "nimora.authorization-grant/1";
+const GRANT_SUMMARY_SPEC: &str = "nimora.authorization-grant-summary/1";
+const EIGHT_HOURS_MS: u64 = 8 * 60 * 60 * 1_000;
+const FOUR_HOURS_MS: u64 = 4 * 60 * 60 * 1_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AuthorizationTier {
+    Observe,
+    Workspace,
+    TrustedWorkspace,
+    Unattended,
+    FullDevice,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AuthorizationGrantStatus {
+    Active,
+    Revoked,
+    Expired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TierPolicy {
+    sandbox: SandboxScope,
+    approval: ApprovalPolicy,
+    network: NetworkPolicy,
+    selected_roots: BTreeSet<String>,
+    lifetime: GrantLifetime,
+    expires_at_ms: Option<u64>,
+}
+
+/// Maps an authorization tier onto sandbox / approval / network / lifetime constraints.
+fn tier_policy(
+    tier: AuthorizationTier,
+    offline: bool,
+    workspace_roots: &[String],
+    now_ms: u64,
+) -> TierPolicy {
+    let restricted_network = if offline {
+        NetworkPolicy::Offline
+    } else {
+        NetworkPolicy::LoopbackOnly
+    };
+    let selected_roots = workspace_roots.iter().cloned().collect::<BTreeSet<_>>();
+    match tier {
+        AuthorizationTier::Observe => TierPolicy {
+            sandbox: SandboxScope::ReadOnly,
+            approval: ApprovalPolicy::AskRisky,
+            network: restricted_network,
+            selected_roots: BTreeSet::new(),
+            lifetime: GrantLifetime::Session,
+            expires_at_ms: None,
+        },
+        AuthorizationTier::Workspace => TierPolicy {
+            sandbox: SandboxScope::WorkspaceWrite,
+            approval: ApprovalPolicy::AskRisky,
+            network: restricted_network,
+            selected_roots: BTreeSet::new(),
+            lifetime: GrantLifetime::Session,
+            expires_at_ms: None,
+        },
+        AuthorizationTier::TrustedWorkspace => TierPolicy {
+            sandbox: SandboxScope::WorkspaceWrite,
+            approval: ApprovalPolicy::NeverAskWithinGrant,
+            network: restricted_network,
+            selected_roots: BTreeSet::new(),
+            lifetime: GrantLifetime::Session,
+            expires_at_ms: None,
+        },
+        AuthorizationTier::Unattended => TierPolicy {
+            sandbox: SandboxScope::SelectedRoots,
+            approval: ApprovalPolicy::NeverAskWithinGrant,
+            network: restricted_network,
+            selected_roots,
+            lifetime: GrantLifetime::UntilTimestamp,
+            expires_at_ms: Some(now_ms.saturating_add(EIGHT_HOURS_MS)),
+        },
+        AuthorizationTier::FullDevice => TierPolicy {
+            sandbox: SandboxScope::FullDevice,
+            approval: ApprovalPolicy::NeverAskWithinGrant,
+            network: if offline {
+                NetworkPolicy::Offline
+            } else {
+                NetworkPolicy::Unrestricted
+            },
+            selected_roots: BTreeSet::new(),
+            lifetime: GrantLifetime::UntilTimestamp,
+            expires_at_ms: Some(now_ms.saturating_add(FOUR_HOURS_MS)),
+        },
+    }
+}
+
+/// Derives authorization tier from persisted grant sandbox + approval.
+fn infer_tier(grant: &AuthorizationGrant) -> AuthorizationTier {
+    match (grant.sandbox, grant.approval) {
+        (SandboxScope::ReadOnly, ApprovalPolicy::AlwaysAsk | ApprovalPolicy::AskRisky) => {
+            AuthorizationTier::Observe
+        }
+        (SandboxScope::WorkspaceWrite, ApprovalPolicy::AskRisky | ApprovalPolicy::AlwaysAsk) => {
+            AuthorizationTier::Workspace
+        }
+        (SandboxScope::WorkspaceWrite, ApprovalPolicy::NeverAskWithinGrant) => {
+            AuthorizationTier::TrustedWorkspace
+        }
+        (SandboxScope::SelectedRoots, ApprovalPolicy::NeverAskWithinGrant) => {
+            AuthorizationTier::Unattended
+        }
+        (SandboxScope::FullDevice, ApprovalPolicy::NeverAskWithinGrant) => {
+            AuthorizationTier::FullDevice
+        }
+        (SandboxScope::ReadOnly, _) => AuthorizationTier::Observe,
+        (SandboxScope::WorkspaceWrite, _) => AuthorizationTier::Workspace,
+        (SandboxScope::SelectedRoots, _) => AuthorizationTier::Unattended,
+        (SandboxScope::FullDevice, _) => AuthorizationTier::FullDevice,
+    }
+}
+
+fn grant_status(grant: &AuthorizationGrant, now_ms: u64) -> AuthorizationGrantStatus {
+    if grant.revoked_at_ms.is_some() {
+        AuthorizationGrantStatus::Revoked
+    } else if grant
+        .expires_at_ms
+        .is_some_and(|expires_at_ms| now_ms >= expires_at_ms)
+    {
+        AuthorizationGrantStatus::Expired
+    } else {
+        AuthorizationGrantStatus::Active
+    }
+}
+
+fn grant_summary_value(
+    grant: &AuthorizationGrant,
+    workspace_root: Option<String>,
+    now_ms: u64,
+) -> Value {
+    let workspace_root = workspace_root.or_else(|| {
+        grant
+            .selected_roots
+            .iter()
+            .next()
+            .cloned()
+            .filter(|_| grant.sandbox == SandboxScope::SelectedRoots)
+    });
+    json!({
+        "spec": GRANT_SUMMARY_SPEC,
+        "grantId": grant.id,
+        "goalId": grant.goal_id,
+        "tier": infer_tier(grant),
+        "status": grant_status(grant, now_ms),
+        "workspaceRoot": workspace_root,
+        "issuedAtMs": grant.issued_at_ms,
+        "expiresAtMs": grant.expires_at_ms,
+        "revokedAtMs": grant.revoked_at_ms,
+    })
+}
+
+fn generous_grant_budget() -> AgentBudget {
+    AgentBudget {
+        max_steps: 64,
+        max_tool_calls: 64,
+        max_elapsed_ms: EIGHT_HOURS_MS,
+        max_input_tokens: 500_000,
+        max_output_tokens: 128_000,
+        max_cost_microunits: 50_000_000,
+    }
+}
+
+fn grant_repository(path: &str) -> Result<SqliteAuthorizationGrantRepository, CliError> {
+    if path.is_empty() {
+        return Err(CliError::new("usage", "数据库路径不能为空", 2));
+    }
+    SqliteAuthorizationGrantRepository::open(Path::new(path)).map_err(grant_storage_error)
+}
+
+fn default_grant_tools() -> Result<BTreeSet<ToolId>, CliError> {
+    let tools = production_tool_registry()
+        .map_err(runtime_error)?
+        .descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.id.clone())
+        .collect::<BTreeSet<_>>();
+    if tools.is_empty() {
+        return Err(CliError::new(
+            "grant-input",
+            "生产工具目录为空，无法签发授权",
+            3,
+        ));
+    }
+    Ok(tools)
+}
+
+fn parse_authorization_tier(value: &str) -> Result<AuthorizationTier, CliError> {
+    match value {
+        "observe" => Ok(AuthorizationTier::Observe),
+        "workspace" => Ok(AuthorizationTier::Workspace),
+        "trusted_workspace" => Ok(AuthorizationTier::TrustedWorkspace),
+        "unattended" => Ok(AuthorizationTier::Unattended),
+        "full_device" => Ok(AuthorizationTier::FullDevice),
+        _ => Err(CliError::new(
+            "usage",
+            "授权档位无效；可用 observe|workspace|trusted_workspace|unattended|full_device",
+            2,
+        )),
+    }
+}
+
+fn parse_grant_id(value: &str) -> Result<uuid::Uuid, CliError> {
+    uuid::Uuid::parse_str(value).map_err(|_| CliError::new("usage", "授权 ID 无效", 2))
+}
+
+fn absolute_workspace_root(path: &str) -> String {
+    fs::canonicalize(Path::new(path))
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_owned())
+}
+
+fn build_authorization_grant(
+    tier: AuthorizationTier,
+    offline: bool,
+    goal_id: uuid::Uuid,
+    plan_revision: u64,
+    workspace_fingerprint: &str,
+    workspace_roots: &[String],
+    tools: BTreeSet<ToolId>,
+    provider_id: &str,
+    model: &str,
+    now_ms: u64,
+) -> Result<AuthorizationGrant, CliError> {
+    if tools.is_empty() {
+        return Err(CliError::new(
+            "grant-input",
+            "授权需要非空工具白名单",
+            3,
+        ));
+    }
+    let policy = tier_policy(tier, offline, workspace_roots, now_ms);
+    let grant = AuthorizationGrant {
+        spec: GRANT_SPEC.to_owned(),
+        id: uuid::Uuid::now_v7(),
+        goal_id,
+        plan_revision,
+        workspace_fingerprint: workspace_fingerprint.to_owned(),
+        sandbox: policy.sandbox,
+        approval: policy.approval,
+        network: policy.network,
+        selected_roots: policy.selected_roots,
+        tool_allowlist: tools,
+        provider_allowlist: BTreeSet::from([provider_id.to_owned()]),
+        model_allowlist: BTreeSet::from([model.to_owned()]),
+        maximum_data_classification: DataClassification::Personal,
+        budget: generous_grant_budget(),
+        lifetime: policy.lifetime,
+        issued_at_ms: now_ms,
+        expires_at_ms: policy.expires_at_ms,
+        revoked_at_ms: None,
+    };
+    grant.validate().map_err(grant_input_error)?;
+    Ok(grant)
+}
+
+fn goal_grant_issue(arguments: &[&str]) -> Result<Value, CliError> {
+    let mut database = None;
+    let mut goal_id = None;
+    let mut tier = None;
+    let mut workspace_roots = Vec::new();
+    let mut reason = None;
+    let mut offline = true;
+    let mut provider_id = None;
+    let mut model = None;
+    let mut tools = Vec::new();
+    let mut reasoning_policy_path = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "--database" if index + 1 < arguments.len() => {
+                database = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--goal-id" if index + 1 < arguments.len() => {
+                goal_id = Some(parse_goal_id(arguments[index + 1])?);
+                index += 2;
+            }
+            "--tier" if index + 1 < arguments.len() => {
+                tier = Some(parse_authorization_tier(arguments[index + 1])?);
+                index += 2;
+            }
+            "--workspace-root" if index + 1 < arguments.len() => {
+                workspace_roots.push(arguments[index + 1].to_owned());
+                index += 2;
+            }
+            "--reason" if index + 1 < arguments.len() => {
+                reason = Some(arguments[index + 1].to_owned());
+                index += 2;
+            }
+            "--offline" => {
+                offline = true;
+                index += 1;
+            }
+            "--online" => {
+                offline = false;
+                index += 1;
+            }
+            "--provider-id" if index + 1 < arguments.len() => {
+                provider_id = Some(arguments[index + 1].to_owned());
+                index += 2;
+            }
+            "--model" if index + 1 < arguments.len() => {
+                model = Some(arguments[index + 1].to_owned());
+                index += 2;
+            }
+            "--tool" if index + 1 < arguments.len() => {
+                tools.push(arguments[index + 1].to_owned());
+                index += 2;
+            }
+            "--reasoning-policy" if index + 1 < arguments.len() => {
+                reasoning_policy_path = Some(arguments[index + 1]);
+                index += 2;
+            }
+            _ => return Err(grant_usage_error()),
+        }
+    }
+    let database = database.ok_or_else(grant_usage_error)?;
+    let goal_id = goal_id.ok_or_else(grant_usage_error)?;
+    let tier = tier.ok_or_else(grant_usage_error)?;
+    if workspace_roots.is_empty() {
+        return Err(CliError::new(
+            "usage",
+            "签发授权需要至少一个 --workspace-root",
+            2,
+        ));
+    }
+    let reason = reason.unwrap_or_else(|| "cli-authorization-grant".to_owned());
+    if reason.trim().is_empty() || reason.len() > 500 {
+        return Err(CliError::new(
+            "grant-input",
+            "授权原因不能为空且不超过 500 字节",
+            3,
+        ));
+    }
+    let reasoning_policy = reasoning_policy_path
+        .map(|path| read_bounded_json::<ModelReasoningPolicy>(path, "推理策略"))
+        .transpose()?;
+    let snapshot = goal_repository(database)?
+        .get(goal_id)
+        .map_err(goal_storage_error)?
+        .ok_or_else(|| CliError::new("goal-not-found", "未找到对应的 Agent Goal", 5))?;
+    let primary_root = absolute_workspace_root(&workspace_roots[0]);
+    let normalized_roots = workspace_roots
+        .iter()
+        .map(|root| absolute_workspace_root(root))
+        .collect::<Vec<_>>();
+    let scanner = WorkspaceScanner::open(Path::new(&primary_root), WorkspaceScanPolicy::default())
+        .map_err(|_| CliError::new("workspace", "无法安全打开工作区以签发授权", 4))?;
+    let now_ms = current_time_ms()?.max(snapshot.goal.updated_at_ms);
+    let workspace = scanner
+        .scan(1, None, now_ms)
+        .map_err(|_| CliError::new("workspace", "工作区扫描失败，无法签发授权", 4))?;
+    let tool_allowlist = if tools.is_empty() {
+        default_grant_tools()?
+    } else {
+        tools
+            .into_iter()
+            .map(|tool| {
+                tool.parse::<ToolId>().map_err(|_| {
+                    CliError::new("grant-input", format!("工具 ID 无效: {tool}"), 3)
+                })
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?
+    };
+    let provider_id = provider_id.unwrap_or_else(|| PROVIDER_ID.to_owned());
+    let model = model.unwrap_or_else(default_model);
+    let grant = build_authorization_grant(
+        tier,
+        offline,
+        snapshot.goal.id,
+        snapshot.current_plan.revision,
+        &workspace.fingerprint,
+        &normalized_roots,
+        tool_allowlist,
+        &provider_id,
+        &model,
+        now_ms,
+    )?;
+    grant_repository(database)?
+        .issue(&grant)
+        .map_err(grant_storage_error)?;
+    Ok(json!({
+        "spec": "nimora.ai-authorization-grant/1",
+        "grant": grant,
+        "summary": grant_summary_value(&grant, Some(primary_root), now_ms),
+        "reason": reason,
+        "reasoningPolicy": reasoning_policy,
+        "workspace": {
+            "fingerprint": workspace.fingerprint,
+            "revision": workspace.revision,
+            "root": absolute_workspace_root(&workspace_roots[0]),
+        }
+    }))
+}
+
+fn goal_grant_list(arguments: &[&str]) -> Result<Value, CliError> {
+    let mut database = None;
+    let mut goal_id = None;
+    let mut limit = 50_usize;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "--database" if index + 1 < arguments.len() => {
+                database = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--goal-id" if index + 1 < arguments.len() => {
+                goal_id = Some(parse_goal_id(arguments[index + 1])?);
+                index += 2;
+            }
+            "--limit" if index + 1 < arguments.len() => {
+                limit = arguments[index + 1].parse().map_err(|_| {
+                    CliError::new("usage", "授权列表 limit 无效", 2)
+                })?;
+                index += 2;
+            }
+            _ => return Err(grant_usage_error()),
+        }
+    }
+    let database = database.ok_or_else(grant_usage_error)?;
+    if !(1..=200).contains(&limit) {
+        return Err(CliError::new("usage", "授权列表 limit 必须在 1..200", 2));
+    }
+    let now_ms = current_time_ms()?;
+    let repository = grant_repository(database)?;
+    let mut grants = Vec::new();
+    if let Some(goal_id) = goal_id {
+        grants.extend(
+            repository
+                .list_for_goal(goal_id, limit)
+                .map_err(grant_storage_error)?,
+        );
+    } else {
+        let mut seen = HashSet::new();
+        for goal in goal_repository(database)?
+            .list(100)
+            .map_err(goal_storage_error)?
+        {
+            for grant in repository
+                .list_for_goal(goal.id, 32)
+                .map_err(grant_storage_error)?
+            {
+                if seen.insert(grant.id) {
+                    grants.push(grant);
+                }
+            }
+        }
+        grants.sort_by(|left, right| {
+            right
+                .issued_at_ms
+                .cmp(&left.issued_at_ms)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        grants.truncate(limit);
+    }
+    let summaries = grants
+        .iter()
+        .map(|grant| grant_summary_value(grant, None, now_ms))
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "spec": "nimora.ai-authorization-grant-list/1",
+        "grants": summaries
+    }))
+}
+
+fn goal_grant_show(arguments: &[&str]) -> Result<Value, CliError> {
+    let (database, grant_id) = parse_grant_identity(arguments)?;
+    let now_ms = current_time_ms()?;
+    let grant = grant_repository(database)?
+        .get(grant_id)
+        .map_err(grant_storage_error)?
+        .ok_or_else(|| CliError::new("grant-not-found", "未找到授权凭证", 5))?;
+    Ok(json!({
+        "spec": "nimora.ai-authorization-grant/1",
+        "grant": grant,
+        "summary": grant_summary_value(&grant, None, now_ms)
+    }))
+}
+
+fn goal_grant_revoke(arguments: &[&str]) -> Result<Value, CliError> {
+    let (database, grant_id) = parse_grant_identity(arguments)?;
+    let now_ms = current_time_ms()?;
+    let repository = grant_repository(database)?;
+    let grant = match repository.revoke(grant_id, now_ms) {
+        Ok(grant) => grant,
+        Err(nimora_persistence_sqlite::SqlitePersistenceError::AuthorizationGrantAlreadyRevoked) => {
+            repository
+                .get(grant_id)
+                .map_err(grant_storage_error)?
+                .ok_or_else(|| CliError::new("grant-not-found", "未找到授权凭证", 5))?
+        }
+        Err(nimora_persistence_sqlite::SqlitePersistenceError::AuthorizationGrantNotFound) => {
+            return Err(CliError::new("grant-not-found", "未找到授权凭证", 5));
+        }
+        Err(_) => return Err(grant_storage_error("revoke failed")),
+    };
+    Ok(json!({
+        "spec": "nimora.ai-authorization-grant-revoke/1",
+        "grantId": grant.id,
+        "revoked": true,
+        "grant": grant,
+        "summary": grant_summary_value(&grant, None, now_ms)
+    }))
+}
+
+fn parse_grant_identity<'a>(arguments: &'a [&'a str]) -> Result<(&'a str, uuid::Uuid), CliError> {
+    let mut database = None;
+    let mut grant_id = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "--database" if index + 1 < arguments.len() => {
+                database = Some(arguments[index + 1]);
+                index += 2;
+            }
+            "--id" | "--grant-id" if index + 1 < arguments.len() => {
+                grant_id = Some(parse_grant_id(arguments[index + 1])?);
+                index += 2;
+            }
+            _ => return Err(grant_usage_error()),
+        }
+    }
+    Ok((
+        database.ok_or_else(grant_usage_error)?,
+        grant_id.ok_or_else(grant_usage_error)?,
+    ))
+}
+
+fn grant_usage_error() -> CliError {
+    CliError::new("usage", "授权命令参数无效；请使用 --help 查看用法", 2)
+}
+
+fn grant_input_error(_: impl std::fmt::Display) -> CliError {
+    CliError::new("grant-input", "授权请求不满足边界契约", 3)
+}
+
+fn grant_storage_error(_: impl std::fmt::Display) -> CliError {
+    CliError::new("grant-storage", "授权存储操作失败", 10)
+}
+
+fn list_auto_session_ids_for_goal(
+    database: &str,
+    goal_id: uuid::Uuid,
+    limit: usize,
+) -> Result<Vec<uuid::Uuid>, CliError> {
+    let connection = match rusqlite::Connection::open(Path::new(database)) {
+        Ok(connection) => connection,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let mut statement = match connection.prepare(
+        "SELECT session_id FROM auto_mode_session
+         WHERE goal_id = ?1
+         ORDER BY updated_at_ms DESC, session_id DESC
+         LIMIT ?2",
+    ) {
+        Ok(statement) => statement,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let rows = match statement.query_map(
+        rusqlite::params![goal_id.to_string(), i64::try_from(limit).unwrap_or(64)],
+        |row| row.get::<_, String>(0),
+    ) {
+        Ok(rows) => rows,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let mut ids = Vec::new();
+    for row in rows {
+        let Ok(value) = row else {
+            continue;
+        };
+        if let Ok(id) = uuid::Uuid::parse_str(&value) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+fn extract_last_assistant_text(checkpoint: &AutoModeCheckpoint) -> Option<String> {
+    checkpoint
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == ProviderMessageRole::Assistant)
+        .map(|message| message.content.chars().take(200).collect::<String>())
+        .filter(|content| !content.is_empty())
+}
+
+fn goal_auto_away_summary(arguments: &[&str]) -> Result<Value, CliError> {
+    let (database, goal_id) = parse_goal_identity(arguments)?;
+    let now_ms = current_time_ms()?;
+    let snapshot = goal_repository(database)?
+        .get(goal_id)
+        .map_err(goal_storage_error)?
+        .ok_or_else(|| CliError::new("goal-not-found", "未找到对应的 Agent Goal", 5))?;
+    let grants = grant_repository(database)?
+        .list_for_goal(goal_id, 64)
+        .map_err(grant_storage_error)?;
+    let session_ids = list_auto_session_ids_for_goal(database, goal_id, 64)?;
+    let auto_repo = auto_repository(database)?;
+    let checkpoint_repo = SqliteAutoModeCheckpointRepository::open(Path::new(database))
+        .map_err(auto_storage_error)?;
+    let workspace_repo = workspace_repository(database)?;
+    let mut sessions = Vec::new();
+    let mut pauses = Vec::new();
+    let mut total_input_tokens = 0_u64;
+    let mut total_output_tokens = 0_u64;
+    let mut total_cost_microunits = 0_u64;
+    let mut total_elapsed_ms = 0_u64;
+    let mut total_cycles = 0_u32;
+    let mut total_tool_calls = 0_u32;
+    let mut last_speech = None;
+    let mut last_directives = Value::Null;
+    let mut workspace_changes = Value::Null;
+    for session_id in session_ids {
+        let Some(session) = auto_repo.get(session_id).map_err(auto_storage_error)? else {
+            continue;
+        };
+        total_input_tokens = total_input_tokens.saturating_add(session.usage.input_tokens);
+        total_output_tokens = total_output_tokens.saturating_add(session.usage.output_tokens);
+        total_cost_microunits = total_cost_microunits.saturating_add(session.usage.cost_microunits);
+        total_elapsed_ms = total_elapsed_ms.saturating_add(session.usage.elapsed_ms);
+        total_cycles = total_cycles.saturating_add(session.usage.cycles);
+        total_tool_calls = total_tool_calls.saturating_add(session.usage.tool_calls);
+        if let Some(reason) = session.pause_reason {
+            pauses.push(json!({
+                "sessionId": session.id,
+                "reason": reason,
+                "updatedAtMs": session.updated_at_ms
+            }));
+        }
+        let checkpoint = checkpoint_repo
+            .get(session.id)
+            .map_err(auto_storage_error)?;
+        if let Some(checkpoint) = checkpoint.as_ref() {
+            if last_speech.is_none() {
+                last_speech = extract_last_assistant_text(checkpoint);
+            }
+            if last_directives.is_null() {
+                // CLI host does not persist pet directives; surface checkpoint model/sequence only.
+                last_directives = json!({
+                    "source": "auto-mode-checkpoint",
+                    "sessionId": checkpoint.session_id,
+                    "sequence": checkpoint.sequence,
+                    "model": checkpoint.model,
+                    "messageCount": checkpoint.messages.len()
+                });
+            }
+        }
+        let workspace = workspace_repo
+            .latest(session.id)
+            .map_err(auto_storage_error)?;
+        if workspace_changes.is_null() {
+            if let Some(stored) = workspace.as_ref() {
+                workspace_changes = json!({
+                    "sessionId": session.id,
+                    "revision": stored.snapshot.revision,
+                    "fingerprint": stored.snapshot.fingerprint,
+                    "fileCount": stored.snapshot.files.len(),
+                    "files": stored
+                        .snapshot
+                        .files
+                        .iter()
+                        .take(64)
+                        .map(|file| file.relative_path.clone())
+                        .collect::<Vec<_>>(),
+                });
+            }
+        }
+        sessions.push(json!({
+            "sessionId": session.id,
+            "status": session.status,
+            "pauseReason": session.pause_reason,
+            "planRevision": session.plan_revision,
+            "usage": session.usage,
+            "createdAtMs": session.created_at_ms,
+            "updatedAtMs": session.updated_at_ms,
+            "checkpointSequence": checkpoint.as_ref().map(|item| item.sequence),
+            "workspaceRevision": workspace
+                .as_ref()
+                .map(|item| item.snapshot.revision),
+            "workspaceFingerprint": workspace
+                .as_ref()
+                .map(|item| item.snapshot.fingerprint.clone()),
+        }));
+    }
+    let completed_steps = snapshot
+        .current_plan
+        .steps
+        .iter()
+        .filter(|step| step.status == AgentPlanStepStatus::Completed)
+        .count();
+    let next_step = snapshot
+        .current_plan
+        .steps
+        .iter()
+        .find(|step| {
+            matches!(
+                step.status,
+                AgentPlanStepStatus::Pending | AgentPlanStepStatus::InProgress
+            )
+        })
+        .map(|step| {
+            json!({
+                "id": step.id,
+                "text": step.text,
+                "status": step.status
+            })
+        });
+    let current_pause_reason = sessions
+        .iter()
+        .find_map(|session| session.get("pauseReason").cloned().filter(|value| !value.is_null()));
+    let revoke_grant_ids = grants
+        .iter()
+        .filter(|grant| matches!(grant_status(grant, now_ms), AuthorizationGrantStatus::Active))
+        .map(|grant| grant.id)
+        .collect::<Vec<_>>();
+    let active_grants = grants
+        .iter()
+        .filter(|grant| matches!(grant_status(grant, now_ms), AuthorizationGrantStatus::Active))
+        .count();
+    let mut highlights = Vec::new();
+    let goal_status = serde_json::to_value(snapshot.goal.status)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned());
+    highlights.push(format!(
+        "目标「{}」状态为 {}，计划进度 {}/{}",
+        snapshot.goal.title,
+        goal_status,
+        completed_steps,
+        snapshot.current_plan.steps.len()
+    ));
+    highlights.push(format!(
+        "关联 Auto Mode 会话 {} 个，活跃授权 {} 个",
+        sessions.len(),
+        active_grants
+    ));
+    if let Some(reason) = current_pause_reason.as_ref() {
+        let reason_text = reason
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| reason.to_string());
+        highlights.push(format!("当前暂停原因：{reason_text}"));
+    }
+    if let Some(step) = next_step.as_ref() {
+        if let Some(text_value) = step.get("text").and_then(Value::as_str) {
+            highlights.push(format!("下一步：{text_value}"));
+        }
+    }
+    highlights.push(format!(
+        "累计用量：cycles={total_cycles} tools={total_tool_calls} in={total_input_tokens} out={total_output_tokens} costμ={total_cost_microunits}"
+    ));
+    if !workspace_changes.is_null() {
+        if let Some(count) = workspace_changes.get("fileCount").and_then(Value::as_u64) {
+            highlights.push(format!("工作区快照文件数：{count}"));
+        }
+    }
+    let mut risk_notes = Vec::new();
+    for grant in &grants {
+        if !matches!(grant_status(grant, now_ms), AuthorizationGrantStatus::Active) {
+            continue;
+        }
+        match infer_tier(grant) {
+            AuthorizationTier::Unattended => risk_notes.push(format!(
+                "授权 {} 为 unattended（SelectedRoots + NeverAskWithinGrant），离开期间可能自动推进可逆写入",
+                grant.id
+            )),
+            AuthorizationTier::FullDevice => risk_notes.push(format!(
+                "授权 {} 为 full_device，可影响本机文件、命令与联网；请确认后一键撤销",
+                grant.id
+            )),
+            AuthorizationTier::TrustedWorkspace => risk_notes.push(format!(
+                "授权 {} 为 trusted_workspace，工作区内写入在 Grant 有效期内可不询问",
+                grant.id
+            )),
+            _ => {}
+        }
+        if matches!(grant.network, NetworkPolicy::Unrestricted) {
+            risk_notes.push(format!(
+                "授权 {} 允许 unrestricted 网络，数据可能离开设备",
+                grant.id
+            ));
+        }
+    }
+    Ok(json!({
+        "spec": "nimora.ai-away-summary/1",
+        "goalId": goal_id,
+        "generatedAtMs": now_ms,
+        "highlights": highlights,
+        "riskNotes": risk_notes,
+        "goal": {
+            "id": snapshot.goal.id,
+            "title": snapshot.goal.title,
+            "objective": snapshot.goal.objective,
+            "status": snapshot.goal.status,
+            "currentPlanRevision": snapshot.goal.current_plan_revision,
+            "updatedAtMs": snapshot.goal.updated_at_ms
+        },
+        "plan": {
+            "revision": snapshot.current_plan.revision,
+            "completedSteps": completed_steps,
+            "totalSteps": snapshot.current_plan.steps.len(),
+            "steps": snapshot.current_plan.steps.iter().map(|step| json!({
+                "id": step.id,
+                "text": step.text,
+                "status": step.status,
+                "evidenceCount": step.evidence.len()
+            })).collect::<Vec<_>>(),
+            "nextStep": next_step
+        },
+        "autoSessions": sessions,
+        "pauses": pauses,
+        "currentPauseReason": current_pause_reason,
+        "grants": grants.iter().map(|grant| grant_summary_value(grant, None, now_ms)).collect::<Vec<_>>(),
+        "tokenUsage": {
+            "cycles": total_cycles,
+            "toolCalls": total_tool_calls,
+            "elapsedMs": total_elapsed_ms,
+            "inputTokens": total_input_tokens,
+            "outputTokens": total_output_tokens,
+            "costMicrounits": total_cost_microunits
+        },
+        "workspaceChanges": workspace_changes,
+        "lastSpeech": last_speech,
+        "lastDirectives": if last_directives.is_null() { Value::Null } else { last_directives },
+        "revokeGrantIds": revoke_grant_ids
+    }))
+}
+
 fn runtime_error(error: impl std::fmt::Display) -> CliError {
     CliError::new("agent-runtime", error.to_string(), 10)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        infer_tier, tier_policy, AuthorizationTier, EIGHT_HOURS_MS, FOUR_HOURS_MS,
+    };
+    use nimora_agent_runtime::{ApprovalPolicy, GrantLifetime, NetworkPolicy, SandboxScope};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn tier_policy_maps_desktop_semantics() {
+        let roots = vec!["/tmp/ws".to_owned()];
+        let observe = tier_policy(AuthorizationTier::Observe, true, &roots, 1_000);
+        assert_eq!(observe.sandbox, SandboxScope::ReadOnly);
+        assert_eq!(observe.approval, ApprovalPolicy::AskRisky);
+        assert_eq!(observe.network, NetworkPolicy::Offline);
+
+        let trusted = tier_policy(AuthorizationTier::TrustedWorkspace, false, &roots, 1_000);
+        assert_eq!(trusted.sandbox, SandboxScope::WorkspaceWrite);
+        assert_eq!(trusted.approval, ApprovalPolicy::NeverAskWithinGrant);
+
+        let unattended = tier_policy(AuthorizationTier::Unattended, true, &roots, 1_000);
+        assert_eq!(unattended.sandbox, SandboxScope::SelectedRoots);
+        assert_eq!(unattended.approval, ApprovalPolicy::NeverAskWithinGrant);
+        assert_eq!(unattended.selected_roots, BTreeSet::from(["/tmp/ws".to_owned()]));
+        assert_eq!(unattended.lifetime, GrantLifetime::UntilTimestamp);
+        assert_eq!(unattended.expires_at_ms, Some(1_000 + EIGHT_HOURS_MS));
+
+        let full = tier_policy(AuthorizationTier::FullDevice, false, &roots, 2_000);
+        assert_eq!(full.sandbox, SandboxScope::FullDevice);
+        assert_eq!(full.approval, ApprovalPolicy::NeverAskWithinGrant);
+        assert_eq!(full.network, NetworkPolicy::Unrestricted);
+        assert_eq!(full.expires_at_ms, Some(2_000 + FOUR_HOURS_MS));
+    }
+
+    #[test]
+    fn infer_tier_matches_sandbox_and_approval() {
+        let roots = vec!["/tmp/ws".to_owned()];
+        for tier in [
+            AuthorizationTier::Observe,
+            AuthorizationTier::Workspace,
+            AuthorizationTier::TrustedWorkspace,
+            AuthorizationTier::Unattended,
+            AuthorizationTier::FullDevice,
+        ] {
+            let policy = tier_policy(tier, true, &roots, 1_000);
+            let grant = nimora_agent_runtime::AuthorizationGrant {
+                spec: "nimora.authorization-grant/1".to_owned(),
+                id: uuid::Uuid::now_v7(),
+                goal_id: uuid::Uuid::now_v7(),
+                plan_revision: 1,
+                workspace_fingerprint: format!("sha256:{}", "a".repeat(64)),
+                sandbox: policy.sandbox,
+                approval: policy.approval,
+                network: policy.network,
+                selected_roots: policy.selected_roots,
+                tool_allowlist: BTreeSet::from([
+                    "pet.state.read".parse().expect("tool"),
+                ]),
+                provider_allowlist: BTreeSet::from(["provider:deterministic-local".to_owned()]),
+                model_allowlist: BTreeSet::from(["model:echo-v1".to_owned()]),
+                maximum_data_classification: nimora_agent_runtime::DataClassification::Personal,
+                budget: nimora_agent_runtime::AgentBudget::default(),
+                lifetime: policy.lifetime,
+                issued_at_ms: 1_000,
+                expires_at_ms: policy.expires_at_ms,
+                revoked_at_ms: None,
+            };
+            assert_eq!(infer_tier(&grant), tier);
+        }
+    }
 }

@@ -3,6 +3,7 @@ import { ProfileManager } from "./components/ProfileManager";
 import { PresenceSettings } from "./components/PresenceSettings";
 import { StartupSettings } from "./components/StartupSettings";
 import { LazyWorkspace } from "./components/LazyWorkspace";
+import { LifeformOverview, buildLifeformSenseHintsFromSnapshot } from "./components/LifeformOverview";
 import { petItemPresentation } from "./components/petItems";
 import type { PetRelationshipStage } from "@nimora/schemas";
 import type { ActiveThemeSnapshot, AssetPreviewAudio, DesktopSnapshot, OutboxSnapshot, PetCareAction, PetItemId, ThemeDescriptor } from "./platform/desktop";
@@ -102,6 +103,7 @@ export function App() {
   const [activeTheme, setActiveTheme] = useState<ActiveThemeSnapshot | null>(null);
   const [notice, setNotice] = useState(desktopApi.native ? "原生运行时已连接" : "浏览器预览模式");
   const [petNameDraft, setPetNameDraft] = useState("");
+  const [directiveSpeech, setDirectiveSpeech] = useState<string | null>(null);
   const updateNotice = useCallback((message: string) => setNotice(message), []);
   const relationship = desktopSnapshot?.petRelationship ?? { bondPoints: 0, affinity: 0, level: 1, levelProgress: 0, pointsPerLevel: 50, stage: "newly_met" as const, nextStage: "familiar" as const, nextStageAt: 25 };
   const relationshipProgress = relationship.levelProgress / relationship.pointsPerLevel * 100;
@@ -135,6 +137,28 @@ export function App() {
       if (disposed) dispose();
       else unlisten = dispose;
     }).catch(() => setNotice("桌宠导航监听暂时不可用"));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void desktopApi.onPetDirectiveChanged((event) => {
+      if (typeof event.speech === "string") setDirectiveSpeech(event.speech);
+      else if (event.speech === null) setDirectiveSpeech(null);
+      void desktopApi.snapshot().then((snapshot) => {
+        if (!disposed) {
+          setDesktopSnapshot(snapshot);
+          setPetNameDraft(snapshot.pet.name);
+        }
+      }).catch(() => undefined);
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlisten = dispose;
+    }).catch(() => undefined);
     return () => {
       disposed = true;
       unlisten?.();
@@ -344,8 +368,8 @@ export function App() {
           <section className="pet-stage" aria-labelledby="pet-heading">
             <div className="stage-copy">
               <span className="pill">{notice}</span>
-              <h2 id="pet-heading">晚上好，我一直在这里。</h2>
-              <p>所有核心能力都在本机运行。你可以先和 {desktopSnapshot?.pet.name ?? "Aster"} 打个招呼，或者开启一个安静的专注场景。</p>
+              <h2 id="pet-heading">我是桌面上的生命体，不是网页小窗口。</h2>
+              <p>{desktopSnapshot?.pet.name ?? "Aster"} 是系统主体：感知窗口与电量、驱动 Agent/Skill/Worker，也能在桌面自己玩耍。本地优先，断网也能陪着你。</p>
               <div className="stage-actions">
                 <button className="primary-button" type="button" disabled={recoveryMode} onClick={() => void runAction("celebrate")}>开始互动</button>
                 <button className="secondary-button" type="button" disabled={recoveryMode} onClick={() => void runAction("work")}>进入专注</button>
@@ -354,20 +378,12 @@ export function App() {
                 <button className="secondary-button" type="button" disabled={recoveryMode} onClick={() => void runCare("groom")}>梳理</button>
               </div>
             </div>
-            <div className="pet-visual" aria-label={`桌面伙伴 ${desktopSnapshot?.pet.name ?? "Aster"}，当前状态平静`}>
-              <div className="orbit orbit-one" />
-              <div className="orbit orbit-two" />
-              <div className="pet-shadow" />
-              <div className="pet-body">
-                <span className="ear left" />
-                <span className="ear right" />
-                <span className="face">
-                  <i className="eye left" />
-                  <i className="eye right" />
-                  <i className="mouth" />
-                </span>
-              </div>
-            </div>
+            <LifeformOverview
+              pet={desktopSnapshot?.pet}
+              overlayStage={desktopSnapshot?.overlayStage}
+              directiveSpeech={directiveSpeech}
+              senseHints={buildLifeformSenseHintsFromSnapshot(desktopSnapshot)}
+            />
           </section>
 
           <section className="metric-card energy-card">

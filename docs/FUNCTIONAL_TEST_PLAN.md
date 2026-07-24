@@ -1,4 +1,91 @@
+
+## DLO — Desktop Lifeform Overlay
+
+| ID | Case | Expected |
+| --- | --- | --- |
+| DLO-01 | Stage covers monitor work area | Pet window size/origin match work area, transparent chrome |
+| DLO-02 | Logical pose | Character at `position - stage.origin`; body 260×300 |
+| DLO-03 | Click-through hit test | Clicks outside pet body pass to desktop |
+| DLO-04 | Spring motion | Wander frames non-linear; final position durable once |
+| DLO-05 | Occlusion | Covered strips clip; ambient muted when coverage high |
+| DLO-06 | Multi-monitor rebind | Crossing display rebinds stage origin/size |
+| DLO-07 | Lifeform autonomy | Meeting/suppress prefers rest; directive event bubbles speech |
+| DLO-08 | apply_pet_directive IPC | Valid directive mutates mood/state; invalid rejected |
+
 # Nimora 功能测试计划
+
+## DLC-CONTEXT — 桌面生命体情境与弹簧运动
+
+| ID | 场景 | 预期结果 |
+| --- | --- | --- |
+| DLC-001 | 构造 `DesktopSnapshot`：`Fresh`、未过期 | `is_usable` / `obstacles_usable` 为真；`plan_wander_from_snapshot` 可消费障碍矩形 |
+| DLC-002 | `now_ms ≥ expires_at_ms` 或 `freshness=Stale` | 不可用；障碍路径 fail-closed 为无障碍自由漫游；不 panic |
+| DLC-003 | `freshness=Degraded`（PermissionDenied / Timeout / PlatformUnavailable） | 保持 Degraded；`refresh_freshness` 不升级为 Fresh；障碍不可用 |
+| DLC-004 | 租约 `0` 或 `> MAX_SNAPSHOT_LIFETIME_MS`（30s） | `DesktopSnapshot::new` 拒绝（InvalidLifetime） |
+| DLC-005 | 时钟回拨使租约非法 | 构造失败（ClockSkew）；宿主不得用半残快照驱动运动 |
+| DLC-006 | 弹簧：静止点到远处目标，多次 `integrate_to_target` / `spring_position_frames` | 轨迹 **非**线性插值；最终稳定在目标附近；Walk 模式可复现 |
+| DLC-007 | `bounce_on_bounds` / `squash_stretch_scale` / `jump_parabola` | 边界反弹有界；压扁拉伸有界；跳跃采样含端点 |
+| DLC-008 | `plan_wander` 含重叠障碍 work area | 目标在安全边距内；`sequence` 固定时可复现 |
+| DLC-009 | 障碍几乎堵住自由区 | 仍返回 work area 内夹取原点，不越界、不 NaN |
+
+## DLC-PLATFORM — 平台环境采样
+
+| ID | 场景 | 预期结果 |
+| --- | --- | --- |
+| DLC-P01 | 非目标 OS 调用对应 `sample` | `AdapterUnavailable`；无 panic |
+| DLC-P02 | `timeout=0` | `InvalidTimeout`；不启动平台查询 |
+| DLC-P03 | macOS 合法超时采样（真机可重复） | `EnvironmentSample`；窗口 `title` 默认为空；shell/零尺寸过滤 |
+| DLC-P04 | macOS 拒绝窗口权限 | 稳定错误；Host 写入 Degraded 快照并让租约过期 |
+| DLC-P05 | 采样超过 timeout | `SampleTimeout`（或 Host 侧 Degraded）；不永久阻塞事件循环 |
+| DLC-P06 | macOS 电源 | IOKit 成功时 `available` 可真；失败 `unavailable`；**不得**把 fail-closed 写成“已完成电池策略产品化” |
+| DLC-P07 | 进程名含 Zoom/Teams/Meet/Webex | meeting active + hint；无关名 → inactive |
+| DLC-P08 | Windows `cfg(windows)` 采样 | 窗口/idle/电源/会议字段可填充；标题清空；本进程窗口过滤 |
+| DLC-P09 | 非 Windows 构建 windows crate | `AdapterUnavailable` |
+
+## DLC-HOST — Host 采样、弹簧漫游与指令（部分已接线）
+
+| ID | 场景 | 预期结果 |
+| --- | --- | --- |
+| DLC-H01 | 正常模式主循环 | 约每 5s 调用 lifeform sample（≤1.5s 超时）；结果进入 `lifeform_env`；失败为 Degraded，不杀宠物窗口 |
+| DLC-H02 | Free 面自走 `Walking` | `plan_lifeform_wander_goal` + `spring_position_frames` → **逻辑位姿 emit**（body 非 OS 窗口）；非一次性瞬移（Reduced Motion 除外） |
+| DLC-H03 | Fresh 快照含障碍窗口 | 自由漫游目标优先避障；Stale/Degraded 时不使用障碍几何 |
+| DLC-H04 | 拖拽 / Safe Mode / Reduced Motion / 关停 与帧循环并发 | 立即停止继续逻辑位姿推进；不抢夺用户拖拽；关停不复活 |
+| DLC-H05 | 边缘 Surface 漫游 | 目标可仍来自 `plan_surface_wander_target`，但位移应走弹簧帧；行为可文档化 |
+| DLC-H06 | 会议 active 采样 | 可抑制自主（`suppress_autonomy`）；不得绕过 Safe Mode 强制可见与用户覆盖 |
+| DLC-H07 | `select_autonomous_intent` + `PersonalityProfile` | Host `tick_autonomy_with_lifeform` + `DesktopBehaviorHints` **已接线**；须确定性且服从令牌桶/Quiet；人格产品化打磨仍开放 |
+| DLC-H08 | Agent 合法 `StructuredPetDirective` | Agent/Auto Mode/Skill/OS/Connector → `apply_pet_directive` **代码路径已接线**；非法 spec/动画/超长 speech 失败关闭；原生视觉闭环仍开放 |
+| DLC-H09 | 多显示器枚举与 rebind | `current_lifeform_displays` 返回全部 monitors；跨屏 mid-walk rebind stage；跨屏 wander 目标可落在其它 work area；混合 DPI/手感真机仍开放 |
+| DLC-H10 | 性能预算 | 采样 P95、积分帧时、WebView GPU、传感器 CPU 有测量点；**当前未插桩，保持开放** |
+| DLC-H11 | FE spring secondary motion | BuiltinPet3D `springToward` 非 lerp；姿态通道收敛稳定 |
+| DLC-H12 | Unattended FE UX | 五档标签/危险 ack/grant badge/list-revoke；preview 拒绝真实副作用 |
+
+## DLC-PET — Domain petization factories
+
+| ID | 场景 | 预期结果 |
+| --- | --- | --- |
+| DLC-PET-01 | `agent_status_directive` 各 `AgentCompanionPhase` | 合法 `nimora.pet_directive/1`；mood 为 `i8`；动画在白名单 |
+| DLC-PET-02 | `auto_mode_directive` 各 `AutoModePetEvent` | start/step/pause/budget/done/crash 有界 speech/action；确定性 |
+| DLC-PET-03 | `user_code_directive` / `automation_directive` | 沙箱/批准/拒绝/崩溃与触发/成功/失败/节流均可映射 |
+| DLC-PET-04 | `battery_directive` / `idle_user_directive` | 阈值输入产生有界 directive；Host 节流不刷屏 |
+| DLC-PET-05 | `grant_directive`（含 FullDeviceWarning） | 签发/撤销/过期/危险警告表情与 FE token 可对齐 |
+| DLC-PET-06 | Host 宠物化接线 | User Program / OS sensory / companion phase 委托 domain factory；connector 仍用 sensory 路径 |
+| DLC-PET-07 | Meeting sensory quiet | Domain：`meeting_sensory_directive(true, hint)` → Rest + 安静陪同 speech（zoom/teams/meet/webex/unknown/None）；`false` → Observe 结束语。Host：`meeting_should_emit` / `publish_lifeform_meeting_sensory` 仅在 active 翻转时发射；**首次 inactive 安静**、同态采样不刷屏；会议 active 另经 `DesktopBehaviorHints.meeting_active` 抑制自主。纯库可证；原生会议检测属 Host |
+| DLC-PET-08 | Grant `apply_grant_event` petization | Domain `grant_directive` 覆盖 Issued/Revoked/Expired/FullDeviceWarning（有界 speech/动画/mood）。Host：unattended issue 按 tier → `companion_directive::apply_grant_event`；revoke 成功后 `GrantCompanionEvent::Revoked`；权限执行与宠物化展示解耦。不要求 native 窗口；断言 directive 路径与 token 合法即可 |
+| DLC-PET-09 | `move_pet` position debounce persistence | `move_pet` / `finish_pet_drag` 更新 Runtime logical `position` 后 `schedule_position_persistence`：~200ms debounce + revision 门闩；拖拽中 `DebouncedMove` 跳过写盘；overlay 源真相为 logical pet 而非 stage outer origin；连续 move 只持久化最终 revision。**描述预期路径**，不要求 native set_position 或磁盘集成测试；重启恢复见 DP-TRAY-RECALL / homePosition 契约 |
+| DLC-PET-10 | Control Center `lifeformSense` IPC | `desktop_snapshot` 暴露 `lifeformSense`：`batteryPercent`/`onBattery`/`charging`、`idleMs`、`meetingActive`/`meetingHint`（仅 `zoom|teams|meet|webex|unknown`）、`displayCount`、`freshness`/`degradationReason`、`observedAtMs`/`expiresAtMs`。Host：`lifeform_sense_from_env` 从 `lifeform_env` 投影；**无** `windows`/`foreground`/标题字段。FE：`LifeformSenseSnapshot` + `buildLifeformSenseHintsFromSnapshot` / `applyLifeformSenseSnapshot`；`App.tsx` 绑定 snapshot。纯库/单元可证；原生采样一致性仍属真机 QA |
+
+| DLC-PET-12 | Render budget · processBudget · notification unread sensory · grant at-rest crypto · cross-display polish | 见下表 DLC-PET-12-01..11。`lifeformPerf` + 渲染预算 HUD；`processBudget` IPC（macOS task_info / Linux /proc；Windows GetProcessMemoryInfo）；通知计数边沿 → `notification_sensory_directive` + `notification_unread`；`AuthorizationGrantKey` + XChaCha20-Poly1305 envelope dual-read；跨屏五档 park + 隔次 wander + 可选 Jump；Q-minion 无方框 / ellipse hit / 双阴影。**原生视觉 QA 未证明** |
+
+
+## DLC-UI — 接地构图与透明 chrome
+
+| ID | 场景 | 预期结果 |
+| --- | --- | --- |
+| DLC-U01 | 加载 `companion-fox.glb` | 接地取景；可见接触阴影 mesh（WebView 内，非桌面遮挡） |
+| DLC-U02 | 浅色/深色壁纸截取 pet 窗口四角 | Alpha 透明；无系统标题栏/窗口阴影/矩形底色（签名包真机） |
+| DLC-U03 | Fox 失败 → 程序化 3D → SVG | 不引入不透明全窗口底；无空 Canvas |
+| DLC-U04 | Overlay stage 窗口模型 | 透明 AOT stage = 显示器 work area；逻辑 body **260×300**；**不是** body-as-OS-window；真实窗口像素遮挡精修与原生 visual QA **未证明** |
+
 
 ## DP-TRAY-RECALL — 托盘恢复与离屏召回
 
@@ -116,6 +203,44 @@
 4. 拖拽或安全模式抢占 Walking 时，原生移动必须停止，下一次 Snapshot 刷新后角色朝向收敛 Neutral；Renderer 切换不得改变方向规则。
 5. `prefers-reduced-motion: reduce` 下取消朝向 Transition，但保留静态 Left/Right，避免用减少动态设置破坏必要空间语义。
 6. macOS 与 Windows 真机分别录制至少两轮左右漫游，确认窗口位移、脚步动作与朝向同步，且 Dock、菜单栏、任务栏和副屏负坐标边界仍安全。
+
+
+## 桌面生命体情境与弹簧运动（库级 / Host 接线门禁）
+
+> 库级可自动化；Host 接线与原生视觉必须分开标记。权威边界见 [`DESKTOP_LIFEFORM_CONTEXT.md`](DESKTOP_LIFEFORM_CONTEXT.md)。
+
+### LIFEFORM-CTX-001 快照契约与新鲜度
+
+- `DesktopSnapshot::new` 拒绝零寿命、超长寿命与非法 lifetime；`spec` 固定为 `nimora.desktop-context/1`。
+- `is_usable` / `obstacles_usable` 仅在 Fresh 且未过期时为真；过期后 fail-closed 为 free-wander，不得继续使用障碍矩形。
+- serde 圆整不得出现原始窗口标题字段；`title_redacted` / 可选 `title_hash` 行为符合契约。
+
+### LIFEFORM-CTX-002 弹簧积分非 lerp
+
+- 固定 `SpringParams` 与 `dt` 下，`integrate` / `spring_position_frames`（若 Host 接入）确定性；首帧位置 **不等于** 剩余距离的线性 `1/N` 分片。
+- Jump 模式弧线中点 y 高于（屏幕坐标更小）起终点连线；Walk 在边界 `bounce_on_bounds` 后仍保持有限速度。
+- **通过库测不算 Host 通过**：仅当 `execute_pet_wander`（或后继）实际消费积分帧时，才可把原生窗口位移标绿。
+
+### LIFEFORM-CTX-003 平台采样 fail-closed
+
+- macOS：`sample(Duration::ZERO)` 在触碰平台前失败；非 macOS 构建返回 `AdapterUnavailable`；电源采样失败为 unavailable，不得 panic。
+- Windows：非 Windows 目标 `AdapterUnavailable`；Windows 目标采样超时/权限失败不得留下永久障碍图。
+- Host sample loop（接线后）：超时或错误只降级 hints / free wander，不得阻塞 UI 线程超过预算。
+
+### LIFEFORM-CTX-004 人格与结构化指令
+
+- `PersonalityProfile` 轴钳制 0–100；legacy Pet JSON 缺 `personality` 时默认合法。
+- `StructuredPetDirective` 拒绝超长 speech、超界 mood delta、非白名单 animation、错误 spec。
+- `select_autonomous_intent` 在相同 vitals/personality/hints 下确定性；`meeting_active` / `suppress_autonomy` 抑制自主动作。
+- **产品环（接线后）**：directive → 领域 action → Renderer 语义 →（可选）原生位姿；Agent 不得绕过校验直接 `set_position`。
+
+### LIFEFORM-CTX-005 明确未覆盖（保持红 / 待办）
+
+- 全屏多显示器 overlay 合成。
+- 真实 OS 窗口像素遮挡与 z-order 栖息。
+- 跨显示器 walk 路径与热插拔障碍图。
+- Agent structured directive 端到端 UI + 原生位姿。
+- 采样 P95、积分帧时、传感器 CPU、WebView GPU 的统一 perf 预算门禁。
 
 ## 自主张望语义
 
@@ -751,7 +876,7 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-104C | 运行级策略贯通 | 普通 Agent、Auto Mode 单轮和后台 Loop 使用同一策略；确认续跑、多轮执行与 Context Anchor 的 Mapping 不漂移 | P0 |
 | AGT-104D | 推理选择器能力门禁 | 仅支持推理的 Provider 显示合法等级；固定等级禁止降级；Browser Preview 不伪造能力；窄屏标签完整 | P0 |
 | AGT-105 | Adaptive 与缓存隔离 | 推荐等级受任务、风险、费用上限约束；策略、实际等级或映射版本变化不命中旧生成缓存 | P1 |
-| AGT-106 | Away Summary | 展示文件、测试、网络、预算、自动授权、失败重试和暂停原因，不暴露 Secret 或隐藏推理 | P1 |
+| AGT-106 | Away Summary（产品面） | Host/FE/CLI 展示进度、会话、Grant、预算投影、暂停原因、highlights、撤销入口；**不**暴露 Secret 或隐藏推理；字段深度可迭代但路径须可用 | P0 |
 | AGT-107 | 授权撤销与未知结果 | 撤销阻止新派发；无法确认的在途结果进入 `indeterminate` 且不自动重放 | P0 |
 | AGT-108 | Desktop 后台 Job 唯一性 | 同一 Session 只能原子创建一个活跃 Job；终态释放 Session 后允许新 Job，旧快照仍可查询 | P0 |
 | AGT-109 | Job 跨批次进度 | 每批 Turn、Cache Hit 与 Checkpoint sequence 单调累计；Yield 不伪装成 Pause 或终态 | P0 |
@@ -765,6 +890,42 @@ ID / 标题 / 优先级 / 前置条件
 | AGT-117 | 有界退出排空 | 应用退出向全部活跃 Job 取消并通过 Condvar 最多等待 2 秒；正常终态唤醒排空，超时统一隔离为 `indeterminate/shutdown-timeout`，迟到 Runner 不得覆盖且 Session 可重新启动 | P0 |
 | AGT-118 | Safe Mode 后台封锁 | 进入 Safe Mode 与应用退出复用同一 Auto Job 排空协议；超时使用独立 `safe-mode-timeout` 未知态，释放 Session 且共享 Provider CancellationFlag 已取消；Recovery Mode 不存在可继承活跃 Job 并拒绝 Start | P0 |
 | AGT-119 | 崩溃投影重建 | 使用真实 SQLite 构造 Running Session 后重启桌面；Session 原子恢复为 `paused/restarted`，历史 IPC 可见同 Session ID 的终态 Job 投影、活跃列表为空且不触发 Provider；未决 Active Attempt 必须先转 `indeterminate/restart-attempt-indeterminate`，可恢复记录超过上限时失败关闭而非静默截断 | P0 |
+
+
+## AGT-GRANT — 无人值守授权（Unattended Execution Grant）
+
+| ID | 场景 | 预期结果 | 优先级 |
+| --- | --- | --- | --- |
+| AGT-GRANT-01 | 五档 `tier_policy` 映射 | Observe/Workspace/Trusted/Unattended/Full Device 分别映射正确 sandbox/approval/network/lifetime；Unattended 8h SelectedRoots；Full Device 4h | P0 |
+| AGT-GRANT-02 | `NeverAskWithinGrant` sleep-safe | 有效 Grant + 范围内写 effect → Auto Mode `Proceed`，不 pause ConfirmationRequired | P0 |
+| AGT-GRANT-03 | 无 Grant / AlwaysAsk | 写 effect → `ConfirmationRequired` pause | P0 |
+| AGT-GRANT-04 | 过期或撤销 Grant | 即使 NeverAskWithinGrant 也 pause ConfirmationRequired；不得继续自动写 | P0 |
+| AGT-GRANT-05 | 绑定漂移 | Goal/Plan/Workspace fingerprint 不一致 → GoalChanged 或 WorkspaceChanged；越界工具 → UnsafeEffect | P0 |
+| AGT-GRANT-06 | SQLite issue/get/revoke | issue 一次；get round-trip；revoke 后 active 查询为空；重复 revoke 幂等或已撤销错误 | P0 |
+| AGT-GRANT-07 | `get_active_for_goal` | 仅返回未撤销且未过期；多条时取最新 issued | P0 |
+| AGT-GRANT-08 | `start_unattended_auto_mode` | Normal Mode 创建 Goal+Session+Checkpoint+Workspace+Grant+Job；返回 sessionId/jobId/grantId；Safe Mode 拒绝 | P0 |
+| AGT-GRANT-09 | list/revoke IPC | list 摘要 `nimora.authorization-grant-summary/1`；revoke 后 status=revoked；FE 危险档需 ack | P0 |
+| AGT-GRANT-10 | Runner 装载 Grant | 每批 `get_active_for_goal` 注入 Supervisor；撤销后新批不得 NeverAsk 放行 | P0 |
+| AGT-GRANT-11 | Full Device 警告 | UI 展示硬风险文案；未 ack 不能启动；硬禁区仍 fail-closed | P0 |
+| AGT-GRANT-12 | Skill/模型不能签发 | 仅 Host 签发路径；扩展请求不能扩大/延长 Grant | P0 |
+| AGT-GRANT-13 | Away Summary 纵切 | 用户返回见进度/自动批准/预算/暂停原因/一键撤销；无 Secret；Host IPC + FE 面板 + CLI `away-summary` **已接线**（原生 visual QA 另计） | P0 |
+| AGT-GRANT-14 | CLI `grant issue` | 五档 tier；`--offline/--online`；工具 allowlist；返回 `nimora.ai-authorization-grant/1` + summary；`NeverAskWithinGrant` 用于 trusted/unattended/full_device | P0 |
+| AGT-GRANT-15 | CLI `grant list/show/revoke` | list 摘要 active；show 完整；revoke 写 `revokedAtMs`；缺失 id → `grant-not-found` | P0 |
+| AGT-GRANT-16 | CLI `away-summary` | 聚合 goal/sessions/grants/pauses/tokenUsage/highlights/riskNotes/revokeGrantIds；无 secret 字段；缺失 goal → `goal-not-found` | P0 |
+| AGT-GRANT-17 | full_device sleep-safe 风险 | UI 危险 ack + riskNotes 含 full_device；硬禁区仍 fail-closed；4h 寿命 | P0 |
+| AGT-GRANT-18 | unattended SelectedRoots | 8h 寿命；根外路径/工具不在 allowlist → 不自动放行 | P0 |
+
+## AGT-AWAY — 离开摘要（Away Summary）
+
+| ID | 场景 | 预期结果 | 优先级 |
+| --- | --- | --- | --- |
+| AGT-AWAY-01 | `build_away_summary` 空输入 | 零计数；无虚假 highlights；`generated_at_ms` 有值 | P0 |
+| AGT-AWAY-02 | 含 completed/failed goals + paused session | 计数正确；pauses/highlights 非空；中文可读 | P0 |
+| AGT-AWAY-03 | 含 active + revoked grants | grants 列表与 revoke 候选；riskNotes 对 unattended/full_device/trusted 有提示 | P0 |
+| AGT-AWAY-04 | IPC `get_away_summary` | Normal 返回聚合或 null（无持久化）；preview 不写库 | P0 |
+| AGT-AWAY-05 | FE `AwaySummaryPanel` | 空态/busy/刷新；指标与亮点；无 Secret 文案 | P0 |
+| AGT-AWAY-06 | CLI 与 Host 契约 | CLI `nimora.ai-away-summary/1` 与桌面领域事实一致（字段可超集，不得矛盾） | P1 |
+
 ## Auto Mode indeterminate-attempt reconciliation
 
 - Verify an indeterminate attempt can be resolved exactly once with all binding parameters unchanged.
@@ -1335,3 +1496,70 @@ ID / 标题 / 优先级 / 前置条件
 | PET-3D-004 | 将健康宠物自主序列推进至 Play，等待动作结束并重启 | Playing/Happy、Renderer `pet.play` 和状态文案一致；动作有界结束回 Idle；Snapshot 可迁移且离线可用 |
 | PET-3D-005 | 构建生产包并校验 `public/models` 与 `dist/models` | `companion-fox.glb` 必须存在且 SHA-256 为 `d97044e701822bac5a62696459b27d7b375aada5de8574ed4362edbba94771f7`；离线断网启动仍可加载 |
 | PET-3D-006 | 检查所有公开 `pet.*` 动作映射 | 每个动作均绑定 Survey、Walk 或 Run；未知动作稳定回 Idle，不因缺失 Clip 停止渲染 |
+
+## Lifeform Subject functional cases (2026-07-24)
+
+> Scope: pet-as-Subject paths for Nimora / 灵栖. Local unit/FE gates ≠ native visual proof. LF-NV-* require Tauri desktop run.
+
+| ID | Case | Expected |
+|---|---|---|
+| LF-CC-01 | Control Center 概览 loads | `LifeformOverview` shows lazy `BuiltinPet3D` (or soft WebGL fallback), no ear mock square |
+| LF-CC-02 | Lifeform overview content | Vitals, personality axes, directive summary, Chinese attention labels, overlay stage summary visible and coherent |
+| LF-CC-03 | Live directive on overview | On `onPetDirectiveChanged` / celebrate stage action, state chip + last directive fields update without full page remount |
+| LF-CC-04 | Soft WebGL fallback | WebGL unavailable → soft fallback UI; no blank crash / ear mock regression |
+| LF-AM-01 | Start Auto Mode job | `companion_directive` → work animation + speech “正在陪你干活” |
+| LF-AM-02 | Auto Mode wait / confirmation | `wait` → perch + “需要你确认一下” (phase de-duped) |
+| LF-AM-03 | Auto Mode completes | `complete` → celebrate + “完成啦！” |
+| LF-AM-04 | Auto Mode fail / cancel | `fail` → work_crash path; `cancel` → rest / clear busy without spam |
+| LF-AM-06 | Unattended job + grant | Start unattended with Trusted/Unattended tier → job runs with grant; companion still emits work/wait phases |
+| LF-AM-07 | Revoke mid-job | Revoke grant → subsequent risky steps pause confirmation; pet may show waiting_for_confirmation |
+| LF-SK-01 | Execute skill | Busy work speech; done celebrate or fail crash |
+| LF-SK-02 | Skill needs approval | Perch wait speech |
+| LF-OS-01 | Offline / degraded / low battery sample | Sensory directive once (phase-tracked, no spam) |
+| LF-OS-02 | Recovery to healthy sample | Restored speech once (e.g. “线路通了”) |
+| LF-CN-01 | Connector EventReceived | `connector.*` event → petized `EventReceived` via automation/skill event session |
+| LF-CN-02 | Connector throttle | Repeat connector events within **8s** do not re-apply pet directive spam |
+| LF-CN-03 | Connector admitted path | When `AppHandle` present, admitted automation path applies directive; without handle, no host crash |
+| LF-SC-01 | Schema personality fields | Pet snapshot may carry `personality`; missing legacy field defaults valid |
+| LF-SC-02 | lastDirective* / lastAttention / directiveRevision | After directive apply, fields + revision update; preview snapshot enriched for consumers |
+| LF-FE-01 | applyPetDirective types | FE types accept `nimora.pet_directive/1` structured payload; invalid rejected at boundary |
+| LF-ID-01 | Idle micro-act yawn | Idle long enough → `yawn` micro-act (BuiltinPet3D), returns idle |
+| LF-ID-02 | Idle micro-act digNose | Idle → `digNose` micro-act, non-blocking |
+| LF-ID-03 | Idle micro-act countAnts | Idle → `countAnts` micro-act; Q-minion warm yellow palette visible |
+| LF-OV-01 | Drag pet on overlay | Moves **logical body**; no body-as-window jump; stage remains work-area AOT |
+| LF-OV-02 | Click outside pet body | Clicks pass through to desktop (`ignore_cursor_events` except body) |
+| LF-OV-03 | Multi-monitor mid-walk rebind | During walk across displays, stage rebinds; pet can target other display |
+| LF-OV-04 | Spring-damper only | Position path uses spring-damper frames, not single-step lerp teleport (Reduced Motion may simplify) |
+| LF-NV-01 | Native visual QA (gate) | Signed/desktop Tauri: transparency, drag feel, click-through, no square chrome — **not yet proven** |
+| LF-NV-02 | Idle CPU budget (gate) | Idle CPU measurement under stated budget — **not yet measured** |
+| LF-NV-03 | Signed Windows package (gate) | Windows signed package sample install/run — **not yet proven** |
+
+## DLC-PET-11 · User-code structured directive + micro-performance
+
+| ID | Case | Expect |
+| --- | --- | --- |
+| DLC-PET-11-01 | `safe.pet.directive` with valid `nimora.pet_directive/1` | Pet speech/animation/revision update; command `pet.directive.apply` |
+| DLC-PET-11-02 | Invalid directive spec | Fail-closed; no revision bump |
+| DLC-PET-11-03 | Micro tokens yawn/hop/look_around | Whitelist accept; 3D motion maps without linear body travel |
+| DLC-PET-11-04 | Notification attention granted | Pet observe + look_around / notification area attention |
+| DLC-PET-11-05 | Creator capability matrix | Shows safe.pet.directive + read surfaces in Chinese |
+| DLC-PET-11-06 | Agent context strips | Token budget / workspace tracking render from session extras |
+
+## DLC-PET-12 · Render budget / processBudget / notification sensory / grant crypto / cross-display polish
+
+> Local unit/FE gates ≠ native visual proof. LF-NV-* / idle CPU measurement still open.
+
+| ID | Case | Expect |
+| --- | --- | --- |
+| DLC-PET-12-01 | Render perf budget HUD | `BuiltinPet3D` samples frames via `lifeformPerf`; throttled `nimora:lifeform-perf` emit; Control Center `LifeformOverview` shows **渲染预算** cards (FPS / frame ms; warn/danger tones from `LIFEFORM_PERF_BUDGET`) |
+| DLC-PET-12-02 | processBudget IPC on snapshot | `DesktopSnapshot` / lifeform sense path includes process budget (`rssMb`, optional `cpuPercentApprox`, `withinMemoryBudget`, `observedAtMs`). FE `hostProcessBudgetFromSense` accepts flat fields or nested `processBudget` |
+| DLC-PET-12-03 | processBudget platform sampling | **macOS**: RSS via `task_info` (fallback `getrusage`). **Linux**: `/proc/self/status` `VmRSS` (fallback `getrusage` KiB). **Windows**: `GetProcessMemoryInfo` → `WorkingSetSize` (fallback `PrivateUsage`); API failure fail-closed |
+| DLC-PET-12-04 | Notification unread sensory (privacy-safe) | Outbox/approvals **counts only** edge → `notification_should_emit` → `notification_sensory_directive`; `LifeformSense.notification_unread` bool. **No** titles/bodies/senders in IPC |
+| DLC-PET-12-05 | Notification clear edge | Unread true→false applies clear/observe directive once (no spam while steady) |
+| DLC-PET-12-06 | Grant encryption at rest | Issue stores `nimora.encrypted-authorization-grant/1` XChaCha20-Poly1305 envelope (not plaintext JSON). Host `authorization_grant_key` loads/generates OS secret-store key; all grant repos use `open_with_key`; keychain unavailable → `app_local_default` |
+| DLC-PET-12-07 | Grant dual-read legacy | Pre-encrypt plaintext rows still `get` / list successfully; next write re-seals encrypted |
+| DLC-PET-12-08 | Grant tamper fail-closed | Corrupt ciphertext / wrong key → load fails closed (no silent plaintext leak) |
+| DLC-PET-12-09 | Cross-display park slots | Multi-monitor `plan_cross_display_target` parks on varied bottom slots (`sequence % 5`), not always bottom-center |
+| DLC-PET-12-10 | Cross-display wander cadence | Every **2nd** wander (`sequence % 2 == 0`) prefers cross-display target when ≥2 displays; short gap may use optional `MotionMode::Jump` parabola frames (no lerp teleport) |
+| DLC-PET-12-11 | Q-minion visual polish | No square chrome frame; ellipse `pet-hit-area` clip; livelier idle micro-acts; dual contact shadow (soft pool + dense core). **Native visual QA still required** |
+

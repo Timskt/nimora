@@ -141,3 +141,53 @@ describe("VRM expression semantics", () => {
     }
   });
 });
+
+import { BoxGeometry, Mesh, MeshBasicMaterial, Object3D } from "three";
+import {
+  cameraDistanceForGroundedPet,
+  cameraDistanceForRadius,
+  CONTACT_SHADOW_STOPS,
+  contactShadowRadius,
+  frameGroundedModel,
+} from "./petSceneHelpers";
+
+describe("pet scene framing", () => {
+  it("grounds the model so feet rest near y=0", () => {
+    const root = new Object3D();
+    const mesh = new Mesh(new BoxGeometry(2, 4, 1), new MeshBasicMaterial());
+    mesh.position.y = 5;
+    root.add(mesh);
+    const framed = frameGroundedModel(root, 1);
+    expect(framed.height).toBeCloseTo(4, 4);
+    expect(framed.lookAtY).toBeCloseTo(1.68, 2);
+    expect(framed.spanX).toBeCloseTo(2, 4);
+    expect(root.position.y).toBeCloseTo(-3, 4);
+  });
+
+  it("frames camera distance from body height rather than a tiny model", () => {
+    const byRadius = cameraDistanceForRadius(1, 32);
+    const grounded = cameraDistanceForGroundedPet(2, 1.2, 0.8, 32);
+    expect(grounded).toBeGreaterThan(0);
+    expect(byRadius).toBeGreaterThan(0);
+    expect(cameraDistanceForGroundedPet(4, 2, 1, 32)).toBeGreaterThan(
+      cameraDistanceForGroundedPet(2, 1, 0.5, 32),
+    );
+  });
+});
+
+describe("contact shadow grounding", () => {
+  it("keeps a strong soft oval under grounded pets", () => {
+    expect(contactShadowRadius(2, 1)).toBeCloseTo(Math.max(2, 1 * 0.38) * 0.68, 5);
+    expect(contactShadowRadius(1, 2)).toBeCloseTo(Math.max(1, 2 * 0.38) * 0.68, 5);
+    expect(contactShadowRadius(2, 1)).toBeGreaterThan(Math.max(2, 1 * 0.35) * 0.55);
+  });
+
+  it("uses a denser center falloff so the pet does not float", () => {
+    expect(CONTACT_SHADOW_STOPS[0]?.[0]).toBe(0);
+    // Dense core (alpha ~0.9) + soft multi-stop falloff for grounded lifeform feet.
+    expect(CONTACT_SHADOW_STOPS[0]?.[1]).toMatch(/0\.9[0-9]?/);
+    expect(CONTACT_SHADOW_STOPS.length).toBeGreaterThanOrEqual(4);
+    expect(CONTACT_SHADOW_STOPS.at(-1)?.[0]).toBe(1);
+    expect(CONTACT_SHADOW_STOPS.at(-1)?.[1]).toMatch(/rgba\([^)]*,\s*0\)/);
+  });
+});

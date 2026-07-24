@@ -1,15 +1,23 @@
 interface BuiltinPetProps {
   state: string;
   emotion: string;
+  mood?: number;
+  animation?: string;
 }
 
-export function BuiltinPet({ state, emotion }: BuiltinPetProps) {
+export function BuiltinPet({ state, emotion, mood, animation }: BuiltinPetProps) {
+  const moodBand = mood == null ? undefined : mood <= 33 ? "low" : mood <= 66 ? "steady" : "high";
   return (
     <svg
       className={`builtin-pet overlay-pet ${state} emotion-${emotion}`}
-      viewBox="0 0 220 240"
+      viewBox="0 0 220 248"
       role="img"
       aria-label="Aster 内置桌面伙伴"
+      data-state={state}
+      data-emotion={emotion}
+      data-mood={mood == null ? undefined : String(mood)}
+      data-mood-band={moodBand}
+      data-animation={animation}
     >
       <defs>
         <linearGradient id="aster-fur" x1="38" y1="26" x2="178" y2="218" gradientUnits="userSpaceOnUse">
@@ -26,10 +34,16 @@ export function BuiltinPet({ state, emotion }: BuiltinPetProps) {
           <stop offset="0.55" stopColor="#41376f" />
           <stop offset="1" stopColor="#201b3d" />
         </radialGradient>
-        <filter id="aster-shadow" x="-40%" y="-40%" width="180%" height="200%">
-          <feDropShadow dx="0" dy="10" stdDeviation="8" floodColor="#392d69" floodOpacity=".22" />
+        <radialGradient id="aster-contact-shadow" cx="50%" cy="50%" r="50%">
+          <stop stopColor="#141824" stopOpacity=".42" />
+          <stop offset="0.45" stopColor="#141824" stopOpacity=".18" />
+          <stop offset="1" stopColor="#141824" stopOpacity="0" />
+        </radialGradient>
+        <filter id="aster-shadow" x="-40%" y="-40%" width="180%" height="210%">
+          <feDropShadow dx="0" dy="12" stdDeviation="9" floodColor="#2a2348" floodOpacity=".28" />
         </filter>
       </defs>
+      <ellipse className="builtin-contact-shadow" cx="110" cy="236" rx="58" ry="11" fill="url(#aster-contact-shadow)" />
       <g className="builtin-tail">
         <path d="M168 157c36 3 43 38 22 54-12 9-28 5-27-8 1-8 10-9 16-14 7-7 3-17-8-19" fill="none" stroke="#c9bce9" strokeWidth="20" strokeLinecap="round" />
         <path d="M177 169c10 4 14 13 10 21" fill="none" stroke="#e9e0f7" strokeWidth="7" strokeLinecap="round" opacity=".72" />

@@ -312,6 +312,16 @@ pub struct Pet {
     pub active_feedback_sequence: Option<u64>,
     #[serde(default)]
     pub autonomy: PetAutonomyState,
+    #[serde(default)]
+    pub personality: crate::PersonalityProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_directive_speech: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_directive_animation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_attention: Option<crate::AttentionFocus>,
+    #[serde(default)]
+    pub directive_revision: u64,
 }
 
 const fn default_need_level() -> u8 {
@@ -415,6 +425,11 @@ impl Pet {
             feedback_sequence: 0,
             active_feedback_sequence: None,
             autonomy: PetAutonomyState::default(),
+            personality: crate::PersonalityProfile::default(),
+            last_directive_speech: None,
+            last_directive_animation: None,
+            last_attention: None,
+            directive_revision: 0,
         })
     }
 
@@ -793,6 +808,9 @@ impl Pet {
         {
             return Err(PetError::InvalidInventory);
         }
+        if !self.personality.is_valid() {
+            return Err(PetError::InvalidPersonality);
+        }
         Ok(())
     }
 
@@ -980,6 +998,216 @@ impl Pet {
         Ok(())
     }
 
+    /// Applies a validated structured lifeform directive to the durable pet entity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PetError::InvalidTransition`] while dragged and
+    /// [`PetError::InvalidDirective`] when directive validation fails.
+    pub fn apply_structured_directive(
+        &mut self,
+        directive: &crate::StructuredPetDirective,
+        now_ms: u64,
+    ) -> Result<(), PetError> {
+        if self.state == PetState::Dragged {
+            return Err(PetError::InvalidTransition);
+        }
+        directive
+            .validate()
+            .map_err(|_| PetError::InvalidDirective)?;
+
+        // WorkCrash is a recovery act: enter Recovering and apply a mood hit.
+        match directive.action {
+            crate::PetDirectiveAction::WorkCrash => {
+                self.active_feedback_sequence = None;
+                self.state = PetState::Recovering;
+                self.emotion = Emotion::Sad;
+                if directive.mood_delta.is_none() {
+                    self.mood = self.mood.saturating_sub(8);
+                }
+            }
+            action => {
+                self.apply_action(action.to_pet_action());
+            }
+        }
+
+        if let Some(delta) = directive.mood_delta {
+            let mood = i16::from(self.mood).saturating_add(i16::from(delta.mood));
+            self.mood = u8::try_from(mood.clamp(0, 100)).unwrap_or_default();
+        }
+
+        self.last_directive_speech = directive.speech.clone();
+        self.last_directive_animation = directive
+            .animation
+            .clone()
+            .or_else(|| Some(directive.action.default_animation().to_owned()));
+        self.last_attention = Some(directive.attention);
+        self.directive_revision = self.directive_revision.saturating_add(1);
+
+        // Mark autonomy active for Start-like directive acts that align with the
+        // classic intent/state machine; otherwise preempt any in-flight autonomy.
+        if let Some((intent, expected_state)) =
+            Self::directive_action_autonomy_alignment(directive.action)
+        {
+            if self.state == expected_state {
+                self.autonomy.resume_action = None;
+                self.autonomy.active_intent = Some(intent);
+                self.autonomy.active_until_ms = Some(
+                    now_ms.saturating_add(PetAutonomyPolicy::default().action_duration_ms),
+                );
+                self.autonomy.sequence = self.autonomy.sequence.saturating_add(1);
+            } else {
+                self.autonomy.active_intent = None;
+                self.autonomy.active_until_ms = None;
+                self.autonomy.resume_action = None;
+            }
+        } else {
+            self.autonomy.active_intent = None;
+            self.autonomy.active_until_ms = None;
+            self.autonomy.resume_action = None;
+        }
+
+        Ok(())
+    }
+
+    /// Personality-aware offline lifeform intent selection.
+    #[must_use]
+    pub fn select_lifeform_autonomy_intent(
+        &self,
+        desktop_hints: crate::DesktopBehaviorHints,
+    ) -> crate::AutonomousBehaviorIntent {
+        crate::select_autonomous_intent(
+            crate::PetVitalsSnapshot::from_pet(self),
+            self.personality,
+            desktop_hints,
+        )
+    }
+
+    /// Advances autonomy using the classic policy, optionally preferring lifeform intent on Start.
+    ///
+    /// When `desktop_hints` is `None`, behavior matches [`Self::autonomy_decision`] exactly.
+    #[must_use]
+    pub fn autonomy_decision_with_lifeform(
+        &self,
+        policy: PetAutonomyPolicy,
+        now_ms: u64,
+        desktop_hints: Option<crate::DesktopBehaviorHints>,
+    ) -> PetAutonomyDecision {
+        let decision = self.autonomy_decision(policy, now_ms);
+        let Some(hints) = desktop_hints else {
+            return decision;
+        };
+        match decision {
+            PetAutonomyDecision::Start { .. } => {
+                let lifeform = self.select_lifeform_autonomy_intent(hints);
+                let (intent, action) = Self::lifeform_intent_to_autonomy(lifeform);
+                PetAutonomyDecision::Start { intent, action }
+            }
+            other => other,
+        }
+    }
+
+    fn directive_action_autonomy_alignment(
+        action: crate::PetDirectiveAction,
+    ) -> Option<(PetIntent, PetState)> {
+        match action {
+            crate::PetDirectiveAction::Wander | crate::PetDirectiveAction::ApproachCursor => {
+                Some((PetIntent::Explore, PetState::Walking))
+            }
+            crate::PetDirectiveAction::Rest => Some((PetIntent::Rest, PetState::Sleeping)),
+            crate::PetDirectiveAction::Play => Some((PetIntent::Play, PetState::Playing)),
+            crate::PetDirectiveAction::Observe => Some((PetIntent::Observe, PetState::Observing)),
+            // Perch/Celebrate/Work map to classic actions whose resulting states
+            // are not represented by PetIntent expected-state matching.
+            crate::PetDirectiveAction::Perch
+            | crate::PetDirectiveAction::Celebrate
+            | crate::PetDirectiveAction::WorkBusy
+            | crate::PetDirectiveAction::WorkCrash => None,
+        }
+    }
+
+    fn lifeform_intent_to_autonomy(
+        intent: crate::AutonomousBehaviorIntent,
+    ) -> (PetIntent, PetAction) {
+        match intent.action {
+            crate::PetDirectiveAction::Wander | crate::PetDirectiveAction::ApproachCursor => {
+                (PetIntent::Explore, PetAction::Walk)
+            }
+            crate::PetDirectiveAction::Rest | crate::PetDirectiveAction::WorkCrash => {
+                (PetIntent::Rest, PetAction::Sleep)
+            }
+            crate::PetDirectiveAction::Play => (PetIntent::Play, PetAction::Play),
+            crate::PetDirectiveAction::Celebrate => (PetIntent::Play, PetAction::Celebrate),
+            crate::PetDirectiveAction::Observe => (PetIntent::Observe, PetAction::Observe),
+            crate::PetDirectiveAction::Perch => (PetIntent::Observe, PetAction::Perch),
+            crate::PetDirectiveAction::WorkBusy => (PetIntent::Stretch, PetAction::Work),
+        }
+    }
+
+    /// States that still count as "matching" an active autonomy intent.
+    ///
+    /// Lifeform directives project onto classic intents while preserving more
+    /// expressive actions (Perch, Celebrate, Work), so the finish/suppress path
+    /// must accept those nearby durable states.
+    const fn autonomy_intent_matches_state(intent: PetIntent, state: PetState) -> bool {
+        match intent {
+            PetIntent::Observe => matches!(
+                state,
+                PetState::Observing | PetState::Perching | PetState::Peeking
+            ),
+            PetIntent::Explore => matches!(state, PetState::Walking | PetState::Climbing),
+            PetIntent::Play => matches!(state, PetState::Playing | PetState::Interacting),
+            PetIntent::Stretch => matches!(state, PetState::Stretching | PetState::Working),
+            PetIntent::Rest => matches!(state, PetState::Sleeping | PetState::Recovering),
+        }
+    }
+
+    
+    /// Records speech/animation/attention for an autonomy Start without re-applying actions.
+    fn stamp_autonomy_directive(
+        &mut self,
+        intent: PetIntent,
+        action: PetAction,
+        _now_ms: u64,
+    ) {
+        // Prefer PetAction so lifeform Celebrate/Perch survive the classic intent projection.
+        let directive_action = match action {
+            PetAction::Walk => crate::PetDirectiveAction::Wander,
+            PetAction::Sleep => crate::PetDirectiveAction::Rest,
+            PetAction::Play => crate::PetDirectiveAction::Play,
+            PetAction::Celebrate => crate::PetDirectiveAction::Celebrate,
+            PetAction::Observe => crate::PetDirectiveAction::Observe,
+            PetAction::Perch => crate::PetDirectiveAction::Perch,
+            PetAction::Work | PetAction::Stretch => crate::PetDirectiveAction::WorkBusy,
+            PetAction::Climb => crate::PetDirectiveAction::Wander,
+            PetAction::Peek => crate::PetDirectiveAction::Observe,
+            PetAction::Idle => {
+                match intent {
+                    PetIntent::Explore => crate::PetDirectiveAction::Wander,
+                    PetIntent::Rest => crate::PetDirectiveAction::Rest,
+                    PetIntent::Play => crate::PetDirectiveAction::Play,
+                    PetIntent::Observe => crate::PetDirectiveAction::Observe,
+                    PetIntent::Stretch => crate::PetDirectiveAction::WorkBusy,
+                }
+            }
+        };
+        let attention = match (directive_action, intent) {
+            (crate::PetDirectiveAction::ApproachCursor, _)
+            | (crate::PetDirectiveAction::Observe, PetIntent::Observe) => crate::AttentionFocus::Cursor,
+            (crate::PetDirectiveAction::Perch, _) => crate::AttentionFocus::ForegroundWindow,
+            (crate::PetDirectiveAction::Play | crate::PetDirectiveAction::Celebrate, _)
+            | (crate::PetDirectiveAction::WorkBusy, _) => crate::AttentionFocus::User,
+            _ => crate::AttentionFocus::IdleScene,
+        };
+        let mood_axis = crate::MoodAxis::from_vitals(self.energy, self.mood);
+        self.last_directive_speech =
+            Some(crate::lifeform_speech_for(directive_action, mood_axis).to_owned());
+        self.last_directive_animation =
+            Some(directive_action.default_animation().to_owned());
+        self.last_attention = Some(attention);
+        self.directive_revision = self.directive_revision.saturating_add(1);
+    }
+
     pub fn recover_transient_state(&mut self) -> bool {
         if matches!(
             self.state,
@@ -994,15 +1222,12 @@ impl Pet {
     #[must_use]
     pub fn autonomy_decision(&self, policy: PetAutonomyPolicy, now_ms: u64) -> PetAutonomyDecision {
         if let Some(active_until_ms) = self.autonomy.active_until_ms {
-            let expected_state = match self.autonomy.active_intent {
-                Some(PetIntent::Observe) => PetState::Observing,
-                Some(PetIntent::Explore) => PetState::Walking,
-                Some(PetIntent::Play) => PetState::Playing,
-                Some(PetIntent::Stretch) => PetState::Stretching,
-                Some(PetIntent::Rest) => PetState::Sleeping,
-                None => return PetAutonomyDecision::Interrupt,
+            let Some(active_intent) = self.autonomy.active_intent else {
+                return PetAutonomyDecision::Interrupt;
             };
-            if self.state != expected_state {
+            // Lifeform acts may land on nearby expressive states (Perch/Celebrate/Work)
+            // that classic PetIntent did not enumerate 1:1.
+            if !Self::autonomy_intent_matches_state(active_intent, self.state) {
                 return PetAutonomyDecision::Interrupt;
             }
             if !policy.enabled || policy.quiet || policy.focus {
@@ -1086,6 +1311,9 @@ impl Pet {
                 self.autonomy.active_until_ms =
                     Some(now_ms.saturating_add(policy.action_duration_ms));
                 self.autonomy.sequence = self.autonomy.sequence.saturating_add(1);
+                // Stamp a structured lifeform directive so speech/animation/attention
+                // ride the same product path as AI-driven acts (offline-capable).
+                self.stamp_autonomy_directive(intent, action, now_ms);
             }
             PetAutonomyDecision::Finish => {
                 if self.autonomy.active_intent == Some(PetIntent::Rest) {
@@ -1139,6 +1367,10 @@ pub enum PetError {
     DuplicateCollaboration,
     #[error("pet inventory must be sorted, unique, and contain quantities between 1 and 999")]
     InvalidInventory,
+    #[error("pet personality traits must be between 0 and 100")]
+    InvalidPersonality,
+    #[error("pet structured directive is invalid")]
+    InvalidDirective,
     #[error("pet item is not available")]
     ItemUnavailable,
     #[error("pet item use is cooling down")]
@@ -2169,6 +2401,257 @@ mod tests {
         pet.notice_presence().expect("notice");
         assert_eq!(pet.feedback_sequence, 1);
         assert_eq!(pet.active_feedback_sequence, Some(1));
+    }
+
+    #[test]
+    fn legacy_snapshot_defaults_personality_profile() {
+        let pet = Pet::new("Aster").expect("valid pet");
+        let mut value = serde_json::to_value(pet).expect("serialize pet");
+        let object = value.as_object_mut().expect("pet object");
+        object.remove("personality");
+        let restored: Pet = serde_json::from_value(value).expect("legacy pet");
+        assert_eq!(restored.personality, crate::PersonalityProfile::default());
+        restored.validate().expect("legacy personality is valid");
+    }
+
+    #[test]
+    fn autonomy_start_stamps_lifeform_directive() {
+        let mut pet = Pet::new("Aster").expect("pet");
+        pet.energy = 90;
+        pet.mood = 80;
+        let policy = PetAutonomyPolicy {
+            enabled: true,
+            quiet: false,
+            focus: false,
+            idle_delay_ms: 0,
+            action_duration_ms: 8_000,
+            cooldown_ms: 1_000,
+            budget_capacity: 10,
+            budget_refill_ms: 1_000,
+        };
+        let before = pet.directive_revision;
+        pet.apply_autonomy_decision(
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Explore,
+                action: PetAction::Walk,
+            },
+            policy,
+            1_000,
+        );
+        assert_eq!(pet.state, PetState::Walking);
+        assert!(pet.directive_revision > before);
+        assert_eq!(
+            pet.last_directive_animation.as_deref(),
+            Some("pet.walk")
+        );
+        assert!(pet.last_directive_speech.as_ref().is_some_and(|s| !s.is_empty()));
+        assert_eq!(pet.last_attention, Some(crate::AttentionFocus::IdleScene));
+    }
+
+    #[test]
+    fn apply_structured_directive_validates_mood_and_maps_actions() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.mood = 50;
+
+        let mut directive = crate::StructuredPetDirective::new(
+            crate::PetDirectiveAction::Play,
+            crate::AttentionFocus::User,
+        );
+        directive.speech = Some("hi".to_owned());
+        directive.animation = Some("pet.play".to_owned());
+        directive.mood_delta = Some(crate::MoodDelta { mood: 10 });
+        pet.apply_structured_directive(&directive, 1_000)
+            .expect("apply play");
+        assert_eq!(pet.state, PetState::Playing);
+        assert_eq!(pet.mood, 60);
+        assert_eq!(pet.last_directive_speech.as_deref(), Some("hi"));
+        assert_eq!(pet.last_directive_animation.as_deref(), Some("pet.play"));
+        assert_eq!(pet.last_attention, Some(crate::AttentionFocus::User));
+        assert_eq!(pet.directive_revision, 1);
+        assert_eq!(pet.autonomy.active_intent, Some(PetIntent::Play));
+        assert_eq!(pet.autonomy.active_until_ms, Some(9_000));
+
+        let wander = crate::StructuredPetDirective::new(
+            crate::PetDirectiveAction::Wander,
+            crate::AttentionFocus::IdleScene,
+        );
+        pet.apply_structured_directive(&wander, 2_000)
+            .expect("wander");
+        assert_eq!(pet.state, PetState::Walking);
+        assert_eq!(pet.autonomy.active_intent, Some(PetIntent::Explore));
+        assert_eq!(pet.directive_revision, 2);
+        assert_eq!(
+            pet.last_directive_animation.as_deref(),
+            Some("pet.walk")
+        );
+
+        let crash = crate::StructuredPetDirective::new(
+            crate::PetDirectiveAction::WorkCrash,
+            crate::AttentionFocus::Obstacle,
+        );
+        pet.apply_structured_directive(&crash, 3_000)
+            .expect("crash");
+        assert_eq!(pet.state, PetState::Recovering);
+        assert_eq!(pet.emotion, Emotion::Sad);
+        assert_eq!(pet.mood, 52); // 60 - 8 default crash hit
+        assert_eq!(pet.autonomy.active_intent, None);
+        assert_eq!(pet.directive_revision, 3);
+
+        let mut bad = crate::StructuredPetDirective::new(
+            crate::PetDirectiveAction::Rest,
+            crate::AttentionFocus::IdleScene,
+        );
+        bad.speech = Some("x".repeat(crate::MAX_DIRECTIVE_SPEECH_CHARS + 1));
+        assert_eq!(
+            pet.apply_structured_directive(&bad, 4_000),
+            Err(PetError::InvalidDirective)
+        );
+        assert_eq!(pet.directive_revision, 3);
+
+        pet.begin_drag().expect("drag");
+        assert_eq!(
+            pet.apply_structured_directive(&directive, 5_000),
+            Err(PetError::InvalidTransition)
+        );
+    }
+
+    #[test]
+    fn legacy_snapshot_defaults_directive_fields() {
+        let pet = Pet::new("Aster").expect("valid pet");
+        let mut value = serde_json::to_value(pet).expect("serialize pet");
+        let object = value.as_object_mut().expect("pet object");
+        object.remove("lastDirectiveSpeech");
+        object.remove("lastDirectiveAnimation");
+        object.remove("lastAttention");
+        object.remove("directiveRevision");
+        let restored: Pet = serde_json::from_value(value).expect("legacy pet");
+        assert_eq!(restored.last_directive_speech, None);
+        assert_eq!(restored.last_directive_animation, None);
+        assert_eq!(restored.last_attention, None);
+        assert_eq!(restored.directive_revision, 0);
+        restored.validate().expect("legacy pet is valid");
+    }
+
+    #[test]
+    fn autonomy_decision_with_lifeform_is_deterministic_and_meeting_suppresses() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.personality = crate::PersonalityProfile {
+            energy: 80,
+            curiosity: 40,
+            laziness: 20,
+            pride: 40,
+        };
+        let policy = PetAutonomyPolicy {
+            idle_delay_ms: 0,
+            action_duration_ms: 5,
+            cooldown_ms: 20,
+            ..PetAutonomyPolicy::default()
+        };
+        pet.autonomy.next_due_ms = 100;
+
+        let hints = crate::DesktopBehaviorHints {
+            crowding: crate::CrowdingLevel::Low,
+            idle_ms: 0,
+            on_battery: false,
+            meeting_active: false,
+            suppress_autonomy: false,
+        };
+        let first = pet.autonomy_decision_with_lifeform(policy, 100, Some(hints));
+        let second = pet.autonomy_decision_with_lifeform(policy, 100, Some(hints));
+        assert_eq!(first, second);
+        assert_eq!(
+            first,
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Explore,
+                action: PetAction::Walk,
+            }
+        );
+
+        let meeting = crate::DesktopBehaviorHints {
+            meeting_active: true,
+            ..hints
+        };
+        let suppressed = pet.autonomy_decision_with_lifeform(policy, 100, Some(meeting));
+        assert_eq!(
+            suppressed,
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Rest,
+                action: PetAction::Sleep,
+            }
+        );
+
+        // None keeps classic autonomy_decision (no regression).
+        let classic = pet.autonomy_decision(policy, 100);
+        let with_none = pet.autonomy_decision_with_lifeform(policy, 100, None);
+        assert_eq!(classic, with_none);
+        assert_eq!(
+            classic,
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Observe,
+                action: PetAction::Observe,
+            }
+        );
+    }
+
+    #[test]
+    fn lifeform_pride_celebrate_and_perch_finish_without_interrupt() {
+        let mut pet = Pet::new("Aster").expect("valid pet");
+        pet.personality = crate::PersonalityProfile::new(40, 30, 15, 90);
+        pet.mood = 80;
+        let policy = PetAutonomyPolicy {
+            idle_delay_ms: 0,
+            action_duration_ms: 10,
+            cooldown_ms: 20,
+            ..PetAutonomyPolicy::default()
+        };
+        pet.autonomy.next_due_ms = 100;
+        let hints = crate::DesktopBehaviorHints::default();
+
+        let start = pet.autonomy_decision_with_lifeform(policy, 100, Some(hints));
+        assert_eq!(
+            start,
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Play,
+                action: PetAction::Celebrate,
+            }
+        );
+        pet.apply_autonomy_decision(start, policy, 100);
+        assert_eq!(pet.state, PetState::Interacting);
+        assert_eq!(
+            pet.autonomy_decision_with_lifeform(policy, 105, Some(hints)),
+            PetAutonomyDecision::Noop
+        );
+        let finish = pet.autonomy_decision_with_lifeform(policy, 120, Some(hints));
+        assert_eq!(finish, PetAutonomyDecision::Finish);
+        pet.apply_autonomy_decision(finish, policy, 120);
+        assert_eq!(pet.state, PetState::Idle);
+
+        // Crowded scene → Perch, also finishable without false interrupt.
+        pet.personality = crate::PersonalityProfile::default();
+        pet.autonomy = PetAutonomyState::default();
+        pet.autonomy.next_due_ms = 200;
+        let crowded = crate::DesktopBehaviorHints {
+            crowding: crate::CrowdingLevel::High,
+            ..crate::DesktopBehaviorHints::default()
+        };
+        let perch_start = pet.autonomy_decision_with_lifeform(policy, 200, Some(crowded));
+        assert_eq!(
+            perch_start,
+            PetAutonomyDecision::Start {
+                intent: PetIntent::Observe,
+                action: PetAction::Perch,
+            }
+        );
+        pet.apply_autonomy_decision(perch_start, policy, 200);
+        assert_eq!(pet.state, PetState::Perching);
+        assert_eq!(
+            pet.autonomy_decision_with_lifeform(policy, 205, Some(crowded)),
+            PetAutonomyDecision::Noop
+        );
+        assert_eq!(
+            pet.autonomy_decision_with_lifeform(policy, 220, Some(crowded)),
+            PetAutonomyDecision::Finish
+        );
     }
 
     #[test]

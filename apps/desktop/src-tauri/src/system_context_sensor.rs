@@ -153,6 +153,119 @@ pub fn sample_activity(
     nimora_system_context_windows::sample_activity(timeout)
 }
 
+
+// ---------------------------------------------------------------------------
+// Pure presence debounce / schedule helpers (platform-agnostic, no OS I/O).
+// Hosts can stabilize fullscreen / DND before Presence decisions.
+// ---------------------------------------------------------------------------
+
+/// Minimum continuous observation before a presence boolean is considered stable.
+pub const PRESENCE_BOOLEAN_HOLD_MS: u64 = 1_500;
+
+/// Suggested re-sample interval while the published presence value is stable.
+pub const PRESENCE_SAMPLE_CADENCE_MS: u64 = 5_000;
+
+/// Faster re-sample interval while a hold is in progress (pending change).
+pub const PRESENCE_SAMPLE_CADENCE_UNSTABLE_MS: u64 = 1_000;
+
+/// Debounce gate for presence booleans (fullscreen / DND).
+///
+/// Emits only after the new value has been observed continuously for the hold
+/// window, preventing flicker into Presence / lifeform suppress paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PresenceBooleanGate {
+    published: Option<bool>,
+    pending: Option<bool>,
+    pending_since_ms: u64,
+    hold_ms: u64,
+}
+
+impl Default for PresenceBooleanGate {
+    fn default() -> Self {
+        Self::new(PRESENCE_BOOLEAN_HOLD_MS)
+    }
+}
+
+impl PresenceBooleanGate {
+    /// Builds a gate with a custom hold interval (milliseconds).
+    #[must_use]
+    pub const fn new(hold_ms: u64) -> Self {
+        Self {
+            published: None,
+            pending: None,
+            pending_since_ms: 0,
+            hold_ms,
+        }
+    }
+
+    /// Last stably published value, if any.
+    #[must_use]
+    pub const fn published(self) -> Option<bool> {
+        self.published
+    }
+
+    /// True while a candidate value differs from the published one and hold is open.
+    #[must_use]
+    pub const fn is_holding(self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Observes a raw sample. Returns `Some(stable)` only when the published
+    /// value changes after the hold window.
+    #[must_use]
+    pub fn observe(mut self, value: bool, now_ms: u64) -> (Self, Option<bool>) {
+        if self.published == Some(value) {
+            self.pending = None;
+            return (self, None);
+        }
+        match self.pending {
+            Some(pending) if pending == value => {
+                if now_ms.saturating_sub(self.pending_since_ms) >= self.hold_ms {
+                    self.published = Some(value);
+                    self.pending = None;
+                    return (self, Some(value));
+                }
+                (self, None)
+            }
+            _ => {
+                self.pending = Some(value);
+                self.pending_since_ms = now_ms;
+                (self, None)
+            }
+        }
+    }
+
+    /// Force-publish (tests / fail-closed reset after permission loss).
+    #[must_use]
+    pub fn force(mut self, value: bool) -> Self {
+        self.published = Some(value);
+        self.pending = None;
+        self
+    }
+}
+
+/// Maps sample success into an optional raw boolean; errors are ignored (keep last).
+#[must_use]
+pub fn presence_raw_from_result<E>(result: Result<bool, E>) -> Option<bool> {
+    result.ok()
+}
+
+/// Next sample delay: faster while any gate is still holding a pending flip.
+#[must_use]
+pub const fn presence_sample_delay_ms(holding: bool) -> u64 {
+    if holding {
+        PRESENCE_SAMPLE_CADENCE_UNSTABLE_MS
+    } else {
+        PRESENCE_SAMPLE_CADENCE_MS
+    }
+}
+
+/// Whether two successive presence samples agree (single-shot convenience).
+#[must_use]
+pub const fn presence_values_agree(a: bool, b: bool) -> bool {
+    a == b
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(target_os = "macos")]
@@ -211,5 +324,61 @@ mod tests {
         for forbidden in ["Library", "Assertions.json", "defaults", "sqlite"] {
             assert!(!DO_NOT_DISTURB_NOTIFICATION.contains(forbidden));
         }
+    }
+}
+
+
+#[cfg(test)]
+mod pure_tests {
+    use super::*;
+
+    #[test]
+    fn presence_gate_holds_before_publish() {
+        let gate = PresenceBooleanGate::new(100);
+        let (gate, emit) = gate.observe(true, 0);
+        assert_eq!(emit, None);
+        assert!(gate.is_holding());
+        let (gate, emit) = gate.observe(true, 50);
+        assert_eq!(emit, None);
+        let (gate, emit) = gate.observe(true, 100);
+        assert_eq!(emit, Some(true));
+        assert!(!gate.is_holding());
+        assert_eq!(gate.published(), Some(true));
+        let (gate, emit) = gate.observe(true, 200);
+        assert_eq!(emit, None);
+        let (gate, emit) = gate.observe(false, 200);
+        assert_eq!(emit, None);
+        assert!(gate.is_holding());
+        let (_gate, emit) = gate.observe(false, 300);
+        assert_eq!(emit, Some(false));
+    }
+
+    #[test]
+    fn presence_gate_resets_pending_on_flicker() {
+        let gate = PresenceBooleanGate::new(100);
+        let (gate, _) = gate.observe(true, 0);
+        let (gate, emit) = gate.observe(false, 50);
+        assert_eq!(emit, None);
+        let (gate, emit) = gate.observe(false, 149);
+        assert_eq!(emit, None);
+        let (gate, emit) = gate.observe(false, 150);
+        assert_eq!(emit, Some(false));
+        assert_eq!(gate.published(), Some(false));
+    }
+
+    #[test]
+    fn presence_schedule_and_result_helpers() {
+        assert_eq!(presence_sample_delay_ms(false), PRESENCE_SAMPLE_CADENCE_MS);
+        assert_eq!(
+            presence_sample_delay_ms(true),
+            PRESENCE_SAMPLE_CADENCE_UNSTABLE_MS
+        );
+        assert_eq!(presence_raw_from_result::<()>(Ok(true)), Some(true));
+        assert_eq!(presence_raw_from_result::<&str>(Err("denied")), None);
+        assert!(presence_values_agree(true, true));
+        assert!(!presence_values_agree(true, false));
+        let forced = PresenceBooleanGate::default().force(true);
+        assert_eq!(forced.published(), Some(true));
+        assert!(!forced.is_holding());
     }
 }

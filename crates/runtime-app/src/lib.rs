@@ -1,10 +1,10 @@
 //! Application use cases and persistence ports for the `Nimora` runtime.
 
 use nimora_runtime_core::{
-    Command, CommandError, CommandRisk, Event, EventError, EventSource, Pet, PetAction,
-    PetAutonomyDecision, PetAutonomyPolicy, PetCareAction, PetError, PetItemId, PointerButton,
-    Position, Profile, ProfileError, ProfileId, ProfilePolicy, RuntimeMode, SafeModeReason,
-    SafetySnapshot,
+    Command, CommandError, CommandRisk, DesktopBehaviorHints, Event, EventError, EventSource, Pet,
+    PetAction, PetAutonomyDecision, PetAutonomyPolicy, PetCareAction, PetError, PetItemId,
+    PointerButton, Position, Profile, ProfileError, ProfileId, ProfilePolicy, RuntimeMode,
+    SafeModeReason, SafetySnapshot, StructuredPetDirective,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -541,6 +541,112 @@ impl<R: PetRepository> RuntimeService<R> {
                 Command::new(
                     "pet.autonomy.tick",
                     serde_json::json!({ "nowMs": now_ms }),
+                    CommandRisk::Safe,
+                )
+            },
+            "pet.autonomy.transitioned",
+            |before, after| {
+                serde_json::json!({
+                    "decision": format!("{decision:?}"),
+                    "beforeState": before.state,
+                    "afterState": after.state,
+                    "beforeEnergy": before.energy,
+                    "afterEnergy": after.energy,
+                    "intent": after.autonomy.active_intent,
+                    "nextDueMs": after.autonomy.next_due_ms,
+                    "budget": {
+                        "beforeTokens": before.autonomy.budget_tokens,
+                        "afterTokens": after.autonomy.budget_tokens,
+                        "nextRefillAtMs": after.autonomy.budget_refill_at_ms,
+                    },
+                })
+            },
+        )
+        .map(Some)
+    }
+
+    /// Applies a structured lifeform directive and persists the resulting pet snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the directive is invalid, the transition is forbidden, or
+    /// atomic persistence fails.
+    pub fn apply_pet_directive(
+        &self,
+        directive: StructuredPetDirective,
+        now_ms: u64,
+    ) -> Result<Command, RuntimeError> {
+        let action = directive.action;
+        let attention = directive.attention;
+        self.update(
+            {
+                let directive = directive.clone();
+                move |pet| pet.apply_structured_directive(&directive, now_ms)
+            },
+            {
+                let directive = directive.clone();
+                move || {
+                    Command::new(
+                        "pet.directive.apply",
+                        serde_json::json!({ "directive": directive }),
+                        CommandRisk::Safe,
+                    )
+                }
+            },
+            "pet.directive.applied",
+            move |before, after| {
+                serde_json::json!({
+                    "action": action,
+                    "attention": attention,
+                    "before": {
+                        "state": before.state,
+                        "emotion": before.emotion,
+                        "mood": before.mood,
+                        "directiveRevision": before.directive_revision,
+                    },
+                    "after": {
+                        "state": after.state,
+                        "emotion": after.emotion,
+                        "mood": after.mood,
+                        "directiveRevision": after.directive_revision,
+                        "speech": after.last_directive_speech,
+                        "animation": after.last_directive_animation,
+                        "attention": after.last_attention,
+                    },
+                })
+            },
+        )
+    }
+
+    /// Advances offline autonomy, optionally preferring personality-aware lifeform intent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the resulting transition cannot be persisted atomically.
+    pub fn tick_autonomy_with_lifeform(
+        &self,
+        policy: PetAutonomyPolicy,
+        now_ms: u64,
+        desktop_hints: Option<DesktopBehaviorHints>,
+    ) -> Result<Option<Command>, RuntimeError> {
+        let decision =
+            self.snapshot()?
+                .autonomy_decision_with_lifeform(policy, now_ms, desktop_hints);
+        if decision == PetAutonomyDecision::Noop {
+            return Ok(None);
+        }
+        self.update(
+            |pet| {
+                pet.apply_autonomy_decision(decision, policy, now_ms);
+                Ok(())
+            },
+            || {
+                Command::new(
+                    "pet.autonomy.tick",
+                    serde_json::json!({
+                        "nowMs": now_ms,
+                        "lifeform": desktop_hints.is_some(),
+                    }),
                     CommandRisk::Safe,
                 )
             },
@@ -1557,6 +1663,103 @@ mod tests {
         let events = service.drain_events().expect("events");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, "pet.action.played");
+        assert_eq!(events[0].trace_id, command.trace_id);
+    }
+
+    #[test]
+    fn apply_pet_directive_persists_structured_directive() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let mut directive = StructuredPetDirective::new(
+            nimora_runtime_core::PetDirectiveAction::Play,
+            nimora_runtime_core::AttentionFocus::User,
+        );
+        directive.speech = Some("hello".to_owned());
+        directive.mood_delta = Some(nimora_runtime_core::MoodDelta { mood: 5 });
+        directive.animation = Some("pet.play".to_owned());
+
+        let command = service
+            .apply_pet_directive(directive, 1_000)
+            .expect("apply directive");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.state, PetState::Playing);
+        assert_eq!(snapshot.mood, 75);
+        assert_eq!(snapshot.last_directive_speech.as_deref(), Some("hello"));
+        assert_eq!(snapshot.last_directive_animation.as_deref(), Some("pet.play"));
+        assert_eq!(
+            snapshot.last_attention,
+            Some(nimora_runtime_core::AttentionFocus::User)
+        );
+        assert_eq!(snapshot.directive_revision, 1);
+
+        let events = service.drain_events().expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "pet.directive.applied");
+        assert_eq!(events[0].trace_id, command.trace_id);
+        assert_eq!(command.command_id.to_string(), "pet.directive.apply");
+    }
+
+    #[test]
+    fn tick_autonomy_with_lifeform_persists_personality_biased_start() {
+        let mut pet = Pet::new("Aster").expect("pet");
+        pet.personality = nimora_runtime_core::PersonalityProfile::new(85, 30, 10, 25);
+        pet.autonomy.next_due_ms = 100;
+        let repository = MemoryRepository {
+            pet: Mutex::new(Some(pet)),
+            outbox: Mutex::new(Vec::new()),
+            fail_save: AtomicBool::new(false),
+        };
+        let service = RuntimeService::initialize(repository, "Aster").expect("runtime");
+        let policy = PetAutonomyPolicy {
+            idle_delay_ms: 0,
+            action_duration_ms: 8,
+            cooldown_ms: 20,
+            ..PetAutonomyPolicy::default()
+        };
+        let hints = DesktopBehaviorHints {
+            crowding: nimora_runtime_core::CrowdingLevel::Low,
+            idle_ms: 0,
+            on_battery: false,
+            meeting_active: false,
+            suppress_autonomy: false,
+        };
+        let command = service
+            .tick_autonomy_with_lifeform(policy, 100, Some(hints))
+            .expect("tick")
+            .expect("start command");
+        assert_eq!(command.command_id.to_string(), "pet.autonomy.tick");
+        assert_eq!(command.arguments["lifeform"], true);
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.state, PetState::Walking);
+        assert_eq!(
+            snapshot.autonomy.active_intent,
+            Some(nimora_runtime_core::PetIntent::Explore)
+        );
+        assert!(snapshot.directive_revision >= 1);
+        assert_eq!(
+            snapshot.last_directive_animation.as_deref(),
+            Some("pet.walk")
+        );
+        let events = service.drain_events().expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "pet.autonomy.transitioned");
+        assert_eq!(events[0].trace_id, command.trace_id);
+    }
+
+    #[test]
+    fn apply_pet_directive_accepts_skill_worker_petization() {
+        let service =
+            RuntimeService::initialize(MemoryRepository::default(), "Aster").expect("runtime");
+        let directive = nimora_runtime_core::skill_worker_busy_directive(Some("summarize"));
+        let command = service
+            .apply_pet_directive(directive, 1_000)
+            .expect("apply skill petization");
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.state, PetState::Working);
+        assert_eq!(snapshot.last_directive_speech.as_deref(), Some("「summarize」跑起来了"));
+        assert_eq!(snapshot.last_directive_animation.as_deref(), Some("pet.work"));
+        let events = service.drain_events().expect("events");
+        assert_eq!(events[0].event_type, "pet.directive.applied");
         assert_eq!(events[0].trace_id, command.trace_id);
     }
 

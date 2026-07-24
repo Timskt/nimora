@@ -11,7 +11,6 @@ import type {
 } from "@nimora/schemas";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
@@ -28,6 +27,51 @@ export interface PetSurfaceSnapshot {
   spec: "nimora.pet-surface/1";
   surface: PetSurface | null;
 }
+/** Fullscreen overlay stage origin/size in screen coordinates. */
+export interface OverlayStage {
+  originX: number;
+  originY: number;
+  width: number;
+  height: number;
+}
+/** Host-emitted pet pose update for optimistic stage placement. */
+export interface PetPositionEvent {
+  x: number;
+  y: number;
+  localX: number;
+  localY: number;
+  revision?: number;
+}
+/** Host-emitted occlusion of the pet body by other windows/surfaces. */
+export interface PetOcclusion {
+  coverage: number;
+  fullyHidden: boolean;
+  strips: Array<{ x0: number; y0: number; x1: number; y1: number }>;
+}
+/** Host-emitted lifeform directive for speech, mood, and animation. */
+export interface PetDirectiveEvent {
+  speech?: string | null;
+  animation?: string | null;
+  attention?: string | null;
+  action?: string | null;
+  mood?: number;
+  revision?: number;
+}
+/** Host-accepted structured pet act (matches nimora.pet_directive/1). */
+export interface StructuredPetDirective {
+  spec: "nimora.pet_directive/1";
+  speech?: string | null;
+  moodDelta?: { mood: number } | null;
+  action: string;
+  animation?: string | null;
+  attention: string;
+}
+/** Empty occlusion used by browser preview / offline mock. */
+export const EMPTY_PET_OCCLUSION: PetOcclusion = {
+  coverage: 0,
+  fullyHidden: false,
+  strips: [],
+};
 export interface AgentCompanionSignal {
   spec: "nimora.agent-companion-signal/1";
   status: AgentCompanionStatus;
@@ -61,6 +105,33 @@ export function isAgentCompanionSignal(value: unknown): value is AgentCompanionS
 }
 export type CommandRisk = "safe" | "low" | "medium" | "high" | "critical";
 
+/** Privacy-preserving OS lifeform aggregates (no window titles). */
+export interface LifeformSenseSnapshot {
+  batteryPercent?: number | null;
+  onBattery: boolean;
+  charging: boolean;
+  idleMs: number;
+  meetingActive: boolean;
+  /** zoom | teams | meet | webex | unknown — never raw titles. */
+  meetingHint?: string | null;
+  displayCount: number;
+  /** App-local unread (outbox/approvals) — never titles or bodies. */
+  notificationUnread?: boolean;
+  freshness: string;
+  degradationReason?: string | null;
+  observedAtMs: number;
+  expiresAtMs: number;
+}
+
+/** Host process RSS / best-effort CPU vs product idle budget (200 MiB). */
+export interface ProcessBudgetSnapshot {
+  rssBytes: number;
+  rssMb: number;
+  cpuPercentApprox?: number | null;
+  withinMemoryBudget: boolean;
+  observedAtMs: number;
+}
+
 export interface DesktopSnapshot {
   pet: Pet;
   petRelationship: PetRelationshipSnapshot;
@@ -72,6 +143,14 @@ export interface DesktopSnapshot {
     alwaysOnTop: boolean;
     clickThrough: boolean;
   };
+  /** Present when the host owns a fullscreen overlay stage; browser preview omits it. */
+  overlayStage?: OverlayStage;
+  /** Logical pet body metrics (physical px). */
+  petBody?: { width: number; height: number };
+  /** Latest OS lifeform sense when the host has sampled the desktop environment. */
+  lifeformSense?: LifeformSenseSnapshot | null;
+  /** Host process memory/CPU budget sample (always present from native host). */
+  processBudget?: ProcessBudgetSnapshot | null;
   presenceOverride: PresenceOverride;
   presenceDecision: PresenceDecision;
   systemContextSensors: SystemContextSensorHealth[];
@@ -356,6 +435,38 @@ export interface StartAutoModeJobRequest extends ResumeAutoModeTurnRequest {
   maxTurnsPerBatch?: number;
 }
 
+export type AuthorizationTier = "observe" | "workspace" | "trusted_workspace" | "unattended" | "full_device";
+
+export interface StartUnattendedAutoModeRequest {
+  title: string;
+  objective: string;
+  steps: string[];
+  workspaceRoot: string;
+  tier: AuthorizationTier;
+  offline?: boolean;
+  maxTurnsPerBatch?: number;
+  reasoningPolicy?: ModelReasoningPolicy | null;
+  maxOutputTokens?: number;
+}
+
+export interface StartUnattendedAutoModeResult {
+  sessionId: string;
+  jobId: string;
+  grantId: string;
+}
+
+export interface AuthorizationGrantSummary {
+  spec: "nimora.authorization-grant-summary/1";
+  grantId: string;
+  goalId: string;
+  tier: AuthorizationTier;
+  status: "active" | "revoked" | "expired";
+  workspaceRoot: string | null;
+  issuedAtMs: number;
+  expiresAtMs: number | null;
+  revokedAtMs: number | null;
+}
+
 export interface DesktopAutoModeTurnResult {
   spec: "nimora.desktop-auto-mode-turn/1";
   sessionId: string;
@@ -429,6 +540,7 @@ export interface DesktopAutoModeControlCenter {
     checkpoint: ({ sequence: number; model: string; workspaceRevision: string; task: { id: string; status: string; usage: { steps: number; toolCalls: number; inputTokens: number; outputTokens: number; costMicrounits: number } } } & Record<string, unknown>) | null;
     attempt: DesktopAutoModeAttemptDetail["attempt"];
     resolutions: DesktopAutoModeAttemptResolution[];
+    grant?: AuthorizationGrantSummary | null;
   }>;
 }
 
@@ -1017,6 +1129,21 @@ export interface AutomationAgentJournalEntry {
   error: string | null;
 }
 
+/** Leave/away summary for unattended Auto Mode (host `get_away_summary`). */
+export interface AwaySummary {
+  spec?: "nimora.away-summary/1";
+  awayStartedAtMs: number | null;
+  awayEndedAtMs: number | null;
+  durationMs: number | null;
+  completedGoals: number;
+  failedGoals: number;
+  pendingConfirmations: number;
+  grantsRevoked: number;
+  companionMoments: number;
+  highlights: string[];
+  generatedAtMs: number;
+}
+
 export interface DesktopApi {
   readonly native: boolean;
   loginLaunchEnabled(): Promise<boolean>;
@@ -1030,6 +1157,9 @@ export interface DesktopApi {
   onSystemContextChanged(handler: () => void): Promise<() => void>;
   onPetVitalsChanged(handler: () => void): Promise<() => void>;
   onPetSurfaceChanged(handler: () => void): Promise<() => void>;
+  onPetPositionChanged(handler: (event: PetPositionEvent) => void): Promise<() => void>;
+  onPetOcclusionChanged(handler: (event: PetOcclusion) => void): Promise<() => void>;
+  onPetDirectiveChanged(handler: (event: PetDirectiveEvent) => void): Promise<() => void>;
   onControlCenterNavigate(handler: (destination: ControlCenterDestination) => void): Promise<() => void>;
   onAgentCompanionSignal(handler: (signal: AgentCompanionSignal) => void): Promise<() => void>;
   publishAgentCompanionSignal(signal: AgentCompanionSignal): Promise<void>;
@@ -1094,6 +1224,10 @@ export interface DesktopApi {
   }): Promise<DesktopAutoModeAttemptResolution>;
   pauseAutoModeJob(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
   cancelAutoModeJob(jobId: string): Promise<DesktopAutoModeJobSnapshot>;
+  startUnattendedAutoMode(request: StartUnattendedAutoModeRequest): Promise<StartUnattendedAutoModeResult>;
+  revokeAuthorizationGrant(grantId: string): Promise<{ grantId: string; revoked: boolean }>;
+  listAuthorizationGrants(goalId?: string): Promise<AuthorizationGrantSummary[]>;
+  getAwaySummary(goalId?: string): Promise<AwaySummary | null>;
   prepareAgentTool(toolId: string, argumentsValue: Record<string, unknown>): Promise<AgentToolResult>;
   confirmAgentTool(invocationId: string): Promise<AgentToolResult>;
   confirmAgentRunTool(invocationId: string): Promise<LocalAgentResult>;
@@ -1115,6 +1249,7 @@ export interface DesktopApi {
   setPetHome(): Promise<NimoraCommand | null>;
   returnPetHome(): Promise<NimoraCommand | null>;
   playAction(action: PetAction): Promise<NimoraCommand | null>;
+  applyPetDirective(directive: StructuredPetDirective): Promise<NimoraCommand | null>;
   carePet(action: PetCareAction): Promise<NimoraCommand | null>;
   usePetItem(itemId: PetItemId): Promise<NimoraCommand | null>;
   renamePet(name: string): Promise<NimoraCommand | null>;
@@ -1122,7 +1257,10 @@ export interface DesktopApi {
   doubleClickPet(x: number, y: number, button: PointerButton): Promise<NimoraCommand | null>;
   strokePet(distancePx: number, durationMs: number, reversals: number): Promise<NimoraCommand | null>;
   noticePet(x: number, y: number): Promise<NimoraCommand | null>;
+  /** @deprecated Prefer beginPetDrag + movePet + finishPetDrag for logical stage drag. */
   dragPet(): Promise<NimoraCommand | null>;
+  beginPetDrag(): Promise<NimoraCommand | null>;
+  finishPetDrag(): Promise<NimoraCommand | null>;
   setClickThrough(enabled: boolean): Promise<void>;
   setReducedMotion(enabled: boolean): Promise<void>;
   assetCatalog(): Promise<AssetCatalogSnapshot>;
@@ -1186,10 +1324,43 @@ const previewSnapshot: DesktopSnapshot = {
       { itemId: "star_ball", quantity: 2 },
       { itemId: "bubble_soap", quantity: 3 },
     ],
+    personality: {
+      energy: 78,
+      curiosity: 86,
+      laziness: 22,
+      pride: 54,
+    },
+    lastDirectiveSpeech: "在桌面上等你呢～",
+    lastDirectiveAnimation: "pet.idle",
+    lastAttention: "user",
+    directiveRevision: 0,
   },
   petRelationship: { bondPoints: 84, affinity: 84, level: 2, levelProgress: 34, pointsPerLevel: 50, stage: "familiar", nextStage: "trusted", nextStageAt: 100 },
   petPresentation: { statusBubblesEnabled: true },
   windowPolicy: { visible: true, alwaysOnTop: true, clickThrough: false },
+  overlayStage: { originX: 0, originY: 0, width: 1280, height: 800 },
+  petBody: { width: 260, height: 300 },
+  lifeformSense: {
+    batteryPercent: 86,
+    onBattery: false,
+    charging: false,
+    idleMs: 12_000,
+    meetingActive: false,
+    meetingHint: null,
+    displayCount: 1,
+    notificationUnread: false,
+    freshness: "fresh",
+    degradationReason: null,
+    observedAtMs: Date.now(),
+    expiresAtMs: Date.now() + 5_000,
+  },
+  processBudget: {
+    rssBytes: 96 * 1024 * 1024,
+    rssMb: 96,
+    cpuPercentApprox: 0.4,
+    withinMemoryBudget: true,
+    observedAtMs: Date.now(),
+  },
   presenceOverride: "automatic",
   presenceDecision: { spec: "nimora.system-context-decision/1", visible: true, suppressAutonomy: false, reason: "base_policy", decidedAtMs: Date.now() },
   systemContextSensors: [
@@ -1265,7 +1436,6 @@ let previewLoginLaunchEnabled = false;
 export function createDesktopApi(
   native: boolean,
   invokeCommand: Invoke = invoke,
-  startDragging: () => Promise<void> = async () => await getCurrentWindow().startDragging(),
 ): DesktopApi {
   if (!native) {
     let previewAgentPendingTools: AgentToolResult[] = [];
@@ -1314,6 +1484,16 @@ export function createDesktopApi(
       async onSystemContextChanged() { return () => undefined; },
       async onPetVitalsChanged() { return () => undefined; },
       async onPetSurfaceChanged() { return () => undefined; },
+      async onPetPositionChanged() { return () => undefined; },
+      async onPetOcclusionChanged() { return () => undefined; },
+      async onPetDirectiveChanged(handler) {
+        if (typeof window === "undefined") return () => undefined;
+        const listener = (event: Event) => {
+          handler((event as CustomEvent<PetDirectiveEvent>).detail);
+        };
+        window.addEventListener("nimora:pet-directive-changed", listener);
+        return () => window.removeEventListener("nimora:pet-directive-changed", listener);
+      },
       async onControlCenterNavigate() { return () => undefined; },
       async onAgentCompanionSignal(handler) {
         const listener = (event: Event) => {
@@ -1519,6 +1699,7 @@ export function createDesktopApi(
           goal: { id: "preview-goal", title: "完善 Nimora 控制中心", objective: "完成安全、可审计的 Agent 长任务体验", status: "active", currentPlanRevision: 2 },
           plan: { goalId: "preview-goal", revision: 2, summary: "实现聚合控制中心", steps: [{ id: "step-1", description: "聚合运行事实", status: "completed" }, { id: "step-2", description: "等待高风险操作确认", status: "in_progress" }] },
           checkpoint: { sequence: 7, model: "qwen3:8b", workspaceRevision: "git:preview", task: { id: "preview-task", status: "paused", usage: { steps: 7, toolCalls: 4, inputTokens: 8400, outputTokens: 2100, costMicrounits: 0 } } }, attempt: null, resolutions: [],
+          grant: { spec: "nimora.authorization-grant-summary/1", grantId: "preview-grant", goalId: "preview-goal", tier: "workspace", status: "active", workspaceRoot: "/preview/workspace", issuedAtMs: now - 420_000, expiresAtMs: null, revokedAtMs: null },
         }] };
       },
       async autoModeAttemptDetail() {
@@ -1532,6 +1713,52 @@ export function createDesktopApi(
       },
       async cancelAutoModeJob() {
         throw new Error("desktop-host-required");
+      },
+      async startUnattendedAutoMode(request) {
+        return {
+          sessionId: "preview-session-unattended",
+          jobId: "preview-job-unattended",
+          grantId: `preview-grant-${request.tier}`,
+        };
+      },
+      async revokeAuthorizationGrant(grantId) {
+        return { grantId, revoked: true };
+      },
+      async listAuthorizationGrants(goalId) {
+        const now = Date.now();
+        const grants: AuthorizationGrantSummary[] = [{
+          spec: "nimora.authorization-grant-summary/1",
+          grantId: "preview-grant",
+          goalId: "preview-goal",
+          tier: "workspace",
+          status: "active",
+          workspaceRoot: "/preview/workspace",
+          issuedAtMs: now - 420_000,
+          expiresAtMs: null,
+          revokedAtMs: null,
+        }];
+        return goalId ? grants.filter((grant) => grant.goalId === goalId) : grants;
+      },
+      async getAwaySummary(goalId) {
+        const now = Date.now();
+        if (goalId && goalId !== "preview-goal") return null;
+        return {
+          spec: "nimora.away-summary/1" as const,
+          awayStartedAtMs: now - 45 * 60_000,
+          awayEndedAtMs: now,
+          durationMs: 45 * 60_000,
+          completedGoals: 1,
+          failedGoals: 0,
+          pendingConfirmations: 1,
+          grantsRevoked: 0,
+          companionMoments: 2,
+          highlights: [
+            "目标「夜间回归」状态为已完成，计划进度 3/3",
+            "关联 Auto Mode 会话 1 个，未撤销授权 1 个",
+            "伙伴留言：测试都绿了，可以回来看看。",
+          ],
+          generatedAtMs: now,
+        };
       },
       async prepareAgentTool(toolId, argumentsValue) {
         const invocationId = crypto.randomUUID();
@@ -1646,6 +1873,84 @@ export function createDesktopApi(
         previewSnapshot.pet.emotion = presentation.emotion;
         return null;
       },
+      async applyPetDirective(directive) {
+        if (!directive || directive.spec !== "nimora.pet_directive/1") {
+          throw new Error("invalid pet directive");
+        }
+        const action = String(directive.action ?? "");
+        const presentation = action === "rest"
+          ? { state: "sleeping" as const, emotion: "sleepy" as const }
+          : action === "work_busy" || action === "work_crash"
+            ? { state: "working" as const, emotion: action === "work_crash" ? "sad" as const : "focused" as const }
+            : action === "wander" || action === "approach_cursor"
+              ? { state: "walking" as const, emotion: "happy" as const }
+              : action === "play"
+                ? { state: "playing" as const, emotion: "happy" as const }
+                : action === "celebrate"
+                  ? { state: "interacting" as const, emotion: "happy" as const }
+                  : action === "observe"
+                    ? { state: "observing" as const, emotion: "neutral" as const }
+                    : action === "perch"
+                      ? { state: "idle" as const, emotion: "neutral" as const }
+                      : { state: "idle" as const, emotion: "neutral" as const };
+        if (action === "work_crash") {
+          previewSnapshot.pet.state = "recovering";
+          previewSnapshot.pet.emotion = "sad";
+          if (!directive.moodDelta) {
+            previewSnapshot.pet.mood = Math.max(0, previewSnapshot.pet.mood - 8);
+          }
+        } else {
+          previewSnapshot.pet.state = presentation.state;
+          previewSnapshot.pet.emotion = presentation.emotion;
+        }
+        if (directive.moodDelta && typeof directive.moodDelta.mood === "number") {
+          previewSnapshot.pet.mood = Math.max(0, Math.min(100, previewSnapshot.pet.mood + directive.moodDelta.mood));
+        }
+        const attentionValues = [
+          "cursor",
+          "foreground_window",
+          "notification_area",
+          "user",
+          "idle_scene",
+          "obstacle",
+        ] as const;
+        type PetAttention = NonNullable<Pet["lastAttention"]>;
+        const rawAttention = directive.attention;
+        const lastAttention: PetAttention | null =
+          typeof rawAttention === "string" && (attentionValues as readonly string[]).includes(rawAttention)
+            ? (rawAttention as PetAttention)
+            : null;
+        const lastDirectiveSpeech = directive.speech ?? null;
+        const lastDirectiveAnimation = directive.animation
+          ?? (action === "rest" ? "pet.sleep"
+            : action === "work_busy" || action === "work_crash" ? "pet.work"
+            : action === "wander" || action === "approach_cursor" ? "pet.walk"
+            : action === "play" ? "pet.play"
+            : action === "celebrate" ? "pet.celebrate"
+            : action === "observe" ? "pet.observe"
+            : action === "perch" ? "pet.perch"
+            : "pet.idle");
+        const directiveRevision = (previewSnapshot.pet.directiveRevision ?? 0) + 1;
+        previewSnapshot.pet = {
+          ...previewSnapshot.pet,
+          lastDirectiveSpeech,
+          lastDirectiveAnimation,
+          lastAttention,
+          directiveRevision,
+        };
+        const event: PetDirectiveEvent = {
+          speech: lastDirectiveSpeech,
+          animation: lastDirectiveAnimation,
+          attention: lastAttention,
+          action: previewSnapshot.pet.state,
+          mood: previewSnapshot.pet.mood,
+          revision: directiveRevision,
+        };
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent<PetDirectiveEvent>("nimora:pet-directive-changed", { detail: event }));
+        }
+        return null;
+      },
       async carePet(action) {
         const gains = action === "feed"
           ? { energy: 20, mood: 2, satiety: 25, cleanliness: 0, affinity: 1 }
@@ -1708,7 +2013,19 @@ export function createDesktopApi(
         previewSnapshot.pet.emotion = "surprised";
         return null;
       },
-      async dragPet() { return null; },
+      async dragPet() {
+        previewSnapshot.pet.state = "dragged";
+        previewSnapshot.pet.state = "idle";
+        return null;
+      },
+      async beginPetDrag() {
+        previewSnapshot.pet.state = "dragged";
+        return null;
+      },
+      async finishPetDrag() {
+        if (previewSnapshot.pet.state === "dragged") previewSnapshot.pet.state = "idle";
+        return null;
+      },
       async setClickThrough() {},
       async setReducedMotion() {},
       async assetCatalog() { return { assets: [], rejected: [] }; },
@@ -1809,6 +2126,15 @@ export function createDesktopApi(
     async onPetSurfaceChanged(handler) {
       return await listen("nimora://pet-surface-changed", handler);
     },
+    async onPetPositionChanged(handler) {
+      return await listen<PetPositionEvent>("nimora://pet-position-changed", (event) => handler(event.payload));
+    },
+    async onPetOcclusionChanged(handler) {
+      return await listen<PetOcclusion>("nimora://pet-occlusion-changed", (event) => handler(event.payload));
+    },
+    async onPetDirectiveChanged(handler) {
+      return await listen<PetDirectiveEvent>("nimora://pet-directive-changed", (event) => handler(event.payload));
+    },
     async onControlCenterNavigate(handler) {
       return await listen<ControlCenterDestination>("nimora://control-center-navigate", (event) => handler(event.payload));
     },
@@ -1899,6 +2225,22 @@ export function createDesktopApi(
     resolveAutoModeAttempt: async (request) => await invokeCommand("resolve_auto_mode_attempt", { request }) as DesktopAutoModeAttemptResolution,
     pauseAutoModeJob: async (jobId) => await invokeCommand("pause_auto_mode_job", { jobId }) as DesktopAutoModeJobSnapshot,
     cancelAutoModeJob: async (jobId) => await invokeCommand("cancel_auto_mode_job", { jobId }) as DesktopAutoModeJobSnapshot,
+    startUnattendedAutoMode: async (request) => await invokeCommand("start_unattended_auto_mode", {
+      request: {
+        title: request.title,
+        objective: request.objective,
+        steps: request.steps,
+        workspaceRoot: request.workspaceRoot,
+        tier: request.tier,
+        offline: request.offline ?? true,
+        maxTurnsPerBatch: request.maxTurnsPerBatch ?? 8,
+        reasoningPolicy: request.reasoningPolicy ?? null,
+        maxOutputTokens: request.maxOutputTokens ?? null,
+      },
+    }) as StartUnattendedAutoModeResult,
+    revokeAuthorizationGrant: async (grantId) => await invokeCommand("revoke_authorization_grant", { grantId }) as { grantId: string; revoked: boolean },
+    listAuthorizationGrants: async (goalId) => await invokeCommand("list_authorization_grants", { goalId: goalId ?? null }) as AuthorizationGrantSummary[],
+    getAwaySummary: async (goalId) => await invokeCommand("get_away_summary", { goalId: goalId ?? null }) as AwaySummary | null,
     prepareAgentTool: async (toolId, argumentsValue) => await invokeCommand("prepare_agent_tool", { request: { toolId, arguments: argumentsValue } }) as AgentToolResult,
     confirmAgentTool: async (invocationId) => await invokeCommand("confirm_agent_tool", { request: { invocationId } }) as AgentToolResult,
     confirmAgentRunTool: async (invocationId) => await invokeCommand("confirm_agent_run_tool", { request: { invocationId } }) as LocalAgentResult,
@@ -1920,6 +2262,7 @@ export function createDesktopApi(
     setPetHome: async () => await invokeCommand("set_pet_home") as NimoraCommand,
     returnPetHome: async () => await invokeCommand("return_pet_home") as NimoraCommand,
     playAction: async (action) => await invokeCommand("play_pet_action", { action }) as NimoraCommand,
+    applyPetDirective: async (directive) => await invokeCommand("apply_pet_directive", { directive }) as NimoraCommand,
     carePet: async (action) => await invokeCommand("care_pet", { action }) as NimoraCommand,
     usePetItem: async (itemId) => await invokeCommand("use_pet_item", { itemId }) as NimoraCommand,
     renamePet: async (name) => await invokeCommand("rename_pet", { name }) as NimoraCommand,
@@ -1935,16 +2278,13 @@ export function createDesktopApi(
     noticePet: async (x, y) => await invokeCommand("notice_pet", {
       request: { x, y, button: "left" },
     }) as NimoraCommand,
+    // Logical stage drag: PetOverlay calls beginPetDrag, movePet on pointer move, finishPetDrag on release.
     dragPet: async () => {
       await invokeCommand("begin_pet_drag");
-      try {
-        await startDragging();
-      } catch (error) {
-        await invokeCommand("finish_pet_drag");
-        throw error;
-      }
       return await invokeCommand("finish_pet_drag") as NimoraCommand;
     },
+    beginPetDrag: async () => await invokeCommand("begin_pet_drag") as NimoraCommand,
+    finishPetDrag: async () => await invokeCommand("finish_pet_drag") as NimoraCommand,
     setClickThrough: async (enabled) => { await invokeCommand("set_click_through", { enabled }); },
     setReducedMotion: async (enabled) => { await invokeCommand("set_reduced_motion", { enabled }); },
     assetCatalog: async () => await invokeCommand("asset_catalog") as AssetCatalogSnapshot,

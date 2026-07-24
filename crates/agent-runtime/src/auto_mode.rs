@@ -1,6 +1,7 @@
 use crate::{
-    AgentBudget, AgentGoal, AgentGoalStatus, AgentPlan, AgentRuntimeError, DataClassification,
-    ToolEffect, ToolId,
+    AgentBudget, AgentGoal, AgentGoalStatus, AgentPlan, AgentRuntimeError, AuthorizationDecision,
+    AuthorizationError, AuthorizationGrant, AuthorizationRequest, DataClassification, ToolEffect,
+    ToolId,
 };
 use nimora_runtime_core::CommandRisk;
 use serde::{Deserialize, Serialize};
@@ -199,11 +200,30 @@ impl AutoModeSession {
         request: &AutoModeStepRequest,
         now_ms: u64,
     ) -> Result<AutoModeStepDecision, AutoModeError> {
+        self.evaluate_step_with_grant(request, None, None, None, now_ms)
+    }
+
+    /// Evaluates one proposed step, optionally auto-approving in-scope grant work.
+    ///
+    /// When `grant` authorizes with never-ask-within-grant, risk/effect confirmation pauses are
+    /// skipped. Goal, workspace, policy allowlist, data class, and budget guards still fail closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the session or request is structurally invalid.
+    pub fn evaluate_step_with_grant(
+        &mut self,
+        request: &AutoModeStepRequest,
+        grant: Option<&AuthorizationGrant>,
+        provider_id: Option<&str>,
+        model: Option<&str>,
+        now_ms: u64,
+    ) -> Result<AutoModeStepDecision, AutoModeError> {
         self.validate()?;
         if self.status != AutoModeStatus::Running || now_ms < self.updated_at_ms {
             return Err(AutoModeError::InvalidTransition);
         }
-        let reason =
+        let mut reason =
             if request.goal_id != self.goal_id || request.plan_revision != self.plan_revision {
                 Some(AutoModePauseReason::GoalChanged)
             } else if request.workspace_revision != self.policy.workspace_revision {
@@ -215,17 +235,14 @@ impl AutoModeSession {
                     .is_some_and(|tool| !self.policy.tool_allowlist.contains(tool))
             {
                 Some(AutoModePauseReason::UnsafeEffect)
-            } else if matches!(
-                request.risk,
-                CommandRisk::Medium | CommandRisk::High | CommandRisk::Critical
-            ) || request.effect != ToolEffect::ReadOnly
-            {
-                Some(AutoModePauseReason::ConfirmationRequired)
-            } else if exceeds_budget(&self.policy, self.usage, request.projected_usage) {
-                Some(AutoModePauseReason::BudgetExhausted)
+            } else if requires_confirmation(request.risk, request.effect) {
+                grant_confirmation_reason(grant, request, provider_id, model, now_ms)
             } else {
                 None
             };
+        if reason.is_none() && exceeds_budget(&self.policy, self.usage, request.projected_usage) {
+            reason = Some(AutoModePauseReason::BudgetExhausted);
+        }
         if let Some(reason) = reason {
             self.pause(reason, now_ms)?;
             return Ok(AutoModeStepDecision::Pause(reason));
@@ -343,6 +360,64 @@ impl AutoModeSession {
     }
 }
 
+fn requires_confirmation(risk: CommandRisk, effect: ToolEffect) -> bool {
+    matches!(
+        risk,
+        CommandRisk::Medium | CommandRisk::High | CommandRisk::Critical
+    ) || !matches!(effect, ToolEffect::ReadOnly)
+}
+
+fn grant_confirmation_reason(
+    grant: Option<&AuthorizationGrant>,
+    request: &AutoModeStepRequest,
+    provider_id: Option<&str>,
+    model: Option<&str>,
+    now_ms: u64,
+) -> Option<AutoModePauseReason> {
+    let Some(grant) = grant else {
+        return Some(AutoModePauseReason::ConfirmationRequired);
+    };
+    let Some(tool_id) = request.tool_id.as_ref() else {
+        return Some(AutoModePauseReason::ConfirmationRequired);
+    };
+    let provider_id =
+        provider_id.or_else(|| grant.provider_allowlist.iter().next().map(String::as_str));
+    let model = model.or_else(|| grant.model_allowlist.iter().next().map(String::as_str));
+    let (Some(provider_id), Some(model)) = (provider_id, model) else {
+        return Some(AutoModePauseReason::ConfirmationRequired);
+    };
+    let auth_request = AuthorizationRequest {
+        goal_id: request.goal_id,
+        plan_revision: request.plan_revision,
+        workspace_fingerprint: &request.workspace_revision,
+        tool_id,
+        provider_id,
+        model,
+        data_classification: request.data_classification,
+        requires_network: false,
+        now_ms,
+    };
+    match grant.authorize(&auth_request) {
+        Ok(AuthorizationDecision::Authorized) => None,
+        Ok(AuthorizationDecision::ApprovalRequired) => {
+            Some(AutoModePauseReason::ConfirmationRequired)
+        }
+        Err(AuthorizationError::OutOfScope) => Some(AutoModePauseReason::UnsafeEffect),
+        Err(AuthorizationError::BindingChanged) => {
+            if grant.goal_id != request.goal_id || grant.plan_revision != request.plan_revision {
+                Some(AutoModePauseReason::GoalChanged)
+            } else {
+                Some(AutoModePauseReason::WorkspaceChanged)
+            }
+        }
+        Err(
+            AuthorizationError::Expired
+            | AuthorizationError::Revoked
+            | AuthorizationError::InvalidGrant,
+        ) => Some(AutoModePauseReason::ConfirmationRequired),
+    }
+}
+
 fn exceeds_budget(
     policy: &AutoModePolicy,
     current: AutoModeUsage,
@@ -410,7 +485,7 @@ pub enum AutoModeError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AgentGoal, AgentPlan, AgentPlanStep};
+    use crate::{AgentGoal, AgentPlan, AgentPlanStep, ApprovalPolicy};
 
     fn fixture() -> (AgentGoal, AgentPlan, AutoModePolicy) {
         let plan = AgentPlan::new(
@@ -476,11 +551,9 @@ mod tests {
             .pause(AutoModePauseReason::UserRequested, 1_001)
             .expect("pause");
         let fingerprint = session.policy_fingerprint.clone();
-        assert!(
-            session
-                .resume(&goal, &plan, "git:changed", &fingerprint, 1_002)
-                .is_err()
-        );
+        assert!(session
+            .resume(&goal, &plan, "git:changed", &fingerprint, 1_002)
+            .is_err());
     }
 
     #[test]
@@ -519,6 +592,282 @@ mod tests {
         assert_eq!(
             session.evaluate_step(&request, 1_001).expect("evaluate"),
             AutoModeStepDecision::Pause(AutoModePauseReason::BudgetExhausted)
+        );
+    }
+
+    fn workspace_fingerprint() -> String {
+        format!("sha256:{}", "a".repeat(64))
+    }
+
+    fn test_grant(
+        goal_id: Uuid,
+        plan_revision: u64,
+        approval: ApprovalPolicy,
+        tools: &[&str],
+        expires_at_ms: Option<u64>,
+        revoked_at_ms: Option<u64>,
+    ) -> AuthorizationGrant {
+        use crate::{GrantLifetime, NetworkPolicy, SandboxScope};
+        AuthorizationGrant {
+            spec: "nimora.authorization-grant/1".to_owned(),
+            id: Uuid::now_v7(),
+            goal_id,
+            plan_revision,
+            workspace_fingerprint: workspace_fingerprint(),
+            sandbox: SandboxScope::WorkspaceWrite,
+            approval,
+            network: NetworkPolicy::Offline,
+            selected_roots: BTreeSet::new(),
+            tool_allowlist: tools
+                .iter()
+                .map(|tool| tool.parse().expect("tool"))
+                .collect(),
+            provider_allowlist: BTreeSet::from(["provider:local".to_owned()]),
+            model_allowlist: BTreeSet::from(["model:local".to_owned()]),
+            maximum_data_classification: DataClassification::Personal,
+            budget: AgentBudget::default(),
+            lifetime: if expires_at_ms.is_some() {
+                GrantLifetime::UntilTimestamp
+            } else {
+                GrantLifetime::Session
+            },
+            issued_at_ms: 900,
+            expires_at_ms,
+            revoked_at_ms,
+        }
+    }
+
+    fn grant_fixture() -> (AgentGoal, AgentPlan, AutoModePolicy) {
+        let plan = AgentPlan::new(
+            Uuid::now_v7(),
+            vec![AgentPlanStep::new("Write state").expect("step")],
+            "Initial",
+            1_000,
+        )
+        .expect("plan");
+        let goal = AgentGoal::new("Auto", "Run unattended", &plan, 1_000).expect("goal");
+        let policy = AutoModePolicy::new(
+            4,
+            1,
+            AgentBudget {
+                max_steps: 4,
+                max_tool_calls: 2,
+                max_elapsed_ms: 10_000,
+                max_input_tokens: 1_000,
+                max_output_tokens: 500,
+                max_cost_microunits: 0,
+            },
+            DataClassification::Personal,
+            ["pet.test.write".to_owned(), "pet.test.read".to_owned()],
+            workspace_fingerprint(),
+        )
+        .expect("policy");
+        (goal, plan, policy)
+    }
+
+    #[test]
+    fn never_ask_grant_allows_write_effect_without_confirmation() {
+        let (goal, plan, policy) = grant_fixture();
+        let mut session = AutoModeSession::start(&goal, &plan, policy, 1_000).expect("session");
+        let grant = test_grant(
+            goal.id,
+            plan.revision,
+            ApprovalPolicy::NeverAskWithinGrant,
+            &["pet.test.write"],
+            None,
+            None,
+        );
+        let request = AutoModeStepRequest {
+            goal_id: goal.id,
+            plan_revision: plan.revision,
+            workspace_revision: workspace_fingerprint(),
+            tool_id: Some("pet.test.write".parse().expect("tool")),
+            risk: CommandRisk::Safe,
+            effect: ToolEffect::ReversibleWrite,
+            data_classification: DataClassification::Personal,
+            projected_usage: AutoModeUsage {
+                cycles: 1,
+                tool_calls: 1,
+                ..AutoModeUsage::default()
+            },
+        };
+        assert_eq!(
+            session
+                .evaluate_step_with_grant(
+                    &request,
+                    Some(&grant),
+                    Some("provider:local"),
+                    Some("model:local"),
+                    1_001,
+                )
+                .expect("evaluate"),
+            AutoModeStepDecision::Proceed
+        );
+    }
+
+    #[test]
+    fn always_ask_grant_still_pauses_for_write_effect() {
+        let (goal, plan, policy) = grant_fixture();
+        let mut session = AutoModeSession::start(&goal, &plan, policy, 1_000).expect("session");
+        let grant = test_grant(
+            goal.id,
+            plan.revision,
+            ApprovalPolicy::AlwaysAsk,
+            &["pet.test.write"],
+            None,
+            None,
+        );
+        let request = AutoModeStepRequest {
+            goal_id: goal.id,
+            plan_revision: plan.revision,
+            workspace_revision: workspace_fingerprint(),
+            tool_id: Some("pet.test.write".parse().expect("tool")),
+            risk: CommandRisk::Safe,
+            effect: ToolEffect::ReversibleWrite,
+            data_classification: DataClassification::Personal,
+            projected_usage: AutoModeUsage {
+                cycles: 1,
+                tool_calls: 1,
+                ..AutoModeUsage::default()
+            },
+        };
+        assert_eq!(
+            session
+                .evaluate_step_with_grant(
+                    &request,
+                    Some(&grant),
+                    Some("provider:local"),
+                    Some("model:local"),
+                    1_001,
+                )
+                .expect("evaluate"),
+            AutoModeStepDecision::Pause(AutoModePauseReason::ConfirmationRequired)
+        );
+    }
+
+    #[test]
+    fn expired_or_revoked_grant_still_pauses_for_confirmation() {
+        let (goal, plan, policy) = grant_fixture();
+        let mut session =
+            AutoModeSession::start(&goal, &plan, policy.clone(), 1_000).expect("session");
+        let expired = test_grant(
+            goal.id,
+            plan.revision,
+            ApprovalPolicy::NeverAskWithinGrant,
+            &["pet.test.write"],
+            Some(1_000),
+            None,
+        );
+        let request = AutoModeStepRequest {
+            goal_id: goal.id,
+            plan_revision: plan.revision,
+            workspace_revision: workspace_fingerprint(),
+            tool_id: Some("pet.test.write".parse().expect("tool")),
+            risk: CommandRisk::Medium,
+            effect: ToolEffect::ReadOnly,
+            data_classification: DataClassification::Personal,
+            projected_usage: AutoModeUsage {
+                cycles: 1,
+                ..AutoModeUsage::default()
+            },
+        };
+        assert_eq!(
+            session
+                .evaluate_step_with_grant(
+                    &request,
+                    Some(&expired),
+                    Some("provider:local"),
+                    Some("model:local"),
+                    1_001,
+                )
+                .expect("evaluate"),
+            AutoModeStepDecision::Pause(AutoModePauseReason::ConfirmationRequired)
+        );
+
+        let mut session =
+            AutoModeSession::start(&goal, &plan, policy.clone(), 1_000).expect("session");
+        let revoked = test_grant(
+            goal.id,
+            plan.revision,
+            ApprovalPolicy::NeverAskWithinGrant,
+            &["pet.test.write"],
+            None,
+            Some(1_000),
+        );
+        assert_eq!(
+            session
+                .evaluate_step_with_grant(
+                    &request,
+                    Some(&revoked),
+                    Some("provider:local"),
+                    Some("model:local"),
+                    1_001,
+                )
+                .expect("evaluate"),
+            AutoModeStepDecision::Pause(AutoModePauseReason::ConfirmationRequired)
+        );
+    }
+
+    #[test]
+    fn grant_tool_outside_allowlist_pauses_as_unsafe_effect() {
+        let (goal, plan, policy) = grant_fixture();
+        let mut session = AutoModeSession::start(&goal, &plan, policy, 1_000).expect("session");
+        let grant = test_grant(
+            goal.id,
+            plan.revision,
+            ApprovalPolicy::NeverAskWithinGrant,
+            &["pet.test.read"],
+            None,
+            None,
+        );
+        let request = AutoModeStepRequest {
+            goal_id: goal.id,
+            plan_revision: plan.revision,
+            workspace_revision: workspace_fingerprint(),
+            tool_id: Some("pet.test.write".parse().expect("tool")),
+            risk: CommandRisk::Safe,
+            effect: ToolEffect::ReversibleWrite,
+            data_classification: DataClassification::Personal,
+            projected_usage: AutoModeUsage {
+                cycles: 1,
+                tool_calls: 1,
+                ..AutoModeUsage::default()
+            },
+        };
+        assert_eq!(
+            session
+                .evaluate_step_with_grant(
+                    &request,
+                    Some(&grant),
+                    Some("provider:local"),
+                    Some("model:local"),
+                    1_001,
+                )
+                .expect("evaluate"),
+            AutoModeStepDecision::Pause(AutoModePauseReason::UnsafeEffect)
+        );
+    }
+
+    #[test]
+    fn medium_risk_without_grant_still_pauses() {
+        let (goal, plan, policy) = grant_fixture();
+        let mut session = AutoModeSession::start(&goal, &plan, policy, 1_000).expect("session");
+        let request = AutoModeStepRequest {
+            goal_id: goal.id,
+            plan_revision: plan.revision,
+            workspace_revision: workspace_fingerprint(),
+            tool_id: Some("pet.test.read".parse().expect("tool")),
+            risk: CommandRisk::Medium,
+            effect: ToolEffect::ReadOnly,
+            data_classification: DataClassification::Personal,
+            projected_usage: AutoModeUsage {
+                cycles: 1,
+                ..AutoModeUsage::default()
+            },
+        };
+        assert_eq!(
+            session.evaluate_step(&request, 1_001).expect("evaluate"),
+            AutoModeStepDecision::Pause(AutoModePauseReason::ConfirmationRequired)
         );
     }
 }

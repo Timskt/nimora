@@ -4,36 +4,46 @@ import {
   AnimationClip,
   AnimationMixer,
   Box3,
+  CanvasTexture,
+  CircleGeometry,
   DirectionalLight,
+  Group,
   HemisphereLight,
   LoopOnce,
   LoopRepeat,
   MathUtils,
   Mesh,
+  MeshBasicMaterial,
   Object3D,
   PerspectiveCamera,
   Scene,
-  Sphere,
   SRGBColorSpace,
   Texture,
   Timer,
-  Vector3,
   WebGLRenderer,
 } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { VRM } from "@pixiv/three-vrm";
 import type { CharacterRendererSnapshot, ModelAnimationBinding } from "../platform/desktop";
+import {
+  cameraDistanceForGroundedPet,
+  contactShadowRadius,
+  createContactShadowTexture,
+  frameGroundedModel,
+} from "./petSceneHelpers";
 import { applyVrmExpression, type VrmExpressionController } from "./vrmExpressions";
+
+export {
+  cameraDistanceForGroundedPet,
+  cameraDistanceForRadius,
+  contactShadowRadius,
+  createContactShadowTexture,
+  frameGroundedModel,
+} from "./petSceneHelpers";
 
 export function modelAssetUrl(baseUrl: string, relativePath: string): string {
   const encoded = relativePath.split("/").map(encodeURIComponent).join("/");
   return `${baseUrl}${encoded}`;
-}
-
-export function cameraDistanceForRadius(radius: number, verticalFovDegrees: number): number {
-  const safeRadius = Math.max(radius, 0.001);
-  const halfFov = MathUtils.degToRad(verticalFovDegrees / 2);
-  return safeRadius / Math.sin(halfFov);
 }
 
 export function isThreeDimensionalBackend(backend: string): boolean {
@@ -109,9 +119,19 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
     let mixer: AnimationMixer | null = null;
     let vrm: VRM | null = null;
     let disposeVrm: ((value: VRM) => void) | null = null;
+    let shadowTexture: CanvasTexture | null = null;
+    let contactShadow: Mesh | null = null;
+    let petStage: Group | null = null;
+    let modelRoot: Group | null = null;
     let renderer: WebGLRenderer;
     try {
-      renderer = new WebGLRenderer({ canvas, alpha: true, antialias: true });
+      renderer = new WebGLRenderer({
+        canvas,
+        alpha: true,
+        antialias: true,
+        premultipliedAlpha: true,
+        powerPreference: "high-performance",
+      });
     } catch {
       onFailure();
       return;
@@ -121,11 +141,17 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
     renderer.outputColorSpace = SRGBColorSpace;
 
     const scene = new Scene();
-    const camera = new PerspectiveCamera(35, 1, 0.01, 1000);
-    scene.add(new HemisphereLight(0xfff5e8, 0x586270, 2.2));
-    const keyLight = new DirectionalLight(0xffffff, 2.8);
-    keyLight.position.set(3, 5, 4);
+    const camera = new PerspectiveCamera(32, 1, 0.01, 1000);
+    scene.add(new HemisphereLight(0xfff4e8, 0x4a5568, 1.55));
+    const keyLight = new DirectionalLight(0xfff7ee, 2.35);
+    keyLight.position.set(2.4, 5.2, 3.6);
     scene.add(keyLight);
+    const fillLight = new DirectionalLight(0xc8d8f0, 0.85);
+    fillLight.position.set(-3.2, 2.4, -1.6);
+    scene.add(fillLight);
+    const rimLight = new DirectionalLight(0xffe0c4, 0.55);
+    rimLight.position.set(-1.2, 3.5, -4.2);
+    scene.add(rimLight);
 
     const resize = () => {
       const width = Math.max(canvas.clientWidth, 1);
@@ -140,13 +166,42 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
 
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const timer = new Timer();
+    let lookAtY = 0.4;
+    let breathAmplitude = 0;
+    let gazeX = 0;
+    let gazeY = 0;
+    const trackPointer = (event: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const midX = rect.left + rect.width / 2;
+      const midY = rect.top + rect.height / 2;
+      gazeX = MathUtils.clamp((event.clientX - midX) / Math.max(rect.width * 0.55, 1), -1, 1);
+      gazeY = MathUtils.clamp((event.clientY - midY) / Math.max(rect.height * 0.55, 1), -1, 1);
+    };
+    window.addEventListener("pointermove", trackPointer, { passive: true });
+
     const renderFrame = () => {
       if (disposed) return;
       animationFrame = window.requestAnimationFrame(renderFrame);
       timer.update();
       const delta = timer.getDelta();
-      if (!reducedMotion.matches) mixer?.update(delta);
-      if (!reducedMotion.matches) vrm?.update(delta);
+      const elapsed = timer.getElapsed();
+      if (!reducedMotion.matches) {
+        mixer?.update(delta);
+        vrm?.update(delta);
+        if (modelRoot) {
+          const breath = Math.sin(elapsed * 1.55) * breathAmplitude;
+          modelRoot.position.y = breath;
+          modelRoot.rotation.y = MathUtils.lerp(modelRoot.rotation.y, gazeX * 0.12, 0.06);
+          modelRoot.rotation.x = MathUtils.lerp(modelRoot.rotation.x, gazeY * 0.04, 0.06);
+        }
+        if (contactShadow) {
+          const pulse = 1 + Math.sin(elapsed * 1.55) * 0.045;
+          contactShadow.scale.x = pulse;
+          contactShadow.scale.z = pulse * 0.58;
+          const material = contactShadow.material as MeshBasicMaterial;
+          material.opacity = 0.98 - Math.sin(elapsed * 1.55) * 0.08;
+        }
+      }
       renderer.render(scene, camera);
     };
     animationFrame = window.requestAnimationFrame(renderFrame);
@@ -189,18 +244,43 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
           fail();
           return;
         }
-        const center = bounds.getCenter(new Vector3());
-        const sphere = bounds.getBoundingSphere(new Sphere());
-        loadedRoot.position.sub(center);
-        loadedRoot.scale.multiplyScalar(descriptor.defaultScale);
-        scene.add(loadedRoot);
-        const radius = sphere.radius * descriptor.defaultScale;
-        const distance = cameraDistanceForRadius(radius, camera.fov) * 1.18;
+
+        petStage = new Group();
+        modelRoot = new Group();
+        modelRoot.add(loadedRoot);
+        const framed = frameGroundedModel(loadedRoot, descriptor.defaultScale);
+        lookAtY = framed.lookAtY;
+        breathAmplitude = framed.height * 0.01;
+
+        shadowTexture = createContactShadowTexture();
+        const shadowRadius = contactShadowRadius(framed.spanX, framed.spanZ);
+        const shadowGeo = new CircleGeometry(shadowRadius, 48);
+        const shadowMat = new MeshBasicMaterial({
+          map: shadowTexture,
+          transparent: true,
+          opacity: 1,
+          depthWrite: false,
+        });
+        contactShadow = new Mesh(shadowGeo, shadowMat);
+        contactShadow.rotation.x = -Math.PI / 2;
+        contactShadow.position.y = 0.002;
+        contactShadow.scale.set(1, 1, 0.58);
+        petStage.add(contactShadow);
+        petStage.add(modelRoot);
+        scene.add(petStage);
+
+        const distance = cameraDistanceForGroundedPet(
+          framed.height,
+          framed.spanX,
+          framed.spanZ,
+          camera.fov,
+        );
         camera.near = Math.max(distance / 100, 0.01);
         camera.far = Math.max(distance * 100, 100);
-        camera.position.set(0, radius * 0.12, distance);
-        camera.lookAt(0, 0, 0);
+        camera.position.set(0, lookAtY * 1.06, distance);
+        camera.lookAt(0, lookAtY, 0);
         camera.updateProjectionMatrix();
+
         const animationMap = descriptor.animationMap;
         let playModelAnimation: ((nextAction: string) => void) | null = null;
         if (gltf.animations.length > 0 && animationMap) {
@@ -249,13 +329,19 @@ export function GltfRenderer({ descriptor, action, onFailure }: GltfRendererProp
       disposed = true;
       timer.dispose();
       window.cancelAnimationFrame(animationFrame);
+      window.removeEventListener("pointermove", trackPointer);
       resizeObserver.disconnect();
       canvas.removeEventListener("webglcontextlost", handleContextLost);
       mixer?.stopAllAction();
       vrm?.expressionManager?.resetValues();
       playActionRef.current = () => undefined;
+      if (petStage) scene.remove(petStage);
+      if (contactShadow) {
+        contactShadow.geometry.dispose();
+        (contactShadow.material as MeshBasicMaterial).dispose();
+      }
+      shadowTexture?.dispose();
       if (loadedRoot) {
-        scene.remove(loadedRoot);
         if (vrm && disposeVrm) disposeVrm(vrm);
         else disposeObjectTree(loadedRoot);
       }

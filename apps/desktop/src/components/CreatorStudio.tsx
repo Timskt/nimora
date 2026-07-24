@@ -39,6 +39,305 @@ export function suggestAnimationMap(names: readonly string[]): Record<string, Mo
   return result;
 }
 
+
+/** Manifest capability IDs accepted by user-code policy (kebab-case). */
+export type UserCodeManifestCapability =
+  | "read-pet-state"
+  | "read-profile-state"
+  | "subscribe-events"
+  | "invoke-safe-commands"
+  | "store-local-data"
+  | "invoke-agent-tasks";
+
+/** First-party safe commands registered for pet control via Capability Gateway. */
+export type UserCodeSafeCommand =
+  | "safe.pet.animate"
+  | "safe.pet.care"
+  | "safe.pet.move"
+  | "safe.pet.directive";
+
+/** Gateway / module read-surface capability names (dot notation). */
+export type UserCodeReadSurface =
+  | "pet.state"
+  | "pet.action.catalog"
+  | "character.state"
+  | "program.catalog"
+  | "runtime.health";
+
+export type UserCodeCapabilityChipTone = "read" | "act" | "agent" | "meta";
+
+export type UserCodeCapabilityChipGroup = "read" | "command" | "agent" | "manifest";
+
+export interface UserCodeCapabilityChip {
+  id: string;
+  labelZh: string;
+  detailZh: string;
+  group: UserCodeCapabilityChipGroup;
+  tone: UserCodeCapabilityChipTone;
+}
+
+/** Chinese labels for Manifest capability IDs. */
+export const USER_CODE_MANIFEST_CAPABILITY_LABELS: Record<UserCodeManifestCapability, string> = {
+  "read-pet-state": "读取宠物状态",
+  "read-profile-state": "读取 Profile",
+  "subscribe-events": "订阅事件",
+  "invoke-safe-commands": "调用安全命令",
+  "store-local-data": "本地命名空间存储",
+  "invoke-agent-tasks": "调用 Agent 任务",
+};
+
+/** Chinese labels for first-party pet safe commands. */
+export const USER_CODE_SAFE_COMMAND_LABELS: Record<UserCodeSafeCommand, string> = {
+  "safe.pet.animate": "播放动作",
+  "safe.pet.care": "照料互动",
+  "safe.pet.move": "移动位置",
+  "safe.pet.directive": "结构化指令",
+};
+
+/** Chinese labels for gateway read surfaces. */
+export const USER_CODE_READ_SURFACE_LABELS: Record<UserCodeReadSurface, string> = {
+  "pet.state": "宠物状态",
+  "pet.action.catalog": "动作目录",
+  "character.state": "角色状态",
+  "program.catalog": "程序目录",
+  "runtime.health": "运行时健康",
+};
+
+const MANIFEST_DETAILS: Record<UserCodeManifestCapability, string> = {
+  "read-pet-state": "注入只读 pet 快照（nimora.input）",
+  "read-profile-state": "读取当前 Profile 策略快照",
+  "subscribe-events": "有界事件订阅（Manifest 声明）",
+  "invoke-safe-commands": "执行 Manifest commands 白名单",
+  "store-local-data": "程序私有 KV，无原始 FS",
+  "invoke-agent-tasks": "需授权；draft + 空 Tool allowlist",
+};
+
+const COMMAND_DETAILS: Record<UserCodeSafeCommand, string> = {
+  "safe.pet.animate": "按动作 ID 播放 pet.* 动画",
+  "safe.pet.care": "喂食 / 抚摸等照料动作",
+  "safe.pet.move": "在桌面安全区域内移动",
+  "safe.pet.directive": "nimora.pet_directive/1 结构化驱动",
+};
+
+const READ_DETAILS: Record<UserCodeReadSurface, string> = {
+  "pet.state": "情绪、位置、状态等只读快照",
+  "pet.action.catalog": "宿主动作与 directive 契约目录",
+  "character.state": "当前角色 / 资源身份",
+  "program.catalog": "已安装用户程序目录",
+  "runtime.health": "启动、安全模式与备份健康",
+};
+
+/**
+ * Compact capability matrix for Creator / AI Creator surfaces.
+ * Pure helper — safe to unit-test without DOM.
+ */
+export function userCodeCapabilityChips(): UserCodeCapabilityChip[] {
+  const reads: UserCodeCapabilityChip[] = (Object.keys(USER_CODE_READ_SURFACE_LABELS) as UserCodeReadSurface[]).map((id) => ({
+    id,
+    labelZh: USER_CODE_READ_SURFACE_LABELS[id],
+    detailZh: READ_DETAILS[id],
+    group: "read" as const,
+    tone: "read" as const,
+  }));
+  const commands: UserCodeCapabilityChip[] = (Object.keys(USER_CODE_SAFE_COMMAND_LABELS) as UserCodeSafeCommand[]).map((id) => ({
+    id,
+    labelZh: USER_CODE_SAFE_COMMAND_LABELS[id],
+    detailZh: COMMAND_DETAILS[id],
+    group: "command" as const,
+    tone: "act" as const,
+  }));
+  const agent: UserCodeCapabilityChip[] = [{
+    id: "invoke-agent-tasks",
+    labelZh: USER_CODE_MANIFEST_CAPABILITY_LABELS["invoke-agent-tasks"],
+    detailZh: MANIFEST_DETAILS["invoke-agent-tasks"],
+    group: "agent",
+    tone: "agent",
+  }];
+  const manifest: UserCodeCapabilityChip[] = (Object.keys(USER_CODE_MANIFEST_CAPABILITY_LABELS) as UserCodeManifestCapability[])
+    .filter((id) => id !== "invoke-agent-tasks")
+    .map((id) => ({
+      id,
+      labelZh: USER_CODE_MANIFEST_CAPABILITY_LABELS[id],
+      detailZh: MANIFEST_DETAILS[id],
+      group: "manifest" as const,
+      tone: "meta" as const,
+    }));
+  return [...reads, ...commands, ...agent, ...manifest];
+}
+
+/** Resolves a capability / command / read-surface id to its Chinese label. */
+export function labelForUserCodeCapability(id: string): string | null {
+  if (id in USER_CODE_MANIFEST_CAPABILITY_LABELS) {
+    return USER_CODE_MANIFEST_CAPABILITY_LABELS[id as UserCodeManifestCapability];
+  }
+  if (id in USER_CODE_SAFE_COMMAND_LABELS) {
+    return USER_CODE_SAFE_COMMAND_LABELS[id as UserCodeSafeCommand];
+  }
+  if (id in USER_CODE_READ_SURFACE_LABELS) {
+    return USER_CODE_READ_SURFACE_LABELS[id as UserCodeReadSurface];
+  }
+  return null;
+}
+
+export interface UserProgramPlanSnippet {
+  storage: unknown[];
+  commands: Array<{
+    command: string;
+    arguments: Record<string, unknown>;
+    idempotencyKey: string;
+  }>;
+  agentTasks: unknown[];
+}
+
+/**
+ * Minimal Worker capability plan that drives the pet via `safe.pet.directive`
+ * (`nimora.pet_directive/1`) with Chinese speech.
+ */
+export function samplePetDirectiveProgramPlan(): UserProgramPlanSnippet {
+  return {
+    storage: [],
+    commands: [{
+      command: "safe.pet.directive",
+      arguments: {
+        spec: "nimora.pet_directive/1",
+        speech: "专注完成啦，休息一下吧！",
+        action: "celebrate",
+        animation: "pet.celebrate",
+        attention: "user",
+        moodDelta: { mood: 6 },
+      },
+      idempotencyKey: "focus-done-celebrate-1",
+    }],
+    agentTasks: [],
+  };
+}
+
+/** Pretty-printed sample plan for UI / docs copy blocks. */
+export function formatSampleProgramPlanJson(plan: UserProgramPlanSnippet = samplePetDirectiveProgramPlan()): string {
+  return JSON.stringify(plan, null, 2);
+}
+
+const CHIP_TONE_STYLE: Record<UserCodeCapabilityChipTone, CSSProperties> = {
+  read: { color: "#3d5f7a", background: "#eaf4fb", borderColor: "rgba(61,95,122,.18)" },
+  act: { color: "#5344a0", background: "#f0ecff", borderColor: "rgba(83,68,160,.18)" },
+  agent: { color: "#6d552e", background: "#fff4dc", borderColor: "rgba(109,85,46,.2)" },
+  meta: { color: "#4a6b3d", background: "#eef6e8", borderColor: "rgba(74,107,61,.18)" },
+};
+
+const GROUP_TITLE_ZH: Record<UserCodeCapabilityChipGroup, string> = {
+  read: "只读面 · Read surfaces",
+  command: "安全命令 · Safe commands",
+  agent: "Agent 任务 · Agent tasks",
+  manifest: "Manifest 能力 · Capabilities",
+};
+
+/**
+ * Compact Chinese capability matrix for Creator product surfaces.
+ * Uses existing design tokens via inline styles (no styles.css change).
+ */
+export function UserCodeCapabilityMatrix({ compact = false }: { compact?: boolean }) {
+  const chips = userCodeCapabilityChips();
+  const groups: UserCodeCapabilityChipGroup[] = compact
+    ? ["read", "command", "agent"]
+    : ["read", "command", "agent", "manifest"];
+  const sample = formatSampleProgramPlanJson();
+
+  return (
+    <section
+      className="creator-capability-matrix"
+      aria-labelledby="user-code-capability-heading"
+      style={{
+        display: "grid",
+        gap: compact ? 12 : 14,
+        padding: compact ? "14px 16px" : "16px 18px",
+        border: "1px solid rgba(115,98,228,.14)",
+        borderRadius: 16,
+        background: "linear-gradient(160deg, rgba(245,241,251,.95), rgba(255,253,250,.98))",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <p className="card-label" style={{ margin: 0 }}>USER CODE · CAPABILITY MATRIX</p>
+          <h3 id="user-code-capability-heading" style={{ margin: "4px 0 0", fontSize: compact ? 14 : 16 }}>
+            用户程序如何驱动宠物与模块
+          </h3>
+        </div>
+        <span
+          style={{
+            padding: "6px 10px",
+            borderRadius: 999,
+            color: "#5344a0",
+            background: "#eeebff",
+            fontSize: 9,
+            fontWeight: 900,
+            whiteSpace: "nowrap",
+          }}
+        >
+          Gateway · fail-closed
+        </span>
+      </div>
+      <p style={{ margin: 0, color: "var(--muted)", fontSize: 11, lineHeight: 1.65, maxWidth: 720 }}>
+        用户代码经 Capability Gateway 访问只读面与 Manifest 白名单中的 <code>safe.*</code> 命令；
+        用 <code>safe.pet.directive</code>（<code>nimora.pet_directive/1</code>）一次表达 speech · moodDelta · action · animation · attention。
+        未声明能力一律拒绝。
+      </p>
+      {groups.map((group) => {
+        const items = chips.filter((chip) => chip.group === group);
+        return (
+          <div key={group} style={{ display: "grid", gap: 8 }}>
+            <strong style={{ fontSize: 10, letterSpacing: ".02em", color: "var(--muted)" }}>{GROUP_TITLE_ZH[group]}</strong>
+            <div className="action-chips" style={{ flexWrap: "wrap", gap: 6 }} role="list">
+              {items.map((chip) => (
+                <span
+                  key={chip.id}
+                  role="listitem"
+                  title={`${chip.id} · ${chip.detailZh}`}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "7px 11px",
+                    border: "1px solid",
+                    borderRadius: 999,
+                    fontSize: 10,
+                    fontWeight: 750,
+                    lineHeight: 1.2,
+                    ...CHIP_TONE_STYLE[chip.tone],
+                  }}
+                >
+                  <code style={{ fontSize: 9, opacity: .85 }}>{chip.id}</code>
+                  <span>{chip.labelZh}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      <div className="creator-note" style={{ flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span aria-hidden="true">⌘</span>
+          <p style={{ margin: 0, fontWeight: 750 }}>示例计划 · sample program plan（含中文 speech）</p>
+        </div>
+        <pre
+          style={{
+            margin: 0,
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(255,255,255,.72)",
+            border: "1px solid rgba(115,98,228,.1)",
+            fontSize: 10,
+            lineHeight: 1.55,
+            overflow: "auto",
+            maxHeight: compact ? 160 : 220,
+          }}
+        >
+          <code>{sample}</code>
+        </pre>
+      </div>
+    </section>
+  );
+}
+
 export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveThemeSnapshot): void }) {
   const [backend, setBackend] = useState<Backend>("Sprite Atlas");
   const [skinTone, setSkinTone] = useState("#d8d0f0");
@@ -267,6 +566,8 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
           {draftSaved ? "草稿已保存" : "保存草稿"}
         </button>
       </div>
+
+      <UserCodeCapabilityMatrix />
 
       <div className="creator-layout">
         <div className="creator-preview" aria-label={`${backend} 角色预览`}>

@@ -137,6 +137,20 @@ impl StoredContextCacheEntry {
     }
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContextCacheMetrics {
+    pub spec: &'static str,
+    pub entries: u64,
+    pub total_bytes: u64,
+    pub max_entries: u64,
+    pub max_bytes: u64,
+    pub oldest_accessed_at_ms: Option<u64>,
+    pub newest_accessed_at_ms: Option<u64>,
+    pub expired_purged: u64,
+}
+
 #[derive(Debug)]
 pub struct SqliteContextCacheRepository {
     connection: Mutex<Connection>,
@@ -360,6 +374,65 @@ impl SqliteContextCacheRepository {
             [workspace_fingerprint],
         )?;
         Ok(deleted)
+    }
+
+
+    /// Returns bounded occupancy metrics after purging expired entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when timestamps cannot be represented or persistence fails.
+    pub fn metrics(&self, now_ms: u64) -> Result<ContextCacheMetrics, SqlitePersistenceError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        let expired_purged = purge_expired(&transaction, now_ms)?;
+        let (entries, total_bytes, oldest, newest): (i64, i64, Option<i64>, Option<i64>) =
+            transaction.query_row(
+                "SELECT COUNT(*), COALESCE(SUM(payload_bytes), 0),
+                        MIN(last_accessed_at_ms), MAX(last_accessed_at_ms)
+                 FROM agent_context_cache",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        transaction.commit()?;
+        Ok(ContextCacheMetrics {
+            spec: "nimora.context-cache-metrics/1",
+            entries: from_i64(entries)?,
+            total_bytes: from_i64(total_bytes)?,
+            max_entries: u64::try_from(self.policy.max_entries)
+                .map_err(|_| SqlitePersistenceError::InvalidContextCache)?,
+            max_bytes: u64::try_from(self.policy.max_bytes)
+                .map_err(|_| SqlitePersistenceError::InvalidContextCache)?,
+            oldest_accessed_at_ms: oldest.map(from_i64).transpose()?,
+            newest_accessed_at_ms: newest.map(from_i64).transpose()?,
+            expired_purged: u64::try_from(expired_purged)
+                .map_err(|_| SqlitePersistenceError::InvalidContextCache)?,
+        })
+    }
+
+    /// Deletes every cache entry. Used when rotating the encryption key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when persistence fails.
+    pub fn clear_all(&self) -> Result<usize, SqlitePersistenceError> {
+        let deleted = self.lock()?.execute("DELETE FROM agent_context_cache", [])?;
+        Ok(deleted)
+    }
+
+    /// Purges expired rows then enforces LRU entry/byte limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the timestamp cannot be represented or persistence fails.
+    pub fn reclaim(&self, now_ms: u64) -> Result<ContextCacheMetrics, SqlitePersistenceError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        purge_expired(&transaction, now_ms)?;
+        enforce_limits(&transaction, self.policy)?;
+        transaction.commit()?;
+        drop(connection);
+        self.metrics(now_ms)
     }
 
     /// Removes all entries whose TTL has elapsed.
@@ -831,5 +904,51 @@ mod tests {
                 .expect("other workspace")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn metrics_and_clear_all_support_rotation_control_plane() {
+        let key = ContextCacheKey::generate().expect("key");
+        let repository = SqliteContextCacheRepository::in_memory(
+            ContextCachePolicy::new(8, 1024 * 1024).expect("policy"),
+            key,
+        )
+        .expect("repo");
+        let context = compacted("ws-a", "hello metrics", 1_000);
+        repository
+            .put(
+                &StoredContextCacheEntry::new(context.clone(), DataClassification::Internal, 5_000)
+                    .expect("entry"),
+                1_000,
+            )
+            .expect("put");
+        let metrics = repository.metrics(1_100).expect("metrics");
+        assert_eq!(metrics.spec, "nimora.context-cache-metrics/1");
+        assert_eq!(metrics.entries, 1);
+        assert!(metrics.total_bytes > 0);
+        assert_eq!(metrics.max_entries, 8);
+        assert_eq!(metrics.expired_purged, 0);
+        assert_eq!(metrics.oldest_accessed_at_ms, Some(1_000));
+        // expired
+        let after_expiry = repository.metrics(6_000).expect("expired metrics");
+        assert_eq!(after_expiry.entries, 0);
+        assert_eq!(after_expiry.expired_purged, 1);
+        repository
+            .put(
+                &StoredContextCacheEntry::new(
+                    compacted("ws-a", "again", 7_000),
+                    DataClassification::Internal,
+                    20_000,
+                )
+                .expect("entry"),
+                7_000,
+            )
+            .expect("put again");
+        assert_eq!(repository.clear_all().expect("clear"), 1);
+        let empty = repository.metrics(8_000).expect("empty");
+        assert_eq!(empty.entries, 0);
+        assert_eq!(empty.total_bytes, 0);
+        let reclaimed = repository.reclaim(8_000).expect("reclaim");
+        assert_eq!(reclaimed.entries, 0);
     }
 }
