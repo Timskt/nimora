@@ -54,6 +54,11 @@ pub(crate) fn auto_mode_companion_status(
 
 /// Maps job status (+ pause/error context) onto a domain Auto Mode pet event when
 /// the richer auto-mode vocabulary applies (start / pause / budget / terminal).
+///
+/// Test-only parity mirror: production reaches the same event vocabulary through
+/// the companion-phase path (`apply_if_changed`) plus the budget special-case
+/// (`apply_budget_pause`) and crash mapping (`apply_failed_if_changed`).
+#[cfg(test)]
 #[must_use]
 pub(crate) fn auto_mode_pet_event_for_status(
     status: AutoModeJobStatus,

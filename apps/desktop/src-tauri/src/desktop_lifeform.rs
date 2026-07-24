@@ -403,6 +403,10 @@ pub fn pose_for_screen(screen_x: i32, screen_y: i32, stage: OverlayStage) -> Pet
 }
 
 /// Builds a pose from stage-local coordinates (FE CSS `--pet-local-*` space).
+///
+/// Test-only inverse of [`pose_for_screen`]; production placement always enters
+/// through `pose_for_screen` (screen-space origins from the sensor/wander paths).
+#[cfg(test)]
 #[must_use]
 pub fn pose_for_local(local_x: i32, local_y: i32, stage: OverlayStage) -> PetScreenPose {
     let (screen_x, screen_y) = pet_screen_from_local(local_x, local_y, stage);
