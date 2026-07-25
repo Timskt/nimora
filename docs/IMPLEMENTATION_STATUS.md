@@ -4,8 +4,8 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **421** passed（33 files） |
-| FE `pnpm exec vitest run src/components` | **385** passed（30 files） |
+| FE `pnpm exec vitest run`（全量） | **423** passed（33 files） |
+| FE `pnpm exec vitest run src/components` | **387** passed（30 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -23,6 +23,23 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — Auto Mode Attempt 对账详情（Attempt Detail）UI 接通（P0 断头路修复）
+
+### 断头路
+- **接通不可逆对账前的权威详情闭环（P0 断头路修复）**：`auto_mode_attempt_detail` 命令后端已注册、平台层 TS binding（`autoModeAttemptDetail(sessionId)`）齐全，但**无任何组件调用**（仅存在于 `platform/desktop.ts` 与测试）。`AgentWorkspace` 的 reconcile 对账流程在提交**不可逆决议**（`resolve_auto_mode_attempt`）前，从不展示该 session 上的历史对账记录（`resolutions[]`）、后端权威风险指引文案（`risk`）与权威 `nextActions`——操作者在信息不全的情况下做永久对账决定。现补齐。
+
+### 接通方式
+- **打开 resolve 对话框即拉取权威详情**：`AgentWorkspace.tsx` 新增 useEffect，当 `pendingControl.kind === "resolve"` 且宿主原生可用时调 `desktopApi.autoModeAttemptDetail(session.id)`，存入 `attemptDetail`/`attemptDetailBusy`（对话框关闭或非 resolve 时清空，带 cancelled 竞态守卫）。
+- **对话框内新增「对账上下文」区块**：一行汇总（`attemptResolutionSummary`）说明该 session 是否已有权威对账记录（首次 vs 已有 N 条 + 最近一次决议/actor）；渲染后端权威 `risk` 文案；按 `resolvedAtMs` 倒序列出历史 `resolutions`（决议中文标签/actor/时间/理由）。
+- **导出纯函数供测试**：`resolutionDecisionLabel`（决议 token → 中文，未知回退原值）、`attemptResolutionSummary`（null → 加载中；0 条 → 首次不可逆；N 条 → 汇总最近一次）。
+- **浏览器预览可达**：`platform/desktop.ts` mock 的 `autoModeAttemptDetail` 由 `throw` 改为返回演示详情（含 1 条历史 resolution + 权威 risk 文案 + nextActions）；控制中心 mock 新增第二个 `indeterminate` 演示 entry（含 `attempt.status === "indeterminate"`），使 resolve 入口在预览中可触发。`desktop.test.ts` 对应断言由 `rejects` 改为校验返回结构。
+
+### 门禁
+- FE `pnpm exec vitest run` **423** passed（33 files，对账详情纯函数 +2）· `pnpm exec vitest run src/components` **387** passed（30 files）· `tsc -b` clean · `pnpm exec vite build` 通过。
+- **原生视觉/端到端 QA 仍强制**：真实 attempt 对账、跨会话历史、暂停/取消手感须在 Tauri 真机验收；不得宣称 goal complete。
 
 ---
 

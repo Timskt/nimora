@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   agentRiskLabel,
+  attemptResolutionSummary,
+  resolutionDecisionLabel,
   agentToolAccessLabel,
   agentToolDomainLabel,
   agentUsageTotal,
@@ -77,6 +79,36 @@ describe("AgentWorkspace", () => {
   it("uses user-facing risk labels for provider module requests", () => {
     expect(agentRiskLabel("safe")).toBe("安全");
     expect(agentRiskLabel("critical")).toBe("严重风险");
+  });
+
+  it("labels reconcile decisions in owner-facing Chinese", () => {
+    expect(resolutionDecisionLabel("confirmed_not_executed")).toBe("确认未执行");
+    expect(resolutionDecisionLabel("accept_external_effect_and_cancel")).toBe("接受副作用并取消");
+    expect(resolutionDecisionLabel("unknown_decision")).toBe("unknown_decision");
+  });
+
+  it("summarizes reconcile history and surfaces the latest authoritative resolution", () => {
+    expect(attemptResolutionSummary(null)).toBe("对账历史加载中…");
+    expect(attemptResolutionSummary({
+      spec: "nimora.desktop-auto-mode-attempt-detail/1",
+      attempt: null,
+      resolutions: [],
+      risk: "risk",
+      nextActions: ["confirmed_not_executed", "accept_external_effect_and_cancel"],
+    })).toBe("该会话尚无对账记录，这将是首次不可逆决议。");
+    const summary = attemptResolutionSummary({
+      spec: "nimora.desktop-auto-mode-attempt-detail/1",
+      attempt: null,
+      resolutions: [
+        { spec: "nimora.auto-mode-attempt-resolution/1", id: "a", sessionId: "s", attemptId: "t", checkpointSequence: 1, requestFingerprint: "f", decision: "confirmed_not_executed", actor: "owner", reason: null, resolvedAtMs: 100 },
+        { spec: "nimora.auto-mode-attempt-resolution/1", id: "b", sessionId: "s", attemptId: "t", checkpointSequence: 2, requestFingerprint: "f", decision: "accept_external_effect_and_cancel", actor: "auto-mode", reason: null, resolvedAtMs: 200 },
+      ],
+      risk: "risk",
+      nextActions: ["confirmed_not_executed", "accept_external_effect_and_cancel"],
+    });
+    expect(summary).toContain("已有 2 条对账记录");
+    expect(summary).toContain("接受副作用并取消");
+    expect(summary).toContain("auto-mode");
   });
 
   it("suggests a provider-appropriate model without hiding the editable field", () => {

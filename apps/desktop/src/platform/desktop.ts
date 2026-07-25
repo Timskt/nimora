@@ -1977,10 +1977,29 @@ export function createDesktopApi(
           plan: { goalId: "preview-goal", revision: 2, summary: "实现聚合控制中心", steps: [{ id: "step-1", description: "聚合运行事实", status: "completed" }, { id: "step-2", description: "等待高风险操作确认", status: "in_progress" }] },
           checkpoint: { sequence: 7, model: "qwen3:8b", workspaceRevision: "git:preview", task: { id: "preview-task", status: "paused", usage: { steps: 7, toolCalls: 4, inputTokens: 8400, outputTokens: 2100, costMicrounits: 0 } } }, attempt: null, resolutions: [],
           grant: { spec: "nimora.authorization-grant-summary/1", grantId: "preview-grant", goalId: "preview-goal", tier: "workspace", status: "active", workspaceRoot: "/preview/workspace", issuedAtMs: now - 420_000, expiresAtMs: null, revokedAtMs: null },
+        }, {
+          job: { spec: "nimora.desktop-auto-mode-job/1", jobId: "preview-job-2", sessionId: "preview-session-2", status: "indeterminate", turnsExecuted: 5, cacheHits: 1, checkpointSequence: 5, pauseReason: null, errorCode: null, startedAtMs: now - 1_200_000, updatedAtMs: now - 60_000 },
+          effectiveStatus: "paused", projectionStale: false,
+          session: { id: "preview-session-2", goalId: "preview-goal-2", planRevision: 1, status: "paused", pauseReason: "confirmation_required", usage: { cycles: 5, toolCalls: 6, elapsedMs: 1_140_000, inputTokens: 15200, outputTokens: 4300, costMicrounits: 0 }, policy: { maxCycles: 32, maxConcurrency: 1, budget: { maxSteps: 32, maxToolCalls: 16, maxElapsedMs: 3_600_000, maxInputTokens: 64_000, maxOutputTokens: 16_000, maxCostMicrounits: 0 }, workspaceRevision: "git:preview" }, createdAtMs: now - 1_200_000, updatedAtMs: now - 60_000 },
+          goal: { id: "preview-goal-2", title: "夜间发布回归", objective: "跑完发布流水线并核对外部副作用", status: "active", currentPlanRevision: 1 },
+          plan: { goalId: "preview-goal-2", revision: 1, summary: "发布并验证", steps: [{ id: "step-1", description: "触发发布 Provider", status: "in_progress" }] },
+          checkpoint: { sequence: 5, model: "qwen3:8b", workspaceRevision: "git:preview", task: { id: "preview-task-2", status: "indeterminate", usage: { steps: 5, toolCalls: 6, inputTokens: 15200, outputTokens: 4300, costMicrounits: 0 } } },
+          attempt: { id: "018f0000-0000-7000-8000-0000000000a2", sessionId: "preview-session-2", checkpointSequence: 5, expectedSessionUpdatedAtMs: now - 60_000, requestFingerprint: "sha256:preview-external-effect", status: "indeterminate", startedAtMs: now - 90_000, updatedAtMs: now - 60_000 },
+          resolutions: [],
+          grant: { spec: "nimora.authorization-grant-summary/1", grantId: "preview-grant-2", goalId: "preview-goal-2", tier: "unattended", status: "active", workspaceRoot: "/preview/workspace", issuedAtMs: now - 1_200_000, expiresAtMs: null, revokedAtMs: null },
         }] };
       },
-      async autoModeAttemptDetail() {
-        throw new Error("desktop-host-required");
+      async autoModeAttemptDetail(sessionId) {
+        const now = Date.now();
+        return {
+          spec: "nimora.desktop-auto-mode-attempt-detail/1",
+          attempt: { id: "018f0000-0000-7000-8000-0000000000a2", sessionId, checkpointSequence: 5, expectedSessionUpdatedAtMs: now - 60_000, requestFingerprint: "sha256:preview-external-effect", status: "indeterminate", startedAtMs: now - 90_000, updatedAtMs: now - 60_000 },
+          resolutions: [
+            { spec: "nimora.auto-mode-attempt-resolution/1", id: "res-1", sessionId, attemptId: "018f0000-0000-7000-8000-00000000009f", checkpointSequence: 3, requestFingerprint: "sha256:preview-earlier", decision: "confirmed_not_executed", actor: "owner", reason: "核对 Provider 审计后确认请求未到达服务端", resolvedAtMs: now - 600_000 },
+          ],
+          risk: "The external Provider or Tool may have produced effects; never retry until manually reconciled.",
+          nextActions: ["confirmed_not_executed", "accept_external_effect_and_cancel"],
+        };
       },
       async resolveAutoModeAttempt() {
         throw new Error("desktop-host-required");

@@ -189,7 +189,11 @@ describe("desktop platform adapter", () => {
       status: "active",
     });
     await expect(api.autoModeAttemptDetail("018f0000-0000-7000-8000-000000000012"))
-      .rejects.toThrow("desktop-host-required");
+      .resolves.toMatchObject({
+        spec: "nimora.desktop-auto-mode-attempt-detail/1",
+        risk: expect.stringContaining("never retry"),
+        nextActions: ["confirmed_not_executed", "accept_external_effect_and_cancel"],
+      });
     await expect(api.resolveAutoModeAttempt({
       sessionId: "018f0000-0000-7000-8000-000000000012",
       attemptId: "018f0000-0000-7000-8000-000000000013",
