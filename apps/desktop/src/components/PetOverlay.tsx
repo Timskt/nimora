@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import type { LifeformAttention } from "./lifeformLiving";
+import type { LifeformAttention, LifeformMicroAct } from "./lifeformLiving";
 import {
   desktopApi,
   EMPTY_PET_OCCLUSION,
@@ -176,6 +176,7 @@ export function PetOverlay() {
   const [occlusion, setOcclusion] = useState<PetOcclusion>(EMPTY_PET_OCCLUSION);
   const [activeScene, setActiveScene] = useState<ActivityScene | null>(() => readActiveActivityScene());
   const [ambientAttention, setAmbientAttention] = useState<LifeformAttention | undefined>(undefined);
+  const [ambientMicroAct, setAmbientMicroAct] = useState<LifeformMicroAct | undefined>(undefined);
   const recentAmbientRef = useRef<string[]>([]);
   const activeSceneRef = useRef<ActivityScene | null>(activeScene);
   activeSceneRef.current = activeScene;
@@ -257,6 +258,7 @@ export function PetOverlay() {
     );
     const moment = petAmbientMoment(value.pet, options);
     setAmbientAttention(moment.attention);
+    setAmbientMicroAct(moment.microAct);
     rememberAmbientLine(recentAmbientRef, moment.speech);
     return moment.speech;
   }, []);
@@ -928,6 +930,7 @@ export function PetOverlay() {
                   state={renderState}
                   emotion={lifeform.emotion}
                   attention={ambientAttention}
+                  microAct={ambientMicroAct}
                   onFailure={handleBuiltin3dFailure}
                 />
               </Suspense>

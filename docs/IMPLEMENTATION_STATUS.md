@@ -4,7 +4,7 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **332** passed（26 files） |
+| FE `pnpm exec vitest run`（全量） | **340** passed（26 files） |
 | FE `pnpm exec vitest run src/components` | **283** passed（22 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
@@ -15,6 +15,19 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 环境情境驱动的 idle 微表演（丢弃数据接线修复·续）本切片
+
+### DONE
+- **idle 微表演接线（真实丢弃数据修复·续）**：`composeLivingMoment` 每个 ambient beat 已计算 `microAct`（`yawn`/`dig_nose`/`count_ants`/`wave`/`hop`/`look_around`/`stretch`/`observe`/`sleep`/`none`），且引擎会依情境选择（如夜间低能量→打哈欠、无聊低情绪→数蚂蚁），但 3D 宠物只按内部定时器循环 yawn/dig/count-ants，完全忽略引擎的情境选择（「机械/不智能」观感来源之一）。
+- `BuiltinPet3D.tsx`：新增纯导出 `microActBiasGain(hint?)` + `MicroActBiasGain` 接口，把引擎的 `microAct` 提示映射为 idle 通道增益（提升匹配通道、柔化竞争通道）；`sampleBuiltinPetMotion` 新增可选 `microActHint`（默认 `"none"` → 与既有 idle 编舞逐字节一致，所有历史测试不变）；增益仅作用于 `idleish` 通道，绝不干扰 directed locomotion 状态。
+- `PetOverlay.tsx`：`composeAmbientLine` 额外 `setAmbientMicroAct(moment.microAct)`；把 `microAct={ambientMicroAct}` 接到 `<BuiltinPet3D>`（与 `attention` 同源同一 moment）。
+
+### 门禁（本切片本地 · 已跑）
+- FE `pnpm exec vitest run` 全量 **340** passed（26 files；332 → +8）· `tsc -b` clean。
+- 新增测试：`microActBiasGain`（none/undefined→全 1、匹配通道 >1 且竞争通道 <1、wave/hop 增益、全增益有限非负）；`sampleBuiltinPetMotion` hint 流经（省略 hint == "none"、yawn hint 在打哈欠窗口加深闭眼、directed locomotion 状态不受 hint 干扰）。
 
 ---
 
@@ -30,8 +43,8 @@
 - FE `pnpm exec vitest run` 全量 **332** passed（26 files；325 → +7）· `tsc -b` clean。
 - 新增测试：`attentionGazeBias`（每目标 -1..1 有界、地面目标向下 / 天空向上、托盘 vs 邻屏左右相反、`undefined`→温和自视）；`petAmbientMoment`（返回完整 moment、speech 与 `petStatusMessage` 同源）。
 
-### 未提交说明
-- 本切片代码已落盘并本地验证通过，但当前沙箱 `.git` 为只读、审批策略为 Never 无法提权 → 无法由本会话 commit/push。需在可写 git 环境中提交（建议 `feat(lifeform): drive ambient gaze from living-presence attention when pointer idle`）。
+### 提交
+- 已提交推送：`de17289 feat(lifeform): 指针空闲时用生活感知注意力驱动环境凝视`。
 
 ---
 

@@ -18,7 +18,7 @@ import {
   WebGLRenderer,
 } from "three";
 import { createContactShadowTexture } from "./petSceneHelpers";
-import type { LifeformAttention } from "./lifeformLiving";
+import type { LifeformAttention, LifeformMicroAct } from "./lifeformLiving";
 import {
   createLifeformPerfTracker,
   createPerfEmitGate,
@@ -33,6 +33,8 @@ interface BuiltinPet3DProps {
   emotion: string;
   /** Living-presence attention target for ambient gaze when the pointer is stale. */
   attention?: LifeformAttention | undefined;
+  /** Living-presence contextual micro-act hint to bias idle choreography. */
+  microAct?: LifeformMicroAct | undefined;
   onFailure(): void;
   /** Optional throttled (~500ms) render budget summary for Control Center. */
   onPerfSummary?: (summary: LifeformPerfSummary) => void;
@@ -145,6 +147,45 @@ export function attentionGazeBias(attention?: LifeformAttention): { x: number; y
     case "self":
     default:
       return { x: 0, y: 0.08 };
+  }
+}
+
+/** Idle micro-act channel gains for a living-presence micro-act hint. */
+export interface MicroActBiasGain {
+  yawn: number;
+  dig: number;
+  ants: number;
+  wave: number;
+  hop: number;
+}
+
+/**
+ * Idle micro-performance gains for the living-presence engine's contextual
+ * micro-act choice.
+ *
+ * The renderer already cycles yawn / dig-nose / count-ants on internal timers,
+ * but the engine decides which act *fits the moment* (yawn when energy is low at
+ * night, count-ants when bored). This gently boosts the matching idle channel
+ * and softens the rest so the contextual act reads as the dominant one — without
+ * hard-snapping to a directed pose. `"none"` returns all-1 gains, so an absent
+ * hint keeps idle choreography byte-identical to the untinted baseline.
+ */
+export function microActBiasGain(hint?: LifeformMicroAct): MicroActBiasGain {
+  const base: MicroActBiasGain = { yawn: 1, dig: 1, ants: 1, wave: 1, hop: 1 };
+  switch (hint) {
+    case "yawn":
+      return { ...base, yawn: 1.55, dig: 0.7, ants: 0.7 };
+    case "dig_nose":
+      return { ...base, dig: 1.55, yawn: 0.7, ants: 0.7 };
+    case "count_ants":
+      return { ...base, ants: 1.55, yawn: 0.7, dig: 0.7 };
+    case "wave":
+      return { ...base, wave: 1.6, hop: 0.85 };
+    case "hop":
+      return { ...base, hop: 1.6, wave: 0.85 };
+    case "none":
+    default:
+      return base;
   }
 }
 
@@ -831,6 +872,7 @@ export function sampleBuiltinPetMotion(
   gazeX: number,
   gazeY: number,
   motion = 1,
+  microActHint: LifeformMicroAct = "none",
 ): BuiltinPetMotionSample {
   const pose = builtinPetPose(state, emotion);
   const walking = isWalking(state);
@@ -846,6 +888,7 @@ export function sampleBuiltinPetMotion(
   const waving = isDirectedWave(state);
   const hopping = isDirectedHop(state);
   const micro = idlePerformancePhase(elapsed);
+  const microGain = microActBiasGain(microActHint);
   const m = MathUtils.clamp(motion, 0, 1);
   // Directed micro-performances stay local (no linear body travel) and do not
   // steal observe/play locomotion channels unless they map there themselves.
@@ -855,19 +898,19 @@ export function sampleBuiltinPetMotion(
   ) || directedYawn || directedDig || directedAnts;
 
   const yawnAmt = MathUtils.clamp(
-    (idleish && !directedYawn && !directedDig && !directedAnts ? micro.yawn : 0)
+    (idleish && !directedYawn && !directedDig && !directedAnts ? micro.yawn * microGain.yawn : 0)
       + (directedYawn ? 0.95 : 0),
     0,
     1,
   );
   const digAmt = MathUtils.clamp(
-    (idleish && !directedYawn && !directedAnts ? micro.digNose : 0)
+    (idleish && !directedYawn && !directedAnts ? micro.digNose * microGain.dig : 0)
       + (directedDig ? 0.95 : 0),
     0,
     1,
   );
   const ants = MathUtils.clamp(
-    (idleish && !directedYawn && !directedDig ? micro.countAnts : 0)
+    (idleish && !directedYawn && !directedDig ? micro.countAnts * microGain.ants : 0)
       + (directedAnts ? 0.92 : 0),
     0,
     1,
@@ -877,8 +920,8 @@ export function sampleBuiltinPetMotion(
   const idleBounce = pureIdle ? micro.microBounce : micro.microBounce * (idleish ? 0.45 : 0.2);
   const settleBoost = pureIdle ? micro.settleHop : 0;
   // Hop channel is spring-friendly vertical squash only — never linear body travel.
-  const hopLiteAmt = pureIdle ? micro.hopLite : 0;
-  const waveLiteAmt = pureIdle ? micro.waveLite : 0;
+  const hopLiteAmt = pureIdle ? micro.hopLite * microGain.hop : 0;
+  const waveLiteAmt = pureIdle ? micro.waveLite * microGain.wave : 0;
   const fidgetAmt = pureIdle ? micro.fidget : micro.fidget * 0.2;
   // Hop is vertical squash/stretch only — land has a rubbery settle beat.
   const hopPhase = hopping
@@ -1210,12 +1253,14 @@ export function sampleBuiltinPetMotion(
   };
 }
 
-export function BuiltinPet3D({ state, emotion, attention, onFailure, onPerfSummary }: BuiltinPet3DProps) {
+export function BuiltinPet3D({ state, emotion, attention, microAct, onFailure, onPerfSummary }: BuiltinPet3DProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef({ state, emotion });
   stateRef.current = { state, emotion };
   const attentionRef = useRef<LifeformAttention | undefined>(attention);
   attentionRef.current = attention;
+  const microActRef = useRef<LifeformMicroAct | undefined>(microAct);
+  microActRef.current = microAct;
   const onPerfSummaryRef = useRef(onPerfSummary);
   onPerfSummaryRef.current = onPerfSummary;
 
@@ -1608,7 +1653,7 @@ export function BuiltinPet3D({ state, emotion, attention, onFailure, onPerfSumma
       const gazeOmega = pointerStale ? 6.5 : 15.5;
       const softGazeX = springToward(springGazeX, targetGazeX, dt, gazeOmega, 0.85) * motion;
       const softGazeY = springToward(springGazeY, targetGazeY, dt, gazeOmega, 0.85) * motion;
-      const sample = sampleBuiltinPetMotion(current.state, current.emotion, elapsed, softGazeX, softGazeY, motion);
+      const sample = sampleBuiltinPetMotion(current.state, current.emotion, elapsed, softGazeX, softGazeY, motion, microActRef.current);
       const playing = isPlaying(current.state);
 
       // Body channels: spring-damper only (never linear lerp). Play spin stays snappy via higher omega.

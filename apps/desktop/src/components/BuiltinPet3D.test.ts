@@ -19,6 +19,7 @@ import {
   qMinionHairTuftSpecs,
   qMinionOverallStrapPose,
   sampleBuiltinPetMotion,
+  microActBiasGain,
   springToward,
   stepSpringDamper,
 } from "./BuiltinPet3D";
@@ -601,5 +602,84 @@ describe("attentionGazeBias", () => {
 
   it("exposes a positive pointer-stale threshold", () => {
     expect(POINTER_ATTENTION_STALE_MS).toBeGreaterThan(0);
+  });
+});
+
+describe("microActBiasGain", () => {
+  it("returns all-1 gains for none / undefined (byte-identical idle)", () => {
+    for (const hint of [undefined, "none"] as const) {
+      const g = microActBiasGain(hint);
+      expect(g).toEqual({ yawn: 1, dig: 1, ants: 1, wave: 1, hop: 1 });
+    }
+  });
+
+  it("boosts the matching channel and softens rival idle acts", () => {
+    const yawn = microActBiasGain("yawn");
+    expect(yawn.yawn).toBeGreaterThan(1);
+    expect(yawn.dig).toBeLessThan(1);
+    expect(yawn.ants).toBeLessThan(1);
+
+    const ants = microActBiasGain("count_ants");
+    expect(ants.ants).toBeGreaterThan(1);
+    expect(ants.yawn).toBeLessThan(1);
+
+    const dig = microActBiasGain("dig_nose");
+    expect(dig.dig).toBeGreaterThan(1);
+  });
+
+  it("boosts wave / hop channels for their hints", () => {
+    expect(microActBiasGain("wave").wave).toBeGreaterThan(1);
+    expect(microActBiasGain("hop").hop).toBeGreaterThan(1);
+  });
+
+  it("keeps every gain finite and non-negative", () => {
+    for (const hint of ["yawn", "dig_nose", "count_ants", "wave", "hop", "none"] as const) {
+      const g = microActBiasGain(hint);
+      for (const v of Object.values(g)) {
+        expect(Number.isFinite(v)).toBe(true);
+        expect(v).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+
+  it("flows a yawn hint through sampleBuiltinPetMotion (idle only)", () => {
+    // Find an idle frame where the untinted yawn envelope is active, then confirm
+    // the yawn hint deepens the eye close vs. the same frame with no hint.
+    let found = false;
+    for (let t = 5.5; t < 7.5; t += 0.05) {
+      const plain = sampleBuiltinPetMotion("idle", "neutral", t, 0, 0, 1, "none");
+      const hinted = sampleBuiltinPetMotion("idle", "neutral", t, 0, 0, 1, "yawn");
+      if (plain.eyeScaleY > 0.4 && hinted.eyeScaleY < plain.eyeScaleY - 1e-4) {
+        found = true;
+        break;
+      }
+    }
+    expect(found).toBe(true);
+  });
+
+  it("never lets a micro-act hint disturb a directed locomotion state", () => {
+    const walkPlain = sampleBuiltinPetMotion("walking", "neutral", 3.2, 0, 0, 1, "none");
+    const walkHint = sampleBuiltinPetMotion("walking", "neutral", 3.2, 0, 0, 1, "yawn");
+    expect(walkHint.eyeScaleY).toBeCloseTo(walkPlain.eyeScaleY, 10);
+    expect(walkHint.rootY).toBeCloseTo(walkPlain.rootY, 10);
+  });
+});
+
+describe("sampleBuiltinPetMotion micro-act hint", () => {
+  it("defaults to the untinted idle baseline when hint omitted", () => {
+    const withNone = sampleBuiltinPetMotion("idle", "neutral", 1.2, 0, 0, 1, "none");
+    const omitted = sampleBuiltinPetMotion("idle", "neutral", 1.2, 0, 0, 1);
+    expect(withNone).toEqual(omitted);
+  });
+
+  it("raises the yawn channel amplitude at a yawn peak when hinted", () => {
+    // Yawn envelope peaks around its ~7.2s cycle; sample near a strong open window.
+    let hintedMax = 0;
+    let baseMax = 0;
+    for (let t = 6; t < 7; t += 0.05) {
+      hintedMax = Math.max(hintedMax, 1 - sampleBuiltinPetMotion("idle", "neutral", t, 0, 0, 1, "yawn").eyeScaleY);
+      baseMax = Math.max(baseMax, 1 - sampleBuiltinPetMotion("idle", "neutral", t, 0, 0, 1, "none").eyeScaleY);
+    }
+    expect(hintedMax).toBeGreaterThanOrEqual(baseMax);
   });
 });
