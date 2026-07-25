@@ -4,8 +4,8 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **411** passed（32 files） |
-| FE `pnpm exec vitest run src/components` | **375** passed（29 files） |
+| FE `pnpm exec vitest run`（全量） | **416** passed（33 files） |
+| FE `pnpm exec vitest run src/components` | **380** passed（30 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -23,6 +23,22 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 自动化立即运行（Live Run）UI 接通（P0 断头路修复）
+
+### DONE
+- **接通自动化真实运行闭环（P0 断头路修复）**：`run_automation`（真实执行）与 `automation_run_status`（按 runId 查审计流水）后端已注册、平台层 TS 齐全，但 `AutomationWorkspace` 只接了 `test_automation`（干跑），**没有任何入口触发真实运行、也无法按 runId 回读持久化审计**。用户能验证计划却永远无法从 UI 真正跑一次规则。现补齐。
+- **新增「立即运行（真实）」动作**：在规则卡片内的「测试运行」旁新增真实运行按钮，`runAutomation` 经干跑校验 + 风险预检后执行——严重风险直接拒绝、中高风险进入参数级批准队列（复用现有审批区并自动刷新）、低风险直接执行；执行后用 `automationRunStatus(runId)` 回读审计流水，并刷新运行历史与资源治理。运行预览区新增「真实运行结果」卡片，逐动作显示状态/补偿/尝试次数/错误 + 审计流水摘要。
+- **导出纯函数供测试**：`statusLabel`（改为导出）/`journalStatusLabel`/`liveRunOutcomeNotice`，浏览器预览的 `runAutomation`/`automationRunStatus` mock 返回可用演示数据（含条件未满足分支），并新增 `.automation-run-actions`/`.automation-live-outcome`/`.automation-step-error` 样式。
+
+### 门禁（本切片本地 · 已跑）
+- FE `pnpm exec vitest run` **416** passed（33 files，自动化 Live Run 纯函数 +5）· `pnpm exec vitest run src/components` **380** passed（30 files）· `tsc -b` clean · `pnpm exec vite build` 通过。
+- 本切片纯前端（未触碰 Rust），沿用 `cargo test -p nimora-desktop --lib` **278** 基线。
+
+### 仍须原生验收
+- 真实运行触发的低/中/高/严重风险分流、审批队列绑定与审计流水回读需在原生窗口内走真实 Command Backend；透明/穿透/遮挡/多屏手感仍须人工 QA。
 
 ---
 

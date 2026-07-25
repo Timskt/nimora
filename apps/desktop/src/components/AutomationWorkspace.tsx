@@ -36,6 +36,8 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
   const [succeeded, setSucceeded] = useState(true);
   const [busy, setBusy] = useState(false);
   const [run, setRun] = useState<AutomationRun | null>(null);
+  const [liveRun, setLiveRun] = useState<AutomationRun | null>(null);
+  const [liveJournal, setLiveJournal] = useState<AutomationJournalEntry | null>(null);
   const [catalog, setCatalog] = useState<AutomationCatalogEntry[]>([]);
   const [history, setHistory] = useState<AutomationJournalEntry[]>([]);
   const [historyExhausted, setHistoryExhausted] = useState(false);
@@ -199,6 +201,28 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
     }
   }
 
+  async function runLive() {
+    setBusy(true);
+    try {
+      const result = await desktopApi.runAutomation(definition, "dev.build.finished", { succeeded });
+      setLiveRun(result);
+      if (result.status === "waiting_for_approval") {
+        setLiveJournal(null);
+        await refreshApprovals();
+        onNotice(liveRunOutcomeNotice(result));
+        return;
+      }
+      const journal = await desktopApi.automationRunStatus(result.runId);
+      setLiveJournal(journal);
+      await Promise.all([refreshHistory(), refreshGovernance()]);
+      onNotice(liveRunOutcomeNotice(result));
+    } catch (error) {
+      onNotice(automationFailureNotice(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return <section className="automation-workspace" aria-labelledby="automation-heading">
     <div className="automation-hero">
       <div>
@@ -293,9 +317,14 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
           <input type="checkbox" checked={succeeded} onChange={(event) => setSucceeded(event.target.checked)} />
           测试事件：构建成功
         </label>
-        <button className="primary-button" type="button" disabled={disabled || busy} onClick={() => void testRun()}>
-          {busy ? "正在验证…" : "测试运行"}
-        </button>
+        <div className="automation-run-actions">
+          <button className="primary-button" type="button" disabled={disabled || busy} onClick={() => void testRun()}>
+            {busy ? "正在验证…" : "测试运行"}
+          </button>
+          <button className="secondary-button" type="button" disabled={disabled || busy} onClick={() => void runLive()} title="经干跑校验与风险预检后真实执行本规则；中高风险会先进入批准队列，严重风险直接拒绝">
+            {busy ? "执行中…" : "立即运行（真实）"}
+          </button>
+        </div>
       </article>
       <aside className="automation-preview" aria-live="polite">
         <p className="card-label">运行预览</p>
@@ -308,12 +337,23 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
           <em>仅计划</em>
         </div>)}
         {run?.status === "planned" && <div className="automation-safety-note"><strong>零副作用</strong><p>未调用 Renderer、Worker、网络或桌面 Command Backend。</p></div>}
+        {liveRun && <div className="automation-live-outcome" data-status={liveRun.status}>
+          <p className="card-label">真实运行结果</p>
+          <strong>{statusLabel(liveRun.status)}</strong>
+          {liveRun.reason && <p>{liveRun.reason}</p>}
+          {liveRun.steps.map((step) => <div className="automation-step" key={`live-${step.actionId}`}>
+            <span data-step-status={step.status}>{step.compensated ? "已补偿" : step.status}</span>
+            <div><strong>{step.actionId}</strong><code>{step.command}</code></div>
+            {step.error ? <em className="automation-step-error">{step.error}</em> : <em>{step.attempts} 次尝试</em>}
+          </div>)}
+          {liveJournal ? <small>审计记录 {journalStatusLabel(liveJournal.status)} · Run {liveJournal.runId} · {new Date(liveJournal.updatedAtMs).toLocaleString("zh-CN")}</small> : null}
+        </div>}
       </aside>
     </div>
   </section>;
 }
 
-function statusLabel(status: AutomationRun["status"]): string {
+export function statusLabel(status: AutomationRun["status"]): string {
   if (status === "planned") return "计划验证通过";
   if (status === "condition_not_matched") return "条件未满足";
   if (status === "trigger_not_matched") return "触发器未匹配";
@@ -342,4 +382,22 @@ function automationFailureNotice(error: unknown): string {
   if (message.includes("cooldown is active")) return "自动化仍在冷却期，未开始执行";
   if (message.includes("cost budget is exhausted")) return "今日 AI 费用预算不足，Provider 未被调用";
   return "审批已过期、被处理、计划发生变化或资源准入失败，未执行自动化";
+}
+
+export function journalStatusLabel(status: AutomationJournalEntry["status"]): string {
+  if (status === "running") return "运行中";
+  if (status === "completed") return "已完成";
+  return "已中断";
+}
+
+export function liveRunOutcomeNotice(run: AutomationRun): string {
+  if (run.status === "succeeded") return "真实运行成功，动作已执行并写入审计记录";
+  if (run.status === "waiting_for_approval") return "动作触及中高风险，已进入参数级批准队列，尚未产生真实副作用";
+  if (run.status === "condition_not_matched") return "条件未满足，未执行任何动作";
+  if (run.status === "trigger_not_matched") return "触发器未匹配，未执行任何动作";
+  if (run.status === "cancelled") return "运行已取消";
+  if (run.status === "timed_out") return "运行超时，已按失败策略补偿";
+  if (run.status === "compensation_failed") return "动作与补偿均失败，请检查审计记录";
+  if (run.status === "failed") return "运行失败，已尝试逆序补偿";
+  return "运行已完成";
 }

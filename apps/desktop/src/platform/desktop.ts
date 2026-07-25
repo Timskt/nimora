@@ -1548,6 +1548,7 @@ export function createDesktopApi(
     let previewAgentPrompt = "";
     let previewAgentModel = "model:echo-v1";
     let previewAgentHistory: AgentHistoryRecord[] = [];
+    let previewLiveRun: AutomationRun | null = null;
     let previewSkillCatalog: SkillCatalogEntry[] = [
       {
         skillId: "skill:preview-greeter",
@@ -1662,8 +1663,25 @@ export function createDesktopApi(
       async automationCatalog() { return []; },
       async setAutomationEnabled() { throw new Error("Automation catalog requires the Nimora desktop runtime."); },
       async rollbackAutomation() { throw new Error("Automation catalog requires the Nimora desktop runtime."); },
-      async runAutomation() { throw new Error("Live automation requires the Nimora desktop runtime."); },
-      async automationRunStatus() { return null; },
+      async runAutomation(definition, eventType, eventData) {
+        const conditionMet = (eventData as { succeeded?: boolean })?.succeeded !== false;
+        const runId = crypto.randomUUID();
+        const status: AutomationRun["status"] = conditionMet ? "succeeded" : "condition_not_matched";
+        previewLiveRun = {
+          spec: "nimora.automation-run/1", runId, automationId: definition.id, traceId: crypto.randomUUID(), eventId: crypto.randomUUID(),
+          mode: "live", status,
+          steps: conditionMet ? definition.actions.map((action) => ({ actionId: action.id, command: action.command, status: "succeeded", attempts: 1, compensated: false, error: null })) : [],
+          reason: conditionMet ? null : "测试事件未通过触发器或条件",
+        } as AutomationRun;
+        void eventType;
+        return previewLiveRun;
+      },
+      async automationRunStatus(runId: string) {
+        const run = previewLiveRun;
+        if (!run || run.runId !== runId) return null;
+        const now = Date.now();
+        return { spec: "nimora.automation-journal-entry/1", runId, automationId: run.automationId, traceId: run.traceId, eventId: run.eventId, status: "completed", startedAtMs: now - 400, updatedAtMs: now, result: run, interruptionReason: null } as AutomationJournalEntry;
+      },
       async automationRunHistory() { return { spec: "nimora.desktop-automation-run-history/1", records: [] }; },
       async automationEventHealth() { return { spec: "nimora.automation-event-health/1", sessions: [] }; },
       async automationGovernanceCatalog() { return { spec: "nimora.automation-governance-catalog/1", generatedAtMs: Date.now(), entries: [] }; },
