@@ -2998,6 +2998,7 @@ body.pet-window.pet-browser-preview { display: block; min-height: 100vh; overflo
 .skill-action-run:hover:not(:disabled) { border-color: var(--status-ok-edge); color: var(--status-ok-text); background: var(--status-ok-surface); }
 .skill-action-danger:hover:not(:disabled) { border-color: var(--status-danger-edge); color: var(--status-danger-text); background: var(--status-danger-surface); }
 .skill-card-hint { margin: 0; color: var(--status-danger-text); font-size: 12px; line-height: 1.5; }
+.skill-head-actions { display: flex; gap: 8px; align-items: center; }
 .skill-approval-queue { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
 .skill-approval-queue h4 { margin: 0 0 12px; font-size: 14px; }
 .skill-approval-queue > ul { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }

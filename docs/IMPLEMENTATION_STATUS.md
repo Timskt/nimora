@@ -4,8 +4,8 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **395** passed（30 files） |
-| FE `pnpm exec vitest run src/components` | **359** passed（27 files） |
+| FE `pnpm exec vitest run`（全量） | **403** passed（31 files） |
+| FE `pnpm exec vitest run src/components` | **367** passed（28 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -23,6 +23,22 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 技能执行历史（Execution History）UI 接通（P0 断头路修复）
+
+### DONE
+- **接通技能执行历史闭环（P0 断头路修复）**：`skill_execution_history_list`/`cancel_skill_execution`/`delete_skill_execution_history` 三个命令后端已注册、平台层 TS 齐全，但仅存在于 `platform/desktop.ts`，**无任何组件调用**。`SkillLifecyclePanel` 只覆盖 catalog/授权/执行/回滚/批准队列，不含执行历史/取消/删除——技能执行后无处查看结果、无法取消待批准执行、无法清理历史。现补齐。
+- **新增 `SkillExecutionHistoryPanel.tsx`**：列出 `skillExecutionHistory(50)` 记录，每条显示 skillId/命令数/Agent 任务数/错误/状态徽章/时间，并提供「取消」（`cancelSkillExecution`，仅 `waitingForApproval` 可点）/「删除」（`deleteSkillExecutionHistory(executionId)`）+ 头部「全部清除」（`deleteSkillExecutionHistory()` 无参）+ 空/错误/通知态。挂载于 `AiCreatorWorkspace`（`SkillLifecyclePanel` 之后）。
+- **导出纯函数供测试**：`skillStatusLabel`/`isCancellable`/`summarizeSkillHistoryRecord`/`formatSkillHistoryTime`，复用 `.skill-lifecycle-panel` token 化样式并新增 `.skill-head-actions` 样式。
+
+### 门禁（本切片本地 · 已跑）
+- FE `pnpm exec vitest run` **403** passed（31 files，技能执行历史面板纯函数 +8）· `pnpm exec vitest run src/components` **367** passed（28 files）· `tsc -b` clean · `pnpm exec vite build` 通过。
+- 本切片纯前端（未触碰 Rust），沿用 `cargo test -p nimora-desktop --lib` **278** 基线。
+
+### 仍须原生验收
+- 技能执行→等待批准→取消/删除的真实交互需在原生窗口内走一遍；透明/穿透/遮挡/多屏手感仍须人工 QA。
 
 ---
 
