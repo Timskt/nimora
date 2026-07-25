@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CapabilityGapPreview, ProfileDraftPreview, ThemeDraftPreview } from "./AiCreatorWorkspace";
+import { CapabilityGapPreview, creatorGenerateBlockReason, ProfileDraftPreview, ThemeDraftPreview } from "./AiCreatorWorkspace";
 import { labelForUserCodeCapability, samplePetDirectiveProgramPlan } from "./CreatorStudio";
 import { CapabilityProposalGovernance } from "./CapabilityProposalGovernance";
 import type { CreatorDraftResult } from "../platform/desktop";
@@ -128,5 +128,42 @@ describe("user program capability surface", () => {
     const plan = samplePetDirectiveProgramPlan();
     expect(plan.commands[0]?.command).toBe("safe.pet.directive");
     expect(String(plan.commands[0]?.arguments.speech)).toContain("专注完成啦");
+  });
+});
+
+describe("creatorGenerateBlockReason", () => {
+  const ready = {
+    busy: false,
+    disabled: false,
+    hasRequirement: true,
+    hasModel: true,
+    providerReady: true,
+    networkProvider: false,
+    networkAllowed: false,
+  };
+
+  it("allows generation when every precondition is satisfied", () => {
+    expect(creatorGenerateBlockReason(ready)).toBeNull();
+  });
+
+  it("prioritizes the safe-mode lock above all other reasons", () => {
+    expect(creatorGenerateBlockReason({ ...ready, disabled: true, hasRequirement: false, providerReady: false }))
+      .toBe("安全或恢复模式下禁止生成草案");
+  });
+
+  it("reports provider readiness, requirement, and model gaps in order", () => {
+    expect(creatorGenerateBlockReason({ ...ready, providerReady: false })).toBe("所选 Provider 尚未就绪，请检查连接或稍候重试");
+    expect(creatorGenerateBlockReason({ ...ready, hasRequirement: false })).toBe("请先描述目标与验收标准");
+    expect(creatorGenerateBlockReason({ ...ready, hasModel: false })).toBe("请填写要使用的模型名称");
+  });
+
+  it("requires explicit network consent for network providers", () => {
+    expect(creatorGenerateBlockReason({ ...ready, networkProvider: true, networkAllowed: false }))
+      .toBe("该 Provider 需联网，请先勾选允许本次请求联网");
+    expect(creatorGenerateBlockReason({ ...ready, networkProvider: true, networkAllowed: true })).toBeNull();
+  });
+
+  it("surfaces the in-flight state once other preconditions pass", () => {
+    expect(creatorGenerateBlockReason({ ...ready, busy: true })).toBe("正在生成并验证，请稍候");
   });
 });

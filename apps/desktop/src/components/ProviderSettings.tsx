@@ -24,6 +24,38 @@ export function secretReferenceForProvider(providerId: string): string {
   return `secret:${providerId.replace(/^provider:/, "provider-").replaceAll(":", "-")}`;
 }
 
+export type ProviderDraftField = "displayName" | "id" | "baseUrl" | "contextWindowTokens" | "maxOutputTokens";
+
+export type ProviderDraftFieldErrors = Partial<Record<ProviderDraftField, string>>;
+
+/**
+ * Pure client-side validation for the secure provider editor.
+ * Mirrors host guarantees (HTTPS on public origins, stable provider id) so the
+ * operator sees actionable feedback before a round-trip. Never inspects secrets.
+ */
+export function validateProviderDraft(draft: UpsertOpenAiProviderRequest): ProviderDraftFieldErrors {
+  const errors: ProviderDraftFieldErrors = {};
+  if (!draft.displayName.trim()) errors.displayName = "请填写显示名称";
+  const id = draft.id.trim();
+  if (!id) errors.id = "请填写 Provider ID";
+  else if (!/^provider:[a-z0-9][a-z0-9:_-]*$/i.test(id)) errors.id = "需以 provider: 开头，仅含字母、数字、: _ -";
+  const baseUrl = draft.baseUrl.trim();
+  if (!baseUrl) errors.baseUrl = "请填写 API Base URL";
+  else {
+    let url: URL | null = null;
+    try { url = new URL(baseUrl); } catch { url = null; }
+    if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) errors.baseUrl = "仅支持 http(s) 地址";
+    else if (url.protocol === "http:" && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") errors.baseUrl = "公网地址必须使用 HTTPS";
+  }
+  if (!Number.isFinite(draft.contextWindowTokens) || draft.contextWindowTokens < 1_024) errors.contextWindowTokens = "至少 1024";
+  if (!Number.isFinite(draft.maxOutputTokens) || draft.maxOutputTokens < 128) errors.maxOutputTokens = "至少 128";
+  return errors;
+}
+
+export function providerDraftIsValid(errors: ProviderDraftFieldErrors): boolean {
+  return Object.keys(errors).length === 0;
+}
+
 export function ProviderSettings({ disabled, onCatalogChanged, onNotice }: ProviderSettingsProps) {
   const [providers, setProviders] = useState<OpenAiProviderConfig[]>([]);
   const [draft, setDraft] = useState<UpsertOpenAiProviderRequest>(emptyProvider);
@@ -70,6 +102,10 @@ export function ProviderSettings({ disabled, onCatalogChanged, onNotice }: Provi
 
   async function save() {
     if (disabled || busy) return;
+    if (!providerDraftIsValid(validateProviderDraft(draft))) {
+      onNotice("请先修正标记的字段，再保存 Provider");
+      return;
+    }
     setBusy(true);
     try {
       const saved = await desktopApi.upsertOpenAiProvider({
@@ -125,6 +161,9 @@ export function ProviderSettings({ disabled, onCatalogChanged, onNotice }: Provi
   }
 
   const hostLocked = disabled || !desktopApi.native;
+  const fieldErrors = validateProviderDraft(draft);
+  const canSave = !hostLocked && !busy && providerDraftIsValid(fieldErrors);
+  const errorStyle = { color: "var(--danger)", fontSize: 8, fontWeight: 700 } as const;
   return <section className="provider-settings" aria-labelledby="provider-settings-heading">
     <header className="provider-settings-hero">
       <div><p className="card-label">SECURE PROVIDER HUB</p><h2 id="provider-settings-heading">连接你的模型，同时守住数据边界。</h2><p>凭据只进入系统密钥库，模型请求由独立 Worker 发送。Nimora 不会回填或展示 API Key。</p></div>
@@ -141,11 +180,11 @@ export function ProviderSettings({ disabled, onCatalogChanged, onNotice }: Provi
       </div>
       <form className="provider-editor" onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <div className="provider-editor-heading"><div><p className="card-label">{selectedId ? "EDIT CONNECTION" : "NEW CONNECTION"}</p><h3>{selectedId ? "编辑安全连接" : "配置兼容服务"}</h3></div><span>{draft.enabled ? "启用" : "停用"}</span></div>
-        <label><span>显示名称</span><input disabled={hostLocked || busy} maxLength={80} required value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label>
-        <label><span>Provider ID</span><input disabled={hostLocked || busy || Boolean(selectedId)} maxLength={128} required value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value, credentialReference: secretReferenceForProvider(event.target.value) })} /><small>创建后保持稳定，供 Agent、Skill 与自动化引用。</small></label>
-        <label><span>API Base URL</span><input disabled={hostLocked || busy} inputMode="url" required value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} /><small>公网仅允许 HTTPS；请求数据将发送到该服务。</small></label>
+        <label><span>显示名称</span><input aria-invalid={Boolean(fieldErrors.displayName)} disabled={hostLocked || busy} maxLength={80} required value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} />{fieldErrors.displayName && <small role="alert" style={errorStyle}>{fieldErrors.displayName}</small>}</label>
+        <label><span>Provider ID</span><input aria-invalid={Boolean(fieldErrors.id)} disabled={hostLocked || busy || Boolean(selectedId)} maxLength={128} required value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value, credentialReference: secretReferenceForProvider(event.target.value) })} /><small>创建后保持稳定，供 Agent、Skill 与自动化引用。</small>{!selectedId && fieldErrors.id && <small role="alert" style={errorStyle}>{fieldErrors.id}</small>}</label>
+        <label><span>API Base URL</span><input aria-invalid={Boolean(fieldErrors.baseUrl)} disabled={hostLocked || busy} inputMode="url" required value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} /><small>公网仅允许 HTTPS；请求数据将发送到该服务。</small>{fieldErrors.baseUrl && <small role="alert" style={errorStyle}>{fieldErrors.baseUrl}</small>}</label>
         <label><span>默认模型</span><input disabled={hostLocked || busy} maxLength={128} value={draft.defaultModel ?? ""} onChange={(event) => setDraft({ ...draft, defaultModel: event.target.value })} /></label>
-        <div className="provider-token-grid"><label><span>上下文窗口</span><input disabled={hostLocked || busy} min={1024} step={1024} type="number" value={draft.contextWindowTokens} onChange={(event) => setDraft({ ...draft, contextWindowTokens: Number(event.target.value) })} /></label><label><span>最大输出</span><input disabled={hostLocked || busy} min={128} step={128} type="number" value={draft.maxOutputTokens} onChange={(event) => setDraft({ ...draft, maxOutputTokens: Number(event.target.value) })} /></label></div>
+        <div className="provider-token-grid"><label><span>上下文窗口</span><input aria-invalid={Boolean(fieldErrors.contextWindowTokens)} disabled={hostLocked || busy} min={1024} step={1024} type="number" value={draft.contextWindowTokens} onChange={(event) => setDraft({ ...draft, contextWindowTokens: Number(event.target.value) })} />{fieldErrors.contextWindowTokens && <small role="alert" style={errorStyle}>{fieldErrors.contextWindowTokens}</small>}</label><label><span>最大输出</span><input aria-invalid={Boolean(fieldErrors.maxOutputTokens)} disabled={hostLocked || busy} min={128} step={128} type="number" value={draft.maxOutputTokens} onChange={(event) => setDraft({ ...draft, maxOutputTokens: Number(event.target.value) })} />{fieldErrors.maxOutputTokens && <small role="alert" style={errorStyle}>{fieldErrors.maxOutputTokens}</small>}</label></div>
         <fieldset className="provider-reasoning" disabled={hostLocked || busy}>
           <legend>推理能力声明</legend>
           <label className="provider-toggle"><input checked={draft.reasoning !== null} type="checkbox" onChange={(event) => setDraft({ ...draft, reasoning: event.target.checked ? { effortValues: { low: "low", medium: "medium", high: "high" }, mappingVersion: "openai-reasoning-effort/1" } : null })} /><span><strong>服务明确支持 reasoning_effort</strong><small>仅在服务与模型文档确认支持时启用；错误声明可能导致请求失败。</small></span></label>
@@ -153,7 +192,7 @@ export function ProviderSettings({ disabled, onCatalogChanged, onNotice }: Provi
         </fieldset>
         <label><span>API Key {selectedId && "（留空则保持不变）"}</span><input autoComplete="new-password" disabled={hostLocked || busy} maxLength={65_536} type="password" value={credential} onChange={(event) => setCredential(event.target.value)} /><small>提交后立即从界面状态清除，不写入 SQLite、日志或浏览器存储。</small></label>
         <label className="provider-toggle"><input checked={draft.enabled} disabled={hostLocked || busy} type="checkbox" onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span><strong>允许在 Agent 中选择</strong><small>实际联网仍需在每次运行时明确授权。</small></span></label>
-        <button className="primary-button" disabled={hostLocked || busy} type="submit">{busy ? "安全保存中…" : "保存 Provider"}</button>
+        <button className="primary-button" disabled={!canSave} type="submit">{busy ? "安全保存中…" : "保存 Provider"}</button>
       </form>
     </div>
   </section>;
