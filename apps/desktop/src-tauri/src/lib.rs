@@ -227,6 +227,9 @@ const DETERMINISTIC_PROVIDER_ID: &str = "provider:deterministic-local";
 const DEFAULT_AGENT_MODEL: &str = "model:echo-v1";
 const AUTO_MODE_CONTEXT_CACHE_SECRET: &str = "secret:cache:auto-mode-context-v1";
 const AUTHORIZATION_GRANT_SECRET: &str = "secret:cache:authorization-grant-v1";
+const ACTIVITY_SCENE_PROGRAM_ID: &str = "nimora.system.scenes";
+const ACTIVITY_SCENE_CATALOG_KEY: &str = "catalog";
+const ACTIVITY_SCENE_ACTIVE_KEY: &str = "active";
 const POSITION_WRITE_DEBOUNCE: Duration = Duration::from_millis(200);
 const CLICK_FEEDBACK_DURATION: Duration = Duration::from_millis(600);
 const NOTICE_FEEDBACK_DURATION: Duration = Duration::from_millis(900);
@@ -659,6 +662,7 @@ struct DesktopState {
     active_asset_selection_write: Mutex<()>,
     program_store: PathBuf,
     program_data_store: ProgramDataStore,
+    system_data_store: ProgramDataStore,
     program_permissions: SqliteProgramPermissionRepository,
     skill_store: PathBuf,
     skill_states: SqliteSkillStateRepository,
@@ -1132,6 +1136,8 @@ impl DesktopState {
         );
         let program_data_store =
             ProgramDataStore::new(program_store.with_file_name("program-data"));
+        let system_data_store =
+            ProgramDataStore::new(program_store.with_file_name("system-data"));
         let skill_store = program_store.with_file_name("skills");
         let skill_states = SqliteSkillStateRepository::open(database_path)?;
         let skill_host = restore_skill_host(&skill_store, &skill_states)?;
@@ -1177,6 +1183,7 @@ impl DesktopState {
             active_asset_selection_write: Mutex::new(()),
             program_store,
             program_data_store,
+            system_data_store,
             program_permissions: SqliteProgramPermissionRepository::open(database_path)?,
             skill_store,
             skill_states,
@@ -1244,6 +1251,8 @@ impl DesktopState {
         );
         let program_data_store =
             ProgramDataStore::new(program_store.with_file_name("program-data-recovery"));
+        let system_data_store =
+            ProgramDataStore::new(program_store.with_file_name("system-data-recovery"));
         let skill_store = program_store.with_file_name("skills-recovery");
         let _ = diagnostic_journal.record(diagnostic_event(
             DiagnosticSeverity::Error,
@@ -1275,6 +1284,7 @@ impl DesktopState {
             active_asset_selection_write: Mutex::new(()),
             program_store,
             program_data_store,
+            system_data_store,
             program_permissions: SqliteProgramPermissionRepository::in_memory()?,
             skill_store,
             skill_states: SqliteSkillStateRepository::in_memory()?,
@@ -1791,6 +1801,13 @@ struct UserProgramCatalogSnapshot {
     rejected: u64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivitySceneStateSnapshot {
+    scenes: serde_json::Value,
+    active_scene_id: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct InstallSkillRequest {
@@ -2177,6 +2194,10 @@ enum DesktopError {
     UserProgramEventSessionLimit,
     #[error("user program event subscription was not found")]
     UserProgramEventSessionNotFound,
+    #[error("activity scene payload must be a JSON array")]
+    ActivitySceneInvalid,
+    #[error(transparent)]
+    ProgramData(#[from] nimora_user_code_storage::ProgramDataError),
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -10105,6 +10126,77 @@ fn user_program_catalog(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn activity_scene_state(
+    state: State<'_, DesktopState>,
+) -> Result<ActivitySceneStateSnapshot, DesktopError> {
+    ensure_normal_mode(&state)?;
+    let scenes = state
+        .system_data_store
+        .read(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_CATALOG_KEY)
+        .map_err(DesktopError::from)?
+        .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+    let active = state
+        .system_data_store
+        .read(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_ACTIVE_KEY)
+        .map_err(DesktopError::from)?
+        .and_then(|value| value.as_str().map(ToOwned::to_owned));
+    Ok(ActivitySceneStateSnapshot {
+        scenes,
+        active_scene_id: active,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn save_activity_scenes(
+    state: State<'_, DesktopState>,
+    scenes: serde_json::Value,
+) -> Result<(), DesktopError> {
+    ensure_normal_mode(&state)?;
+    if !scenes.is_array() {
+        return Err(DesktopError::ActivitySceneInvalid);
+    }
+    state
+        .system_data_store
+        .write(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_CATALOG_KEY, &scenes)
+        .map_err(DesktopError::from)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn set_active_activity_scene(
+    state: State<'_, DesktopState>,
+    scene_id: Option<String>,
+) -> Result<(), DesktopError> {
+    ensure_normal_mode(&state)?;
+    match scene_id {
+        Some(id) if !id.is_empty() && id.len() <= 128 => state
+            .system_data_store
+            .write(
+                ACTIVITY_SCENE_PROGRAM_ID,
+                ACTIVITY_SCENE_ACTIVE_KEY,
+                &serde_json::Value::String(id),
+            )
+            .map_err(DesktopError::from),
+        Some(_) => {
+            state
+                .system_data_store
+                .delete(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_ACTIVE_KEY)
+                .map_err(DesktopError::from)?;
+            Ok(())
+        }
+        None => {
+            state
+                .system_data_store
+                .delete(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_ACTIVE_KEY)
+                .map_err(DesktopError::from)?;
+            Ok(())
+        }
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn open_user_program_event_session(
     state: State<'_, DesktopState>,
     program_id: String,
@@ -13491,6 +13583,9 @@ pub fn run() {
             execute_user_program,
             execute_installed_user_program,
             user_program_catalog,
+            activity_scene_state,
+            save_activity_scenes,
+            set_active_activity_scene,
             invoke_user_program_capability,
             stop_user_program
         ])
@@ -14616,7 +14711,8 @@ fn discover_agent_provider_worker(app: &AppHandle) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVE_CHARACTER_FILE, ACTIVE_THEME_FILE, ACTIVE_VOICE_FILE, ActiveAgentTask,
+        ACTIVE_CHARACTER_FILE, ACTIVE_THEME_FILE, ACTIVE_VOICE_FILE, ACTIVITY_SCENE_ACTIVE_KEY,
+        ACTIVITY_SCENE_CATALOG_KEY, ACTIVITY_SCENE_PROGRAM_ID, ActiveAgentTask,
         ActiveSkillExecution, AgentProviderStatusRequest, AssetInstallReceipt, AttentionBudget,
         AttentionChannel, AttentionDecisionReason, AttentionPriority, AttentionRequest,
         AttentionSource, AutoModeJobStatus, AutomationEventMetrics, AutomationRun,
@@ -16581,6 +16677,92 @@ mod tests {
         .expect("catalog");
         assert!(snapshot.programs.is_empty());
         assert_eq!(snapshot.rejected, 1);
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn activity_scene_store_round_trips_scenes_and_active_selection() {
+        let (root, state) = normal_desktop_state();
+        // Empty store yields an absent catalog and no active scene.
+        let scenes = state
+            .system_data_store
+            .read(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_CATALOG_KEY)
+            .expect("read empty catalog");
+        assert!(scenes.is_none());
+        let active = state
+            .system_data_store
+            .read(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_ACTIVE_KEY)
+            .expect("read empty active");
+        assert!(active.is_none());
+
+        // Persist a scene catalog and active selection, then read them back.
+        let catalog = json!([
+            {"id": "scene.user.demo", "name": "演示夜", "source": "user", "enabled": true}
+        ]);
+        state
+            .system_data_store
+            .write(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_CATALOG_KEY, &catalog)
+            .expect("write catalog");
+        state
+            .system_data_store
+            .write(
+                ACTIVITY_SCENE_PROGRAM_ID,
+                ACTIVITY_SCENE_ACTIVE_KEY,
+                &json!("scene.user.demo"),
+            )
+            .expect("write active");
+        let stored = state
+            .system_data_store
+            .read(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_CATALOG_KEY)
+            .expect("read catalog")
+            .expect("catalog present");
+        assert_eq!(stored, catalog);
+        let stored_active = state
+            .system_data_store
+            .read(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_ACTIVE_KEY)
+            .expect("read active")
+            .expect("active present");
+        assert_eq!(stored_active, json!("scene.user.demo"));
+
+        // Clearing the active selection removes only the active key.
+        state
+            .system_data_store
+            .delete(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_ACTIVE_KEY)
+            .expect("clear active");
+        let cleared = state
+            .system_data_store
+            .read(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_ACTIVE_KEY)
+            .expect("read cleared active");
+        assert!(cleared.is_none());
+        let catalog_after = state
+            .system_data_store
+            .read(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_CATALOG_KEY)
+            .expect("read catalog after clear")
+            .expect("catalog still present");
+        assert_eq!(catalog_after, catalog);
+
+        // The activity scene store is isolated from the user program data store.
+        let program_isolation = state
+            .program_data_store
+            .read(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_CATALOG_KEY)
+            .expect("read program data store");
+        assert!(program_isolation.is_none());
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn activity_scene_program_id_satisfies_program_data_store_validation() {
+        // Constants must satisfy the ProgramDataStore identifier/key rules or the
+        // Tauri commands would fail at runtime. Reads with them must not error.
+        let (root, state) = normal_desktop_state();
+        state
+            .system_data_store
+            .read(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_CATALOG_KEY)
+            .expect("program id and catalog key are valid");
+        state
+            .system_data_store
+            .read(ACTIVITY_SCENE_PROGRAM_ID, ACTIVITY_SCENE_ACTIVE_KEY)
+            .expect("program id and active key are valid");
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 

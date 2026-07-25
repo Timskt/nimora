@@ -11,7 +11,7 @@
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
 | `cargo test -p nimora-desktop --lib process_budget` | **7** passed |
 | `cargo test -p nimora-desktop --lib desktop_lifeform` | **21** passed |
-| `cargo test -p nimora-desktop --lib`（全量） | **275** passed（多线程默认，无死锁；含 GrantExpiryWatch +5） |
+| `cargo test -p nimora-desktop --lib`（全量） | **278** passed（多线程默认，无死锁；含活动场景存储往返/校验 +3） |
 | `cargo test -p nimora-agent-provider-worker --lib` | **15** passed（新增 payload/parse 覆盖 +11） |
 | `cargo test -p nimora-agent-tools --lib` | **10** passed（新增网关工具映射/校验/策略 +9） |
 | `cargo test -p nimora-model-importer --lib` | **12** passed（新增 GLB 容器/预算/URI/路径安全 +10） |
@@ -23,6 +23,22 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 活动场景（Activity Scene）接回能力底座 + 全局样式 token 收敛
+
+### DONE
+- **活动场景持久化接回 Rust 能力底座（P0 断头路修复）**：此前活动场景创意工坊纯 `localStorage`+`CustomEvent` 存储，绕过能力底座，重装/多窗口无权威来源。现新增隔离的 `system_data_store: ProgramDataStore`（root `system-data`/`system-data-recovery`，与用户程序 `program-data` 物理隔离），并接通 3 个 typed Tauri 命令 `activity_scene_state`/`save_activity_scenes`/`set_active_activity_scene`（均 `ensure_normal_mode` 守卫，`save_activity_scenes` 校验 JSON 必须为数组否则 `DesktopError::ActivitySceneInvalid`）。常量 `nimora.system.scenes`/`catalog`/`active` 满足 `ProgramDataStore` 标识符/键校验。新增 `DesktopError::ProgramData(#[from] ProgramDataError)`。
+- **前端 write-through + 启动 hydrate**：`activityScenes.ts` 的 `persistScenes`/`persistActiveSceneId` 改为「先 localStorage 即时缓存（60fps overlay 读路径）→ 再异步 write-through 后端」，新增 `hydrateScenesFromHost()`（后端为权威源，启动时覆盖本地缓存）。`ActivitySceneWorkshop.tsx` 与 `PetOverlay.tsx` 挂载时 hydrate，保留 `CustomEvent` 即时刷新，无 Tauri 宿主时纯 localStorage 回退。平台层 `desktop.ts` 补 3 方法（interface + mock + 真实 invoke，camelCase）与 `ActivitySceneStateSnapshot` 类型。
+- **全局样式 token 收敛**（UI 审计：扩展模块「5+ 种紫」）：`styles.css` 新增 `--accent-purple`/`--accent-purple-soft`（`:root` 与 dark 块同值、主题不变），把 9 处紫色 sprawl、`#fffefa`→`--surface-strong`、`#52744e`→`--success` 共 25 处 usage-site 硬编码收敛到 token（559→538）。仅动 `styles.css`，未触碰宠物/overlay/场景调色板/3D 渐变。
+
+### 门禁（本切片本地 · 已跑）
+- FE `pnpm exec vitest run` **369** passed（28 files）· `tsc -b` clean · `pnpm exec vite build` 通过（CSS 解析无误）。
+- `cargo test -p nimora-desktop --lib`（全量）**278** passed（新增 `activity_scene_store_round_trips_scenes_and_active_selection` + `activity_scene_program_id_satisfies_program_data_store_validation`，覆盖 save→read round-trip、active set/clear、与用户程序 store 隔离、常量校验）。
+
+### 仍须原生验收
+- 活动场景仅在 WebView 预览与后端单元测试下验证；真实 Tauri 命令链路（多窗口 write-through 一致性、重启 hydrate、overlay 60fps 同步读）与原生透明/穿透/遮挡/多屏手感仍须端到端原生运行，不得据此宣称 goal complete。
 
 ---
 

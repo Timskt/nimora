@@ -49,6 +49,7 @@ import { subscribeReducedMotion } from "./reducedMotion";
 import { BuiltinPet } from "./BuiltinPet";
 import { BUILTIN_FOX_RENDERER } from "./builtinFox";
 import {
+  hydrateScenesFromHost,
   loadActiveSceneId,
   loadStoredScenes,
   pickSceneSpeech,
@@ -274,6 +275,9 @@ export function PetOverlay() {
   useEffect(() => {
     const refreshScene = () => setActiveScene(readActiveActivityScene());
     refreshScene();
+    // Hydrate the local cache from the Rust capability base (source of truth) at
+    // startup, then re-read so a restarted overlay observes persisted scenes.
+    void hydrateScenesFromHost().then(refreshScene).catch(() => {});
     const onStorage = (event: StorageEvent) => {
       if (!event.key || event.key.includes("nimora") || event.key.includes("activity") || event.key.includes("scene")) {
         refreshScene();

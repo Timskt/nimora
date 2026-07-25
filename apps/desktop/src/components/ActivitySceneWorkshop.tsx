@@ -7,6 +7,7 @@ import {
   SCENE_CATEGORY_LABEL,
   SCENE_PROP_CATALOG,
   createUserActivityScene,
+  hydrateScenesFromHost,
   loadActiveSceneId,
   loadStoredScenes,
   persistActiveSceneId,
@@ -51,6 +52,18 @@ export function ActivitySceneWorkshop({
   useEffect(() => {
     onActiveSceneChange?.(activeScene);
   }, [activeScene, onActiveSceneChange]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void hydrateScenesFromHost().then((state) => {
+      if (cancelled) return;
+      setScenes(state.scenes);
+      setActiveId(state.activeSceneId);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const visibleScenes = useMemo(() => {
     if (filter === "all") return scenes;

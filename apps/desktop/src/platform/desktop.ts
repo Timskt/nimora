@@ -989,6 +989,12 @@ export interface UserProgramCatalogSnapshot {
   rejected: number;
 }
 
+/** Host-persisted activity scene catalog snapshot (mirrors ActivitySceneStateSnapshot). */
+export interface ActivitySceneStateSnapshot {
+  scenes: unknown[];
+  activeSceneId: string | null;
+}
+
 export interface UserProgramEventSessionReceipt {
   subscriptionId: string;
   programId: string;
@@ -1383,6 +1389,9 @@ export interface DesktopApi {
   openUserProgramEventSession(programId: string): Promise<UserProgramEventSessionReceipt | null>;
   drainUserProgramEvents(subscriptionId: string): Promise<UserProgramEventBatch>;
   executeNextUserProgramEvent(subscriptionId: string): Promise<UserProgramEventExecutionReceipt | null>;
+  activitySceneState(): Promise<ActivitySceneStateSnapshot>;
+  saveActivityScenes(scenes: unknown[]): Promise<void>;
+  setActiveActivityScene(sceneId: string | null): Promise<void>;
   startUserProgramEventLoop(subscriptionId: string): Promise<void>;
   userProgramEventSessionStatus(subscriptionId: string): Promise<UserProgramEventSessionStatus | null>;
   closeUserProgramEventSession(subscriptionId: string): Promise<void>;
@@ -2251,6 +2260,9 @@ export function createDesktopApi(
       async rollbackUserProgram() { return null; },
       async userProgramPermissionStatus() { return null; },
       async userProgramCatalog() { return { programs: [], rejected: 0 }; },
+      async activitySceneState() { return { scenes: [], activeSceneId: null }; },
+      async saveActivityScenes() {},
+      async setActiveActivityScene() {},
       async grantUserProgramPermissions() { return null; },
       async revokeUserProgramPermissions() {},
       async openUserProgramEventSession() { return null; },
@@ -2502,6 +2514,9 @@ export function createDesktopApi(
     rollbackUserProgram: async (programId) => await invokeCommand("rollback_user_program", { programId }) as UserProgramRollbackReceipt,
     userProgramPermissionStatus: async (programId) => await invokeCommand("user_program_permission_status", { programId }) as UserProgramPermissionStatus,
     userProgramCatalog: async () => await invokeCommand("user_program_catalog") as UserProgramCatalogSnapshot,
+    activitySceneState: async () => await invokeCommand("activity_scene_state") as ActivitySceneStateSnapshot,
+    saveActivityScenes: async (scenes) => { await invokeCommand("save_activity_scenes", { scenes }); },
+    setActiveActivityScene: async (sceneId) => { await invokeCommand("set_active_activity_scene", { sceneId }); },
     grantUserProgramPermissions: async (programId) => await invokeCommand("grant_user_program_permissions", { programId }) as UserProgramPermissionStatus,
     revokeUserProgramPermissions: async (programId) => { await invokeCommand("revoke_user_program_permissions", { programId }); },
     openUserProgramEventSession: async (programId) => await invokeCommand("open_user_program_event_session", { programId }) as UserProgramEventSessionReceipt,

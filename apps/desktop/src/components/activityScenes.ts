@@ -3,8 +3,16 @@
  * Scenes decorate the desktop lifeform (speech / props / palette / particle bias)
  * without requiring network or third-party IP assets.
  *
- * Storage is local-first (localStorage). Host package install can come later.
+ * Storage is local-first: the Rust capability base (system data store) is the
+ * source of truth, mirrored into localStorage as a synchronous 60fps cache for
+ * the overlay. Host writes are write-through (localStorage first for instant UI,
+ * then async host persistence). Without a Tauri host we fall back to localStorage.
  */
+import { desktopApi } from "../platform/desktop";
+
+function hostSyncEnabled(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
 
 export type SceneCategory = "sports" | "esports" | "festival" | "season" | "geek" | "custom";
 export type SceneParticle = "none" | "confetti" | "sparkles" | "snow" | "embers" | "pixels";
@@ -364,10 +372,15 @@ export function loadStoredScenes(): ActivityScene[] {
 }
 
 export function persistScenes(scenes: ActivityScene[]): void {
-  if (typeof localStorage === "undefined") return;
-  // Persist user scenes + builtin overrides only
+  // Persist user scenes + builtin overrides only.
   const payload = scenes.filter((scene) => scene.source === "user" || scene.source === "builtin");
-  localStorage.setItem(ACTIVITY_SCENES_STORAGE_KEY, JSON.stringify(payload));
+  if (typeof localStorage !== "undefined") {
+    // Instant local cache for the 60fps overlay read path.
+    localStorage.setItem(ACTIVITY_SCENES_STORAGE_KEY, JSON.stringify(payload));
+  }
+  // Write-through to the Rust capability base (source of truth). Fire-and-forget:
+  // the local cache already reflects the change; host failures fall back gracefully.
+  void desktopApi.saveActivityScenes(payload as unknown[]).catch(() => {});
 }
 
 export function loadActiveSceneId(): string | null {
@@ -380,12 +393,46 @@ export function loadActiveSceneId(): string | null {
 }
 
 export function persistActiveSceneId(id: string | null): void {
-  if (typeof localStorage === "undefined") return;
-  if (!id) {
-    localStorage.removeItem(ACTIVE_ACTIVITY_SCENE_KEY);
-    return;
+  if (typeof localStorage !== "undefined") {
+    if (!id) {
+      localStorage.removeItem(ACTIVE_ACTIVITY_SCENE_KEY);
+    } else {
+      localStorage.setItem(ACTIVE_ACTIVITY_SCENE_KEY, id);
+    }
   }
-  localStorage.setItem(ACTIVE_ACTIVITY_SCENE_KEY, id);
+  void desktopApi.setActiveActivityScene(id).catch(() => {});
+}
+
+/**
+ * Hydrate the local cache from the Rust capability base at startup.
+ * The host store is authoritative; when it holds scenes we overwrite the
+ * localStorage mirror so the overlay and workshop observe the persisted state.
+ * On a non-Tauri host (browser/mock) this is a no-op and localStorage stands.
+ * Returns the merged scene catalog and active scene id for the caller to apply.
+ */
+export async function hydrateScenesFromHost(): Promise<{
+  scenes: ActivityScene[];
+  activeSceneId: string | null;
+}> {
+  try {
+    const snapshot = await desktopApi.activitySceneState();
+    const rawScenes = Array.isArray(snapshot.scenes) ? (snapshot.scenes as ActivityScene[]) : [];
+    if (rawScenes.length > 0 && typeof localStorage !== "undefined") {
+      const payload = rawScenes.filter((scene) => scene.source === "user" || scene.source === "builtin");
+      localStorage.setItem(ACTIVITY_SCENES_STORAGE_KEY, JSON.stringify(payload));
+    }
+    if (typeof localStorage !== "undefined") {
+      if (snapshot.activeSceneId) {
+        localStorage.setItem(ACTIVE_ACTIVITY_SCENE_KEY, snapshot.activeSceneId);
+      }
+    }
+    return {
+      scenes: mergeSceneCatalog(rawScenes.length > 0 ? rawScenes : null),
+      activeSceneId: snapshot.activeSceneId ?? loadActiveSceneId(),
+    };
+  } catch {
+    return { scenes: loadStoredScenes(), activeSceneId: loadActiveSceneId() };
+  }
 }
 
 export function resolveActiveScene(scenes: ActivityScene[], activeId: string | null): ActivityScene | null {
