@@ -463,4 +463,161 @@ mod tests {
             Err(ModelImportError::InvalidGlb(_))
         ));
     }
+
+    use super::{
+        ModelProbeRequest, probe_model_bytes, probe_staged_model, safe_relative_file,
+    };
+    use std::path::{Path, PathBuf};
+
+    fn plain_glb() -> Vec<u8> {
+        glb(&serde_json::json!({
+            "asset": { "version": "2.0" },
+            "nodes": [{}, {}],
+            "meshes": [{}],
+            "materials": [{}],
+            "textures": [{}],
+            "animations": [{ "name": "  idle  " }, { "name": "" }],
+            "skins": [{}]
+        }))
+    }
+
+    #[test]
+    fn plain_glb_reports_counts_and_trimmed_animation_names() {
+        let report = probe_glb(&plain_glb()).expect("report");
+        assert_eq!(report.format, "glb");
+        assert_eq!(report.format_version, "2.0");
+        assert_eq!(report.nodes, 2);
+        assert_eq!(report.meshes, 1);
+        assert_eq!(report.materials, 1);
+        assert_eq!(report.textures, 1);
+        assert_eq!(report.skins, 1);
+        assert_eq!(report.animations, 2);
+        assert_eq!(report.animation_names, vec!["idle".to_owned()]);
+        assert_eq!(report.binary_bytes, 0);
+        assert_eq!(report.spec, "nimora.model-probe-report/1");
+    }
+
+    #[test]
+    fn probe_model_bytes_delegates_to_container_parser() {
+        assert_eq!(
+            probe_model_bytes(&plain_glb()).expect("report").format,
+            "glb"
+        );
+        assert!(matches!(
+            probe_model_bytes(&[0_u8; 8]),
+            Err(ModelImportError::InvalidGlb("missing GLB header"))
+        ));
+    }
+
+    #[test]
+    fn rejects_short_or_bad_magic_header() {
+        assert!(matches!(
+            probe_glb(&[0_u8; 8]),
+            Err(ModelImportError::InvalidGlb("missing GLB header"))
+        ));
+        let mut bad = plain_glb();
+        bad[0] = b'x';
+        assert!(matches!(
+            probe_glb(&bad),
+            Err(ModelImportError::InvalidGlb("missing GLB header"))
+        ));
+    }
+
+    #[test]
+    fn rejects_non_two_version_and_length_mismatch() {
+        let mut wrong_version = plain_glb();
+        wrong_version[4..8].copy_from_slice(&1_u32.to_le_bytes());
+        assert!(matches!(
+            probe_glb(&wrong_version),
+            Err(ModelImportError::InvalidGlb("only GLB 2.0 is accepted"))
+        ));
+        let mut wrong_length = plain_glb();
+        wrong_length[8..12].copy_from_slice(&9_999_u32.to_le_bytes());
+        assert!(matches!(
+            probe_glb(&wrong_length),
+            Err(ModelImportError::InvalidGlb(
+                "declared length does not match file"
+            ))
+        ));
+    }
+
+    #[test]
+    fn rejects_non_json_first_chunk() {
+        let mut wrong_chunk = plain_glb();
+        wrong_chunk[16..20].copy_from_slice(&0x004e_4942_u32.to_le_bytes());
+        assert!(matches!(
+            probe_glb(&wrong_chunk),
+            Err(ModelImportError::InvalidGlb("first chunk must be bounded JSON"))
+        ));
+    }
+
+    #[test]
+    fn rejects_external_buffer_and_image_uris() {
+        let external_buffer = glb(&serde_json::json!({
+            "asset": { "version": "2.0" },
+            "buffers": [{ "uri": "https://evil.example/leak.bin" }]
+        }));
+        assert!(matches!(
+            probe_glb(&external_buffer),
+            Err(ModelImportError::InvalidGlb(
+                "external and data URIs are not accepted in GLB"
+            ))
+        ));
+        let external_image = glb(&serde_json::json!({
+            "asset": { "version": "2.0" },
+            "images": [{ "uri": "data:image/png;base64,AAAA" }]
+        }));
+        assert!(matches!(
+            probe_glb(&external_image),
+            Err(ModelImportError::InvalidGlb(
+                "external and data URIs are not accepted in GLB"
+            ))
+        ));
+    }
+
+    #[test]
+    fn rejects_resource_budget_overflow() {
+        let too_many_nodes = glb(&serde_json::json!({
+            "asset": { "version": "2.0" },
+            "nodes": vec![serde_json::json!({}); 10_001]
+        }));
+        assert!(matches!(
+            probe_glb(&too_many_nodes),
+            Err(ModelImportError::ResourceBudgetExceeded)
+        ));
+    }
+
+    #[test]
+    fn safe_relative_file_accepts_single_normal_component() {
+        assert_eq!(
+            safe_relative_file(Path::new("model.glb")).expect("relative"),
+            Path::new("model.glb")
+        );
+    }
+
+    #[test]
+    fn safe_relative_file_rejects_traversal_absolute_and_nested() {
+        for value in ["", "/abs.glb", "../escape.glb", "sub/model.glb", "./model.glb"] {
+            assert!(
+                matches!(
+                    safe_relative_file(Path::new(value)),
+                    Err(ModelImportError::UnsafeSource)
+                ),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn probe_staged_model_rejects_wrong_spec() {
+        let request = ModelProbeRequest {
+            spec: "nimora.model-probe/999".to_owned(),
+            source: PathBuf::from("model.glb"),
+        };
+        assert!(matches!(
+            probe_staged_model(Path::new("."), &request),
+            Err(ModelImportError::InvalidRequest)
+        ));
+    }
+
 }

@@ -14,9 +14,25 @@
 | `cargo test -p nimora-desktop --lib`（全量） | **275** passed（多线程默认，无死锁；含 GrantExpiryWatch +5） |
 | `cargo test -p nimora-agent-provider-worker --lib` | **15** passed（新增 payload/parse 覆盖 +11） |
 | `cargo test -p nimora-agent-tools --lib` | **10** passed（新增网关工具映射/校验/策略 +9） |
+| `cargo test -p nimora-model-importer --lib` | **12** passed（新增 GLB 容器/预算/URI/路径安全 +10） |
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 覆盖模型导入 GLB 容器解析、资源预算与暂存路径安全本切片
+
+### DONE
+- **补齐 `model-importer` 安全敏感的零覆盖路径**：此前仅 2 个测试（严格 VRM 1.0 识别/拒绝未声明或旧版 VRM）；真正承载不可信第三方模型导入的 GLB 容器解析、资源预算与暂存目录路径安全全链路缺测。
+- `probe_glb`/`probe_model_bytes` 覆盖：普通 GLB 计数与动画名 trim（空名过滤）、`probe_model_bytes` 委托容器解析；负路径：短/坏魔数、非 2.0 版本、声明长度不符、首块非 JSON、buffer/image 外部与 data URI 拒绝（防数据出境）、节点数超 `MAX_NODES` 触发 `ResourceBudgetExceeded`。
+- `safe_relative_file` 覆盖：接受单一 Normal 组件；拒绝空/绝对路径/`..` 穿越/嵌套子目录/`./` 前缀。`probe_staged_model` 覆盖错误 spec fail-closed。
+
+### 门禁（本切片本地 · 已跑）
+- `cargo test -p nimora-model-importer --lib` **12** passed（2 → +10）· `cargo clippy -p nimora-model-importer --tests` 零告警。
+
+### 仍须原生验收
+- 真实暂存目录 canonicalize/symlink 拒绝、`probe_model_in_worker` 子进程超时/崩溃/输出预算隔离依赖真实文件系统与进程，无法在本纯逻辑单测环境覆盖，不得据此宣称 goal complete。
 
 ---
 
