@@ -632,4 +632,264 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(descriptor_ids, contract_ids);
     }
+
+    use nimora_agent_runtime::{ToolBackend, ToolInvocation};
+
+    #[derive(Debug)]
+    struct EchoBackend;
+
+    impl CapabilityBackend for EchoBackend {
+        fn read_pet_state(&self) -> Result<Value, String> {
+            Ok(json!({"read": "pet.state"}))
+        }
+
+        fn read_pet_action_catalog(&self) -> Result<Value, String> {
+            Ok(json!({"read": "pet.action.catalog"}))
+        }
+
+        fn read_profile_state(&self) -> Result<Value, String> {
+            Ok(json!({"read": "profile.state"}))
+        }
+
+        fn read_character_state(&self) -> Result<Value, String> {
+            Ok(json!({"read": "character.state"}))
+        }
+
+        fn read_asset_catalog(&self) -> Result<Value, String> {
+            Ok(json!({"read": "asset.catalog"}))
+        }
+
+        fn read_program_catalog(&self) -> Result<Value, String> {
+            Ok(json!({"read": "program.catalog"}))
+        }
+
+        fn read_runtime_health(&self) -> Result<Value, String> {
+            Ok(json!({"read": "runtime.health"}))
+        }
+
+        fn validate_automation(
+            &self,
+            definition: &Value,
+            event_type: &str,
+            event_data: &Value,
+        ) -> Result<Value, String> {
+            Ok(json!({
+                "definition": definition,
+                "eventType": event_type,
+                "eventData": event_data,
+            }))
+        }
+
+        fn read_local_data(&self, _program_id: &str, _key: &str) -> Result<Option<Value>, String> {
+            Ok(None)
+        }
+
+        fn write_local_data(
+            &self,
+            _program_id: &str,
+            _key: &str,
+            _value: &Value,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn delete_local_data(&self, _program_id: &str, _key: &str) -> Result<bool, String> {
+            Ok(false)
+        }
+
+        fn invoke_command(
+            &self,
+            command: &str,
+            arguments: Value,
+            trace_id: &str,
+            idempotency_key: Option<&str>,
+        ) -> Result<Value, String> {
+            Ok(json!({
+                "command": command,
+                "arguments": arguments,
+                "traceId": trace_id,
+                "idempotencyKey": idempotency_key,
+            }))
+        }
+    }
+
+    fn run(tool_id: &str, arguments: Value) -> Result<Value, String> {
+        let backend = GatewayToolBackend::new(
+            EchoBackend,
+            GatewayToolBackend::<EchoBackend>::standard_policy(
+                uuid::Uuid::now_v7(),
+                uuid::Uuid::now_v7(),
+            ),
+        );
+        run_with(&backend, tool_id, arguments)
+    }
+
+    fn run_with(
+        backend: &GatewayToolBackend<EchoBackend>,
+        tool_id: &str,
+        arguments: Value,
+    ) -> Result<Value, String> {
+        let policy = backend.policy.clone();
+        let invocation = ToolInvocation::new(policy.task_id, policy.trace_id, tool_id, arguments)
+            .expect("invocation");
+        let descriptor = descriptor(
+            tool_id,
+            "t",
+            "d",
+            empty_object_schema(),
+            CommandRisk::Safe,
+            ToolEffect::ReadOnly,
+        )
+        .expect("descriptor");
+        backend.invoke(&invocation, &descriptor, Duration::from_secs(1))
+    }
+
+    #[test]
+    fn standard_policy_grants_expected_reads_and_safe_commands() {
+        let policy = GatewayToolBackend::<EchoBackend>::standard_policy(
+            uuid::Uuid::now_v7(),
+            uuid::Uuid::now_v7(),
+        );
+        assert_eq!(
+            policy.read_capabilities,
+            BTreeSet::from([
+                "asset.catalog".to_owned(),
+                "automation.definition.validate".to_owned(),
+                "character.state".to_owned(),
+                "pet.action.catalog".to_owned(),
+                "pet.state".to_owned(),
+                "profile.state".to_owned(),
+                "program.catalog".to_owned(),
+                "runtime.health".to_owned(),
+            ])
+        );
+        assert_eq!(
+            policy.commands,
+            BTreeSet::from([
+                SAFE_PET_ANIMATE.to_owned(),
+                SAFE_PET_CARE.to_owned(),
+                SAFE_PET_MOVE.to_owned(),
+                SAFE_PROFILE_SWITCH.to_owned(),
+                SAFE_CHARACTER_SWITCH.to_owned(),
+                SAFE_PROGRAM_EXECUTE.to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn read_tool_returns_backend_value_for_empty_arguments() {
+        assert_eq!(
+            run(PET_STATE_READ, json!({})).expect("pet state"),
+            json!({"read": "pet.state"})
+        );
+        assert_eq!(
+            run(RUNTIME_HEALTH_READ, json!({})).expect("health"),
+            json!({"read": "runtime.health"})
+        );
+    }
+
+    #[test]
+    fn read_tool_rejects_non_empty_arguments() {
+        let error = run(PET_STATE_READ, json!({"x": 1})).expect_err("must reject");
+        assert!(error.contains("empty object"), "{error}");
+    }
+
+    #[test]
+    fn profile_switch_maps_to_safe_command_preserving_arguments() {
+        let response =
+            run(PROFILE_ACTIVE_SWITCH, json!({"profileId": "p-1"})).expect("switch accepted");
+        assert_eq!(response["command"], json!(SAFE_PROFILE_SWITCH));
+        assert_eq!(response["arguments"], json!({"profileId": "p-1"}));
+        assert!(response["idempotencyKey"].is_string());
+    }
+
+    #[test]
+    fn animation_and_move_map_to_their_safe_commands() {
+        assert_eq!(
+            run(PET_ANIMATION_PLAY, json!({"action": "celebrate"})).expect("animate")["command"],
+            json!(SAFE_PET_ANIMATE)
+        );
+        assert_eq!(
+            run(PET_POSITION_MOVE, json!({"x": 12.0, "y": 8.0})).expect("move")["command"],
+            json!(SAFE_PET_MOVE)
+        );
+    }
+
+    #[test]
+    fn pet_care_accepts_only_the_bounded_action_enum() {
+        assert_eq!(
+            run(PET_CARE_PERFORM, json!({"action": "feed"})).expect("feed")["command"],
+            json!(SAFE_PET_CARE)
+        );
+        assert!(
+            run(PET_CARE_PERFORM, json!({"action": "sleep"}))
+                .expect_err("invalid action")
+                .contains("feed, play, or groom")
+        );
+        assert!(
+            run(PET_CARE_PERFORM, json!({"action": "feed", "extra": 1}))
+                .expect_err("extra argument")
+                .contains("only the action argument")
+        );
+        assert!(run(PET_CARE_PERFORM, json!("feed")).is_err());
+    }
+
+    #[test]
+    fn automation_validation_requires_string_event_type_and_fields() {
+        let response = run(
+            AUTOMATION_DEFINITION_VALIDATE,
+            json!({"definition": {"on": "x"}, "eventType": "file.changed", "eventData": {}}),
+        )
+        .expect("validation");
+        assert_eq!(response["eventType"], json!("file.changed"));
+        assert_eq!(response["definition"], json!({"on": "x"}));
+        assert!(
+            run(
+                AUTOMATION_DEFINITION_VALIDATE,
+                json!({"eventType": "file.changed", "eventData": {}}),
+            )
+            .expect_err("missing definition")
+            .contains("definition")
+        );
+        assert!(
+            run(
+                AUTOMATION_DEFINITION_VALIDATE,
+                json!({"definition": {}, "eventType": 7, "eventData": {}}),
+            )
+            .expect_err("non-string event type")
+            .contains("eventType must be a string")
+        );
+    }
+
+    #[test]
+    fn unknown_tool_without_contribution_is_rejected() {
+        let error = run("studio.example.ghost-tool", json!({}))
+            .expect_err("no adapter for unknown tool");
+        assert!(error.contains("no registered Capability Gateway adapter"), "{error}");
+    }
+
+    #[test]
+    fn contributed_command_tool_is_mapped_and_authorized() {
+        let contributed = BTreeMap::from([(
+            "studio.example.custom-report".to_owned(),
+            "safe.custom.report".to_owned(),
+        )]);
+        let backend = GatewayToolBackend::new(
+            EchoBackend,
+            GatewayToolBackend::<EchoBackend>::standard_policy(
+                uuid::Uuid::now_v7(),
+                uuid::Uuid::now_v7(),
+            ),
+        )
+        .with_contributed_commands(contributed);
+        assert!(backend.policy.commands.contains("safe.custom.report"));
+        let response = run_with(
+            &backend,
+            "studio.example.custom-report",
+            json!({"scope": "week"}),
+        )
+        .expect("contributed command accepted");
+        assert_eq!(response["command"], json!("safe.custom.report"));
+        assert_eq!(response["arguments"], json!({"scope": "week"}));
+    }
 }

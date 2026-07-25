@@ -13,9 +13,25 @@
 | `cargo test -p nimora-desktop --lib desktop_lifeform` | **21** passed |
 | `cargo test -p nimora-desktop --lib`（全量） | **275** passed（多线程默认，无死锁；含 GrantExpiryWatch +5） |
 | `cargo test -p nimora-agent-provider-worker --lib` | **15** passed（新增 payload/parse 覆盖 +11） |
+| `cargo test -p nimora-agent-tools --lib` | **10** passed（新增网关工具映射/校验/策略 +9） |
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 覆盖 Agent 网关工具映射、参数校验与标准策略本切片
+
+### DONE
+- **补齐 `agent-tools` 零覆盖的生产路由**：`GatewayToolBackend`（635 loc）此前仅 1 个测试（descriptor↔semantic 契约对齐）；真正把 Provider Tool 调用翻译为 `CapabilityRequest`、做参数校验并经 Capability Gateway 授权分发的 `invoke` 全链路零单测。
+- 新增基于 `EchoBackend`（fake `CapabilityBackend`）+ `standard_policy` 的行为测试：只读工具空参→后端值、非空参→拒绝（`empty object`）；`profile.active.switch`/`pet.animation.play`/`pet.position.move` 映射到对应 `safe.*` 命令并保真透传参数与 idempotency key；`pet.care.perform` 仅接受 `feed/play/groom` 枚举、拒绝多余参数与非对象；`automation.definition.validate` 要求 `definition`/字符串 `eventType`/`eventData`；未注册贡献命令的未知工具 fail-closed（`no registered Capability Gateway adapter`）；`with_contributed_commands` 把贡献命令并入策略并正确路由。
+- `standard_policy` 授予的只读能力集与安全命令集逐项断言，防止后续误删/误加授权面。
+
+### 门禁（本切片本地 · 已跑）
+- `cargo test -p nimora-agent-tools --lib` **10** passed（1 → +9）· `cargo clippy -p nimora-agent-tools --tests` 本切片新增代码零告警（余留告警在 `agent-runtime`，非本切片）。
+
+### 仍须原生验收
+- 真实 Capability Gateway 后端（真实 Pet/Profile/Character/Asset/Program/Automation 模块 + 授权 grant）往返无法在本环境验证；本切片仅覆盖工具→请求映射、参数校验与策略装配的纯逻辑，不得据此宣称 goal complete。
 
 ---
 
