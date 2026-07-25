@@ -751,4 +751,165 @@ mod tests {
         assert_eq!(timed_out.status, AutomationRunStatus::TimedOut);
         assert!(backend.commands.lock().expect("commands").is_empty());
     }
+
+    #[test]
+    fn validate_accepts_the_reference_definition() {
+        assert_eq!(AutomationEngine::validate(&definition()), Ok(()));
+    }
+
+    #[test]
+    fn validate_rejects_wrong_spec_and_malformed_identifiers() {
+        let mut wrong_spec = definition();
+        wrong_spec.spec = "nimora.automation/2".to_owned();
+        assert_eq!(
+            AutomationEngine::validate(&wrong_spec),
+            Err(AutomationError::InvalidDefinition)
+        );
+
+        let mut short_id = definition();
+        short_id.id = "local.focus".to_owned();
+        assert_eq!(
+            AutomationEngine::validate(&short_id),
+            Err(AutomationError::InvalidDefinition)
+        );
+
+        let mut upper_id = definition();
+        upper_id.id = "Local.Focus.OnBuild".to_owned();
+        assert_eq!(
+            AutomationEngine::validate(&upper_id),
+            Err(AutomationError::InvalidDefinition)
+        );
+    }
+
+    #[test]
+    fn validate_rejects_non_canonical_versions() {
+        for version in ["1.0", "1.0.0.0", "01.0.0", "1.0.x", ""] {
+            let mut candidate = definition();
+            candidate.version = version.to_owned();
+            assert_eq!(
+                AutomationEngine::validate(&candidate),
+                Err(AutomationError::InvalidDefinition),
+                "{version}"
+            );
+        }
+        let mut zero = definition();
+        zero.version = "0.0.0".to_owned();
+        assert_eq!(AutomationEngine::validate(&zero), Ok(()));
+    }
+
+    #[test]
+    fn validate_rejects_empty_or_oversized_action_and_condition_sets() {
+        let mut empty_actions = definition();
+        empty_actions.actions.clear();
+        assert_eq!(
+            AutomationEngine::validate(&empty_actions),
+            Err(AutomationError::InvalidDefinition)
+        );
+
+        let mut too_many_actions = definition();
+        let template = too_many_actions.actions[0].clone();
+        too_many_actions.actions = (0..=MAX_AUTOMATION_ACTIONS)
+            .map(|index| {
+                let mut action = template.clone();
+                action.id = format!("a-{index}");
+                action.idempotency_key = Some(format!("key-{index}"));
+                action
+            })
+            .collect();
+        assert_eq!(
+            AutomationEngine::validate(&too_many_actions),
+            Err(AutomationError::InvalidDefinition)
+        );
+
+        let mut too_many_conditions = definition();
+        let condition = too_many_conditions.conditions[0].clone();
+        too_many_conditions.conditions = vec![condition; MAX_AUTOMATION_CONDITIONS + 1];
+        assert_eq!(
+            AutomationEngine::validate(&too_many_conditions),
+            Err(AutomationError::InvalidDefinition)
+        );
+    }
+
+    #[test]
+    fn validate_rejects_policy_bounds() {
+        let mut zero_timeout = definition();
+        zero_timeout.policy.timeout_ms = 0;
+        assert_eq!(
+            AutomationEngine::validate(&zero_timeout),
+            Err(AutomationError::InvalidDefinition)
+        );
+
+        let mut huge_timeout = definition();
+        huge_timeout.policy.timeout_ms = MAX_AUTOMATION_TIMEOUT_MS + 1;
+        assert_eq!(
+            AutomationEngine::validate(&huge_timeout),
+            Err(AutomationError::InvalidDefinition)
+        );
+
+        let mut zero_runs = definition();
+        zero_runs.policy.max_concurrent_runs = 0;
+        assert_eq!(
+            AutomationEngine::validate(&zero_runs),
+            Err(AutomationError::InvalidDefinition)
+        );
+    }
+
+    #[test]
+    fn validate_rejects_bad_condition_pointer() {
+        let mut candidate = definition();
+        candidate.conditions[0].pointer = "no-leading-slash".to_owned();
+        assert_eq!(
+            AutomationEngine::validate(&candidate),
+            Err(AutomationError::InvalidCondition)
+        );
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_action_ids_and_bad_commands() {
+        let mut duplicate = definition();
+        let mut second = duplicate.actions[0].clone();
+        second.idempotency_key = Some("build-42-second".to_owned());
+        duplicate.actions.push(second);
+        assert_eq!(
+            AutomationEngine::validate(&duplicate),
+            Err(AutomationError::InvalidAction)
+        );
+
+        let mut bad_command = definition();
+        bad_command.actions[0].command = "Not A Command".to_owned();
+        assert_eq!(
+            AutomationEngine::validate(&bad_command),
+            Err(AutomationError::InvalidAction)
+        );
+
+        let mut non_object_args = definition();
+        non_object_args.actions[0].arguments = json!("string");
+        assert_eq!(
+            AutomationEngine::validate(&non_object_args),
+            Err(AutomationError::InvalidAction)
+        );
+    }
+
+    #[test]
+    fn validate_rejects_retry_without_idempotency_key() {
+        let mut candidate = definition();
+        candidate.actions[0].retry_safe = true;
+        candidate.actions[0].idempotency_key = None;
+        assert_eq!(
+            AutomationEngine::validate(&candidate),
+            Err(AutomationError::InvalidAction)
+        );
+    }
+
+    #[test]
+    fn validate_rejects_bad_compensation_command() {
+        let mut candidate = definition();
+        if let Some(compensation) = candidate.actions[0].compensation.as_mut() {
+            compensation.command = "Not Valid".to_owned();
+        }
+        assert_eq!(
+            AutomationEngine::validate(&candidate),
+            Err(AutomationError::InvalidAction)
+        );
+    }
 }

@@ -15,9 +15,26 @@
 | `cargo test -p nimora-agent-provider-worker --lib` | **15** passed（新增 payload/parse 覆盖 +11） |
 | `cargo test -p nimora-agent-tools --lib` | **10** passed（新增网关工具映射/校验/策略 +9） |
 | `cargo test -p nimora-model-importer --lib` | **12** passed（新增 GLB 容器/预算/URI/路径安全 +10） |
+| `cargo test -p nimora-automation-runtime --lib` | **15** passed（新增 validate 拒绝分支 +9） |
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 覆盖自动化定义校验的拒绝分支本切片
+
+### DONE
+- **补齐 `automation-runtime` 校验层的零直测缺口**：此前 6 个测试全部走 `run`/`run_with_id` 的执行路径，`AutomationEngine::validate` 的富分支拒绝逻辑仅被间接触及；作为 Capability Gateway 前置的准入闸门，其拒绝路径必须显式锁定。
+- `validate` 覆盖：接受参考定义；拒绝错误 spec、过短/大写 automation id；拒绝非规范版本（`1.0`/`1.0.0.0`/`01.0.0`/`1.0.x`/空），确认 `0.0.0` 合法。
+- 拒绝空动作集与超 `MAX_AUTOMATION_ACTIONS`/`MAX_AUTOMATION_CONDITIONS` 的计划；拒绝零/超限 `timeout_ms` 与零 `max_concurrent_runs`。
+- 拒绝非 `/` 开头的条件指针（`InvalidCondition`）；拒绝重复 action id、非法命令、非对象参数、`retry_safe` 缺 `idempotency_key`、非法补偿命令（`InvalidAction`）。
+
+### 门禁（本切片本地 · 已跑）
+- `cargo test -p nimora-automation-runtime --lib` **15** passed（6 → +9）· `cargo clippy -p nimora-automation-runtime --tests` 零告警。
+
+### 仍须原生验收
+- `validate` 之后真实自动化在原生宿主的调度、并发闸门、冷却与每日成本预算的运行时行为依赖真实进程与时钟，纯逻辑单测无法覆盖，不得据此宣称 goal complete。
 
 ---
 
