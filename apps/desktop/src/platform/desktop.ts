@@ -2324,7 +2324,15 @@ export function createDesktopApi(
       },
       async setClickThrough() {},
       async setReducedMotion() {},
-      async assetCatalog() { return { assets: [], rejected: [] }; },
+      async assetCatalog() {
+        return {
+          assets: [
+            { id: "character.local.custom", assetType: "character", version: "1.2.0", name: { "zh-CN": "自定义小黄人", en: "Custom Minion" }, publisher: "preview", license: "LicenseRef-Proprietary", rendererBackend: "gltf", fileCount: 6, totalBytes: 4_200_000 },
+            { id: "theme.studio.midnight", assetType: "theme", version: "0.4.1", name: { "zh-CN": "午夜工作室", en: "Midnight Studio" }, publisher: "preview", license: "CC-BY-4.0", rendererBackend: null, fileCount: 2, totalBytes: 12_800 },
+          ],
+          rejected: [],
+        };
+      },
       async activeCharacter() { return { assetId: "builtin.nimora", source: "built-in", fallbackReason: null }; },
       async activeCharacterRenderer() {
         return {
@@ -2355,7 +2363,7 @@ export function createDesktopApi(
       async inspectModel() { return null; },
       async importModel() { return null; },
       async installAsset() { return null; },
-      async rollbackAsset() { return null; },
+      async rollbackAsset(assetId) { return { assetId, quarantinedFailedVersion: true }; },
       async validateUserProgram() { return null; },
       async installUserProgram() { return null; },
       async rollbackUserProgram() { return null; },

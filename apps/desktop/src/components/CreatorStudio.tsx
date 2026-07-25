@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import type { ActiveCharacterSnapshot, ActiveThemeSnapshot, ActiveVoiceSnapshot, AssetCatalogSnapshot, AssetPackageSummary, AssetPreviewReport, ModelAnimationBinding, ModelProbeReport, ThemeDescriptor } from "../platform/desktop";
+import type { ActiveCharacterSnapshot, ActiveThemeSnapshot, ActiveVoiceSnapshot, AssetCatalogSnapshot, AssetPackageSummary, AssetPreviewReport, AssetRollbackReceipt, ModelAnimationBinding, ModelProbeReport, ThemeDescriptor } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const backends = ["Sprite Atlas", "Live2D Cubism", "VRM", "glTF"] as const;
@@ -349,6 +349,9 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
   const [activeVoice, setActiveVoice] = useState<ActiveVoiceSnapshot | null>(null);
   const [activationError, setActivationError] = useState<string | null>(null);
   const [activating, setActivating] = useState<string | null>(null);
+  const [rollbackTarget, setRollbackTarget] = useState<AssetPackageSummary | null>(null);
+  const [rollingBack, setRollingBack] = useState(false);
+  const [rollbackNotice, setRollbackNotice] = useState<string | null>(null);
   const [pendingImport, setPendingImport] = useState<{ sourcePath: string; report: AssetPreviewReport } | null>(null);
   const [previewPosterUrl, setPreviewPosterUrl] = useState<string | null>(null);
   const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
@@ -436,6 +439,35 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
       setActivationError(error instanceof Error ? error.message : "声音激活失败");
     } finally {
       setActivating(null);
+    }
+  }
+
+  async function confirmRollback() {
+    if (!rollbackTarget || rollingBack) return;
+    const assetId = rollbackTarget.id;
+    setRollingBack(true);
+    setActivationError(null);
+    setRollbackNotice(null);
+    try {
+      const receipt = await desktopApi.rollbackAsset(assetId);
+      if (!receipt) throw new Error("当前环境不支持资源回滚");
+      const [nextCatalog, nextCharacter, nextTheme, nextVoice] = await Promise.all([
+        desktopApi.assetCatalog(),
+        desktopApi.activeCharacter(),
+        desktopApi.activeTheme(),
+        desktopApi.activeVoice(),
+      ]);
+      setCatalog(nextCatalog);
+      setActiveCharacter(nextCharacter);
+      setActiveTheme(nextTheme);
+      onThemeChange(nextTheme);
+      setActiveVoice(nextVoice);
+      setRollbackNotice(assetRollbackMessage(receipt));
+      setRollbackTarget(null);
+    } catch (error) {
+      setActivationError(error instanceof Error ? error.message : "资源回滚失败");
+    } finally {
+      setRollingBack(false);
     }
   }
 
@@ -687,14 +719,17 @@ export function CreatorStudio({ onThemeChange }: { onThemeChange(theme: ActiveTh
         {catalog?.assets.length === 0 ? <p className="catalog-empty">尚未安装第三方资源，默认角色继续离线可用。</p> : null}
         {activeCharacter?.fallbackReason ? <p className="catalog-empty error">已安全回退默认角色：{activeCharacter.fallbackReason}</p> : null}
         {activationError ? <p className="catalog-empty error">{activationError}</p> : null}
+        {rollbackNotice ? <p className="catalog-empty success" role="status">{rollbackNotice}</p> : null}
         {catalog && catalog.assets.length > 0 ? <ul className="asset-list">
-          {catalog.assets.map((asset) => <AssetCatalogItem asset={asset} active={asset.assetType === "theme" ? activeTheme?.assetId === asset.id : asset.assetType === "voice" ? activeVoice?.assetId === asset.id : activeCharacter?.assetId === asset.id} activating={activating === asset.id} key={asset.id} onActivateCharacter={activate} onActivateTheme={activateTheme} onActivateVoice={activateVoice} />)}
+          {catalog.assets.map((asset) => <AssetCatalogItem asset={asset} active={asset.assetType === "theme" ? activeTheme?.assetId === asset.id : asset.assetType === "voice" ? activeVoice?.assetId === asset.id : activeCharacter?.assetId === asset.id} activating={activating === asset.id} key={asset.id} onActivateCharacter={activate} onActivateTheme={activateTheme} onActivateVoice={activateVoice} onRollback={setRollbackTarget} />)}
         </ul> : null}
         {catalog && catalog.rejected.length > 0 ? <details className="rejected-assets">
           <summary>{catalog.rejected.length} 个资源未通过健康检查</summary>
           <ul>{catalog.rejected.map((asset) => <li key={asset.directory}><strong>{asset.directory}</strong><span>{asset.reason}</span></li>)}</ul>
         </details> : null}
       </section>
+
+      {rollbackTarget ? <div className="control-dialog-backdrop"><section aria-labelledby="rollback-dialog-title" aria-modal="true" className="control-dialog danger" role="dialog"><p className="card-label">回滚确认</p><h3 id="rollback-dialog-title">回滚到上一版本？</h3><p>将用最近一次备份覆盖当前已安装版本；当前版本会被隔离留存以便排查。若该资源正在使用，会安全回退到内置默认。</p><dl><div><dt>资源</dt><dd>{assetDisplayName(rollbackTarget)}</dd></div><div><dt>标识</dt><dd><code>{rollbackTarget.id}</code></dd></div><div><dt>当前版本</dt><dd>{rollbackTarget.version}</dd></div></dl><div><button disabled={rollingBack} onClick={() => setRollbackTarget(null)} type="button">返回</button><button className="primary-button" disabled={rollingBack} onClick={() => void confirmRollback()} type="button">{rollingBack ? "回滚中…" : "确认回滚"}</button></div></section></div> : null}
 
       <div className="creator-checks">
         <div className="section-heading"><div><p className="card-label">PACKAGE HEALTH</p><h3>发布前检查</h3></div><strong>{completion}/{checks.length} 已通过</strong></div>
@@ -729,17 +764,24 @@ function themePreviewStyle(theme: ThemeDescriptor): CSSProperties {
   return { "--preview-surface": theme.colors.surfaceElevated, "--preview-text": theme.colors.text, "--preview-muted": theme.colors.textMuted, "--preview-border": theme.colors.border, "--preview-accent": theme.colors.accent, "--preview-accent-soft": theme.colors.accentSoft } as CSSProperties;
 }
 
-function AssetCatalogItem({ asset, active, activating, onActivateCharacter, onActivateTheme, onActivateVoice }: { asset: AssetPackageSummary; active: boolean; activating: boolean; onActivateCharacter(assetId: string): Promise<void>; onActivateTheme(assetId: string): Promise<void>; onActivateVoice(assetId: string): Promise<void> }) {
+function AssetCatalogItem({ asset, active, activating, onActivateCharacter, onActivateTheme, onActivateVoice, onRollback }: { asset: AssetPackageSummary; active: boolean; activating: boolean; onActivateCharacter(assetId: string): Promise<void>; onActivateTheme(assetId: string): Promise<void>; onActivateVoice(assetId: string): Promise<void>; onRollback(asset: AssetPackageSummary): void }) {
   const displayName = assetDisplayName(asset);
   return <li>
     <span className="asset-kind">{asset.assetType.slice(0, 1).toUpperCase()}</span>
     <div><strong>{displayName}</strong><p>{asset.id} · {asset.version}</p></div>
     {asset.assetType === "character" ? <button className="text-button" type="button" disabled={active || activating} onClick={() => void onActivateCharacter(asset.id)}>{active ? "当前角色" : activating ? "验证中…" : "设为角色"}</button> : asset.assetType === "theme" ? <button className="text-button" type="button" disabled={active || activating} onClick={() => void onActivateTheme(asset.id)}>{active ? "当前主题" : activating ? "验证中…" : "设为主题"}</button> : asset.assetType === "voice" ? <button className="text-button" type="button" disabled={active || activating} onClick={() => void onActivateVoice(asset.id)}>{active ? "当前声音" : activating ? "验证中…" : "设为声音"}</button> : <span className="asset-backend">{asset.rendererBackend ?? "无渲染后端"}</span>}
+    <button className="text-button asset-rollback" type="button" disabled={activating} onClick={() => onRollback(asset)} title="恢复到该资源的上一版本，当前版本将被隔离留存">回滚上一版本</button>
   </li>;
 }
 
 export function assetDisplayName(asset: AssetPackageSummary): string {
   return asset.name["zh-CN"] ?? asset.name.en ?? Object.values(asset.name)[0] ?? asset.id;
+}
+
+/** Owner-facing summary of an asset rollback receipt (restore-to-previous + quarantine). */
+export function assetRollbackMessage(receipt: AssetRollbackReceipt): string {
+  const base = `${receipt.assetId} 已回滚到上一版本`;
+  return receipt.quarantinedFailedVersion ? `${base}；当前版本已隔离留存以便排查。` : `${base}。`;
 }
 
 export function formatBytes(bytes: number): string {

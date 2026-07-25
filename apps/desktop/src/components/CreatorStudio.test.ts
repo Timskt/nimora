@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  assetRollbackMessage,
   formatSampleProgramPlanJson,
   labelForUserCodeCapability,
   samplePetDirectiveProgramPlan,
@@ -12,6 +13,18 @@ import {
   userCodeCapabilityChips,
   UserCodeCapabilityMatrix,
 } from "./CreatorStudio";
+
+describe("assetRollbackMessage", () => {
+  it("notes quarantine when the failed version is preserved", () => {
+    expect(assetRollbackMessage({ assetId: "character.local.custom", quarantinedFailedVersion: true }))
+      .toBe("character.local.custom 已回滚到上一版本；当前版本已隔离留存以便排查。");
+  });
+
+  it("omits quarantine wording when nothing needed isolating", () => {
+    expect(assetRollbackMessage({ assetId: "theme.studio.midnight", quarantinedFailedVersion: false }))
+      .toBe("theme.studio.midnight 已回滚到上一版本。");
+  });
+});
 
 describe("suggestAnimationMap", () => {
   it("maps recognized names with action-specific loop behavior", () => {

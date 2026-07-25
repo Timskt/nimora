@@ -4,8 +4,8 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **423** passed（33 files） |
-| FE `pnpm exec vitest run src/components` | **387** passed（30 files） |
+| FE `pnpm exec vitest run`（全量） | **425** passed（33 files） |
+| FE `pnpm exec vitest run src/components` | **389** passed（30 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -23,6 +23,23 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 资源包回滚（Asset Rollback）UI 接通（P0 断头路修复）
+
+### 断头路
+- **接通已安装资源回滚闭环（P0 断头路修复）**：`rollback_asset` 命令后端已注册、平台层 TS binding（`rollbackAsset(assetId)`）齐全，但**无任何组件调用**（仅存在于 `platform/desktop.ts` 与测试）。CreatorStudio 已接 `installAsset`/`importModel`/`activateCharacter/Theme/Voice`，用户能装入并激活第三方角色/主题/声音，却**无处把出问题的资源回滚到上一版本**——一次坏更新装上后没有从 UI 撤销的路径，只能手动删磁盘目录。现补齐 install → activate → rollback 生命周期闭环。
+
+### 接通方式
+- **资源目录每项新增「回滚上一版本」入口**：`AssetCatalogItem` 增加 `onRollback` 回调，点击进入危险确认对话框（复用 `.control-dialog danger`），确认后调 `desktopApi.rollbackAsset(assetId)`。
+- **回滚后重新对账全量状态**：成功后并行刷新 `assetCatalog`/`activeCharacter`/`activeTheme`/`activeVoice`（回滚正在使用的资源会由后端安全回退内置默认，前端同步 `onThemeChange`），并展示回执摘要。
+- **导出纯函数供测试**：`assetRollbackMessage`（回执 → 中文；区分「已回滚」与「已回滚 + 当前版本已隔离留存」两种分支）。
+- **浏览器预览可达**：`platform/desktop.ts` mock 的 `assetCatalog` 由空目录改为返回 2 个演示已安装资源（character + theme），`rollbackAsset` 由 `throw` 改为返回演示回执，使回滚入口与结果在预览中可触发。
+
+### 门禁
+- FE `pnpm exec vitest run` **425** passed（33 files，资源回滚纯函数 +2）· `pnpm exec vitest run src/components` **389** passed（30 files）· `tsc -b` clean · `pnpm exec vite build` 通过。
+- **原生视觉/端到端 QA 仍强制**：真实备份回滚、隔离目录留存、正在使用资源回退内置默认须在 Tauri 真机验收；不得宣称 goal complete。
 
 ---
 
