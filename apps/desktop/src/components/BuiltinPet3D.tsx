@@ -18,6 +18,7 @@ import {
   WebGLRenderer,
 } from "three";
 import { createContactShadowTexture } from "./petSceneHelpers";
+import type { LifeformAttention } from "./lifeformLiving";
 import {
   createLifeformPerfTracker,
   createPerfEmitGate,
@@ -30,6 +31,8 @@ import {
 interface BuiltinPet3DProps {
   state: string;
   emotion: string;
+  /** Living-presence attention target for ambient gaze when the pointer is stale. */
+  attention?: LifeformAttention | undefined;
   onFailure(): void;
   /** Optional throttled (~500ms) render budget summary for Control Center. */
   onPerfSummary?: (summary: LifeformPerfSummary) => void;
@@ -96,8 +99,53 @@ export interface BuiltinPetMotionSample {
   mouthSmile: number;
 }
 
+/** After the pointer is idle this long, ambient attention takes over gaze. */
+export const POINTER_ATTENTION_STALE_MS = 2600;
+
 export function clampGaze(value: number): number {
   return MathUtils.clamp(value, -1, 1);
+}
+
+/**
+ * Ambient gaze bias for a living-moment attention target (screen space, -1..1).
+ *
+ * When the pointer is stale the pet should look at whatever the living-presence
+ * engine decided is interesting (taskbar, notification tray, another display,
+ * the sky…) instead of freezing on the last cursor spot. Directions are gentle
+ * so the head still reads as glancing, not snapping to a wall.
+ */
+export function attentionGazeBias(attention?: LifeformAttention): { x: number; y: number } {
+  switch (attention) {
+    case "user":
+    case "cursor":
+      // Toward the person / pointer: near-center, slight upward warmth.
+      return { x: 0, y: -0.12 };
+    case "taskbar":
+      // Down toward the dock / taskbar strip.
+      return { x: 0.12, y: 0.72 };
+    case "notification":
+      // Toward the notification corner (top-right on both platforms).
+      return { x: 0.7, y: -0.62 };
+    case "window-edge":
+      return { x: 0.6, y: -0.1 };
+    case "battery":
+      // Menu-bar / tray battery indicator (top-right-ish).
+      return { x: 0.66, y: -0.5 };
+    case "other-display":
+      // Look off toward a neighbouring monitor.
+      return { x: -0.85, y: -0.05 };
+    case "ants":
+      // Peer down at the "ants" on the desktop floor.
+      return { x: -0.22, y: 0.66 };
+    case "sky":
+      return { x: 0.08, y: -0.78 };
+    case "work":
+      // Focused slightly down at the work surface.
+      return { x: -0.1, y: 0.24 };
+    case "self":
+    default:
+      return { x: 0, y: 0.08 };
+  }
 }
 
 /** Warm classic Q-minion palette (no chrome plate / no square frame). */
@@ -1162,10 +1210,12 @@ export function sampleBuiltinPetMotion(
   };
 }
 
-export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: BuiltinPet3DProps) {
+export function BuiltinPet3D({ state, emotion, attention, onFailure, onPerfSummary }: BuiltinPet3DProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef({ state, emotion });
   stateRef.current = { state, emotion };
+  const attentionRef = useRef<LifeformAttention | undefined>(attention);
+  attentionRef.current = attention;
   const onPerfSummaryRef = useRef(onPerfSummary);
   onPerfSummaryRef.current = onPerfSummary;
 
@@ -1472,6 +1522,8 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
 
     let gazeX = 0;
     let gazeY = 0;
+    // Pointer activity clock: after this goes stale, ambient attention drives gaze.
+    let lastPointerMoveMs = -Infinity;
     // Soft gaze lag so eyes/head follow the pointer with life, not stiff snaps.
     const springGazeX = createSpringState(0);
     const springGazeY = createSpringState(0);
@@ -1484,6 +1536,7 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
       const spanY = Math.max(rect.height * 0.55, window.innerHeight * 0.18, 1);
       gazeX = clampGaze((event.clientX - cx) / spanX);
       gazeY = clampGaze((event.clientY - cy) / spanY);
+      lastPointerMoveMs = performance.now();
     };
     window.addEventListener("pointermove", trackPointer, { passive: true });
 
@@ -1536,9 +1589,25 @@ export function BuiltinPet3D({ state, emotion, onFailure, onPerfSummary }: Built
       const elapsed = timer.getElapsed();
       const current = stateRef.current;
       const motion = reducedMotion.matches ? 0 : 1;
+      // Pointer stale → drift gaze toward the living-presence attention target so
+      // the pet looks at meaningful desktop things (tray, dock, other display)
+      // instead of freezing on the last cursor spot.
+      const pointerStale = nowMs - lastPointerMoveMs > POINTER_ATTENTION_STALE_MS;
+      let targetGazeX = gazeX;
+      let targetGazeY = gazeY;
+      if (pointerStale) {
+        const bias = attentionGazeBias(attentionRef.current);
+        // Gentle wander around the biased target so glances read as alive.
+        const wanderX = Math.sin(elapsed * 0.31) * 0.12 + Math.sin(elapsed * 0.13) * 0.06;
+        const wanderY = Math.sin(elapsed * 0.24 + 1.1) * 0.08;
+        targetGazeX = clampGaze(bias.x + wanderX);
+        targetGazeY = clampGaze(bias.y + wanderY);
+      }
       // VISUAL: snappier eye/head IK lag (secondary spring only — no body travel lerp).
-      const softGazeX = springToward(springGazeX, gazeX, dt, 15.5, 0.8) * motion;
-      const softGazeY = springToward(springGazeY, gazeY, dt, 15.5, 0.8) * motion;
+      // Ambient gaze eases slower than pointer tracking so it feels like wandering, not snapping.
+      const gazeOmega = pointerStale ? 6.5 : 15.5;
+      const softGazeX = springToward(springGazeX, targetGazeX, dt, gazeOmega, 0.85) * motion;
+      const softGazeY = springToward(springGazeY, targetGazeY, dt, gazeOmega, 0.85) * motion;
       const sample = sampleBuiltinPetMotion(current.state, current.emotion, elapsed, softGazeX, softGazeY, motion);
       const playing = isPlaying(current.state);
 

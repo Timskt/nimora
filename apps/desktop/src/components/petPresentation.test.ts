@@ -21,6 +21,7 @@ import {
   occlusionPresentation,
   occlusionVisibleRegions,
   normalizeMotionToken,
+  petAmbientMoment,
   petAnimationToken,
   petFacing,
   petLifeformTokens,
@@ -347,3 +348,23 @@ describe("screen-space stage clamp", () => {
       .toEqual({ x: 12, y: 34 });
   });
 });
+
+describe("petAmbientMoment", () => {
+  const HEALTHY = { energy: 80, mood: 80, satiety: 80, cleanliness: 80, emotion: "neutral" as const };
+  const NOON = { hourOfDay: 14 as const, nowMs: 0 };
+
+  it("returns the full living moment (speech + attention + micro-act) for gaze wiring", () => {
+    const moment = petAmbientMoment({ state: "working" as const, ...HEALTHY }, { sequence: 0, ...NOON });
+    expect(typeof moment.speech).toBe("string");
+    expect(moment.speech.length).toBeGreaterThan(0);
+    expect(typeof moment.attention).toBe("string");
+    expect(typeof moment.microAct).toBe("string");
+  });
+
+  it("matches petStatusMessage speech for identical inputs (single source of truth)", () => {
+    const pet = { state: "idle" as const, ...HEALTHY };
+    const options = { sequence: 3, ...NOON };
+    expect(petAmbientMoment(pet, options).speech).toBe(petStatusMessage(pet, options));
+  });
+});
+

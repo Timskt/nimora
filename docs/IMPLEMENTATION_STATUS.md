@@ -4,7 +4,7 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **325** passed（26 files） |
+| FE `pnpm exec vitest run`（全量） | **332** passed（26 files） |
 | FE `pnpm exec vitest run src/components` | **283** passed（22 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
@@ -15,6 +15,23 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 环境注意力驱动的 idle 注视（丢弃数据接线修复）本切片
+
+### DONE
+- **idle 注视接线（真实丢弃数据修复）**：`composeLivingMoment`（`lifeformLiving.ts`）本就为每个 ambient beat 计算 `attention` 注视目标（`user`/`cursor`/`taskbar`/`window-edge`/`notification`/`battery`/`other-display`/`ants`/`sky`/`self`/`work`）与 `microAct`，但 `petStatusMessage` 只取 `.speech`、其余全部丢弃——3D 宠物的注视纯由指针驱动，指针静止即冻结在最后光标点（「笨/机械」观感来源之一）。
+- `petPresentation.ts`：抽出纯 `buildLivingMomentInput` helper；`petStatusMessage` 委托之；新增导出 `petAmbientMoment(pet, options): LivingMoment` 返回完整 moment（speech + attention + microAct），与气泡文案同源。
+- `BuiltinPet3D.tsx`：新增纯导出 `attentionGazeBias(attention?)` 把注意力目标映射为温和的屏幕空间注视偏置（-1..1）；新增 `POINTER_ATTENTION_STALE_MS`（2600ms）；渲染循环在指针静止超阈时用 `attentionGazeBias` + 轻微正弦游走混入目标注视，并放慢注视弹簧（`gazeOmega` 6.5 vs 15.5）使之读作「张望」而非「急停」。
+- `PetOverlay.tsx`：抽出 `composeAmbientLine`（单次计算 moment → 设置 `ambientAttention` state + 记忆 ambient 行 + 返回 speech），替换 4 处重复 IIFE；把 `attention={ambientAttention}` 接到 `<BuiltinPet3D>`。
+
+### 门禁（本切片本地 · 已跑）
+- FE `pnpm exec vitest run` 全量 **332** passed（26 files；325 → +7）· `tsc -b` clean。
+- 新增测试：`attentionGazeBias`（每目标 -1..1 有界、地面目标向下 / 天空向上、托盘 vs 邻屏左右相反、`undefined`→温和自视）；`petAmbientMoment`（返回完整 moment、speech 与 `petStatusMessage` 同源）。
+
+### 未提交说明
+- 本切片代码已落盘并本地验证通过，但当前沙箱 `.git` 为只读、审批策略为 Never 无法提权 → 无法由本会话 commit/push。需在可写 git 环境中提交（建议 `feat(lifeform): drive ambient gaze from living-presence attention when pointer idle`）。
 
 ---
 

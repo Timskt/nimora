@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  attentionGazeBias,
   builtinPetBodyYaw,
   builtinPetPose,
   clampGaze,
+  POINTER_ATTENTION_STALE_MS,
   createSpringState,
   cycleEnvelope,
   idleMicroActIntensity,
@@ -552,5 +554,52 @@ describe("lifeform perf emit contract", () => {
     expect(gate.shouldEmit(0)).toBe(true);
     expect(gate.shouldEmit(200)).toBe(false);
     expect(gate.shouldEmit(500)).toBe(true);
+  });
+});
+
+describe("attentionGazeBias", () => {
+  const targets = [
+    "user",
+    "cursor",
+    "taskbar",
+    "window-edge",
+    "notification",
+    "battery",
+    "other-display",
+    "ants",
+    "sky",
+    "self",
+    "work",
+  ] as const;
+
+  it("keeps every attention target within the safe gaze range", () => {
+    for (const target of targets) {
+      const bias = attentionGazeBias(target);
+      expect(bias.x).toBeGreaterThanOrEqual(-1);
+      expect(bias.x).toBeLessThanOrEqual(1);
+      expect(bias.y).toBeGreaterThanOrEqual(-1);
+      expect(bias.y).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("falls back to a gentle self glance for undefined", () => {
+    const bias = attentionGazeBias(undefined);
+    expect(bias.x).toBe(0);
+    expect(Math.abs(bias.y)).toBeLessThan(0.2);
+  });
+
+  it("points downward for floor-level targets and upward for the sky", () => {
+    expect(attentionGazeBias("taskbar").y).toBeGreaterThan(0.3);
+    expect(attentionGazeBias("ants").y).toBeGreaterThan(0.3);
+    expect(attentionGazeBias("sky").y).toBeLessThan(-0.3);
+  });
+
+  it("looks to opposite horizontal sides for tray vs. other display", () => {
+    expect(attentionGazeBias("notification").x).toBeGreaterThan(0);
+    expect(attentionGazeBias("other-display").x).toBeLessThan(0);
+  });
+
+  it("exposes a positive pointer-stale threshold", () => {
+    expect(POINTER_ATTENTION_STALE_MS).toBeGreaterThan(0);
   });
 });

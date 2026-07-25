@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import type { LifeformAttention } from "./lifeformLiving";
 import {
   desktopApi,
   EMPTY_PET_OCCLUSION,
@@ -24,7 +25,7 @@ import {
   petFacing,
   petLifeformTokens,
   petLocalPosition,
-  petStatusMessage,
+  petAmbientMoment,
   resolveOverlayStage,
   resolvePetRenderState,
 } from "./petPresentation";
@@ -174,6 +175,7 @@ export function PetOverlay() {
   const [directive, setDirective] = useState<PetDirectiveEvent | null>(null);
   const [occlusion, setOcclusion] = useState<PetOcclusion>(EMPTY_PET_OCCLUSION);
   const [activeScene, setActiveScene] = useState<ActivityScene | null>(() => readActiveActivityScene());
+  const [ambientAttention, setAmbientAttention] = useState<LifeformAttention | undefined>(undefined);
   const recentAmbientRef = useRef<string[]>([]);
   const activeSceneRef = useRef<ActivityScene | null>(activeScene);
   activeSceneRef.current = activeScene;
@@ -243,6 +245,22 @@ export function PetOverlay() {
     clipPath: occlusionStyle.clipPath,
     WebkitClipPath: occlusionStyle.clipPath,
   };
+  // Compute one living moment (speech + attention) so the bubble line and the
+  // 3D pet's ambient gaze stay in sync from a single source of truth.
+  const composeAmbientLine = useCallback((value: DesktopSnapshot): string => {
+    const options = buildAmbientStatusOptions(
+      value,
+      directiveSpeechRef.current,
+      activeSceneRef.current,
+      recentAmbientRef.current,
+      occlusionCoverageRef.current,
+    );
+    const moment = petAmbientMoment(value.pet, options);
+    setAmbientAttention(moment.attention);
+    rememberAmbientLine(recentAmbientRef, moment.speech);
+    return moment.speech;
+  }, []);
+
   const applySnapshot = useCallback((value: DesktopSnapshot) => {
     setSnapshot(value);
     setStatusBubblesEnabled(value.petPresentation.statusBubblesEnabled);
@@ -368,7 +386,7 @@ export function PetOverlay() {
       setNameDraft(value.pet.name);
       setRenderer(descriptor);
       setRendererFailed(false);
-      presentBubble(desktopApi.native ? (() => { const line = petStatusMessage(value.pet, buildAmbientStatusOptions(value, directiveSpeechRef.current, activeSceneRef.current, recentAmbientRef.current, occlusionCoverageRef.current)); rememberAmbientLine(recentAmbientRef, line); return line; })() : "浏览器预览", "status");
+      presentBubble(desktopApi.native ? composeAmbientLine(value) : "浏览器预览", "status");
     }).catch(() => {
       if (disposed) return;
       presentBubble("角色资源不可用，已使用内置角色", "error");
@@ -392,7 +410,7 @@ export function PetOverlay() {
           if (!disposed) {
             applySnapshot(value);
             void desktopApi.requestAttention("autonomy", "bubble", "ambient").then((attention) => {
-              if (!disposed && attention.allowed && !ambientMutedRef.current) presentBubble((() => { const line = petStatusMessage(value.pet, buildAmbientStatusOptions(value, directiveSpeechRef.current, activeSceneRef.current, recentAmbientRef.current, occlusionCoverageRef.current)); rememberAmbientLine(recentAmbientRef, line); return line; })(), "status");
+              if (!disposed && attention.allowed && !ambientMutedRef.current) presentBubble(composeAmbientLine(value), "status");
             }).catch(() => undefined);
           }
         });
@@ -406,7 +424,7 @@ export function PetOverlay() {
         void desktopApi.snapshot().then((value) => {
           if (!disposed) {
             applySnapshot(value);
-            if (!ambientMutedRef.current) presentBubble((() => { const line = petStatusMessage(value.pet, buildAmbientStatusOptions(value, directiveSpeechRef.current, activeSceneRef.current, recentAmbientRef.current, occlusionCoverageRef.current)); rememberAmbientLine(recentAmbientRef, line); return line; })(), "status");
+            if (!ambientMutedRef.current) presentBubble(composeAmbientLine(value), "status");
           }
         });
       }).then((disposeListener) => {
@@ -456,7 +474,7 @@ export function PetOverlay() {
             setCompanionAction(null);
             lastCompanionSpeechRef.current = null;
             void desktopApi.snapshot().then((value) => {
-              if (!disposed && !ambientMutedRef.current) presentBubble((() => { const line = petStatusMessage(value.pet, buildAmbientStatusOptions(value, directiveSpeechRef.current, activeSceneRef.current, recentAmbientRef.current, occlusionCoverageRef.current)); rememberAmbientLine(recentAmbientRef, line); return line; })(), "status");
+              if (!disposed && !ambientMutedRef.current) presentBubble(composeAmbientLine(value), "status");
             });
           }, 4200);
         }
@@ -909,6 +927,7 @@ export function PetOverlay() {
                 <BuiltinPet3D
                   state={renderState}
                   emotion={lifeform.emotion}
+                  attention={ambientAttention}
                   onFailure={handleBuiltin3dFailure}
                 />
               </Suspense>

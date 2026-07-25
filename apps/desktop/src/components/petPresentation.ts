@@ -1,5 +1,10 @@
 import type { Pet } from "@nimora/schemas";
-import { livingAmbientSpeech, type LivingMomentInput } from "./lifeformLiving";
+import {
+  composeLivingMoment,
+  livingAmbientSpeech,
+  type LivingMoment,
+  type LivingMomentInput,
+} from "./lifeformLiving";
 
 export type PetFacing = "left" | "right" | "neutral";
 export type PetMoodBand = "low" | "steady" | "high";
@@ -149,11 +154,10 @@ function healthyIdleLine(sequence: number | null | undefined): string {
   return HEALTHY_IDLE_LINES[index]!;
 }
 
-/** Ambient status line; living presence engine (not fixed robotic loops). */
-export function petStatusMessage(
+function buildLivingMomentInput(
   pet: Pick<Pet, "state" | "energy" | "mood" | "satiety" | "cleanliness" | "emotion">,
   options?: PetStatusOptions,
-): string {
+): LivingMomentInput {
   const moment: LivingMomentInput = {
     pet: {
       state: pet.state,
@@ -175,7 +179,27 @@ export function petStatusMessage(
   if (options?.nowMs != null) {
     moment.nowMs = options.nowMs;
   }
-  return livingAmbientSpeech(moment);
+  return moment;
+}
+
+/** Ambient status line; living presence engine (not fixed robotic loops). */
+export function petStatusMessage(
+  pet: Pick<Pet, "state" | "energy" | "mood" | "satiety" | "cleanliness" | "emotion">,
+  options?: PetStatusOptions,
+): string {
+  return livingAmbientSpeech(buildLivingMomentInput(pet, options));
+}
+
+/**
+ * Full living moment (speech + attention + micro-act) for the same inputs as
+ * [`petStatusMessage`]. The 3D pet uses `attention` to drive ambient gaze so it
+ * looks at meaningful desktop targets when the pointer is idle.
+ */
+export function petAmbientMoment(
+  pet: Pick<Pet, "state" | "energy" | "mood" | "satiety" | "cleanliness" | "emotion">,
+  options?: PetStatusOptions,
+): LivingMoment {
+  return composeLivingMoment(buildLivingMomentInput(pet, options));
 }
 
 /** Map vitals mood (0–100) into a coarse lifeform band for CSS / data hooks. */
