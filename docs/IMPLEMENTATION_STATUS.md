@@ -4,7 +4,7 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **369** passed（28 files） |
+| FE `pnpm exec vitest run`（全量） | **384** passed（29 files） |
 | FE `pnpm exec vitest run src/components` | **283** passed（22 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
@@ -23,6 +23,23 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 用户程序（User Program）编写-校验-运行授权 UI 接通（P0 断头路修复）
+
+### DONE
+- **接通「用户自己写代码控制」核心闭环（P0 断头路修复）**：此前后端 `validate_user_program`/`execute_user_program`（源码直跑）已注册、平台层 TS（`validateUserProgram`/`executeUserProgram`）齐全，但**无任何 UI** 调用，用户无法从零编写并运行一个用户程序（`UserProgramManagementPanel` 只能管已安装的）。现补齐从零编写入口。
+- **新增 `UserProgramAuthoringPanel.tsx`**：manifest 表单（程序 ID / 版本 / 超时 / 内存预算 / 事件并发策略 / 事件队列容量）+ 六项能力多选（含每项能力风险提示）+ 订阅事件 / 安全命令多行输入 + 源码编辑区 + 「校验清单」（`validateUserProgram` → `ProgramPolicyReport` 展示授权能力/超时/内存）+ 「运行源码」（`executeUserProgram` → 执行回执）+ 客户端实时校验 + 空/错误/通知态 + 重置。挂载于 `AiCreatorWorkspace`（`SkillLifecyclePanel` 之后、`UserProgramManagementPanel` 之前）。
+- **客户端校验镜像 Rust `user-code-policy`**：命名空间 ID（≥3 段小写）/ 语义化版本（三段纯数字）/ 订阅上限 32 / 命令上限 32 / 超时 ≤30000ms / 内存 ≤64MiB / 事件队列 1-64 / 声明订阅须勾选 `subscribe-events` / 声明命令须勾选 `invoke-safe-commands` 且命令须 `safe.` 前缀，提交前拦截非法清单避免无谓后端往返（后端仍是权威校验源）。
+- **导出纯函数供测试**：`defaultManifestDraft`/`validateManifestDraft`/`manifestFromDraft`/`describePolicyReport`/`describeExecutionReceipt`，复用 `.skill-lifecycle-panel` token 化样式并新增 `.user-program-*` 布局样式（网格表单 / 能力清单 / 源码等宽编辑区 / 校验报告卡片）。
+
+### 门禁（本切片本地 · 已跑）
+- FE `pnpm exec vitest run` **384** passed（29 files，用户程序编写面板纯函数 +15）· `tsc -b` clean · `pnpm exec vite build` 通过（CSS 解析无误）。
+- 本切片纯前端（未触碰 Rust），沿用 `cargo test -p nimora-desktop --lib` **278** 基线。
+
+### 仍须原生验收
+- 面板仅在 WebView 预览下验证过 DOM 渲染与纯函数；真实 Tauri 命令链路（源码沙箱执行、超时/内存预算强制、能力网关授权、Agent 任务委派）与原生透明/穿透/遮挡/多屏手感仍须端到端原生运行，不得据此宣称 goal complete。
 
 ---
 

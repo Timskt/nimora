@@ -3011,6 +3011,25 @@ body.pet-window.pet-browser-preview { display: block; min-height: 100vh; overflo
 .skill-risk-chip { padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 750; color: var(--status-idle-text); background: var(--status-idle-surface); }
 .skill-risk-chip[data-risk="medium"] { color: var(--status-warn-text); background: var(--status-warn-surface); }
 .skill-risk-chip[data-risk="high"], .skill-risk-chip[data-risk="critical"] { color: var(--status-danger-text); background: var(--status-danger-surface); }
+.user-program-authoring { display: grid; gap: 14px; margin-top: 16px; }
+.user-program-manifest-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.user-program-field { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 650; }
+.user-program-field-wide { grid-column: 1 / -1; }
+.user-program-field input, .user-program-field select, .user-program-field textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-strong); font: inherit; font-size: 13px; box-sizing: border-box; }
+.user-program-field textarea { resize: vertical; line-height: 1.5; }
+.user-program-source { min-height: 200px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.user-program-field input:focus-visible, .user-program-field select:focus-visible, .user-program-field textarea:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; border-color: var(--accent); }
+.user-program-capabilities { display: grid; gap: 10px; margin: 0; padding: 14px; border: 1px solid var(--line); border-radius: 14px; }
+.user-program-capabilities legend { padding: 0 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.user-program-capability { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; }
+.user-program-capability input { margin-top: 3px; }
+.user-program-capability span { display: grid; gap: 2px; }
+.user-program-capability strong { font-size: 13px; color: var(--ink); }
+.user-program-capability small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.user-program-client-errors { display: grid; gap: 6px; margin: 0; padding: 12px 14px 12px 30px; border: 1px solid var(--status-warn-edge); border-radius: 12px; color: var(--status-warn-text); background: var(--status-warn-surface); font-size: 12px; line-height: 1.5; }
+.user-program-report { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--status-ok-edge); border-radius: 12px; color: var(--status-ok-text); background: var(--status-ok-surface); }
+.user-program-report strong { font-size: 13px; }
+.user-program-report span { color: var(--muted); font-size: 12px; }
 
 /* ── Legibility & interaction-state pass (2026-07-25) ───────────────────────
    Additive overrides that lift the extension / agent / scene modules off the
