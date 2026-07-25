@@ -4,7 +4,7 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **340** passed（26 files） |
+| FE `pnpm exec vitest run`（全量） | **347** passed（26 files） |
 | FE `pnpm exec vitest run src/components` | **283** passed（22 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
@@ -15,6 +15,19 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — idle 活跃度振幅由生活感知 vitality 驱动（丢弃数据接线修复·续）本切片
+
+### DONE
+- **vitality 接线（真实丢弃数据修复·续）**：`composeLivingMoment` 每个 ambient beat 已由 `vitalityOf(pet)`（`mood*0.35+energy*0.35+satiety*0.15+clean*0.15`）算出 0..1 `vitality`（文档注明「used for bounce amplitude etc.」），但此前只在引擎内部用于 micro-act 选择，从未到达渲染器——疲惫与充沛的宠物 idle 振幅完全一致（「机械」观感来源之一）。
+- `BuiltinPet3D.tsx`：新增纯导出 `vitalityBounceGain(vitality=1)`（返回 `0.7 + v*0.3`，clamp；地板 0.7 使宠物永不僵直；`vitality=1`/省略 → 增益恰为 1，与既有编舞逐字节一致）；`sampleBuiltinPetMotion` 新增第 8 参 `vitality`；增益仅乘到 pure-idle 活跃通道（`idleBounce`/`settleBoost`/`hopLiteAmt`/`waveLiteAmt`/`fidgetAmt`），directed/locomotion 振幅不动。
+- `PetOverlay.tsx`：新增 `ambientVitality` state，`composeAmbientLine` 中 `setAmbientVitality(moment.vitality)`；把 `vitality={ambientVitality}` 接到 `<BuiltinPet3D>`（与 `attention`/`microAct` 同源同一 moment）。
+
+### 门禁（本切片本地 · 已跑）
+- FE `pnpm exec vitest run` 全量 **347** passed（26 files；340 → +7）· `tsc -b` clean。
+- 新增测试：`vitalityBounceGain`（1/undefined→1、单调递增、地板≥0.7、0/0.5/1 有限有界、NaN→1）；`sampleBuiltinPetMotion` 流经（默认 vitality == 省略、低 vitality 降低 idle 振幅、directed/walking 不受影响）。
 
 ---
 
