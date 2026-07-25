@@ -445,4 +445,185 @@ mod tests {
             Err(SkillHostError::Protocol(_))
         ));
     }
+
+    fn config(execution_id: &str) -> SkillWorkerConfig {
+        SkillWorkerConfig {
+            executable: "unused".to_owned(),
+            args: Vec::new(),
+            execution_id: execution_id.to_owned(),
+            timeout: Duration::from_secs(1),
+            output_bytes: 1024,
+            cancellation: None,
+        }
+    }
+
+    fn activated_host() -> SkillHost {
+        let mut host = SkillHost::default();
+        let validated = validate_manifest(manifest()).expect("validate manifest");
+        host.install(validated).expect("install");
+        host.authorize(nimora_skill_runtime::SkillGrant {
+            skill_id: "studio.example.validator".to_owned(),
+            version: "1.0.0".to_owned(),
+            capabilities: BTreeSet::from([SkillCapability::InvokeCommands]),
+        })
+        .expect("authorize");
+        host.activate("studio.example.validator").expect("activate");
+        host
+    }
+
+    fn run_request(execution_id: &str, activation_event: &str) -> SkillWorkerMessage {
+        SkillWorkerMessage::Run {
+            protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
+            execution_id: execution_id.to_owned(),
+            manifest: Box::new(manifest()),
+            source: "export default {};".to_owned(),
+            activation_event: activation_event.to_owned(),
+            input: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn run_request_is_admitted_against_a_matching_active_lease() {
+        let host = activated_host();
+        assert_eq!(
+            validate_run_request(&config("run-1"), &run_request("run-1", "onStartup"), &host),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn run_request_rejects_undeclared_activation_event() {
+        let host = activated_host();
+        assert!(matches!(
+            validate_run_request(&config("run-1"), &run_request("run-1", "onOther"), &host),
+            Err(SkillHostError::Admission(_))
+        ));
+    }
+
+    #[test]
+    fn run_request_rejects_a_manifest_that_diverges_from_the_lease() {
+        let host = activated_host();
+        let SkillWorkerMessage::Run {
+            manifest: mut divergent,
+            ..
+        } = run_request("run-1", "onStartup")
+        else {
+            unreachable!("constructed a run request")
+        };
+        divergent.version = "2.0.0".to_owned();
+        let request = SkillWorkerMessage::Run {
+            protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
+            execution_id: "run-1".to_owned(),
+            manifest: divergent,
+            source: "export default {};".to_owned(),
+            activation_event: "onStartup".to_owned(),
+            input: serde_json::Value::Null,
+        };
+        assert!(matches!(
+            validate_run_request(&config("run-1"), &request, &host),
+            Err(SkillHostError::Admission(_))
+        ));
+    }
+
+    #[test]
+    fn run_request_rejects_protocol_and_identity_and_shape_violations() {
+        let host = SkillHost::default();
+        let wrong_protocol = SkillWorkerMessage::Validate {
+            protocol_version: SKILL_WORKER_PROTOCOL_VERSION + 7,
+            execution_id: "validation-1".to_owned(),
+            manifest: Box::new(manifest()),
+            source: "export default {};".to_owned(),
+        };
+        assert!(matches!(
+            validate_run_request(&config("validation-1"), &wrong_protocol, &host),
+            Err(SkillHostError::Admission(_))
+        ));
+
+        let wrong_identity = SkillWorkerMessage::Validate {
+            protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
+            execution_id: "validation-2".to_owned(),
+            manifest: Box::new(manifest()),
+            source: "export default {};".to_owned(),
+        };
+        assert!(matches!(
+            validate_run_request(&config("validation-1"), &wrong_identity, &host),
+            Err(SkillHostError::Admission(_))
+        ));
+
+        let terminal = SkillWorkerMessage::Validated {
+            execution_id: "validation-1".to_owned(),
+        };
+        assert!(matches!(
+            validate_run_request(&config("validation-1"), &terminal, &host),
+            Err(SkillHostError::Admission(_))
+        ));
+    }
+
+    #[test]
+    fn validate_response_accepts_correlated_terminals_and_rejects_the_rest() {
+        assert_eq!(
+            validate_response(
+                "run-1",
+                &SkillWorkerMessage::Completed {
+                    execution_id: "run-1".to_owned(),
+                    output: SkillExecutionOutput::default(),
+                },
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_response(
+                "run-1",
+                &SkillWorkerMessage::Error {
+                    execution_id: Some("run-1".to_owned()),
+                    code: "engine".to_owned(),
+                    message: "boom".to_owned(),
+                },
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_response(
+                "run-1",
+                &SkillWorkerMessage::Error {
+                    execution_id: None,
+                    code: "startup".to_owned(),
+                    message: "no id".to_owned(),
+                },
+            ),
+            Err(SkillHostError::Protocol(_))
+        ));
+        assert!(matches!(
+            validate_response(
+                "run-1",
+                &SkillWorkerMessage::Validate {
+                    protocol_version: SKILL_WORKER_PROTOCOL_VERSION,
+                    execution_id: "run-1".to_owned(),
+                    manifest: Box::new(manifest()),
+                    source: "export default {};".to_owned(),
+                },
+            ),
+            Err(SkillHostError::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn isolation_failures_are_classified_apart_from_admission_faults() {
+        for error in [
+            SkillHostError::Protocol("p".to_owned()),
+            SkillHostError::TimedOut,
+            SkillHostError::OutputLimit,
+            SkillHostError::Crashed,
+            SkillHostError::Io("i".to_owned()),
+        ] {
+            assert!(is_isolation_failure(&error), "{error:?}");
+        }
+        for error in [
+            SkillHostError::Admission("a".to_owned()),
+            SkillHostError::Start("s".to_owned()),
+            SkillHostError::Cancelled,
+        ] {
+            assert!(!is_isolation_failure(&error), "{error:?}");
+        }
+    }
 }

@@ -16,9 +16,25 @@
 | `cargo test -p nimora-agent-tools --lib` | **10** passed（新增网关工具映射/校验/策略 +9） |
 | `cargo test -p nimora-model-importer --lib` | **12** passed（新增 GLB 容器/预算/URI/路径安全 +10） |
 | `cargo test -p nimora-automation-runtime --lib` | **15** passed（新增 validate 拒绝分支 +9） |
+| `cargo test -p nimora-skill-host --lib` | **9** passed（新增 Worker 准入/响应关联/隔离分类 +6） |
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 覆盖 Skill Worker 准入、响应关联与隔离故障分类本切片
+
+### DONE
+- **补齐 `skill-host` 进程监督层的纯逻辑准入路径**：此前仅 3 个测试（协议版本常量、无租约校验准入、Validated 响应身份匹配）；真正决定第三方 Skill 能否运行的 `validate_run_request` 活动租约分支与 `validate_response`/`is_isolation_failure` 分类缺测。
+- `validate_run_request` 覆盖：Run 请求在匹配的已激活租约下准入；拒绝未声明的激活事件；拒绝与租约版本不一致的清单；拒绝协议版本、执行身份不符及非 Run/Validate 的终态请求（fail-closed 准入）。
+- `validate_response` 覆盖：接受关联的 Completed 与带 id 的 Error 终态；拒绝无 id 的 Error 与非终态（Validate）响应。`is_isolation_failure` 覆盖：Protocol/TimedOut/OutputLimit/Crashed/Io 计入隔离故障，Admission/Start/Cancelled 不计入（不误伤崩溃窗口）。
+
+### 门禁（本切片本地 · 已跑）
+- `cargo test -p nimora-skill-host --lib` **9** passed（3 → +6）· `cargo clippy -p nimora-skill-host --tests` 零告警。
+
+### 仍须原生验收
+- 真实子进程 spawn/kill、stdout 分帧、超时与输出预算强制、取消信号传播依赖真实进程与操作系统，无法在本纯逻辑单测环境覆盖，不得据此宣称 goal complete。
 
 ---
 
