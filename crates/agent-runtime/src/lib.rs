@@ -49,8 +49,9 @@ pub use provider::{
     ProviderResponse, ProviderToolCall, ProviderUsage,
 };
 pub use reasoning::{
-    ModelReasoningPolicy, ReasoningEffort, ReasoningMapping, ReasoningPolicyError,
-    ReasoningStrategy,
+    AdaptiveReasoningSignals, BudgetPressure, ContextPressure, ModelReasoningPolicy,
+    QualityPreference, ReasoningEffort, ReasoningMapping, ReasoningPolicyError, ReasoningStrategy,
+    ReasoningTaskKind,
 };
 pub use task_gateway::{
     AgentAutonomy, AgentTaskAdmission, AgentTaskGateway, AgentTaskGatewayPolicy, AgentTaskParent,
