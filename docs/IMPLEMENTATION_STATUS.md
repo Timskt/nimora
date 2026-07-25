@@ -4,7 +4,7 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **347** passed（26 files） |
+| FE `pnpm exec vitest run`（全量） | **356** passed（26 files） |
 | FE `pnpm exec vitest run src/components` | **283** passed（22 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
@@ -12,9 +12,26 @@
 | `cargo test -p nimora-desktop --lib process_budget` | **7** passed |
 | `cargo test -p nimora-desktop --lib desktop_lifeform` | **21** passed |
 | `cargo test -p nimora-desktop --lib`（全量） | **275** passed（多线程默认，无死锁；含 GrantExpiryWatch +5） |
+| `cargo test -p nimora-agent-provider-worker --lib` | **15** passed（新增 payload/parse 覆盖 +11） |
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 覆盖 OpenAI 兼容适配器请求序列化与响应解析本切片
+
+### DONE
+- **补齐最关键的零覆盖路径**：`agent-provider-worker` 的 `openai_compatible.rs` 此前仅测端点策略、模型探测目录、密钥脱敏；真正承载业务的 `completion_payload`（授权后请求视图 → OpenAI JSON）与 `parse_completion`（响应 → `ProviderResponse`）零单测。
+- `completion_payload` 覆盖：model/max_tokens/stream 映射、tools 以 `type:function` + `function.parameters` 展开、system/user 顺序、未绑定推理时**不**产出 `reasoning_effort`、绑定 `ReasoningMapping` 后产出 `reasoning_effort`、assistant `tool_calls` 与 tool 结果 `tool_call_id` 的关联保真（arguments 序列化为字符串）。
+- `parse_completion` 覆盖：content+usage 读取、usage 缺省归零、tool_calls 提取（arguments 解析为 JSON 对象 + `tool_id` 还原）、finish_reason 映射；负路径：非单一 choice（空/多）、非法 finish_reason、`tool_calls` finish 但零调用、tool arguments 非对象、非 `function` 类型 tool_call —— 全部判定为 `MalformedResponse`。
+
+### 门禁（本切片本地 · 已跑）
+- `cargo test -p nimora-agent-provider-worker --lib` **15** passed（4 → +11）。
+- FE 全量仍 **356** passed（本切片不动前端）。
+
+### 仍须原生验收
+- 真实 Provider 往返（真实 HTTPS 端点 + 密钥 + 限流/重试）无法在本环境验证；本切片仅覆盖纯序列化/解析逻辑，不得据此宣称 goal complete。
 
 ---
 

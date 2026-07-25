@@ -407,4 +407,213 @@ mod tests {
         assert!(!debug.contains("do-not-log"));
         assert!(debug.contains("REDACTED"));
     }
+
+    fn sample_request() -> ProviderRequest {
+        use nimora_agent_runtime::{DataClassification, ProviderMessage, ToolDescriptor, ToolEffect};
+        use nimora_runtime_core::CommandRisk;
+        use uuid::Uuid;
+        ProviderRequest::new(
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            "provider:openai-compatible",
+            "gpt-4.1-mini",
+            vec![
+                ProviderMessage::text(
+                    ProviderMessageRole::System,
+                    "Follow host policy.",
+                    DataClassification::Internal,
+                    true,
+                ),
+                ProviderMessage::text(
+                    ProviderMessageRole::User,
+                    "Inspect the current pet.",
+                    DataClassification::Personal,
+                    false,
+                ),
+            ],
+            vec![
+                ToolDescriptor::new(
+                    "core.pet.state-read",
+                    "Read pet state",
+                    "Reads the current pet state.",
+                    serde_json::json!({"type": "object"}),
+                    serde_json::json!({"type": "object"}),
+                    CommandRisk::Safe,
+                    ToolEffect::ReadOnly,
+                )
+                .expect("tool"),
+            ],
+            256,
+        )
+        .expect("request")
+    }
+
+    #[test]
+    fn completion_payload_maps_the_authorized_request_view() {
+        let payload = completion_payload(&sample_request());
+        assert_eq!(payload["model"], json!("gpt-4.1-mini"));
+        assert_eq!(payload["max_tokens"], json!(256));
+        assert_eq!(payload["stream"], json!(false));
+        assert!(payload.get("reasoning_effort").is_none());
+        let messages = payload["messages"].as_array().expect("messages");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], json!("system"));
+        assert_eq!(messages[0]["content"], json!("Follow host policy."));
+        assert_eq!(messages[1]["role"], json!("user"));
+        let tools = payload["tools"].as_array().expect("tools");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["type"], json!("function"));
+        assert_eq!(tools[0]["function"]["name"], json!("core.pet.state-read"));
+        assert_eq!(tools[0]["function"]["parameters"], json!({"type": "object"}));
+    }
+
+    #[test]
+    fn completion_payload_attaches_reasoning_effort_when_bound() {
+        use nimora_agent_runtime::{ReasoningEffort, ReasoningMapping};
+        let request = sample_request().with_reasoning(
+            ReasoningMapping::new(
+                ReasoningEffort::High,
+                ReasoningEffort::High,
+                "high",
+                "openai-reasoning-effort/1",
+            )
+            .expect("mapping"),
+        );
+        let payload = completion_payload(&request);
+        assert_eq!(payload["reasoning_effort"], json!("high"));
+    }
+
+    #[test]
+    fn completion_payload_preserves_tool_call_correlation() {
+        use nimora_agent_runtime::{DataClassification, ProviderMessage};
+        let mut request = sample_request();
+        let call = ProviderToolCall {
+            id: "call_1".to_owned(),
+            tool_id: ToolId::from_str("core.pet.state-read").expect("tool id"),
+            arguments: json!({"scope": "current"}),
+        };
+        let assistant = ProviderMessage {
+            role: ProviderMessageRole::Assistant,
+            content: String::new(),
+            classification: DataClassification::Personal,
+            trusted: false,
+            tool_calls: vec![call.clone()],
+            tool_call_id: None,
+            tool_name: None,
+        };
+        let tool_result = ProviderMessage {
+            role: ProviderMessageRole::Tool,
+            content: "{\"ok\":true}".to_owned(),
+            classification: DataClassification::Personal,
+            trusted: true,
+            tool_calls: Vec::new(),
+            tool_call_id: Some("call_1".to_owned()),
+            tool_name: Some(call.tool_id.clone()),
+        };
+        request.messages.push(assistant);
+        request.messages.push(tool_result);
+        let payload = completion_payload(&request);
+        let messages = payload["messages"].as_array().expect("messages");
+        let assistant_message = &messages[2];
+        assert_eq!(assistant_message["tool_calls"][0]["id"], json!("call_1"));
+        assert_eq!(
+            assistant_message["tool_calls"][0]["function"]["name"],
+            json!("core.pet.state-read")
+        );
+        assert_eq!(
+            assistant_message["tool_calls"][0]["function"]["arguments"],
+            json!("{\"scope\":\"current\"}")
+        );
+        assert_eq!(messages[3]["tool_call_id"], json!("call_1"));
+    }
+
+    #[test]
+    fn parse_completion_reads_content_and_usage() {
+        let request = sample_request();
+        let body = br#"{"choices":[{"message":{"content":"hi there"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":5}}"#;
+        let response = parse_completion(&request, body).expect("response");
+        assert_eq!(response.content, "hi there");
+        assert_eq!(response.finish_reason, ProviderFinishReason::Completed);
+        assert_eq!(response.usage.input_tokens, 11);
+        assert_eq!(response.usage.output_tokens, 5);
+        assert_eq!(response.request_id, request.request_id);
+        assert!(response.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn parse_completion_defaults_usage_when_absent() {
+        let request = sample_request();
+        let body = br#"{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}"#;
+        let response = parse_completion(&request, body).expect("response");
+        assert_eq!(response.usage.input_tokens, 0);
+        assert_eq!(response.usage.output_tokens, 0);
+        assert_eq!(response.usage.cost_microunits, 0);
+    }
+
+    #[test]
+    fn parse_completion_extracts_tool_calls() {
+        let request = sample_request();
+        let body = br#"{"choices":[{"message":{"content":null,"tool_calls":[{"id":"call_9","type":"function","function":{"name":"core.pet.state-read","arguments":"{\"scope\":\"current\"}"}}]},"finish_reason":"tool_calls"}]}"#;
+        let response = parse_completion(&request, body).expect("response");
+        assert_eq!(response.finish_reason, ProviderFinishReason::ToolCalls);
+        assert_eq!(response.content, "");
+        assert_eq!(response.tool_calls.len(), 1);
+        assert_eq!(response.tool_calls[0].id, "call_9");
+        assert_eq!(response.tool_calls[0].tool_id.to_string(), "core.pet.state-read");
+        assert_eq!(response.tool_calls[0].arguments, json!({"scope": "current"}));
+    }
+
+    #[test]
+    fn parse_completion_rejects_non_single_choice() {
+        let request = sample_request();
+        assert_eq!(
+            parse_completion(&request, br#"{"choices":[]}"#).expect_err("empty").kind,
+            ProviderErrorKind::MalformedResponse
+        );
+        let two = br#"{"choices":[{"message":{"content":"a"},"finish_reason":"stop"},{"message":{"content":"b"},"finish_reason":"stop"}]}"#;
+        assert_eq!(
+            parse_completion(&request, two).expect_err("two").kind,
+            ProviderErrorKind::MalformedResponse
+        );
+    }
+
+    #[test]
+    fn parse_completion_rejects_invalid_finish_reason() {
+        let request = sample_request();
+        let body = br#"{"choices":[{"message":{"content":"x"},"finish_reason":"explode"}]}"#;
+        assert_eq!(
+            parse_completion(&request, body).expect_err("finish").kind,
+            ProviderErrorKind::MalformedResponse
+        );
+    }
+
+    #[test]
+    fn parse_completion_rejects_tool_finish_without_calls() {
+        let request = sample_request();
+        let mismatched = br#"{"choices":[{"message":{"content":"x","tool_calls":[]},"finish_reason":"tool_calls"}]}"#;
+        assert_eq!(
+            parse_completion(&request, mismatched).expect_err("mismatch").kind,
+            ProviderErrorKind::MalformedResponse
+        );
+    }
+
+    #[test]
+    fn parse_completion_rejects_non_object_tool_arguments() {
+        let request = sample_request();
+        let body = br#"{"choices":[{"message":{"content":null,"tool_calls":[{"id":"c","type":"function","function":{"name":"core.pet.state-read","arguments":"[1,2]"}}]},"finish_reason":"tool_calls"}]}"#;
+        assert_eq!(
+            parse_completion(&request, body).expect_err("args").kind,
+            ProviderErrorKind::MalformedResponse
+        );
+    }
+
+    #[test]
+    fn parse_completion_rejects_non_function_tool_call() {
+        let request = sample_request();
+        let body = br#"{"choices":[{"message":{"content":null,"tool_calls":[{"id":"c","type":"custom","function":{"name":"core.pet.state-read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"#;
+        assert_eq!(
+            parse_completion(&request, body).expect_err("kind").kind,
+            ProviderErrorKind::MalformedResponse
+        );
+    }
 }
