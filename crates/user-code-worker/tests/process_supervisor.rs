@@ -64,3 +64,27 @@ fn supervisor_honors_cross_thread_cancellation() {
     });
     assert_eq!(worker.wait(), Err(HostError::Cancelled));
 }
+
+#[test]
+fn supervisor_enforces_the_output_budget() {
+    let mut config = worker_config(Duration::from_secs(2));
+    config.output_bytes = 4;
+    let request = WorkerMessage::Run {
+        manifest: json!({"id": "integration.example.output"}),
+        source: "({ value: 'a very long result that exceeds the tiny output budget' })".to_owned(),
+        input: json!(null),
+    };
+    let mut process = WorkerProcess::spawn(config, &request).expect("spawn worker");
+    assert_eq!(process.wait(), Err(HostError::OutputLimit));
+}
+
+#[test]
+fn supervisor_reports_a_worker_that_exits_without_a_result() {
+    let request = WorkerMessage::Cancel;
+    let mut process =
+        WorkerProcess::spawn(worker_config(Duration::from_secs(2)), &request).expect("spawn worker");
+    assert!(matches!(
+        process.wait(),
+        Ok(WorkerMessage::Error { .. }) | Err(HostError::Crashed)
+    ));
+}

@@ -578,6 +578,77 @@ export interface SkillExecutionHistoryPage {
   records: SkillExecutionHistoryRecord[];
 }
 
+export type SkillCapability =
+  | "invoke-agent-tasks"
+  | "invoke-commands"
+  | "contribute-agent-tools"
+  | "store-local-data"
+  | "subscribe-events";
+
+export type SkillRuntimeStatus =
+  | "permission-required"
+  | "authorized"
+  | "activated"
+  | "suspended"
+  | "crashed"
+  | "quarantined";
+
+export interface SkillCatalogEntry {
+  skillId: string;
+  version: string;
+  publisher: string;
+  capabilities: SkillCapability[];
+  authorized: boolean;
+  enabled: boolean;
+  runtimeStatus: SkillRuntimeStatus | null;
+  healthy: boolean;
+}
+
+export interface SkillCatalogSnapshot {
+  skills: SkillCatalogEntry[];
+}
+
+export interface SkillApprovalCommand {
+  commandId: string;
+  arguments: unknown;
+  risk: CommandRisk;
+}
+
+export interface SkillApprovalRequest {
+  approvalId: string;
+  expiresAtMs: number;
+  commands: SkillApprovalCommand[];
+}
+
+export interface SkillApprovalCatalogEntry {
+  approvalId: string;
+  executionId: string;
+  skillId: string;
+  createdAtMs: number;
+  expiresAtMs: number;
+  commands: SkillApprovalCommand[];
+}
+
+export interface SkillApprovalCatalog {
+  approvals: SkillApprovalCatalogEntry[];
+}
+
+export interface SkillExecutionReceipt {
+  executionId: string;
+  skillId: string;
+  status: "completed" | "waitingForApproval" | "rejected";
+  approval: SkillApprovalRequest | null;
+  commandResults: unknown[];
+  agentResults: LocalAgentResult[];
+}
+
+export interface SkillRollbackReceipt {
+  skillId: string;
+  restoredVersion: string;
+  quarantinedFailedVersion: boolean;
+  requiresAuthorization: boolean;
+}
+
 export interface AgentToolResult {
   spec: "nimora.desktop-agent-tool-result/1";
   task: { id: string; status: string; providerId: string };
@@ -1202,6 +1273,14 @@ export interface DesktopApi {
   skillExecutionHistory(limit?: number, before?: { createdAtMs: number; executionId: string }): Promise<SkillExecutionHistoryPage>;
   deleteSkillExecutionHistory(executionId?: string): Promise<number>;
   cancelSkillExecution(executionId: string): Promise<boolean>;
+  skillCatalog(): Promise<SkillCatalogSnapshot>;
+  authorizeSkill(skillId: string): Promise<SkillCatalogEntry>;
+  setSkillEnabled(skillId: string, enabled: boolean): Promise<SkillCatalogEntry>;
+  rollbackInstalledSkill(skillId: string): Promise<SkillRollbackReceipt>;
+  executeSkill(skillId: string, activationEvent: string, input?: unknown): Promise<SkillExecutionReceipt>;
+  pendingSkillApprovals(): Promise<SkillApprovalCatalog>;
+  approveSkillExecution(approvalId: string): Promise<SkillExecutionReceipt>;
+  rejectSkillExecution(approvalId: string): Promise<SkillExecutionReceipt>;
   runLocalAgent(prompt: string, providerId?: string, model?: string, allowNetwork?: boolean, reasoningPolicy?: ModelReasoningPolicy | null): Promise<LocalAgentResult>;
   generateCreatorDraft(kind: CreatorArtifactKind, requirement: string, providerId: string, model: string, allowNetwork?: boolean): Promise<CreatorDraftResult>;
   approveCreatorDraft(kind: CreatorArtifactKind, requirement: string, draft: NonNullable<CreatorDraftResult["draft"]>, draftDigest: string): Promise<CreatorDraftApprovalReceipt>;
@@ -1443,6 +1522,19 @@ export function createDesktopApi(
     let previewAgentPrompt = "";
     let previewAgentModel = "model:echo-v1";
     let previewAgentHistory: AgentHistoryRecord[] = [];
+    let previewSkillCatalog: SkillCatalogEntry[] = [
+      {
+        skillId: "skill:preview-greeter",
+        version: "1.0.0",
+        publisher: "publisher:nimora-preview",
+        capabilities: ["invoke-commands", "subscribe-events"],
+        authorized: false,
+        enabled: false,
+        runtimeStatus: null,
+        healthy: true,
+      },
+    ];
+    let previewSkillApprovals: SkillApprovalCatalogEntry[] = [];
     const recordPreviewAgentHistory = (
       task: { id: string; status: string; providerId: string },
       prompt: string,
@@ -1604,6 +1696,83 @@ export function createDesktopApi(
       },
       async deleteSkillExecutionHistory() { return 0; },
       async cancelSkillExecution() { return false; },
+      async skillCatalog() {
+        return { skills: structuredClone(previewSkillCatalog) };
+      },
+      async authorizeSkill(skillId) {
+        const entry = previewSkillCatalog.find((item) => item.skillId === skillId);
+        if (!entry) throw new Error("skill-not-found");
+        entry.authorized = true;
+        entry.enabled = false;
+        entry.runtimeStatus = "authorized";
+        return structuredClone(entry);
+      },
+      async setSkillEnabled(skillId, enabled) {
+        const entry = previewSkillCatalog.find((item) => item.skillId === skillId);
+        if (!entry) throw new Error("skill-not-found");
+        if (enabled && !entry.authorized) throw new Error("SkillAuthorizationRequired");
+        entry.enabled = enabled;
+        entry.runtimeStatus = enabled ? "activated" : "authorized";
+        return structuredClone(entry);
+      },
+      async rollbackInstalledSkill(skillId) {
+        const entry = previewSkillCatalog.find((item) => item.skillId === skillId);
+        if (entry) {
+          entry.authorized = false;
+          entry.enabled = false;
+          entry.runtimeStatus = null;
+        }
+        return {
+          skillId,
+          restoredVersion: entry?.version ?? "1.0.0",
+          quarantinedFailedVersion: false,
+          requiresAuthorization: true,
+        };
+      },
+      async executeSkill(skillId, activationEvent, input) {
+        const entry = previewSkillCatalog.find((item) => item.skillId === skillId);
+        if (!entry) throw new Error("skill-not-found");
+        if (!entry.enabled) throw new Error("skill-not-enabled");
+        void activationEvent;
+        void input;
+        return {
+          executionId: crypto.randomUUID(),
+          skillId,
+          status: "completed",
+          approval: null,
+          commandResults: [],
+          agentResults: [],
+        };
+      },
+      async pendingSkillApprovals() {
+        return { approvals: structuredClone(previewSkillApprovals) };
+      },
+      async approveSkillExecution(approvalId) {
+        const idx = previewSkillApprovals.findIndex((item) => item.approvalId === approvalId);
+        const entry = idx >= 0 ? previewSkillApprovals[idx] : null;
+        if (idx >= 0) previewSkillApprovals.splice(idx, 1);
+        return {
+          executionId: entry?.executionId ?? crypto.randomUUID(),
+          skillId: entry?.skillId ?? "skill:preview-greeter",
+          status: "completed",
+          approval: null,
+          commandResults: [],
+          agentResults: [],
+        };
+      },
+      async rejectSkillExecution(approvalId) {
+        const idx = previewSkillApprovals.findIndex((item) => item.approvalId === approvalId);
+        const entry = idx >= 0 ? previewSkillApprovals[idx] : null;
+        if (idx >= 0) previewSkillApprovals.splice(idx, 1);
+        return {
+          executionId: entry?.executionId ?? crypto.randomUUID(),
+          skillId: entry?.skillId ?? "skill:preview-greeter",
+          status: "rejected",
+          approval: null,
+          commandResults: [],
+          agentResults: [],
+        };
+      },
       async agentProviderStatus(providerId) {
         const scripted = providerId === "provider:preview-scripted";
         return {
@@ -2187,6 +2356,14 @@ export function createDesktopApi(
     skillExecutionHistory: async (limit = 50, before) => await invokeCommand("skill_execution_history_list", { request: { beforeCreatedAtMs: before?.createdAtMs ?? null, beforeExecutionId: before?.executionId ?? null, limit } }) as SkillExecutionHistoryPage,
     deleteSkillExecutionHistory: async (executionId) => (await invokeCommand("delete_skill_execution_history", { request: { executionId: executionId ?? null } }) as { deleted: number }).deleted,
     cancelSkillExecution: async (executionId) => await invokeCommand("cancel_skill_execution", { executionId }) as boolean,
+    skillCatalog: async () => await invokeCommand("skill_catalog") as SkillCatalogSnapshot,
+    authorizeSkill: async (skillId) => await invokeCommand("authorize_skill", { skillId }) as SkillCatalogEntry,
+    setSkillEnabled: async (skillId, enabled) => await invokeCommand("set_skill_enabled", { skillId, enabled }) as SkillCatalogEntry,
+    rollbackInstalledSkill: async (skillId) => await invokeCommand("rollback_installed_skill", { skillId }) as SkillRollbackReceipt,
+    executeSkill: async (skillId, activationEvent, input) => await invokeCommand("execute_skill", { request: { skillId, activationEvent, input: input ?? null } }) as SkillExecutionReceipt,
+    pendingSkillApprovals: async () => await invokeCommand("pending_skill_approvals") as SkillApprovalCatalog,
+    approveSkillExecution: async (approvalId) => await invokeCommand("approve_skill_execution", { request: { approvalId } }) as SkillExecutionReceipt,
+    rejectSkillExecution: async (approvalId) => await invokeCommand("reject_skill_execution", { request: { approvalId } }) as SkillExecutionReceipt,
     runLocalAgent: async (prompt, providerId = "provider:deterministic-local", model = "model:echo-v1", allowNetwork = false, reasoningPolicy = null) => await invokeCommand("run_local_agent", { request: { prompt, providerId, model, allowNetwork, reasoningPolicy } }) as LocalAgentResult,
     generateCreatorDraft: async (kind, requirement, providerId, model, allowNetwork = false) => await invokeCommand("generate_creator_draft", { request: { kind, requirement, providerId, model, allowNetwork } }) as CreatorDraftResult,
     approveCreatorDraft: async (kind, requirement, draft, draftDigest) => await invokeCommand("approve_creator_draft", { request: { kind, requirement, draft, draftDigest } }) as CreatorDraftApprovalReceipt,

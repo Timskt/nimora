@@ -4,7 +4,7 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **356** passed（26 files） |
+| FE `pnpm exec vitest run`（全量） | **362** passed（27 files） |
 | FE `pnpm exec vitest run src/components` | **283** passed（22 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
@@ -18,9 +18,26 @@
 | `cargo test -p nimora-automation-runtime --lib` | **15** passed（新增 validate 拒绝分支 +9） |
 | `cargo test -p nimora-skill-host --lib` | **9** passed（新增 Worker 准入/响应关联/隔离分类 +6） |
 | `cargo test -p nimora-automation-capability-bridge --lib` | **7** passed（新增策略校验/风险取大/瞬时故障 +4） |
+| `cargo test -p nimora-user-code-host --lib` | **5** passed（新增协议变体/可选输入/驼峰标签 +3） |
+| `cargo test -p nimora-user-code-worker`（集成） | **5** passed（新增输出预算/无结果退出 +2） |
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — Skill 生命周期前端接通 + 扩展/Agent/场景可读性与交互态修复
+
+### DONE
+- **接通 Skill 生命周期 UI（P0 断头路修复）**：此前 `skill_catalog`/`authorize_skill`/`set_skill_enabled`/`rollback_installed_skill`/`execute_skill`/`pending_skill_approvals`/`approve_skill_execution`/`reject_skill_execution` 已在 `src-tauri` 注册（`lib.rs:13388`）但前端从未 invoke，AI Creator 生成并安装的 Skill 落地即死路（默认 `authorized:false, enabled:false` 且无入口）。现补齐平台层 8 个方法（mock + 真实 invoke，camelCase 参数）、新增 `SkillLifecyclePanel.tsx`（授权 → 启用 → 试运行 → 回滚全链路 + 待批准命令队列 + 空/错误/通知态），挂载于 `AiCreatorWorkspace`。
+- **扩展/Agent/场景模块可读性与交互态修复**（UI 审计 §8，附加式覆盖，不改动压缩基线规则）：扩展模块正文字号统一抬到 12–13px（原 8–10px 普遍破底线）；补全 `.ai-creator-hint`（markup 引用但 CSS 未定义）；在 `:root` 定义此前 4 处引用却缺失的 `--display`；`.ai-kind-grid`/草案与缺口按钮补 hover/focus-visible/disabled；Agent 运行时 chips 与输入框抬到 11–13px（`.control-status-chip` 8px→11px）；活动场景补键盘 focus-visible 可达性；Creator 状态色收敛到 `--status-*` token。
+
+### 门禁（本切片本地 · 已跑）
+- FE `pnpm exec vitest run` **362** passed（27 files，Skill 面板纯函数 `describeStatus`/`summarizeSkillReceipt` +30）· `tsc -b` clean · `pnpm exec vite build` 通过（CSS 解析无误）。
+- `cargo test -p nimora-user-code-host --lib` **5** passed（3→+3）· `cargo test -p nimora-user-code-worker`（集成）**5** passed（3→+2，覆盖输出预算与无结果退出的进程监督分支）。
+
+### 仍须原生验收
+- Skill 面板仅在 WebView 预览下验证过 DOM 渲染与纯函数；真实 Tauri 命令链路（授权状态机、待批准命令跨进程回执、回滚后重授权）与原生透明/穿透/遮挡/多屏手感仍须端到端原生运行，不得据此宣称 goal complete。
 
 ---
 

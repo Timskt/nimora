@@ -268,4 +268,55 @@ mod tests {
     fn protocol_version_is_explicit() {
         assert_eq!(protocol_version(), 1);
     }
+
+    #[test]
+    fn remaining_variants_round_trip_as_jsonl() {
+        for message in [
+            WorkerMessage::Run {
+                manifest: serde_json::json!({"id": "example"}),
+                source: "({ value: 1 })".to_owned(),
+                input: serde_json::json!({"reason": "test"}),
+            },
+            WorkerMessage::Cancel,
+            WorkerMessage::Result {
+                value: serde_json::json!({"value": 1}),
+            },
+            WorkerMessage::Error {
+                code: "engine-error".to_owned(),
+                message: "boom".to_owned(),
+            },
+            WorkerMessage::Log {
+                level: "info".to_owned(),
+                message: "hello".to_owned(),
+            },
+        ] {
+            let encoded = serde_json::to_string(&message).unwrap();
+            assert_eq!(
+                serde_json::from_str::<WorkerMessage>(&encoded).unwrap(),
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn optional_run_input_defaults_to_null() {
+        let decoded = serde_json::from_str::<WorkerMessage>(
+            r#"{"type":"run","manifest":{"id":"x"},"source":"({})"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            decoded,
+            WorkerMessage::Run {
+                manifest: serde_json::json!({"id": "x"}),
+                source: "({})".to_owned(),
+                input: serde_json::Value::Null,
+            }
+        );
+    }
+
+    #[test]
+    fn messages_use_a_camel_case_type_tag() {
+        let encoded = serde_json::to_string(&WorkerMessage::Cancel).unwrap();
+        assert_eq!(encoded, r#"{"type":"cancel"}"#);
+    }
 }
