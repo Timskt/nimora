@@ -24,6 +24,7 @@ import {
   createAgentCompanionSignal,
   type AgentCompanionBubble,
 } from "./agentCompanion";
+import { AutoModeJobHistoryPanel } from "./AutoModeJobHistoryPanel";
 
 const ProviderSettings = lazy(async () => {
   const module = await import("./ProviderSettings");
@@ -2275,6 +2276,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
             </div>
       )}
     </section>
+    <AutoModeJobHistoryPanel disabled={safeMode || recoveryMode} />
     {pendingControl && <div className="control-dialog-backdrop"><section aria-labelledby="control-dialog-title" aria-modal="true" className={pendingControl.kind === "pause" ? "control-dialog" : "control-dialog danger"} role="dialog"><p className="card-label">参数绑定确认</p><h3 id="control-dialog-title">{pendingControl.kind === "pause" ? "暂停这个任务？" : pendingControl.kind === "cancel" ? "取消这个任务？" : pendingControl.decision === "confirmed_not_executed" ? "确认外部操作未执行？" : "接受潜在副作用并取消？"}</h3><p>{pendingControl.kind === "pause" ? "任务会在当前原子步骤结束后暂停，不会丢弃 Checkpoint。" : pendingControl.kind === "cancel" ? "取消不可恢复为同一个运行；已产生的外部副作用不会自动回滚。" : "此决议将绑定当前 Attempt、Checkpoint 与请求指纹，并永久写入审计记录。"}</p><dl><div><dt>Goal</dt><dd>{pendingControl.entry.goal.title}</dd></div><div><dt>Session</dt><dd><code>{pendingControl.entry.session.id}</code></dd></div>{pendingControl.kind === "resolve" && <div><dt>Attempt</dt><dd><code>{pendingControl.entry.attempt?.id}</code></dd></div>}</dl>{pendingControl.kind === "resolve" && <label><span>对账理由（必填）</span><textarea autoFocus maxLength={2048} onChange={(event) => setControlReason(event.target.value)} placeholder="说明你核对了什么证据，以及为什么选择此决议" value={controlReason} /></label>}<div><button disabled={controlBusy} onClick={() => setPendingControl(null)} type="button">返回检查</button><button className="primary-button" disabled={controlBusy || (pendingControl.kind === "resolve" && !controlReason.trim())} onClick={() => void executeControl()} type="button">{controlBusy ? "提交中…" : "确认提交"}</button></div></section></div>}
     {pendingDangerAck && <div className="control-dialog-backdrop"><section aria-labelledby="danger-grant-title" aria-describedby="danger-grant-desc" aria-modal="true" className={`control-dialog danger${authorizationTier === "full_device" ? " full-device" : ""}`} role="dialog">
       <p className="card-label">HIGH RISK AUTHORIZATION</p>

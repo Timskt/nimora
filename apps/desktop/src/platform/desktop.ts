@@ -1878,11 +1878,17 @@ export function createDesktopApi(
       async startAutoModeJob() {
         throw new Error("desktop-host-required");
       },
-      async autoModeJobStatus() {
-        throw new Error("desktop-host-required");
+      async autoModeJobStatus(jobId: string) {
+        const now = Date.now();
+        return { spec: "nimora.desktop-auto-mode-job/1", jobId, sessionId: "preview-session", status: "running", turnsExecuted: 9, cacheHits: 4, checkpointSequence: 9, pauseReason: null, errorCode: null, startedAtMs: now - 300_000, updatedAtMs: now } as DesktopAutoModeJobSnapshot;
       },
       async autoModeJobHistory() {
-        throw new Error("desktop-host-required");
+        const now = Date.now();
+        return [
+          { spec: "nimora.desktop-auto-mode-job/1", jobId: "preview-job", sessionId: "preview-session", status: "paused", turnsExecuted: 7, cacheHits: 3, checkpointSequence: 7, pauseReason: "confirmation_required", errorCode: null, startedAtMs: now - 420_000, updatedAtMs: now - 12_000 },
+          { spec: "nimora.desktop-auto-mode-job/1", jobId: "preview-job-failed", sessionId: "preview-session-orphan", status: "failed", turnsExecuted: 2, cacheHits: 0, checkpointSequence: 1, pauseReason: null, errorCode: "provider_unreachable", startedAtMs: now - 900_000, updatedAtMs: now - 840_000 },
+          { spec: "nimora.desktop-auto-mode-job/1", jobId: "preview-job-indeterminate", sessionId: "preview-session-2", status: "indeterminate", turnsExecuted: 5, cacheHits: 1, checkpointSequence: 5, pauseReason: null, errorCode: null, startedAtMs: now - 1_200_000, updatedAtMs: now - 1_140_000 },
+        ] as DesktopAutoModeJobSnapshot[];
       },
       async autoModeControlCenter() {
         const now = Date.now();

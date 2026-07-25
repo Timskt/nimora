@@ -4,8 +4,8 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **403** passed（31 files） |
-| FE `pnpm exec vitest run src/components` | **367** passed（28 files） |
+| FE `pnpm exec vitest run`（全量） | **411** passed（32 files） |
+| FE `pnpm exec vitest run src/components` | **375** passed（29 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -23,6 +23,23 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 无人值守任务历史（Auto Mode Job History）UI 接通（P0 断头路修复）
+
+### DONE
+- **接通无人值守任务历史闭环（P0 断头路修复）**：`auto_mode_job_history`/`auto_mode_job_status` 两个命令后端已注册、平台层 TS 齐全，但仅存在于 `platform/desktop.ts`，**无任何组件调用**。控制中心（`auto_mode_control_center`）只投影「会话/目标/计划已完整持久化」且状态为 running/paused/completed/cancelled 的任务；**失败（failed）、结果未知（indeterminate）、以及会话未持久化的孤儿任务在控制中心不可见**，用户无处复核错误码。现补齐。
+- **新增 `AutoModeJobHistoryPanel.tsx`**：调用 `autoModeJobHistory()` 列出全部原始任务快照，把 failed/indeterminate 任务排到最前并高亮「需关注」，每条显示轮数/缓存命中/检查点/暂停原因/错误码/会话/时间 + 状态徽章（复用 `autoModePhaseLabel` 中文相位）+「刷新状态」（`autoModeJobStatus(jobId)` 单任务重查）。挂载于 `AgentWorkspace` 控制视图（control-center section 之后）。
+- **浏览器预览 mock 补真实演示数据**：`autoModeJobHistory` 返回 paused + failed(provider_unreachable) + indeterminate 三条，`autoModeJobStatus` 返回可刷新快照，让预览能演示「控制中心看不到的失败任务在这里可见」的价值。
+- **导出纯函数供测试**：`autoModeJobStatusLabel`/`isTerminalFailureJob`/`summarizeAutoModeJob`/`formatAutoModeJobTime`/`partitionAutoModeJobs`，复用 `.skill-lifecycle-panel`/`.skill-head-actions` token 化样式。
+
+### 门禁（本切片本地 · 已跑）
+- FE `pnpm exec vitest run` **411** passed（32 files，无人值守任务历史面板纯函数 +8）· `pnpm exec vitest run src/components` **375** passed（29 files）· `tsc -b` clean · `pnpm exec vite build` 通过。
+- 本切片纯前端（未触碰 Rust），沿用 `cargo test -p nimora-desktop --lib` **278** 基线。
+
+### 仍须原生验收
+- 真实失败/indeterminate 任务在控制中心不可见、但在本面板可复核错误码的对比需在原生窗口内走一遍；透明/穿透/遮挡/多屏手感仍须人工 QA。
 
 ---
 
