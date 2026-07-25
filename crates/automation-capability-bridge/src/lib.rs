@@ -309,4 +309,116 @@ mod tests {
         bridge.execute(&context(), command).expect("execute care");
         assert_eq!(calls.lock().expect("calls")[0].0, "safe.pet.care");
     }
+
+    #[derive(Debug, Default)]
+    struct FailingBackend;
+
+    impl CapabilityBackend for FailingBackend {
+        fn read_pet_state(&self) -> Result<Value, String> {
+            Err("unused".to_owned())
+        }
+
+        fn read_profile_state(&self) -> Result<Value, String> {
+            Err("unused".to_owned())
+        }
+
+        fn read_local_data(&self, _program_id: &str, _key: &str) -> Result<Option<Value>, String> {
+            Err("unused".to_owned())
+        }
+
+        fn write_local_data(
+            &self,
+            _program_id: &str,
+            _key: &str,
+            _value: &Value,
+        ) -> Result<(), String> {
+            Err("unused".to_owned())
+        }
+
+        fn delete_local_data(&self, _program_id: &str, _key: &str) -> Result<bool, String> {
+            Err("unused".to_owned())
+        }
+
+        fn invoke_command(
+            &self,
+            _command: &str,
+            _arguments: Value,
+            _trace_id: &str,
+            _idempotency_key: Option<&str>,
+        ) -> Result<Value, String> {
+            Err("backend offline".to_owned())
+        }
+    }
+
+    #[test]
+    fn policy_new_rejects_empty_bad_action_and_non_safe_bindings() {
+        assert!(AutomationCapabilityPolicy::new(std::iter::empty()).is_err());
+
+        let bad_action = AutomationCapabilityPolicy::new([(
+            "Not A Command".to_owned(),
+            AutomationCommandBinding {
+                gateway_command: "safe.pet.animate".to_owned(),
+                minimum_risk: CommandRisk::Low,
+            },
+        )]);
+        assert!(bad_action.is_err());
+
+        let non_safe = AutomationCapabilityPolicy::new([(
+            "pet.animation.play".to_owned(),
+            AutomationCommandBinding {
+                gateway_command: "pet.animate".to_owned(),
+                minimum_risk: CommandRisk::Low,
+            },
+        )]);
+        assert!(non_safe.is_err());
+
+        let valid = AutomationCapabilityPolicy::new([(
+            "pet.animation.play".to_owned(),
+            AutomationCommandBinding {
+                gateway_command: "safe.pet.animate".to_owned(),
+                minimum_risk: CommandRisk::Medium,
+            },
+        )]);
+        assert!(valid.is_ok());
+    }
+
+    #[test]
+    fn max_risk_never_drops_below_either_operand() {
+        for (left, right, expected) in [
+            (CommandRisk::Safe, CommandRisk::Low, CommandRisk::Low),
+            (CommandRisk::High, CommandRisk::Low, CommandRisk::High),
+            (CommandRisk::Medium, CommandRisk::Medium, CommandRisk::Medium),
+            (CommandRisk::Critical, CommandRisk::High, CommandRisk::Critical),
+        ] {
+            assert_eq!(max_risk(left, right), expected);
+            assert_eq!(max_risk(right, left), expected);
+        }
+    }
+
+    #[test]
+    fn admit_rejects_commands_absent_from_the_policy() {
+        let policy = AutomationCapabilityPolicy::pet_actions();
+        let stray = Command::new("profile.active.switch", json!({}), CommandRisk::Low)
+            .expect("command");
+        assert!(policy.admit(&stray).is_err());
+    }
+
+    #[test]
+    fn backend_failures_surface_as_transient_action_failures() {
+        let bridge = AutomationCapabilityBridge::new(
+            FailingBackend,
+            AutomationCapabilityPolicy::pet_actions(),
+        );
+        let command = Command::new(
+            "pet.animation.play",
+            json!({"action": "wave"}),
+            CommandRisk::Low,
+        )
+        .expect("command");
+        let failure = bridge
+            .execute(&context(), command)
+            .expect_err("backend failure");
+        assert!(failure.transient);
+    }
+
 }

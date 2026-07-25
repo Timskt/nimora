@@ -17,9 +17,24 @@
 | `cargo test -p nimora-model-importer --lib` | **12** passed（新增 GLB 容器/预算/URI/路径安全 +10） |
 | `cargo test -p nimora-automation-runtime --lib` | **15** passed（新增 validate 拒绝分支 +9） |
 | `cargo test -p nimora-skill-host --lib` | **9** passed（新增 Worker 准入/响应关联/隔离分类 +6） |
+| `cargo test -p nimora-automation-capability-bridge --lib` | **7** passed（新增策略校验/风险取大/瞬时故障 +4） |
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 覆盖自动化能力桥接的策略校验与故障分类本切片
+
+### DONE
+- **补齐 `automation-capability-bridge` 主体分支**：此前仅 3 个测试（固定命令派发、未知动作拒绝、care 共享命令）；真正把 Automation 动作映射到 Gateway `safe.*` 命令并做风险取大的 `AutomationCapabilityPolicy::new`、`max_risk`、以及后端瞬时故障分类缺测。
+- `AutomationCapabilityPolicy::new` 覆盖：拒绝空策略、非法动作 ID、非 `safe.` 前缀绑定；接受合法绑定。`max_risk` 覆盖：对称验证不会低于任一操作数（含相等与 Critical 上界）。`admit` 覆盖：拒绝策略外命令。桥接层覆盖：后端失败经 `GatewayError::Backend` 归类为可重试（transient）`ActionFailure`。
+
+### 门禁（本切片本地 · 已跑）
+- `cargo test -p nimora-automation-capability-bridge --lib` **7** passed（3 → +4）· `cargo clippy -p nimora-automation-capability-bridge --tests` 零告警（`runtime-core` 依赖内既有告警不在本切片范围）。
+
+### 仍须原生验收
+- 桥接仅覆盖纯逻辑映射与故障归类；真实 Gateway 授权链路、跨进程命令派发与幂等去重仍依赖端到端原生运行，不得据此宣称 goal complete。
 
 ---
 
