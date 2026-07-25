@@ -3032,6 +3032,17 @@ body.pet-window.pet-browser-preview { display: block; min-height: 100vh; overflo
 .user-program-report strong { font-size: 13px; }
 .user-program-report span { color: var(--muted); font-size: 12px; }
 .user-program-session-card { display: grid; gap: 12px; margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
+.user-program-session-start { display: grid; gap: 12px; margin-top: 16px; }
+.user-program-session-live { display: grid; gap: 14px; margin-top: 16px; }
+.user-program-session-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.user-program-session-banner strong { display: block; font-size: 13px; }
+.user-program-action-grid { flex-wrap: wrap; gap: 8px; }
+.user-program-transcript { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.user-program-transcript li { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 12px; }
+.user-program-transcript li.transcript-ok { border-color: var(--status-ok-edge); background: var(--status-ok-surface); color: var(--status-ok-text); }
+.user-program-transcript li.transcript-error { border-color: var(--status-warn-edge); background: var(--status-warn-surface); color: var(--status-warn-text); }
+.user-program-transcript strong { font-size: 12px; }
+.user-program-transcript span { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; }
 
 /* ── Legibility & interaction-state pass (2026-07-25) ───────────────────────
    Additive overrides that lift the extension / agent / scene modules off the

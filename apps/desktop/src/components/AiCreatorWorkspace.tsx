@@ -5,6 +5,7 @@ import { SkillLifecyclePanel } from "./SkillLifecyclePanel";
 import { SkillExecutionHistoryPanel } from "./SkillExecutionHistoryPanel";
 import { UserProgramManagementPanel } from "./UserProgramManagementPanel";
 import { UserProgramEventSessionPanel } from "./UserProgramEventSessionPanel";
+import { UserProgramSessionPanel } from "./UserProgramSessionPanel";
 import { UserProgramAuthoringPanel } from "./UserProgramAuthoringPanel";
 import { UserCodeCapabilityMatrix } from "./CreatorStudio";
 
@@ -183,6 +184,7 @@ export function AiCreatorWorkspace({ disabled }: { disabled: boolean }) {
     <UserProgramAuthoringPanel disabled={disabled} />
     <UserProgramManagementPanel disabled={disabled} />
     <UserProgramEventSessionPanel disabled={disabled} />
+    <UserProgramSessionPanel disabled={disabled} />
     <CapabilityProposalGovernance disabled={disabled} />
   </section>;
 }

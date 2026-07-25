@@ -4,8 +4,8 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **425** passed（33 files） |
-| FE `pnpm exec vitest run src/components` | **389** passed（30 files） |
+| FE `pnpm exec vitest run`（全量） | **439** passed（34 files） |
+| FE `pnpm exec vitest run src/components` | **403** passed（31 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -23,6 +23,23 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 用户程序能力会话控制台（Live Capability Session）UI 接通（P0 断头路修复）
+
+### 断头路
+- **接通用户程序持久会话生命周期闭环（P0 断头路修复）**：`start_user_program` / `invoke_user_program_capability` / `stop_user_program` 三个命令后端已注册、平台层 TS binding（`startUserProgram` / `invokeUserProgramCapability` / `stopUserProgram`）齐全，但**无任何组件调用**（仅存在于 `platform/desktop.ts` 与测试）。此前 UI 只有一次性执行（`executeUserProgram` / `executeInstalledUserProgram`）与事件会话（`openUserProgramEventSession` 簇），**缺少「开启一个持久沙箱会话、反复逐条探测该程序被授予的能力、用完再释放」的交互路径**——极客/开发者装好并授权一个用户程序后，无法在不触发完整执行的前提下按能力粒度验证网关授权边界。现补齐 start → invoke(×N) → stop 会话闭环。
+
+### 接通方式
+- **新增「能力会话控制台」面板**（`UserProgramSessionPanel.tsx`，挂到 `AiCreatorWorkspace` 用户程序区）：从 `userProgramCatalog` 过滤出「已授权且声明能力」的程序，选择后 `startUserProgram(manifest)` 开启持久会话（manifest 由 catalog 条目重建，能力/命令/预算与安装态一致）。
+- **按已授权能力动态渲染调用按钮**：读取宠物状态 / 读取档案状态 / 读写删本地键（`store-local-data`）/ 调用安全命令（`invoke-safe-commands`，命令取程序首个声明命令），每次 `invokeUserProgramCapability(envelope)` 走网关，结果以中文流水（transcript，最多 20 条，成功/失败分色）回读；`stopUserProgram(executionId)` 释放会话。
+- **参数输入按能力语义解析**：本地键支持 `键=值`、命令参数支持 JSON（非法 JSON 安全降级为 `{value}`）。
+- **导出纯函数供测试**：`sessionManifestFromEntry` / `sessionEligiblePrograms` / `availableCapabilityActions` / `describeSessionReceipt` / `describeCapabilityResponse`（+14 断言）。
+- **浏览器预览可达**：`platform/desktop.ts` mock 的 `userProgramCatalog` 由空目录改为返回 1 个已授权演示程序，`startUserProgram` / `invokeUserProgramCapability` 按能力类型返回演示响应（含合法 `NimoraCommand` 回执），使整条会话在预览中可触发。
+
+### 门禁
+- FE 全量 vitest **439** passed（34 files，+14）；components **403** passed（31 files）；`tsc -b` clean；`vite build` 通过。
 
 ---
 

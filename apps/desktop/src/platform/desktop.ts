@@ -2368,7 +2368,23 @@ export function createDesktopApi(
       async installUserProgram() { return null; },
       async rollbackUserProgram() { return null; },
       async userProgramPermissionStatus() { return null; },
-      async userProgramCatalog() { return { programs: [], rejected: 0 }; },
+      async userProgramCatalog() {
+        return {
+          programs: [
+            {
+              programId: "studio.demo.companion",
+              version: "1.2.0",
+              capabilities: ["read-pet-state", "read-profile-state", "store-local-data", "invoke-safe-commands"],
+              commands: ["safe.pet.notify"],
+              subscriptions: [],
+              timeoutMs: 5_000,
+              memoryBytes: 8 * 1024 * 1024,
+              permissionGranted: true,
+            },
+          ],
+          rejected: 0,
+        };
+      },
       async activitySceneState() { return { scenes: [], activeSceneId: null }; },
       async saveActivityScenes() {},
       async setActiveActivityScene() {},
@@ -2380,10 +2396,46 @@ export function createDesktopApi(
       async startUserProgramEventLoop() {},
       async userProgramEventSessionStatus() { return null; },
       async closeUserProgramEventSession() {},
-      async startUserProgram() { return null; },
+      async startUserProgram(manifest) {
+        return {
+          executionId: crypto.randomUUID(),
+          programId: manifest.id,
+          timeoutMs: manifest.timeoutMs,
+          memoryBytes: manifest.memoryBytes,
+        };
+      },
       async executeUserProgram() { return null; },
       async executeInstalledUserProgram() { return null; },
-      async invokeUserProgramCapability() { return null; },
+      async invokeUserProgramCapability(envelope) {
+        switch (envelope.request.type) {
+          case "readPetState":
+            return { type: "petState", value: { mood: "curious", attention: "user", energy: 0.72 } };
+          case "readProfileState":
+            return { type: "profileState", value: { spec: "nimora.profile/1", displayName: "演示档案" } as unknown as ProfileSnapshot };
+          case "readLocalData":
+            return { type: "localData", value: null };
+          case "writeLocalData":
+            return { type: "localDataWritten" };
+          case "deleteLocalData":
+            return { type: "localDataDeleted", deleted: true };
+          case "invokeCommand":
+            return {
+              type: "commandAccepted",
+              value: {
+                spec: "nimora.command/1",
+                executionId: envelope.executionId,
+                commandId: envelope.request.command,
+                traceId: envelope.traceId,
+                arguments: envelope.request.arguments,
+                risk: "safe",
+                status: "succeeded",
+                idempotencyKey: null,
+              },
+            };
+          default:
+            return null;
+        }
+      },
       async stopUserProgram() {},
     };
   }
