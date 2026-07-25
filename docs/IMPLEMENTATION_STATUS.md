@@ -4,8 +4,8 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **384** passed（29 files） |
-| FE `pnpm exec vitest run src/components` | **283** passed（22 files） |
+| FE `pnpm exec vitest run`（全量） | **395** passed（30 files） |
+| FE `pnpm exec vitest run src/components` | **359** passed（27 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -23,6 +23,22 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 用户程序事件会话（Event Session）UI 接通（P0 断头路修复）
+
+### DONE
+- **激活 `subscribe-events` 能力的运行闭环（P0 断头路修复）**：此前 6 个事件会话命令（`open_user_program_event_session`/`drain_user_program_events`/`execute_next_user_program_event`/`start_user_program_event_loop`/`user_program_event_session_status`/`close_user_program_event_session`）已注册、平台层 TS 齐全，但**无任何 UI** 调用。用户程序可声明订阅却无处运行——上一切片新增的「订阅事件」能力形同虚设。现补齐。
+- **新增 `UserProgramEventSessionPanel.tsx`**：自动筛选「声明了订阅且勾选 subscribe-events」的已安装程序，列出后可「开启事件会话」；会话开启后提供「执行下一个事件」（`executeNextUserProgramEvent` + 自动刷新状态）/「排空队列」（`drainUserProgramEvents`）/「启动自动循环」（`startUserProgramEventLoop`，进入后台线程驱动）/「刷新状态」（`userProgramEventSessionStatus`）/「关闭会话」（`closeUserProgramEventSession`）全链路 + 空/错误/通知态 + 未授权提示。挂载于 `AiCreatorWorkspace`（`UserProgramManagementPanel` 之后）。
+- **导出纯函数供测试**：`subscribingPrograms`/`describeSessionReceipt`/`describeSessionStatus`/`summarizeEventExecution`/`describeEventBatch`，复用 `.skill-lifecycle-panel` token 化样式并新增 `.user-program-session-card` 样式。
+
+### 门禁（本切片本地 · 已跑）
+- FE `pnpm exec vitest run` **395** passed（30 files，事件会话面板纯函数 +11）· `tsc -b` clean · `pnpm exec vite build` 通过。
+- 本切片纯前端（未触碰 Rust），沿用 `cargo test -p nimora-desktop --lib` **278** 基线。
+
+### 仍须原生验收
+- 面板仅在 WebView 预览下验证过 DOM 渲染与纯函数；真实 Tauri 命令链路（事件订阅队列、后台自动循环线程、并发策略 serial/drop/cancel-previous、执行回执与丢弃计数）与原生透明/穿透/遮挡/多屏手感仍须端到端原生运行，不得据此宣称 goal complete。
 
 ---
 

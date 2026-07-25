@@ -3030,6 +3030,7 @@ body.pet-window.pet-browser-preview { display: block; min-height: 100vh; overflo
 .user-program-report { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--status-ok-edge); border-radius: 12px; color: var(--status-ok-text); background: var(--status-ok-surface); }
 .user-program-report strong { font-size: 13px; }
 .user-program-report span { color: var(--muted); font-size: 12px; }
+.user-program-session-card { display: grid; gap: 12px; margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
 
 /* ── Legibility & interaction-state pass (2026-07-25) ───────────────────────
    Additive overrides that lift the extension / agent / scene modules off the

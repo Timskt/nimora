@@ -3,6 +3,7 @@ import { desktopApi, type AgentCatalog, type AgentProviderStatus, type CreatorAr
 import { CapabilityProposalGovernance } from "./CapabilityProposalGovernance";
 import { SkillLifecyclePanel } from "./SkillLifecyclePanel";
 import { UserProgramManagementPanel } from "./UserProgramManagementPanel";
+import { UserProgramEventSessionPanel } from "./UserProgramEventSessionPanel";
 import { UserProgramAuthoringPanel } from "./UserProgramAuthoringPanel";
 import { UserCodeCapabilityMatrix } from "./CreatorStudio";
 
@@ -179,6 +180,7 @@ export function AiCreatorWorkspace({ disabled }: { disabled: boolean }) {
     <SkillLifecyclePanel disabled={disabled} />
     <UserProgramAuthoringPanel disabled={disabled} />
     <UserProgramManagementPanel disabled={disabled} />
+    <UserProgramEventSessionPanel disabled={disabled} />
     <CapabilityProposalGovernance disabled={disabled} />
   </section>;
 }
