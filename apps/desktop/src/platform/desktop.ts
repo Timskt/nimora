@@ -973,6 +973,22 @@ export interface UserProgramPermissionStatus {
   granted: boolean;
 }
 
+export interface UserProgramCatalogEntry {
+  programId: string;
+  version: string;
+  capabilities: UserCodeCapability[];
+  commands: string[];
+  subscriptions: string[];
+  timeoutMs: number;
+  memoryBytes: number;
+  permissionGranted: boolean;
+}
+
+export interface UserProgramCatalogSnapshot {
+  programs: UserProgramCatalogEntry[];
+  rejected: number;
+}
+
 export interface UserProgramEventSessionReceipt {
   subscriptionId: string;
   programId: string;
@@ -1361,6 +1377,7 @@ export interface DesktopApi {
   installUserProgram(request: InstallUserProgramRequest): Promise<UserProgramInstallReceipt | null>;
   rollbackUserProgram(programId: string): Promise<UserProgramRollbackReceipt | null>;
   userProgramPermissionStatus(programId: string): Promise<UserProgramPermissionStatus | null>;
+  userProgramCatalog(): Promise<UserProgramCatalogSnapshot>;
   grantUserProgramPermissions(programId: string): Promise<UserProgramPermissionStatus | null>;
   revokeUserProgramPermissions(programId: string): Promise<void>;
   openUserProgramEventSession(programId: string): Promise<UserProgramEventSessionReceipt | null>;
@@ -2233,6 +2250,7 @@ export function createDesktopApi(
       async installUserProgram() { return null; },
       async rollbackUserProgram() { return null; },
       async userProgramPermissionStatus() { return null; },
+      async userProgramCatalog() { return { programs: [], rejected: 0 }; },
       async grantUserProgramPermissions() { return null; },
       async revokeUserProgramPermissions() {},
       async openUserProgramEventSession() { return null; },
@@ -2483,6 +2501,7 @@ export function createDesktopApi(
     installUserProgram: async (request) => await invokeCommand("install_user_program", { request }) as UserProgramInstallReceipt,
     rollbackUserProgram: async (programId) => await invokeCommand("rollback_user_program", { programId }) as UserProgramRollbackReceipt,
     userProgramPermissionStatus: async (programId) => await invokeCommand("user_program_permission_status", { programId }) as UserProgramPermissionStatus,
+    userProgramCatalog: async () => await invokeCommand("user_program_catalog") as UserProgramCatalogSnapshot,
     grantUserProgramPermissions: async (programId) => await invokeCommand("grant_user_program_permissions", { programId }) as UserProgramPermissionStatus,
     revokeUserProgramPermissions: async (programId) => { await invokeCommand("revoke_user_program_permissions", { programId }); },
     openUserProgramEventSession: async (programId) => await invokeCommand("open_user_program_event_session", { programId }) as UserProgramEventSessionReceipt,

@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { desktopApi, type AgentCatalog, type AgentProviderStatus, type CreatorArtifactKind, type CreatorDraftApprovalReceipt, type CreatorDraftCheckReport, type CreatorDraftResult } from "../platform/desktop";
 import { CapabilityProposalGovernance } from "./CapabilityProposalGovernance";
 import { SkillLifecyclePanel } from "./SkillLifecyclePanel";
+import { UserProgramManagementPanel } from "./UserProgramManagementPanel";
 import { UserCodeCapabilityMatrix } from "./CreatorStudio";
 
 const artifactKinds: Array<{ kind: CreatorArtifactKind; title: string; detail: string }> = [
@@ -175,6 +176,7 @@ export function AiCreatorWorkspace({ disabled }: { disabled: boolean }) {
       {!result ? <div className="ai-empty-state"><span>✦</span><h3>等待一份经过验证的草案</h3><p>用户程序可声明 read 面、safe.pet.*（含 directive）与 invoke-agent-tasks；能力不足时显示不可执行缺口。</p></div> : null}
     </section></div>
     <SkillLifecyclePanel disabled={disabled} />
+    <UserProgramManagementPanel disabled={disabled} />
     <CapabilityProposalGovernance disabled={disabled} />
   </section>;
 }

@@ -1771,6 +1771,26 @@ struct UserProgramPermissionStatus {
     granted: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProgramCatalogEntry {
+    program_id: String,
+    version: String,
+    capabilities: Vec<Capability>,
+    commands: Vec<String>,
+    subscriptions: Vec<String>,
+    timeout_ms: u64,
+    memory_bytes: u64,
+    permission_granted: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProgramCatalogSnapshot {
+    programs: Vec<UserProgramCatalogEntry>,
+    rejected: u64,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct InstallSkillRequest {
@@ -10076,6 +10096,15 @@ fn revoke_user_program_permissions(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
+fn user_program_catalog(
+    state: State<'_, DesktopState>,
+) -> Result<UserProgramCatalogSnapshot, DesktopError> {
+    ensure_normal_mode(&state)?;
+    enumerate_user_program_catalog(&state.program_store, &state.program_permissions)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 fn open_user_program_event_session(
     state: State<'_, DesktopState>,
     program_id: String,
@@ -10515,6 +10544,56 @@ fn permission_status(
         version: manifest.version,
         capabilities: manifest.capabilities,
         granted,
+    })
+}
+
+fn enumerate_user_program_catalog(
+    program_store: &std::path::Path,
+    program_permissions: &SqliteProgramPermissionRepository,
+) -> Result<UserProgramCatalogSnapshot, DesktopError> {
+    let mut programs = Vec::new();
+    let mut rejected = 0_u64;
+    let entries = match std::fs::read_dir(program_store) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(UserProgramCatalogSnapshot {
+                programs,
+                rejected,
+            });
+        }
+        Err(error) => return Err(DesktopError::from(error)),
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            rejected = rejected.saturating_add(1);
+            continue;
+        };
+        let Some(program_id) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+            rejected = rejected.saturating_add(1);
+            continue;
+        };
+        let Ok(installed) = load_installed_program(program_store, &program_id) else {
+            rejected = rejected.saturating_add(1);
+            continue;
+        };
+        let permission_granted = program_permissions
+            .is_granted(&permission_grant(&installed.manifest))?;
+        let manifest = installed.manifest;
+        programs.push(UserProgramCatalogEntry {
+            program_id: manifest.id,
+            version: manifest.version,
+            capabilities: manifest.capabilities,
+            commands: manifest.commands,
+            subscriptions: manifest.subscriptions,
+            timeout_ms: manifest.timeout_ms,
+            memory_bytes: manifest.memory_bytes,
+            permission_granted,
+        });
+    }
+    programs.sort_by(|left, right| left.program_id.cmp(&right.program_id));
+    Ok(UserProgramCatalogSnapshot {
+        programs,
+        rejected,
     })
 }
 
@@ -13411,6 +13490,7 @@ pub fn run() {
             start_user_program,
             execute_user_program,
             execute_installed_user_program,
+            user_program_catalog,
             invoke_user_program_capability,
             stop_user_program
         ])
@@ -14566,7 +14646,8 @@ mod tests {
         creator_composition_graph, current_time_ms, default_agent_model, default_agent_provider_id,
         delete_openai_provider_inner, desktop_provider_registry, desktop_tool_registry,
         diagnostic_report, dispatch_skill_commands, ensure_normal_mode, ensure_program_permissions,
-        ensure_user_program_agent_capability, finish_skill_event_session, inspect_asset_catalog,
+        ensure_user_program_agent_capability, enumerate_user_program_catalog,
+        finish_skill_event_session, inspect_asset_catalog,
         install_generated_theme, install_gltf_character, installed_renderer,
         open_diagnostic_journal, parse_asset_protocol_path, parse_user_program_plan,
         pause_auto_mode_job_inner, permission_grant, persist_asset_selection, pet_autonomy_policy,
@@ -16478,6 +16559,28 @@ mod tests {
         assert!(!serialized.contains("main.js"));
         assert!(!serialized.contains("activePath"));
         assert!(!serialized.contains("source"));
+        std::fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn user_program_catalog_command_reports_rejected_and_missing_store() {
+        let (root, state) = normal_desktop_state();
+        let missing = enumerate_user_program_catalog(
+            &state.program_store,
+            &state.program_permissions,
+        )
+        .expect("missing store yields empty catalog");
+        assert!(missing.programs.is_empty());
+        assert_eq!(missing.rejected, 0);
+        std::fs::create_dir_all(state.program_store.join("corrupt-entry"))
+            .expect("corrupt program fixture");
+        let snapshot = enumerate_user_program_catalog(
+            &state.program_store,
+            &state.program_permissions,
+        )
+        .expect("catalog");
+        assert!(snapshot.programs.is_empty());
+        assert_eq!(snapshot.rejected, 1);
         std::fs::remove_dir_all(root).expect("fixture cleanup");
     }
 

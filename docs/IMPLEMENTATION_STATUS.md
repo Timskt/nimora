@@ -4,7 +4,7 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **362** passed（27 files） |
+| FE `pnpm exec vitest run`（全量） | **369** passed（28 files） |
 | FE `pnpm exec vitest run src/components` | **283** passed（22 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
@@ -23,6 +23,23 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 用户程序（User Program）管理入口接通（P0 断头路修复）
+
+### DONE
+- **接通用户程序管理 UI（P0 断头路修复）**：此前 8 个用户程序命令已在 `src-tauri` 注册（`install_user_program`/`rollback_user_program`/`user_program_permission_status`/`grant_user_program_permissions`/`revoke_user_program_permissions`/`execute_installed_user_program`/`stop_user_program` 等，`lib.rs:13399` 注册块）且平台层 TS 已接通，但缺「列出已安装程序」命令 + 前端管理面板，程序装完即无入口管理，形成断头路。
+- **新增 `user_program_catalog` typed 命令**：把 `DesktopCapabilityBackend::read_program_catalog` 的枚举逻辑抽成共享自由函数 `enumerate_user_program_catalog(program_store, program_permissions)`（缺失 store 返回空目录、损坏条目计入 `rejected` 且不泄漏路径），新增 `UserProgramCatalogEntry`/`UserProgramCatalogSnapshot`（camelCase，含 `capabilities`/`commands`/`subscriptions`/`timeoutMs`/`memoryBytes`/`permissionGranted`），`ensure_normal_mode` 守卫，注册进 `generate_handler!`。
+- **平台层 TS 绑定**：`desktop.ts` 补 `userProgramCatalog()`（interface + mock 返回 `{programs:[],rejected:0}` + 真实 `invokeCommand("user_program_catalog")`）与 TS 类型。
+- **新增 `UserProgramManagementPanel.tsx`**：列出已安装程序、授权（grant）/ 撤销（revoke）/ 执行（`executeInstalledUserProgram`）/ 回滚（`rollbackUserProgram`）全链路 + 空/错误/通知态 + 损坏条目提示 + 订阅事件展示，导出纯函数（`describeProgramStatus`/`summarizeProgramReceipt`/`formatMemoryBudget`）供测试，挂载于 `AiCreatorWorkspace`（`SkillLifecyclePanel` 之后），复用 `.skill-lifecycle-panel` token 化样式。
+
+### 门禁（本切片本地 · 已跑）
+- FE `pnpm exec vitest run` **369** passed（28 files，用户程序面板纯函数 +7）· `tsc -b` clean · `pnpm exec vite build` 通过。
+- `cargo test -p nimora-desktop --lib`：新增 `user_program_catalog_command_reports_rejected_and_missing_store`（覆盖缺失 store 与损坏条目分支）通过；全量编译无新增错误（仅既有 dead-code 警告）。
+
+### 仍须原生验收
+- 面板仅在 WebView 预览下验证过 DOM 渲染与纯函数；真实 Tauri 命令链路（授权状态机、执行回执、回滚隔离）与原生透明/穿透/遮挡/多屏手感仍须端到端原生运行，不得据此宣称 goal complete。
 
 ---
 
