@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { journalStatusLabel, liveRunOutcomeNotice, statusLabel } from "./AutomationWorkspace";
-import type { AutomationRun } from "../platform/desktop";
+import { agentTaskCancellable, agentTaskStatusLabel, journalStatusLabel, liveRunCancellable, liveRunOutcomeNotice, statusLabel } from "./AutomationWorkspace";
+import type { AutomationAgentJournalEntry, AutomationRun } from "../platform/desktop";
 
 function run(status: AutomationRun["status"]): AutomationRun {
   return {
@@ -50,5 +50,74 @@ describe("liveRunOutcomeNotice", () => {
     expect(liveRunOutcomeNotice(run("timed_out"))).toContain("超时");
     expect(liveRunOutcomeNotice(run("compensation_failed"))).toContain("补偿均失败");
     expect(liveRunOutcomeNotice(run("failed"))).toContain("逆序补偿");
+  });
+});
+
+
+function agentTask(status: AutomationAgentJournalEntry["status"]): AutomationAgentJournalEntry {
+  return {
+    spec: "nimora.automation-agent-journal/1",
+    runId: "run-1",
+    idempotencyKey: "run-1:agent.task.run",
+    admission: {
+      spec: "nimora.agent-task-admission/1",
+      task: {
+        spec: "nimora.agent-task/1",
+        id: "run-1-agent-0",
+        traceId: "trace-1",
+        requester: "automation",
+        providerId: "provider:local",
+        status: "running",
+      },
+      rootTaskId: "run-1",
+      parentTaskId: null,
+      callDepth: 0,
+    },
+    model: "preview.local.reasoner",
+    status,
+    submittedAtMs: 1_000,
+    updatedAtMs: 2_000,
+    error: null,
+  };
+}
+
+describe("agentTaskStatusLabel", () => {
+  it("maps agent task statuses to Chinese labels", () => {
+    expect(agentTaskStatusLabel("submitted")).toBe("已提交");
+    expect(agentTaskStatusLabel("waiting_for_confirmation")).toBe("等待确认");
+    expect(agentTaskStatusLabel("completed")).toBe("已完成");
+    expect(agentTaskStatusLabel("failed")).toBe("已失败");
+    expect(agentTaskStatusLabel("cancelled")).toBe("已取消");
+    expect(agentTaskStatusLabel("interrupted")).toBe("已中断");
+  });
+});
+
+describe("agentTaskCancellable", () => {
+  it("only allows cancellation while a task is still in flight", () => {
+    expect(agentTaskCancellable("submitted")).toBe(true);
+    expect(agentTaskCancellable("waiting_for_confirmation")).toBe(true);
+    expect(agentTaskCancellable("completed")).toBe(false);
+    expect(agentTaskCancellable("failed")).toBe(false);
+    expect(agentTaskCancellable("cancelled")).toBe(false);
+    expect(agentTaskCancellable("interrupted")).toBe(false);
+  });
+});
+
+describe("liveRunCancellable", () => {
+  it("allows cancelling in-flight runs regardless of child tasks", () => {
+    expect(liveRunCancellable("waiting_for_approval", [])).toBe(true);
+    expect(liveRunCancellable("planned", [])).toBe(true);
+  });
+
+  it("allows cancelling a terminal run only when a child task is still cancellable", () => {
+    expect(liveRunCancellable("succeeded", [])).toBe(false);
+    expect(liveRunCancellable("succeeded", [agentTask("completed")])).toBe(false);
+    expect(liveRunCancellable("succeeded", [agentTask("submitted")])).toBe(true);
+    expect(liveRunCancellable("failed", [agentTask("waiting_for_confirmation")])).toBe(true);
+  });
+
+  it("never offers cancellation for non-cancellable terminal runs", () => {
+    expect(liveRunCancellable("condition_not_matched", [agentTask("submitted")])).toBe(false);
+    expect(liveRunCancellable("cancelled", [agentTask("submitted")])).toBe(false);
   });
 });

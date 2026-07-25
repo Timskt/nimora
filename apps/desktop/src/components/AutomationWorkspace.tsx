@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AutomationApprovalCatalog, AutomationCatalogEntry, AutomationCostReconciliationCatalog, AutomationCostReconciliationReason, AutomationDefinition, AutomationEventHealthSnapshot, AutomationGovernanceCatalog, AutomationJournalEntry, AutomationRun } from "../platform/desktop";
+import type { AutomationAgentJournalEntry, AutomationApprovalCatalog, AutomationCatalogEntry, AutomationCostReconciliationCatalog, AutomationCostReconciliationReason, AutomationDefinition, AutomationEventHealthSnapshot, AutomationGovernanceCatalog, AutomationJournalEntry, AutomationRun } from "../platform/desktop";
 import { desktopApi } from "../platform/desktop";
 
 const sampleDefinition: AutomationDefinition = {
@@ -38,6 +38,7 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
   const [run, setRun] = useState<AutomationRun | null>(null);
   const [liveRun, setLiveRun] = useState<AutomationRun | null>(null);
   const [liveJournal, setLiveJournal] = useState<AutomationJournalEntry | null>(null);
+  const [liveAgentTasks, setLiveAgentTasks] = useState<AutomationAgentJournalEntry[]>([]);
   const [catalog, setCatalog] = useState<AutomationCatalogEntry[]>([]);
   const [history, setHistory] = useState<AutomationJournalEntry[]>([]);
   const [historyExhausted, setHistoryExhausted] = useState(false);
@@ -201,6 +202,42 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
     }
   }
 
+  async function refreshLiveAgentTasks(runId: string) {
+    try {
+      setLiveAgentTasks(await desktopApi.automationRunAgentTasks(runId));
+    } catch {
+      setLiveAgentTasks([]);
+    }
+  }
+
+  async function cancelLiveRun() {
+    if (!liveRun) return;
+    setBusy(true);
+    try {
+      const cancelled = await desktopApi.cancelAutomationRun(liveRun.runId);
+      await refreshLiveAgentTasks(liveRun.runId);
+      await Promise.all([refreshHistory(), refreshGovernance()]);
+      onNotice(cancelled ? "已请求取消本次运行，活跃 Agent 子任务将级联停止" : "运行已进入终态，无需取消");
+    } catch {
+      onNotice("取消请求失败，审计记录保持不变");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelLiveAgentTask(entry: AutomationAgentJournalEntry) {
+    setBusy(true);
+    try {
+      const cancelled = await desktopApi.cancelAgentTask(entry.admission.task.id);
+      await refreshLiveAgentTasks(entry.runId);
+      onNotice(cancelled ? "已请求取消该 Agent 子任务" : "该 Agent 子任务已进入终态，无需取消");
+    } catch {
+      onNotice("取消 Agent 子任务失败，审计记录保持不变");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function runLive() {
     setBusy(true);
     try {
@@ -208,12 +245,14 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
       setLiveRun(result);
       if (result.status === "waiting_for_approval") {
         setLiveJournal(null);
+        setLiveAgentTasks([]);
         await refreshApprovals();
         onNotice(liveRunOutcomeNotice(result));
         return;
       }
       const journal = await desktopApi.automationRunStatus(result.runId);
       setLiveJournal(journal);
+      await refreshLiveAgentTasks(result.runId);
       await Promise.all([refreshHistory(), refreshGovernance()]);
       onNotice(liveRunOutcomeNotice(result));
     } catch (error) {
@@ -347,6 +386,18 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
             {step.error ? <em className="automation-step-error">{step.error}</em> : <em>{step.attempts} 次尝试</em>}
           </div>)}
           {liveJournal ? <small>审计记录 {journalStatusLabel(liveJournal.status)} · Run {liveJournal.runId} · {new Date(liveJournal.updatedAtMs).toLocaleString("zh-CN")}</small> : null}
+          {liveRunCancellable(liveRun.status, liveAgentTasks) ? <div className="automation-live-actions">
+            <button className="secondary-button" type="button" disabled={disabled || busy} onClick={() => void cancelLiveRun()} title="请求取消本次运行；有界取消会级联停止仍活跃的 Agent 子任务与 Provider Worker">取消本次运行</button>
+          </div> : null}
+          {liveAgentTasks.length > 0 ? <div className="automation-agent-tasks">
+            <p className="card-label">AGENT 子任务</p>
+            {liveAgentTasks.map((task) => <div className="automation-agent-task" data-status={task.status} key={task.admission.task.id}>
+              <div><strong>{agentTaskStatusLabel(task.status)}</strong><code>{task.model}</code></div>
+              <small>{task.admission.task.id} · {new Date(task.updatedAtMs).toLocaleString("zh-CN")}</small>
+              {task.error ? <em className="automation-step-error">{task.error}</em> : null}
+              {agentTaskCancellable(task.status) ? <button className="skill-action skill-action-danger" type="button" disabled={disabled || busy} onClick={() => void cancelLiveAgentTask(task)}>取消子任务</button> : null}
+            </div>)}
+          </div> : null}
         </div>}
       </aside>
     </div>
@@ -382,6 +433,29 @@ function automationFailureNotice(error: unknown): string {
   if (message.includes("cooldown is active")) return "自动化仍在冷却期，未开始执行";
   if (message.includes("cost budget is exhausted")) return "今日 AI 费用预算不足，Provider 未被调用";
   return "审批已过期、被处理、计划发生变化或资源准入失败，未执行自动化";
+}
+
+export function agentTaskStatusLabel(status: AutomationAgentJournalEntry["status"]): string {
+  if (status === "submitted") return "已提交";
+  if (status === "waiting_for_confirmation") return "等待确认";
+  if (status === "completed") return "已完成";
+  if (status === "failed") return "已失败";
+  if (status === "cancelled") return "已取消";
+  return "已中断";
+}
+
+export function agentTaskCancellable(status: AutomationAgentJournalEntry["status"]): boolean {
+  return status === "submitted" || status === "waiting_for_confirmation";
+}
+
+export function liveRunCancellable(
+  status: AutomationRun["status"],
+  agentTasks: AutomationAgentJournalEntry[],
+): boolean {
+  if (status === "succeeded" || status === "failed" || status === "compensation_failed") {
+    return agentTasks.some((task) => agentTaskCancellable(task.status));
+  }
+  return status === "waiting_for_approval" || status === "planned";
 }
 
 export function journalStatusLabel(status: AutomationJournalEntry["status"]): string {

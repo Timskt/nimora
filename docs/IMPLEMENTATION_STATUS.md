@@ -4,8 +4,8 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **416** passed（33 files） |
-| FE `pnpm exec vitest run src/components` | **380** passed（30 files） |
+| FE `pnpm exec vitest run`（全量） | **421** passed（33 files） |
+| FE `pnpm exec vitest run src/components` | **385** passed（30 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -23,6 +23,22 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-25 — 自动化 Agent 子任务可见性与级联取消 UI 接通（P0 断头路修复）
+
+### DONE
+- **接通自动化 Agent 子任务闭环（P0 断头路修复）**：`automation_run_agent_tasks`（按 runId 列子任务）、`automation_agent_task_status`（按 taskId 查单条）、`cancel_automation_run`（取消运行并级联停止活跃子任务）、`cancel_agent_task`（取消单个子任务）四个命令后端已注册、平台层 TS binding 齐全，但**无任何 UI 调用**——一次真实运行派生的 Agent 子任务在界面上不可见、无法取消，运行本身也无法从 UI 中止。现补齐，直接建立在上一切片 Live Run 之上。
+- **子任务面板 + 级联取消**：真实运行成功后 `runLive` 调 `automationRunAgentTasks(runId)` 回读子任务，运行结果卡片新增「AGENT 子任务」列表，逐条显示状态（已提交/等待确认/已完成/已失败/已取消/已中断）、模型、taskId 与更新时间；仍活跃（submitted/waiting_for_confirmation）的子任务可单独「取消子任务」，运行整体在存在可取消子任务或处于 waiting_for_approval/planned 时显示「取消本次运行」，级联停止活跃 Agent 子任务与 Provider Worker。
+- **导出纯函数供测试**：`agentTaskStatusLabel`/`agentTaskCancellable`/`liveRunCancellable`；`AutomationAgentJournalEntry.admission` 由 `unknown` 收敛为带 `task.id`/状态/root/parent/callDepth 的强类型 `AutomationAgentTaskAdmission`（与后端 `AgentTaskAdmission`/`AgentTask` serde 契约对齐）；浏览器预览 mock 为四个方法返回与 `previewLiveRun` 绑定的演示数据，并新增 `.automation-live-actions`/`.automation-agent-tasks`/`.automation-agent-task` 样式。
+
+### 门禁（本切片本地 · 已跑）
+- FE `pnpm exec vitest run` **421** passed（33 files，Agent 子任务纯函数 +5）· `pnpm exec vitest run src/components` **385** passed（30 files）· `tsc -b` clean · `pnpm exec vite build` 通过。
+- 本切片纯前端（未触碰 Rust），沿用 `cargo test -p nimora-desktop --lib` **278** 基线。
+
+### 仍须原生验收
+- 运行级联取消对活跃 Agent 子任务与 Provider Worker 的实际停止、taskId 状态在异步执行期间的实时演进，须在原生窗口内走真实 Command/Agent Backend；透明/穿透/遮挡/多屏手感仍须人工 QA。
 
 ---
 

@@ -1210,11 +1210,26 @@ export interface AutomationApprovalResolution {
   status: "rejected";
 }
 
+export interface AutomationAgentTaskAdmission {
+  spec: string;
+  task: {
+    spec: string;
+    id: string;
+    traceId: string;
+    requester: string;
+    providerId: string;
+    status: "pending" | "planning" | "waitingForConfirmation" | "running" | "paused" | "succeeded" | "failed" | "cancelled" | "budgetExhausted";
+  };
+  rootTaskId: string;
+  parentTaskId: string | null;
+  callDepth: number;
+}
+
 export interface AutomationAgentJournalEntry {
   spec: "nimora.automation-agent-journal/1";
   runId: string;
   idempotencyKey: string;
-  admission: unknown;
+  admission: AutomationAgentTaskAdmission;
   model: string;
   status: "submitted" | "waiting_for_confirmation" | "completed" | "failed" | "cancelled" | "interrupted";
   submittedAtMs: number;
@@ -1549,6 +1564,33 @@ export function createDesktopApi(
     let previewAgentModel = "model:echo-v1";
     let previewAgentHistory: AgentHistoryRecord[] = [];
     let previewLiveRun: AutomationRun | null = null;
+    const previewAgentTaskEntry = (runId: string): AutomationAgentJournalEntry => {
+      const now = Date.now();
+      return {
+        spec: "nimora.automation-agent-journal/1",
+        runId,
+        idempotencyKey: `${runId}:agent.task.run`,
+        admission: {
+          spec: "nimora.agent-task-admission/1",
+          task: {
+            spec: "nimora.agent-task/1",
+            id: `${runId}-agent-0`,
+            traceId: `${runId}-trace`,
+            requester: "automation-agent-bridge",
+            providerId: "preview.local.reasoner",
+            status: "succeeded",
+          },
+          rootTaskId: runId,
+          parentTaskId: null,
+          callDepth: 0,
+        },
+        model: "preview.local.reasoner",
+        status: "completed",
+        submittedAtMs: now - 320,
+        updatedAtMs: now,
+        error: null,
+      };
+    };
     let previewSkillCatalog: SkillCatalogEntry[] = [
       {
         skillId: "skill:preview-greeter",
@@ -1692,10 +1734,26 @@ export function createDesktopApi(
       async approveAutomationRun() { throw new Error("Automation approval requires the Nimora desktop runtime."); },
       async rejectAutomationRun() { throw new Error("Automation approval requires the Nimora desktop runtime."); },
       async deleteAutomationRunHistory() { return 0; },
-      async automationAgentTaskStatus() { return null; },
-      async automationRunAgentTasks() { return []; },
-      async cancelAgentTask() { return false; },
-      async cancelAutomationRun() { return false; },
+      async automationRunAgentTasks(runId: string) {
+        const run = previewLiveRun;
+        if (!run || run.runId !== runId || run.status !== "succeeded") return [];
+        return [previewAgentTaskEntry(runId)];
+      },
+      async automationAgentTaskStatus(taskId: string) {
+        const run = previewLiveRun;
+        if (!run || run.status !== "succeeded") return null;
+        const entry = previewAgentTaskEntry(run.runId);
+        return entry.admission.task.id === taskId ? entry : null;
+      },
+      async cancelAgentTask(taskId: string) {
+        const run = previewLiveRun;
+        if (!run) return false;
+        return previewAgentTaskEntry(run.runId).admission.task.id === taskId;
+      },
+      async cancelAutomationRun(runId: string) {
+        const run = previewLiveRun;
+        return Boolean(run && run.runId === runId);
+      },
       async agentCatalog() {
         return {
           spec: "nimora.desktop-agent-catalog/1",
