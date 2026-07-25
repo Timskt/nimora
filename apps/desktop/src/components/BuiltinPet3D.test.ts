@@ -20,6 +20,7 @@ import {
   qMinionOverallStrapPose,
   sampleBuiltinPetMotion,
   microActBiasGain,
+  vitalityBounceGain,
   springToward,
   stepSpringDamper,
 } from "./BuiltinPet3D";
@@ -681,5 +682,70 @@ describe("sampleBuiltinPetMotion micro-act hint", () => {
       baseMax = Math.max(baseMax, 1 - sampleBuiltinPetMotion("idle", "neutral", t, 0, 0, 1, "none").eyeScaleY);
     }
     expect(hintedMax).toBeGreaterThanOrEqual(baseMax);
+  });
+});
+
+describe("vitalityBounceGain", () => {
+  it("returns exactly 1 for a full-health or omitted vitality (byte-identical baseline)", () => {
+    expect(vitalityBounceGain(1)).toBe(1);
+    expect(vitalityBounceGain()).toBe(1);
+  });
+
+  it("increases monotonically with vitality and stays bounded", () => {
+    const samples = [0, 0.25, 0.5, 0.75, 1].map((v) => vitalityBounceGain(v));
+    for (let i = 1; i < samples.length; i += 1) {
+      expect(samples[i]).toBeGreaterThan(samples[i - 1]!);
+    }
+    for (const g of samples) {
+      expect(Number.isFinite(g)).toBe(true);
+      expect(g).toBeGreaterThanOrEqual(0.7);
+      expect(g).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("keeps a non-freezing floor for a fully drained pet", () => {
+    expect(vitalityBounceGain(0)).toBeGreaterThanOrEqual(0.7);
+    expect(vitalityBounceGain(-5)).toBe(vitalityBounceGain(0));
+  });
+
+  it("falls back to full liveliness for NaN / non-finite vitality", () => {
+    expect(vitalityBounceGain(Number.NaN)).toBe(1);
+    expect(vitalityBounceGain(Number.POSITIVE_INFINITY)).toBe(1);
+  });
+});
+
+describe("vitality flows into idle liveliness amplitude", () => {
+  it("keeps the default vitality identical to an omitted one", () => {
+    for (let t = 0; t < 8; t += 0.37) {
+      const omitted = sampleBuiltinPetMotion("idle", "neutral", t, 0, 0, 1, "none");
+      const full = sampleBuiltinPetMotion("idle", "neutral", t, 0, 0, 1, "none", 1);
+      expect(full.rootY).toBeCloseTo(omitted.rootY, 10);
+      expect(full.scaleY).toBeCloseTo(omitted.scaleY, 10);
+    }
+  });
+
+  it("makes a drained pet fidget with smaller idle amplitude than a thriving one", () => {
+    let lowRange = 0;
+    let highRange = 0;
+    let lowMin = Infinity, lowMax = -Infinity, highMin = Infinity, highMax = -Infinity;
+    for (let t = 0; t < 12; t += 0.05) {
+      const low = sampleBuiltinPetMotion("idle", "neutral", t, 0, 0, 1, "none", 0.05);
+      const high = sampleBuiltinPetMotion("idle", "neutral", t, 0, 0, 1, "none", 1);
+      lowMin = Math.min(lowMin, low.rootY); lowMax = Math.max(lowMax, low.rootY);
+      highMin = Math.min(highMin, high.rootY); highMax = Math.max(highMax, high.rootY);
+    }
+    lowRange = lowMax - lowMin;
+    highRange = highMax - highMin;
+    expect(highRange).toBeGreaterThan(lowRange);
+  });
+
+  it("does not let vitality alter locomotion / directed states", () => {
+    for (const state of ["walking", "work", "playing", "celebrate"]) {
+      for (let t = 0; t < 4; t += 0.5) {
+        const low = sampleBuiltinPetMotion(state, "neutral", t, 0, 0, 1, "none", 0);
+        const high = sampleBuiltinPetMotion(state, "neutral", t, 0, 0, 1, "none", 1);
+        expect(low.rootY).toBeCloseTo(high.rootY, 10);
+      }
+    }
   });
 });

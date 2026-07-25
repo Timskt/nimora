@@ -35,6 +35,8 @@ interface BuiltinPet3DProps {
   attention?: LifeformAttention | undefined;
   /** Living-presence contextual micro-act hint to bias idle choreography. */
   microAct?: LifeformMicroAct | undefined;
+  /** Living-presence 0..1 vitality driving idle liveliness amplitude. */
+  vitality?: number | undefined;
   onFailure(): void;
   /** Optional throttled (~500ms) render budget summary for Control Center. */
   onPerfSummary?: (summary: LifeformPerfSummary) => void;
@@ -187,6 +189,20 @@ export function microActBiasGain(hint?: LifeformMicroAct): MicroActBiasGain {
     default:
       return base;
   }
+}
+
+/**
+ * Idle liveliness amplitude gain for the living-presence engine's 0..1 vitality.
+ *
+ * A drained pet (low mood / energy / satiety / cleanliness) should bounce and
+ * fidget sluggishly; a thriving one springs livelier. `vitality = 1` returns a
+ * gain of exactly 1 so a full-health pet (or an omitted vitality) keeps idle
+ * choreography byte-identical to the untinted baseline. The floor stays well
+ * above zero so even an exhausted pet never freezes flat.
+ */
+export function vitalityBounceGain(vitality = 1): number {
+  const v = MathUtils.clamp(Number.isFinite(vitality) ? vitality : 1, 0, 1);
+  return 0.7 + v * 0.3;
 }
 
 /** Warm classic Q-minion palette (no chrome plate / no square frame). */
@@ -873,6 +889,7 @@ export function sampleBuiltinPetMotion(
   gazeY: number,
   motion = 1,
   microActHint: LifeformMicroAct = "none",
+  vitality = 1,
 ): BuiltinPetMotionSample {
   const pose = builtinPetPose(state, emotion);
   const walking = isWalking(state);
@@ -889,6 +906,7 @@ export function sampleBuiltinPetMotion(
   const hopping = isDirectedHop(state);
   const micro = idlePerformancePhase(elapsed);
   const microGain = microActBiasGain(microActHint);
+  const vitalityGain = vitalityBounceGain(vitality);
   const m = MathUtils.clamp(motion, 0, 1);
   // Directed micro-performances stay local (no linear body travel) and do not
   // steal observe/play locomotion channels unless they map there themselves.
@@ -917,12 +935,15 @@ export function sampleBuiltinPetMotion(
   );
 
   const pureIdle = idleish && !directedYawn && !directedDig && !directedAnts;
-  const idleBounce = pureIdle ? micro.microBounce : micro.microBounce * (idleish ? 0.45 : 0.2);
-  const settleBoost = pureIdle ? micro.settleHop : 0;
+  // Vitality softens idle liveliness only in the pure-idle channels: a drained
+  // pet fidgets sluggishly, a thriving one springs livelier. Directed poses and
+  // locomotion states keep their own amplitude (unchanged).
+  const idleBounce = pureIdle ? micro.microBounce * vitalityGain : micro.microBounce * (idleish ? 0.45 : 0.2);
+  const settleBoost = pureIdle ? micro.settleHop * vitalityGain : 0;
   // Hop channel is spring-friendly vertical squash only — never linear body travel.
-  const hopLiteAmt = pureIdle ? micro.hopLite * microGain.hop : 0;
-  const waveLiteAmt = pureIdle ? micro.waveLite * microGain.wave : 0;
-  const fidgetAmt = pureIdle ? micro.fidget : micro.fidget * 0.2;
+  const hopLiteAmt = pureIdle ? micro.hopLite * microGain.hop * vitalityGain : 0;
+  const waveLiteAmt = pureIdle ? micro.waveLite * microGain.wave * vitalityGain : 0;
+  const fidgetAmt = pureIdle ? micro.fidget * vitalityGain : micro.fidget * 0.2;
   // Hop is vertical squash/stretch only — land has a rubbery settle beat.
   const hopPhase = hopping
     ? Math.abs(Math.sin(elapsed * 5.2))
@@ -1253,7 +1274,7 @@ export function sampleBuiltinPetMotion(
   };
 }
 
-export function BuiltinPet3D({ state, emotion, attention, microAct, onFailure, onPerfSummary }: BuiltinPet3DProps) {
+export function BuiltinPet3D({ state, emotion, attention, microAct, vitality, onFailure, onPerfSummary }: BuiltinPet3DProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef({ state, emotion });
   stateRef.current = { state, emotion };
@@ -1261,6 +1282,8 @@ export function BuiltinPet3D({ state, emotion, attention, microAct, onFailure, o
   attentionRef.current = attention;
   const microActRef = useRef<LifeformMicroAct | undefined>(microAct);
   microActRef.current = microAct;
+  const vitalityRef = useRef<number | undefined>(vitality);
+  vitalityRef.current = vitality;
   const onPerfSummaryRef = useRef(onPerfSummary);
   onPerfSummaryRef.current = onPerfSummary;
 
@@ -1653,7 +1676,7 @@ export function BuiltinPet3D({ state, emotion, attention, microAct, onFailure, o
       const gazeOmega = pointerStale ? 6.5 : 15.5;
       const softGazeX = springToward(springGazeX, targetGazeX, dt, gazeOmega, 0.85) * motion;
       const softGazeY = springToward(springGazeY, targetGazeY, dt, gazeOmega, 0.85) * motion;
-      const sample = sampleBuiltinPetMotion(current.state, current.emotion, elapsed, softGazeX, softGazeY, motion, microActRef.current);
+      const sample = sampleBuiltinPetMotion(current.state, current.emotion, elapsed, softGazeX, softGazeY, motion, microActRef.current, vitalityRef.current);
       const playing = isPlaying(current.state);
 
       // Body channels: spring-damper only (never linear lerp). Play spin stays snappy via higher omega.

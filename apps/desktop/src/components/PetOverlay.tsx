@@ -177,6 +177,7 @@ export function PetOverlay() {
   const [activeScene, setActiveScene] = useState<ActivityScene | null>(() => readActiveActivityScene());
   const [ambientAttention, setAmbientAttention] = useState<LifeformAttention | undefined>(undefined);
   const [ambientMicroAct, setAmbientMicroAct] = useState<LifeformMicroAct | undefined>(undefined);
+  const [ambientVitality, setAmbientVitality] = useState<number | undefined>(undefined);
   const recentAmbientRef = useRef<string[]>([]);
   const activeSceneRef = useRef<ActivityScene | null>(activeScene);
   activeSceneRef.current = activeScene;
@@ -259,6 +260,7 @@ export function PetOverlay() {
     const moment = petAmbientMoment(value.pet, options);
     setAmbientAttention(moment.attention);
     setAmbientMicroAct(moment.microAct);
+    setAmbientVitality(moment.vitality);
     rememberAmbientLine(recentAmbientRef, moment.speech);
     return moment.speech;
   }, []);
@@ -931,6 +933,7 @@ export function PetOverlay() {
                   emotion={lifeform.emotion}
                   attention={ambientAttention}
                   microAct={ambientMicroAct}
+                  vitality={ambientVitality}
                   onFailure={handleBuiltin3dFailure}
                 />
               </Suspense>
