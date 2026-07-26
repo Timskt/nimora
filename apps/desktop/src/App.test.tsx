@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { itemPresentation, keepsakePresentation, navigation, navItemClassName, normalizedPetName, requestedAgentView, requestedNavigation, runtimeActivities, shouldRefreshActivity, voiceGain } from "./App";
+import { automationBadgeLabel, itemPresentation, keepsakePresentation, navBadgeText, navigation, navItemClassName, normalizedPetName, requestedAgentView, requestedNavigation, runtimeActivities, shouldRefreshActivity, voiceGain } from "./App";
 import { petInventoryQuantity, petItemPresentation } from "./components/petItems";
 
 describe("navItemClassName", () => {
@@ -84,5 +84,31 @@ describe("runtimeActivities", () => {
       tone: "mint",
     });
     expect(runtimeActivities({ pending: 0, leased: 0, delivered: 8, deadLetter: 2 })[0]?.title).toBe("2 条事件需要处理");
+  });
+});
+
+describe("navBadgeText", () => {
+  it("hides the badge when nothing is waiting", () => {
+    expect(navBadgeText(0)).toBeNull();
+    expect(navBadgeText(-3)).toBeNull();
+    expect(navBadgeText(null)).toBeNull();
+    expect(navBadgeText(undefined)).toBeNull();
+    expect(navBadgeText(Number.NaN)).toBeNull();
+  });
+
+  it("shows the count and caps at 99+", () => {
+    expect(navBadgeText(1)).toBe("1");
+    expect(navBadgeText(12)).toBe("12");
+    expect(navBadgeText(99)).toBe("99");
+    expect(navBadgeText(100)).toBe("99+");
+    expect(navBadgeText(4.9)).toBe("4");
+  });
+});
+
+describe("automationBadgeLabel", () => {
+  it("is null when nothing is waiting, otherwise describes the queue", () => {
+    expect(automationBadgeLabel(0)).toBeNull();
+    expect(automationBadgeLabel(2)).toBe("2 个自动化运行等待批准");
+    expect(automationBadgeLabel(250)).toBe("99+ 个自动化运行等待批准");
   });
 });

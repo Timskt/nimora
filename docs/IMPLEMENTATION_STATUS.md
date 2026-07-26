@@ -4,7 +4,7 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **444** passed（34 files） |
+| FE `pnpm exec vitest run`（全量） | **447** passed（34 files） |
 | FE `pnpm exec vitest run src/components` | **408** passed（31 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
@@ -23,6 +23,25 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-26 — 自动化待批准数 · 导航角标（Automation Approval Badge）UI 接通（P0 断头路修复）
+
+### 断头路
+- **接通自动化待批准聚合计数闭环（P0 断头路修复）**：`automation_pending_approval_count` 命令后端已注册、平台层 TS binding（`automationPendingApprovalCount`）齐全，但**无任何组件调用**（仅存在于 `platform/desktop.ts` 与测试）。此前只有进入「自动化」工作区、拉全量 `pendingAutomationApprovals` 目录后才能看到有多少运行在等参数级批准——用户在概览/角色/Agent 等其它分区时，**中高风险动作进入批准队列却毫无全局提示**，无人值守场景下容易漏批、错过过期窗口。现补齐「任意分区都能看到待批准数」的轻量全局感知。
+
+### 接通方式
+- **主导航「自动化」项新增待批准角标**：`App.tsx` 以 `automationPendingApprovalCount()` 轻量轮询（15s，仅原生且非恢复模式、页面可见时），把计数渲染为导航角标；`recoveryMode` 或非原生时清零隐藏。
+- **纯函数化角标呈现**：`navBadgeText`（≤0 隐藏、>99 显示 `99+`）与 `automationBadgeLabel`（无障碍标签 "N 个自动化运行等待批准"），角标带 `role="status"` + `aria-label` + `title`。
+- **轮询遵循既有可见性纪律**：复用活动刷新同款 `visibilitychange` + 单飞（in-flight 去重）+ dispose 清理模式；失败保留上次角标（批准数是提示、非门禁）。
+- **样式**：新增 `.nav-badge`（右对齐胶囊、强调色底、紧凑字号），随 `.nav-item` 布局自适应。
+- **导出纯函数供测试**：`navBadgeText` / `automationBadgeLabel`（+6 断言，覆盖 0/负数/正常/99+ 边界与标签文案）。
+- **浏览器预览一致性**：预览 mock 的 `automationPendingApprovalCount` 与 `pendingAutomationApprovals` 均保持空（0/[]），维持「预览完全离线且内部自洽」不变量；角标显隐逻辑由纯函数测试覆盖。
+
+### 门禁
+- FE 全量 vitest **447** passed（34 files，+3）· components **408** passed（31 files）· `tsc -b` clean · `vite build` 通过。
+- **原生端到端 QA 仍强制**：真实批准队列计数、过期收敛、跨分区角标实时性须在 Tauri 真机验收；不得宣称 goal complete。
 
 ---
 

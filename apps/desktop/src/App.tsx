@@ -17,6 +17,7 @@ const loadAutomationWorkspace = () => import("./components/AutomationWorkspace")
 const loadAiCreatorWorkspace = () => import("./components/AiCreatorWorkspace").then((module) => ({ default: module.AiCreatorWorkspace }));
 const loadDataProtection = () => import("./components/DataProtection").then((module) => ({ default: module.DataProtection }));
 const ACTIVITY_REFRESH_INTERVAL_MS = 10_000;
+const APPROVAL_BADGE_REFRESH_INTERVAL_MS = 15_000;
 
 export const navigation = ["概览", "角色", "Agent", "自动化", "扩展", "活动", "设置"] as const;
 type NavigationItem = (typeof navigation)[number];
@@ -32,6 +33,25 @@ export function requestedAgentView(search: string): "run" | "control" {
 
 export function navItemClassName(isActive: boolean): string {
   return isActive ? "nav-item active" : "nav-item";
+}
+
+/**
+ * Clamp a raw pending-approval count into a nav-badge display string.
+ * Returns null when there is nothing waiting (badge hidden); caps at "99+".
+ */
+export function navBadgeText(count: number | null | undefined): string | null {
+  const value = Math.floor(Number(count) || 0);
+  if (value <= 0) return null;
+  return value > 99 ? "99+" : String(value);
+}
+
+/**
+ * Accessible label for the automation nav badge, or null when hidden.
+ */
+export function automationBadgeLabel(count: number | null | undefined): string | null {
+  const value = Math.floor(Number(count) || 0);
+  if (value <= 0) return null;
+  return `${value > 99 ? "99+" : value} 个自动化运行等待批准`;
 }
 
 export function shouldRefreshActivity(active: NavigationItem, visibilityState: DocumentVisibilityState): boolean {
@@ -106,6 +126,7 @@ export function App() {
   const [notice, setNotice] = useState(desktopApi.native ? "原生运行时已连接" : "浏览器预览模式");
   const [petNameDraft, setPetNameDraft] = useState("");
   const [directiveSpeech, setDirectiveSpeech] = useState<string | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState(0);
   const updateNotice = useCallback((message: string) => setNotice(message), []);
   const relationship = desktopSnapshot?.petRelationship ?? { bondPoints: 0, affinity: 0, level: 1, levelProgress: 0, pointsPerLevel: 50, stage: "newly_met" as const, nextStage: "familiar" as const, nextStageAt: 25 };
   const relationshipProgress = relationship.levelProgress / relationship.pointsPerLevel * 100;
@@ -237,6 +258,36 @@ export function App() {
     };
   }, [active]);
 
+  useEffect(() => {
+    if (!desktopApi.native || recoveryMode) {
+      setPendingApprovals(0);
+      return;
+    }
+    let disposed = false;
+    let polling = false;
+    const refreshApprovals = async () => {
+      if (disposed || polling || document.visibilityState !== "visible") return;
+      polling = true;
+      try {
+        const count = await desktopApi.automationPendingApprovalCount();
+        if (!disposed) setPendingApprovals(count);
+      } catch {
+        // Keep the last known badge; approval count is advisory, not a gate.
+      } finally {
+        polling = false;
+      }
+    };
+    const handleVisibilityChange = () => void refreshApprovals();
+    void refreshApprovals();
+    const timer = window.setInterval(() => void refreshApprovals(), APPROVAL_BADGE_REFRESH_INTERVAL_MS);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [recoveryMode]);
+
   async function runAction(action: "celebrate" | "work") {
     if (recoveryMode) {
       setNotice("恢复模式下互动与自动化保持暂停");
@@ -309,7 +360,10 @@ export function App() {
           <span>Nimora</span>
         </div>
         <nav className="navigation">
-          {navigation.map((item) => (
+          {navigation.map((item) => {
+            const badge = item === "自动化" ? navBadgeText(pendingApprovals) : null;
+            const badgeLabel = item === "自动化" ? automationBadgeLabel(pendingApprovals) : null;
+            return (
             <button
               className={navItemClassName(active === item)}
               key={item}
@@ -319,8 +373,10 @@ export function App() {
             >
               <span className="nav-dot" aria-hidden="true" />
               {item}
+              {badge ? <span className="nav-badge" role="status" aria-label={badgeLabel ?? undefined} title={badgeLabel ?? undefined}>{badge}</span> : null}
             </button>
-          ))}
+            );
+          })}
         </nav>
         <section className={recoveryMode || safeMode ? "runtime-card safe" : "runtime-card"} aria-label="运行状态">
           <span className={recoveryMode || safeMode ? "status-dot safe" : "status-dot"} aria-hidden="true" />
