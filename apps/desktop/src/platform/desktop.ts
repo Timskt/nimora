@@ -955,6 +955,29 @@ export interface InstallUserProgramRequest {
   files: InstallPackageFile[];
 }
 
+export interface UserProgramPackageFile {
+  relativePath: string;
+  bytes: number;
+  sha256: string;
+}
+
+export interface UserProgramPackageInspection {
+  sourcePath: string;
+  manifest: UserProgramManifest;
+  files: UserProgramPackageFile[];
+  programId: string;
+  version: string;
+  fileCount: number;
+  totalBytes: number;
+  capabilities: UserCodeCapability[];
+  commands: string[];
+  subscriptions: string[];
+}
+
+export interface InspectUserProgramPackageRequest {
+  sourcePath: string;
+}
+
 export interface UserProgramInstallReceipt {
   programId: string;
   version: string;
@@ -1395,6 +1418,7 @@ export interface DesktopApi {
   installAsset(request: InstallAssetRequest): Promise<AssetInstallReceipt | null>;
   rollbackAsset(assetId: string): Promise<AssetRollbackReceipt | null>;
   validateUserProgram(manifest: UserProgramManifest): Promise<ProgramPolicyReport | null>;
+  inspectUserProgramPackage(request: InspectUserProgramPackageRequest): Promise<UserProgramPackageInspection | null>;
   installUserProgram(request: InstallUserProgramRequest): Promise<UserProgramInstallReceipt | null>;
   rollbackUserProgram(programId: string): Promise<UserProgramRollbackReceipt | null>;
   userProgramPermissionStatus(programId: string): Promise<UserProgramPermissionStatus | null>;
@@ -2365,6 +2389,7 @@ export function createDesktopApi(
       async installAsset() { return null; },
       async rollbackAsset(assetId) { return { assetId, quarantinedFailedVersion: true }; },
       async validateUserProgram() { return null; },
+      async inspectUserProgramPackage() { return null; },
       async installUserProgram() { return null; },
       async rollbackUserProgram() { return null; },
       async userProgramPermissionStatus(programId: string) {
@@ -2679,6 +2704,7 @@ export function createDesktopApi(
     installAsset: async (request) => await invokeCommand("install_asset", { request }) as AssetInstallReceipt,
     rollbackAsset: async (assetId) => await invokeCommand("rollback_asset", { assetId }) as AssetRollbackReceipt,
     validateUserProgram: async (manifest) => await invokeCommand("validate_user_program", { manifest }) as ProgramPolicyReport,
+    inspectUserProgramPackage: async (request) => await invokeCommand("inspect_user_program_package", { request }) as UserProgramPackageInspection,
     installUserProgram: async (request) => await invokeCommand("install_user_program", { request }) as UserProgramInstallReceipt,
     rollbackUserProgram: async (programId) => await invokeCommand("rollback_user_program", { programId }) as UserProgramRollbackReceipt,
     userProgramPermissionStatus: async (programId) => await invokeCommand("user_program_permission_status", { programId }) as UserProgramPermissionStatus,

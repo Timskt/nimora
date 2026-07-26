@@ -4,14 +4,14 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **475** passed（35 files） |
-| FE `pnpm exec vitest run src/components` | **436** passed（32 files） |
+| FE `pnpm exec vitest run`（全量） | **480** passed（35 files） |
+| FE `pnpm exec vitest run src/components` | **441** passed（32 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
 | `cargo test -p nimora-desktop --lib process_budget` | **7** passed |
 | `cargo test -p nimora-desktop --lib desktop_lifeform` | **21** passed |
-| `cargo test -p nimora-desktop --lib`（全量） | **278** passed（多线程默认，无死锁；含活动场景存储往返/校验 +3） |
+| `cargo test -p nimora-desktop --lib`（全量） | **279** passed（多线程默认，无死锁；新增磁盘程序包检查投影 +1） |
 | `cargo test -p nimora-agent-provider-worker --lib` | **15** passed（新增 payload/parse 覆盖 +11） |
 | `cargo test -p nimora-agent-tools --lib` | **10** passed（新增网关工具映射/校验/策略 +9） |
 | `cargo test -p nimora-model-importer --lib` | **12** passed（新增 GLB 容器/预算/URI/路径安全 +10） |
@@ -20,11 +20,28 @@
 | `cargo test -p nimora-automation-capability-bridge --lib` | **7** passed（新增策略校验/风险取大/瞬时故障 +4） |
 | `cargo test -p nimora-user-code-host --lib` | **5** passed（新增协议变体/可选输入/驼峰标签 +3） |
 | `cargo test -p nimora-user-code-worker`（集成） | **5** passed（新增输出预算/无结果退出 +2） |
+| `cargo test -p nimora-user-code-package --lib` | **13** passed（新增磁盘包目录检查/清单投影/防逃逸 +4） |
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
 
 ---
+
+## 2026-07-26 — 用户程序磁盘包安装（Disk Package Install）UI 接通（P0 断头路修复 · 最后一个 0-caller）
+
+### 断头路
+- **接通「从磁盘目录安装用户程序」闭环（P0 断头路修复 · 最后一个 0-caller）**：`install_user_program` 命令后端已注册、平台层 TS binding（`installUserProgram`）齐全，但**无任何组件调用**。根因：`InstallUserProgramRequest.files` 要求每个文件带 sha256，而 WebView 无法读盘算哈希 → UI 无法自行构造安装请求。全量 0-caller 复扫后这是最后一个真死路。
+
+### 接通方式
+- **契约 crate `nimora-user-code-package` 新增 `inspect_program_package(source_root)`**：校验目录/manifest 存在、canonicalize 防路径逃逸、执行 policy `evaluate`、递归 `collect_program_files`（跳过 `.nimora-integrity.json`、逐文件算 sha256）、按 relative_path 排序、`validate_inventory_contract`，返回 `ProgramPackageInspection{manifest, files, total_bytes}`。
+- **后端新增 `inspect_user_program_package` 命令**：控制中心门禁 + `ensure_normal_mode` + `validate_package_source`，把检查结果投影为 camelCase 的 `UserProgramPackageInspection`（含 manifest/文件清单/能力/命令/订阅/字节数），在 `install_user_program` 之前注册。
+- **`UserProgramManagementPanel` 新增磁盘安装条**：pickDirectory → `inspectUserProgramPackage` 预览候选包（程序 id/版本/文件数/字节/能力）→ 确认后用 `buildInstallRequestFromInspection` 组装请求 → `installUserProgram` 复验哈希后原子安装 → 刷新目录。空态与正常态两个 return 均渲染安装条。
+- **导出纯函数供测试**：`formatPackageBytes`/`summarizeInstallCandidate`/`buildInstallRequestFromInspection`。
+- **浏览器预览保持离线**：mock 的 `inspectUserProgramPackage()`/`installUserProgram()` 仍返回 `null`（`desktop.test.ts` "keeps browser preview fully offline" 一致）。
+
+### 门禁
+- FE 全量 vitest **480** passed（35 files）；components vitest **441** passed（32 files）；`tsc -b` clean；`vite build` 通过。
+- `cargo test -p nimora-desktop --lib` **279** passed；`cargo test -p nimora-user-code-package --lib` **13** passed。
 
 ## 2026-07-26 — 运行时事件诊断流（Runtime Event Diagnostics）UI 接通（P0 断头路修复）
 

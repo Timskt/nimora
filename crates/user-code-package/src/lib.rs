@@ -129,6 +129,101 @@ pub fn install_program_atomically(
     })
 }
 
+/// Verified projection of an expanded user-program package directory.
+///
+/// Produced by [`inspect_program_package`] so a caller can review the parsed
+/// manifest and the install-ready inventory before committing to an atomic
+/// install through [`install_program_atomically`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramPackageInspection {
+    pub manifest: ProgramManifest,
+    pub files: Vec<InstallFile>,
+    pub total_bytes: u64,
+}
+
+/// Inspects an expanded user-program package directory without changing the
+/// filesystem, returning the parsed manifest plus a verified install-ready
+/// inventory (relative path, byte length, sha256) for every packaged file.
+///
+/// The returned `files` are exactly what [`install_program_atomically`] expects,
+/// so a caller can present a review summary and then install without recomputing
+/// hashes. The integrity lock file is never surfaced in the inventory.
+///
+/// # Errors
+///
+/// Returns an error when the source is not a directory, the manifest is missing,
+/// escapes the package root, or is invalid, when the manifest fails policy
+/// evaluation, or when the inventory violates the package contract (missing
+/// required files, duplicate paths, or budget limits).
+pub fn inspect_program_package(
+    source_root: &Path,
+) -> Result<ProgramPackageInspection, ProgramPackageError> {
+    if !source_root.is_dir() {
+        return Err(ProgramPackageError::SourceNotDirectory);
+    }
+    let canonical_source_root = source_root.canonicalize()?;
+    let manifest_path = source_root.join(MANIFEST_FILE);
+    if !manifest_path.is_file() {
+        return Err(ProgramPackageError::MissingRequiredFile);
+    }
+    let canonical_manifest = manifest_path.canonicalize()?;
+    if !canonical_manifest.starts_with(&canonical_source_root) {
+        return Err(ProgramPackageError::ManifestEscapedSource);
+    }
+    let manifest =
+        serde_json::from_slice::<ProgramManifest>(&fs::read(&canonical_manifest)?)?;
+    evaluate(manifest.clone())?;
+    let mut files = Vec::new();
+    collect_program_files(&canonical_source_root, &canonical_source_root, &mut files)?;
+    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    validate_inventory_contract(&files)?;
+    let total_bytes = files.iter().try_fold(0_u64, |total, file| {
+        total
+            .checked_add(file.bytes)
+            .ok_or(ProgramPackageError::BudgetExceeded)
+    })?;
+    Ok(ProgramPackageInspection {
+        manifest,
+        files,
+        total_bytes,
+    })
+}
+
+fn collect_program_files(
+    root: &Path,
+    dir: &Path,
+    files: &mut Vec<InstallFile>,
+) -> Result<(), ProgramPackageError> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let path = entry.path();
+        if file_type.is_dir() {
+            collect_program_files(root, &path, files)?;
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let relative = match path.strip_prefix(root) {
+            Ok(relative) => relative.to_path_buf(),
+            Err(_) => return Err(ProgramPackageError::ManifestEscapedSource),
+        };
+        if relative == Path::new(INTEGRITY_FILE) {
+            continue;
+        }
+        let bytes = fs::read(&path)?;
+        let byte_count =
+            u64::try_from(bytes.len()).map_err(|_| ProgramPackageError::BudgetExceeded)?;
+        files.push(InstallFile {
+            relative_path: relative,
+            bytes: byte_count,
+            sha256: format!("{:x}", Sha256::digest(&bytes)),
+        });
+    }
+    Ok(())
+}
+
 /// Restores the latest previously active version of a user program.
 ///
 /// # Errors
@@ -562,6 +657,108 @@ mod tests {
         assert!(matches!(
             install_program_atomically(&source, &root.join("store"), manifest("1.0.0"), &files),
             Err(ProgramPackageError::ManifestEscapedSource)
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inspects_a_package_into_an_install_ready_inventory() {
+        let root =
+            std::env::temp_dir().join(format!("nimora-program-inspect-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let expected = manifest("1.0.0");
+        write_package(&source, &expected, "({ commands: [] })");
+        fs::create_dir_all(source.join("lib")).unwrap();
+        fs::write(source.join("lib/helper.js"), "export const x = 1;").unwrap();
+
+        let inspection = inspect_program_package(&source).unwrap();
+        assert_eq!(inspection.manifest, expected);
+        assert_eq!(inspection.files.len(), 3);
+        let paths = inspection
+            .files
+            .iter()
+            .map(|file| file.relative_path.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("lib/helper.js"),
+                PathBuf::from(ENTRY_FILE),
+                PathBuf::from(MANIFEST_FILE),
+            ]
+        );
+        let recomputed = inspection.files.iter().fold(0_u64, |total, file| {
+            assert_eq!(
+                file.sha256.len(),
+                64,
+                "sha256 digests are 64 hex characters"
+            );
+            total + file.bytes
+        });
+        assert_eq!(inspection.total_bytes, recomputed);
+
+        let result =
+            install_program_atomically(&source, &root.join("store"), expected, &inspection.files)
+                .unwrap();
+        assert!(result.backup_path.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inspection_never_surfaces_the_integrity_lock_file() {
+        let root = std::env::temp_dir()
+            .join(format!("nimora-program-inspect-lock-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let expected = manifest("1.0.0");
+        write_package(&source, &expected, "({ commands: [] })");
+        fs::write(source.join(INTEGRITY_FILE), b"{}").unwrap();
+
+        let inspection = inspect_program_package(&source).unwrap();
+        assert!(
+            inspection
+                .files
+                .iter()
+                .all(|file| file.relative_path != Path::new(INTEGRITY_FILE))
+        );
+        assert_eq!(inspection.files.len(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inspection_rejects_a_package_missing_its_entry_file() {
+        let root = std::env::temp_dir()
+            .join(format!("nimora-program-inspect-missing-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let expected = manifest("1.0.0");
+        fs::write(
+            source.join(MANIFEST_FILE),
+            serde_json::to_vec(&expected).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            inspect_program_package(&source),
+            Err(ProgramPackageError::MissingRequiredFile)
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inspection_rejects_a_missing_manifest() {
+        let root = std::env::temp_dir().join(format!(
+            "nimora-program-inspect-nomanifest-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join(ENTRY_FILE), "null").unwrap();
+        assert!(matches!(
+            inspect_program_package(&source),
+            Err(ProgramPackageError::MissingRequiredFile)
         ));
         fs::remove_dir_all(root).unwrap();
     }

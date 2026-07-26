@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildInstallRequestFromInspection,
   describePermissionAudit,
   describeProgramStatus,
   formatMemoryBudget,
+  formatPackageBytes,
+  summarizeInstallCandidate,
   summarizeProgramReceipt,
 } from "./UserProgramManagementPanel";
 import type {
   UserProgramCatalogEntry,
   UserProgramExecutionReceipt,
+  UserProgramPackageInspection,
   UserProgramPermissionStatus,
 } from "../platform/desktop";
 
@@ -114,5 +118,75 @@ describe("describePermissionAudit", () => {
     const result = describePermissionAudit(base, null);
     expect(result.drift).toBe(false);
     expect(result.message).toContain("未返回权威授权状态");
+  });
+});
+
+
+function inspection(
+  overrides: Partial<UserProgramPackageInspection> = {},
+): UserProgramPackageInspection {
+  return {
+    sourcePath: "/tmp/nimora-program",
+    manifest: {
+      id: "studio.example.disk",
+      version: "2.1.0",
+      capabilities: ["read-pet-state", "subscribe-events"],
+      subscriptions: ["focus.started"],
+      eventConcurrency: "serial",
+      eventQueueCapacity: 16,
+      commands: ["safe.pet.animate"],
+      timeoutMs: 5_000,
+      memoryBytes: 8 * 1024 * 1024,
+    },
+    files: [
+      { relativePath: "main.js", bytes: 64, sha256: "a".repeat(64) },
+      { relativePath: "manifest.json", bytes: 120, sha256: "b".repeat(64) },
+    ],
+    programId: "studio.example.disk",
+    version: "2.1.0",
+    fileCount: 2,
+    totalBytes: 184,
+    capabilities: ["read-pet-state", "subscribe-events"],
+    commands: ["safe.pet.animate"],
+    subscriptions: ["focus.started"],
+    ...overrides,
+  };
+}
+
+describe("formatPackageBytes", () => {
+  it("labels an empty package", () => {
+    expect(formatPackageBytes(0)).toBe("0 B");
+    expect(formatPackageBytes(-1)).toBe("0 B");
+  });
+
+  it("renders KiB and MiB thresholds", () => {
+    expect(formatPackageBytes(512)).toBe("512 B");
+    expect(formatPackageBytes(2 * 1024)).toBe("2 KiB");
+    expect(formatPackageBytes(4 * 1024 * 1024)).toBe("4.0 MiB");
+    expect(formatPackageBytes(16 * 1024 * 1024)).toBe("16 MiB");
+  });
+});
+
+describe("summarizeInstallCandidate", () => {
+  it("summarizes id, version, file count, size, and capability count", () => {
+    expect(summarizeInstallCandidate(inspection())).toBe(
+      "studio.example.disk v2.1.0 · 2 个文件 · 184 B · 2 项能力",
+    );
+  });
+
+  it("notes when a package needs no capabilities", () => {
+    expect(summarizeInstallCandidate(inspection({ capabilities: [] }))).toContain("无需能力");
+  });
+});
+
+describe("buildInstallRequestFromInspection", () => {
+  it("reuses the verified inventory without touching the disk again", () => {
+    const request = buildInstallRequestFromInspection(inspection());
+    expect(request.sourcePath).toBe("/tmp/nimora-program");
+    expect(request.manifest.id).toBe("studio.example.disk");
+    expect(request.files).toEqual([
+      { relativePath: "main.js", bytes: 64, sha256: "a".repeat(64) },
+      { relativePath: "manifest.json", bytes: 120, sha256: "b".repeat(64) },
+    ]);
   });
 });

@@ -173,7 +173,8 @@ use nimora_user_code_gateway::{
 };
 use nimora_user_code_host::{WorkerConfig, WorkerMessage, WorkerProcess};
 use nimora_user_code_package::{
-    ProgramPackageError, install_program_atomically, load_installed_program, rollback_program,
+    ProgramPackageError, ProgramPackageInspection, inspect_program_package,
+    install_program_atomically, load_installed_program, rollback_program,
 };
 use nimora_user_code_policy::{
     Capability, EventAdmission, EventConcurrencyPolicy, EventTriggerScheduler,
@@ -10031,6 +10032,86 @@ fn terminal_skill_worker_output(
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InspectUserProgramPackageRequest {
+    source_path: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProgramPackageFile {
+    relative_path: String,
+    bytes: u64,
+    sha256: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProgramPackageInspection {
+    source_path: PathBuf,
+    manifest: ProgramManifest,
+    files: Vec<UserProgramPackageFile>,
+    program_id: String,
+    version: String,
+    file_count: usize,
+    total_bytes: u64,
+    capabilities: Vec<Capability>,
+    commands: Vec<String>,
+    subscriptions: Vec<String>,
+}
+
+fn build_user_program_package_inspection(
+    source_path: PathBuf,
+    inspection: ProgramPackageInspection,
+) -> UserProgramPackageInspection {
+    let ProgramPackageInspection {
+        manifest,
+        files,
+        total_bytes,
+    } = inspection;
+    let file_count = files.len();
+    let projected = files
+        .into_iter()
+        .map(|file| UserProgramPackageFile {
+            relative_path: file.relative_path.to_string_lossy().into_owned(),
+            bytes: file.bytes,
+            sha256: file.sha256,
+        })
+        .collect::<Vec<_>>();
+    UserProgramPackageInspection {
+        source_path,
+        program_id: manifest.id.clone(),
+        version: manifest.version.clone(),
+        file_count,
+        total_bytes,
+        capabilities: manifest.capabilities.clone(),
+        commands: manifest.commands.clone(),
+        subscriptions: manifest.subscriptions.clone(),
+        manifest,
+        files: projected,
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+fn inspect_user_program_package(
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+    request: InspectUserProgramPackageRequest,
+) -> Result<UserProgramPackageInspection, DesktopError> {
+    if window.label() != CONTROL_CENTER_LABEL {
+        return Err(DesktopError::WindowForbidden);
+    }
+    ensure_normal_mode(&state)?;
+    validate_package_source(&request.source_path)?;
+    let inspection = inspect_program_package(&request.source_path)?;
+    Ok(build_user_program_package_inspection(
+        request.source_path,
+        inspection,
+    ))
+}
+
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 fn install_user_program(
@@ -13567,6 +13648,7 @@ pub fn run() {
             skill_execution_history_list,
             delete_skill_execution_history,
             cancel_skill_execution,
+            inspect_user_program_package,
             install_user_program,
             rollback_user_program,
             user_program_permission_status,
@@ -14718,6 +14800,7 @@ mod tests {
         AttentionSource, AutoModeJobStatus, AutomationEventMetrics, AutomationRun,
         AutomationRunOrigin, AutomationTestRequest, BUILTIN_CHARACTER_ID, BUILTIN_THEME_ID,
         BUILTIN_VOICE_ID, CHARACTER_SELECTION, CapabilityBackend, ContextKind,
+        ProgramPackageInspection, build_user_program_package_inspection,
         DETERMINISTIC_PROVIDER_ID, DeleteProviderRequest, DesktopAgentRunStatus,
         DesktopCapabilityBackend, DesktopError, DesktopProviderCredentialResolver,
         DesktopResolveAutoModeAttemptRequest, DesktopSecretStore, DesktopState,
@@ -19907,6 +19990,51 @@ mod tests {
         )
         .expect("install staged package");
         assert_eq!(installed.program_id, "studio.example.creator-install");
+    }
+
+    #[test]
+    fn user_program_package_inspection_projects_manifest_and_inventory() {
+        let manifest = ProgramManifest {
+            id: "studio.example.disk-install".to_owned(),
+            version: "2.1.0".to_owned(),
+            capabilities: vec![Capability::ReadPetState, Capability::SubscribeEvents],
+            subscriptions: vec!["focus.started".to_owned()],
+            event_concurrency: EventConcurrencyPolicy::Serial,
+            event_queue_capacity: 8,
+            commands: vec!["safe.pet.animate".to_owned()],
+            timeout_ms: 5_000,
+            memory_bytes: 8 * 1024 * 1024,
+        };
+        let inspection = ProgramPackageInspection {
+            manifest: manifest.clone(),
+            files: vec![
+                InstallFile {
+                    relative_path: PathBuf::from("main.js"),
+                    bytes: 24,
+                    sha256: "a".repeat(64),
+                },
+                InstallFile {
+                    relative_path: PathBuf::from("manifest.json"),
+                    bytes: 120,
+                    sha256: "b".repeat(64),
+                },
+            ],
+            total_bytes: 144,
+        };
+        let projected = build_user_program_package_inspection(
+            PathBuf::from("/tmp/disk-package"),
+            inspection,
+        );
+        assert_eq!(projected.program_id, "studio.example.disk-install");
+        assert_eq!(projected.version, "2.1.0");
+        assert_eq!(projected.file_count, 2);
+        assert_eq!(projected.total_bytes, 144);
+        assert_eq!(projected.files.len(), 2);
+        assert_eq!(projected.files[0].relative_path, "main.js");
+        assert_eq!(projected.files[1].relative_path, "manifest.json");
+        assert_eq!(projected.commands, vec!["safe.pet.animate".to_owned()]);
+        assert_eq!(projected.capabilities, manifest.capabilities);
+        assert_eq!(projected.manifest, manifest);
     }
 
     #[test]
