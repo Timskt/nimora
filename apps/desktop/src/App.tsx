@@ -4,6 +4,7 @@ import { PresenceSettings } from "./components/PresenceSettings";
 import { StartupSettings } from "./components/StartupSettings";
 import { LazyWorkspace } from "./components/LazyWorkspace";
 import { ActivitySceneWorkshop, RuntimeActivityPanel } from "./components/ActivitySceneWorkshop";
+import { RuntimeEventDiagnosticsPanel } from "./components/RuntimeEventDiagnosticsPanel";
 import { LifeformOverview, buildLifeformSenseHintsFromSnapshot } from "./components/LifeformOverview";
 import { hostProcessBudgetFromDesktopSnapshot } from "./components/lifeformPerf";
 import { petItemPresentation } from "./components/petItems";
@@ -422,7 +423,7 @@ export function App() {
           </div>
         </section>}
 
-        {active === "角色" ? <LazyWorkspace loader={loadCreatorStudio} name="角色工作室" componentProps={{ onThemeChange: setActiveTheme }} /> : active === "扩展" ? <LazyWorkspace loader={loadAiCreatorWorkspace} name="AI 扩展工坊" componentProps={{ disabled: safeMode || recoveryMode }} /> : active === "Agent" ? <LazyWorkspace loader={loadAgentWorkspace} name="Agent 工作区" componentProps={{ safeMode, recoveryMode, initialView: agentView, onNotice: updateNotice }} /> : active === "自动化" ? <LazyWorkspace loader={loadAutomationWorkspace} name="自动化工作区" componentProps={{ disabled: safeMode || recoveryMode, onNotice: updateNotice }} /> : active === "活动" ? <ActivityWorkspace outbox={outbox} /> : active === "设置" ? <LazyWorkspace loader={loadDataProtection} name={recoveryMode ? "数据恢复中心" : "设置与数据保护"} componentProps={{ recoveryMode, onNotice: updateNotice }} /> : <div className="dashboard-grid">
+        {active === "角色" ? <LazyWorkspace loader={loadCreatorStudio} name="角色工作室" componentProps={{ onThemeChange: setActiveTheme }} /> : active === "扩展" ? <LazyWorkspace loader={loadAiCreatorWorkspace} name="AI 扩展工坊" componentProps={{ disabled: safeMode || recoveryMode }} /> : active === "Agent" ? <LazyWorkspace loader={loadAgentWorkspace} name="Agent 工作区" componentProps={{ safeMode, recoveryMode, initialView: agentView, onNotice: updateNotice }} /> : active === "自动化" ? <LazyWorkspace loader={loadAutomationWorkspace} name="自动化工作区" componentProps={{ disabled: safeMode || recoveryMode, onNotice: updateNotice }} /> : active === "活动" ? <ActivityWorkspace outbox={outbox} recoveryMode={recoveryMode} /> : active === "设置" ? <LazyWorkspace loader={loadDataProtection} name={recoveryMode ? "数据恢复中心" : "设置与数据保护"} componentProps={{ recoveryMode, onNotice: updateNotice }} /> : <div className="dashboard-grid">
           <section className="pet-stage" aria-labelledby="pet-heading">
             <div className="stage-copy">
               <span className="pill">{notice}</span>
@@ -523,12 +524,13 @@ export function App() {
   );
 }
 
-function ActivityWorkspace({ outbox }: { outbox: OutboxSnapshot | null }) {
+function ActivityWorkspace({ outbox, recoveryMode }: { outbox: OutboxSnapshot | null; recoveryMode: boolean }) {
   return (
     <section className="activity-workspace activity-workspace--workshop" aria-labelledby="scene-workshop-heading">
       <ActivitySceneWorkshop />
       <aside className="activity-workspace-runtime" aria-label="运行记录">
         <RuntimeActivityPanel outbox={outbox} activities={runtimeActivities(outbox)} />
+        <RuntimeEventDiagnosticsPanel disabled={recoveryMode} />
       </aside>
     </section>
   );

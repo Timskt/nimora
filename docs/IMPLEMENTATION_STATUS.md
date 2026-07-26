@@ -4,8 +4,8 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **461** passed（34 files） |
-| FE `pnpm exec vitest run src/components` | **422** passed（31 files） |
+| FE `pnpm exec vitest run`（全量） | **475** passed（35 files） |
+| FE `pnpm exec vitest run src/components` | **436** passed（32 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -25,6 +25,21 @@
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
 
 ---
+
+## 2026-07-26 — 运行时事件诊断流（Runtime Event Diagnostics）UI 接通（P0 断头路修复）
+
+### 断头路
+- **接通运行时原始事件排空诊断闭环（P0 断头路修复）**：`drain_runtime_events` 命令后端已注册、平台层 TS binding（`drainEvents`）齐全，但**无任何组件调用**（仅存在于 `platform/desktop.ts` 与测试）。运行时事件总线（`NimoraEvent[]`，含 `eventType/source/traceId/timestamp/data`）此前只能被后端内部消费，面向开发者/极客的原始事件流在 UI 侧完全不可见——排查「事件是否真的被发出/来自哪个子系统」时无处观察。现补齐「排空事件」的破坏性诊断闭环。
+
+### 接通方式
+- **活动工作区新增《运行时事件诊断流》面板**（`RuntimeEventDiagnosticsPanel.tsx`，挂载于 `ActivityWorkspace` 运行记录侧栏，`RuntimeActivityPanel` 之后）：调 `desktopApi.drainEvents()` 排空运行时队列，累计进有界（≤200 条）、最新优先的本地缓冲；支持「自动排空」（4s 轮询）与手动「排空事件」。
+- **隐私优先渲染**：只展示 `eventType/source/traceId(截断)/timestamp` 元数据与按来源分类（内核/技能/自动化/Agent/连接器/能力网关/系统）的计数徽章，**绝不显示事件正文 `data`、桌面内容或密钥**。
+- **破坏性语义可见**：面板文案明确「排空是破坏性的——事件取出后累计到此处」，并按 id 去重防重复排空导致的重复渲染。
+- **导出纯函数供测试**（`runtimeEventDiagnostics.ts`）：`eventSourceCategory`/`eventSourceLabel`/`mergeDrainedEvents`（有界+去重+最新优先）/`describeDrainNotice`/`tallyEventSources`/`formatEventTimestamp`/`shortTraceId`，覆盖来源归类、缓冲上限、去重、空排空等分支。
+- **浏览器预览保持离线**：mock 的 `drainEvents()` 仍返回 `[]`（`desktop.test.ts` "keeps browser preview fully offline" 一致），面板在预览中呈现空态并说明只有原生运行时才有真实事件。
+
+### 门禁
+- FE 全量 vitest **475** passed（35 files）；components vitest **436** passed（32 files）；`tsc -b` clean；`vite build` 通过。
 
 ## 2026-07-26 — 自动化 Agent 子任务「刷新状态」权威复核（Agent Task Status Audit）UI 接通（P0 断头路修复）
 

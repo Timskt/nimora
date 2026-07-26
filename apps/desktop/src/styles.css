@@ -2929,6 +2929,25 @@ body.pet-window.pet-browser-preview { display: block; min-height: 100vh; overflo
   margin-top: 14px;
 }
 
+.runtime-event-diagnostics { margin-top: 18px; }
+.runtime-event-auto { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.runtime-event-auto input { accent-color: var(--accent-purple); }
+.runtime-event-privacy { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.runtime-event-privacy code { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 10px; }
+.runtime-event-tally { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.runtime-event-tally-chip { padding: 4px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-purple); font-size: 10px; font-weight: 700; }
+.runtime-event-tally-chip[data-source="gateway"] { background: var(--status-danger-surface); color: var(--status-danger-text); }
+.runtime-event-tally-chip[data-source="agent"] { background: #e6eef8; color: #34557a; }
+.runtime-event-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 8px; max-height: 340px; overflow-y: auto; }
+.runtime-event-row { padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; border-left: 3px solid var(--accent-purple); }
+.runtime-event-row[data-source="gateway"] { border-left-color: var(--status-danger-edge); }
+.runtime-event-row[data-source="automation"] { border-left-color: var(--success); }
+.runtime-event-row[data-source="agent"] { border-left-color: #34557a; }
+.runtime-event-row-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.runtime-event-row-head code { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 10px; overflow-wrap: anywhere; }
+.runtime-event-source { padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-purple); font-size: 9px; font-weight: 800; white-space: nowrap; }
+.runtime-event-meta { margin: 6px 0 0; color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+
 @media (max-width: 1080px) {
   .scene-workshop-layout {
     grid-template-columns: 1fr;
