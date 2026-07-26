@@ -58,6 +58,9 @@ import {
   tierUsesNeverAsk,
   controlEmptyGuidance,
   isAbsoluteWorkspaceRoot,
+  canResumeControlEntry,
+  resumeControlLockReason,
+  buildResumeJobRequest,
   providerReadinessGuidance,
   runTaskLockReason,
   unattendedStartFailureMessage,
@@ -707,5 +710,59 @@ describe("runTaskLockReason + provider readiness guidance", () => {
       serviceReachable: false,
       models: [],
     })).toMatch(/离线|模型连接/);
+  });
+});
+
+describe("resume paused auto-mode control entry", () => {
+  const activeGrant = { status: "active", workspaceRoot: "/Users/sky/project" };
+
+  it("canResumeControlEntry requires paused job + active grant + absolute root", () => {
+    expect(canResumeControlEntry({ job: { status: "paused" }, grant: activeGrant })).toBe(true);
+    expect(canResumeControlEntry({ job: { status: "pausing" }, grant: activeGrant })).toBe(false);
+    expect(canResumeControlEntry({ job: { status: "running" }, grant: activeGrant })).toBe(false);
+    expect(canResumeControlEntry({ job: { status: "paused" }, grant: { status: "revoked", workspaceRoot: "/Users/sky/project" } })).toBe(false);
+    expect(canResumeControlEntry({ job: { status: "paused" }, grant: { status: "active", workspaceRoot: "relative/path" } })).toBe(false);
+    expect(canResumeControlEntry({ job: { status: "paused" }, grant: null })).toBe(false);
+  });
+
+  it("resumeControlLockReason explains each blocked precondition, null when allowed", () => {
+    expect(resumeControlLockReason({ entry: { job: { status: "paused" }, grant: activeGrant } })).toBeNull();
+    expect(resumeControlLockReason({ entry: { job: { status: "pausing" }, grant: activeGrant } })).toMatch(/收敛暂停/);
+    expect(resumeControlLockReason({ entry: { job: { status: "running" }, grant: activeGrant } })).toMatch(/已暂停/);
+    expect(resumeControlLockReason({ entry: { job: { status: "paused" }, grant: null } })).toMatch(/缺少有效授权/);
+    expect(resumeControlLockReason({ entry: { job: { status: "paused" }, grant: { status: "active", workspaceRoot: "relative" } } })).toMatch(/绝对工作区/);
+    expect(resumeControlLockReason({ entry: { job: { status: "paused" }, grant: activeGrant }, actionLockReason: "浏览器预览不能提交控制操作" })).toBe("浏览器预览不能提交控制操作");
+  });
+
+  it("buildResumeJobRequest emits a clamped start-job request bound to the session + grant root", () => {
+    const request = buildResumeJobRequest({
+      entry: { session: { id: "session-1" }, grant: activeGrant },
+      offline: true,
+      maxTurnsPerBatch: 999,
+    });
+    expect(request.sessionId).toBe("session-1");
+    expect(request.workspaceRoot).toBe("/Users/sky/project");
+    expect(request.offline).toBe(true);
+    expect(request.maxTurnsPerBatch).toBe(64);
+    expect(request.reasoningPolicy).toBeUndefined();
+  });
+
+  it("buildResumeJobRequest floors invalid turns to 1 and attaches reasoning policy when provided", () => {
+    const request = buildResumeJobRequest({
+      entry: { session: { id: "session-2" }, grant: activeGrant },
+      offline: false,
+      maxTurnsPerBatch: 0,
+      reasoningPolicy: { mode: "fixed", effort: "high" } as never,
+    });
+    expect(request.maxTurnsPerBatch).toBe(1);
+    expect(request.reasoningPolicy).toEqual({ mode: "fixed", effort: "high" });
+  });
+
+  it("buildResumeJobRequest throws when the grant lacks an absolute workspace root", () => {
+    expect(() => buildResumeJobRequest({
+      entry: { session: { id: "session-3" }, grant: { status: "active", workspaceRoot: null } },
+      offline: true,
+      maxTurnsPerBatch: 8,
+    })).toThrow(/resume-missing-workspace-root/);
   });
 });

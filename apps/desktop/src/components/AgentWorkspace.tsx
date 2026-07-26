@@ -16,6 +16,7 @@ import {
   type DesktopAutoModeControlCenter,
   type LocalAgentResult,
   type ModelReasoningPolicy,
+  type StartAutoModeJobRequest,
 } from "../platform/desktop";
 import {
   agentCompanionBubble,
@@ -37,6 +38,7 @@ type ControlEntry = DesktopAutoModeControlCenter["entries"][number];
 type PendingControl =
   | { kind: "pause"; entry: ControlEntry }
   | { kind: "cancel"; entry: ControlEntry }
+  | { kind: "resume"; entry: ControlEntry }
   | { kind: "resolve"; entry: ControlEntry; decision: "confirmed_not_executed" | "accept_external_effect_and_cancel" };
 
 interface AgentWorkspaceProps {
@@ -273,6 +275,65 @@ export function isAbsoluteWorkspaceRoot(path: string | null | undefined): boolea
   if (value.startsWith("/")) return true;
   // Windows: C:\… or C:/…
   return /^[A-Za-z]:[\\/]/.test(value);
+}
+
+/**
+ * Whether a paused auto-mode control entry can be resumed into a new batch.
+ * Requires a paused (not still-pausing) job and an active grant with an
+ * absolute workspace root; otherwise the resume path must stay disabled.
+ */
+export function canResumeControlEntry(entry: {
+  job: { status: string };
+  grant?: { status?: string; workspaceRoot?: string | null } | null;
+}): boolean {
+  if (entry.job.status !== "paused") return false;
+  const grant = entry.grant ?? null;
+  if (!grant || grant.status !== "active") return false;
+  return isAbsoluteWorkspaceRoot(grant.workspaceRoot ?? null);
+}
+
+/**
+ * Why resuming a paused control entry is locked, or null when allowed.
+ * Layers action-lock reasons on top of the resume-specific preconditions.
+ */
+export function resumeControlLockReason(options: {
+  entry: { job: { status: string }; grant?: { status?: string; workspaceRoot?: string | null } | null };
+  actionLockReason?: string | null;
+}): string | null {
+  if (options.actionLockReason) return options.actionLockReason;
+  const { entry } = options;
+  if (entry.job.status === "pausing") return "任务仍在收敛暂停，稍候即可恢复运行。";
+  if (entry.job.status !== "paused") return "只有已暂停的任务才能恢复运行。";
+  const grant = entry.grant ?? null;
+  if (!grant || grant.status !== "active") return "缺少有效授权，无法恢复；请重新授权后再继续。";
+  if (!isAbsoluteWorkspaceRoot(grant.workspaceRoot ?? null)) return "授权未绑定绝对工作区路径，无法安全恢复。";
+  return null;
+}
+
+/**
+ * Build the start-auto-mode-job request that resumes a paused session's
+ * remaining batches from its last Checkpoint. Throws when preconditions fail.
+ */
+export function buildResumeJobRequest(options: {
+  entry: { session: { id: string }; grant?: { status?: string; workspaceRoot?: string | null } | null };
+  offline: boolean;
+  maxTurnsPerBatch: number;
+  reasoningPolicy?: ModelReasoningPolicy | null;
+}): StartAutoModeJobRequest {
+  const grant = options.entry.grant ?? null;
+  const workspaceRoot = grant?.workspaceRoot ?? null;
+  if (!workspaceRoot || !isAbsoluteWorkspaceRoot(workspaceRoot)) {
+    throw new Error("resume-missing-workspace-root");
+  }
+  const turns = Math.max(1, Math.min(64, Math.floor(options.maxTurnsPerBatch) || 1));
+  const request: StartAutoModeJobRequest = {
+    sessionId: options.entry.session.id,
+    workspaceRoot,
+    offline: options.offline,
+    maxTurnsPerBatch: turns,
+  };
+  if (options.reasoningPolicy) request.reasoningPolicy = options.reasoningPolicy;
+  return request;
 }
 
 /**
@@ -1619,6 +1680,16 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
         await desktopApi.cancelAutoModeJob(pendingControl.entry.job.jobId);
         await publishCompanionStatus("cancelled", pendingControl.entry.job.jobId).catch(() => undefined);
         onNotice("已请求取消，正在收敛运行状态");
+      } else if (pendingControl.kind === "resume") {
+        const request = buildResumeJobRequest({
+          entry: pendingControl.entry,
+          offline: offlineMode,
+          maxTurnsPerBatch,
+          reasoningPolicy: reasoningCapabilities ? reasoningPolicyForChoice(reasoningChoice) : null,
+        });
+        await desktopApi.startAutoModeJob(request);
+        await publishCompanionStatus("running", pendingControl.entry.job.jobId).catch(() => undefined);
+        onNotice("已从上一个 Checkpoint 恢复运行，继续执行剩余批次");
       } else {
         const attempt = pendingControl.entry.attempt;
         if (!attempt) throw new Error("attempt-missing");
@@ -2275,7 +2346,10 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
           {grant && <div className="control-grant-meta"><span>授权 · {tierLabel(grant.tier)}</span><span className="grant-policy-chip">{tierApprovalLabel(grant.tier)}</span>{tierUsesNeverAsk(grant.tier) && grantActive ? <span className="grant-policy-chip never-ask" title={tierSleepSafeCopy(grant.tier)}>NeverAsk · 睡眠安全</span> : null}{grant.workspaceRoot && <code>{grant.workspaceRoot}</code>}{grantActive && <button disabled={Boolean(controlLockReason)} onClick={() => void revokeGrant(grant.grantId)} title={controlLockReason ?? "立即撤销此授权，阻止后续自动派发"} type="button">撤销授权</button>}</div>}
           {entry.attempt?.status === "indeterminate" && <div className="control-risk" role="alert"><strong>外部执行结果未知，禁止自动重试</strong><p>Attempt {entry.attempt.id} · Checkpoint #{entry.attempt.checkpointSequence}</p><code>{entry.attempt.requestFingerprint}</code><p className="control-risk-next">下一步：根据你掌握的外部证据，二选一完成对账；理由会永久写入审计。</p><div><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "resolve", entry, decision: "confirmed_not_executed" })} title={controlLockReason ?? "确认外部操作未执行，并安全暂停"} type="button">确认未执行并暂停</button><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "resolve", entry, decision: "accept_external_effect_and_cancel" })} title={controlLockReason ?? "接受可能已产生的副作用并取消任务"} type="button">接受副作用并取消</button></div></div>}
           {!entry.attempt && ["starting", "running"].includes(entry.job.status) && <div className="control-actions"><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "pause", entry })} title={controlLockReason ?? "在当前原子步骤结束后暂停，保留 Checkpoint"} type="button">暂停</button><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "cancel", entry })} title={controlLockReason ?? "取消不可恢复为同一运行；已产生副作用不会自动回滚"} type="button">取消任务</button></div>}
-          {!entry.attempt && ["paused", "pausing"].includes(entry.job.status) && <div className="control-actions"><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "cancel", entry })} title={controlLockReason ?? "取消已暂停任务；不可恢复为同一运行，已产生副作用不会自动回滚"} type="button">取消任务</button></div>}
+          {!entry.attempt && ["paused", "pausing"].includes(entry.job.status) && (() => {
+            const resumeLock = resumeControlLockReason({ entry, actionLockReason: controlLockReason });
+            return <div className="control-actions"><button className="primary-button" disabled={Boolean(resumeLock)} onClick={() => prepareControl({ kind: "resume", entry })} title={resumeLock ?? "从上一个 Checkpoint 继续执行剩余批次"} type="button">恢复运行</button><button disabled={Boolean(controlLockReason)} onClick={() => prepareControl({ kind: "cancel", entry })} title={controlLockReason ?? "取消已暂停任务；不可恢复为同一运行，已产生副作用不会自动回滚"} type="button">取消任务</button></div>;
+          })()}
           {entry.resolutions.length > 0 && <details className="resolution-history"><summary>不可变对账记录 · {entry.resolutions.length}</summary>{entry.resolutions.map((resolution) => <article key={resolution.id}><strong>{resolution.decision}</strong><p>{resolution.reason}</p><small>{resolution.actor} · {new Date(resolution.resolvedAtMs).toLocaleString("zh-CN")}</small></article>)}</details>}
         </article>
         );
@@ -2327,7 +2401,7 @@ export function AgentWorkspace({ safeMode, recoveryMode, initialView = "run", on
       )}
     </section>
     <AutoModeJobHistoryPanel disabled={safeMode || recoveryMode} />
-    {pendingControl && <div className="control-dialog-backdrop"><section aria-labelledby="control-dialog-title" aria-modal="true" className={pendingControl.kind === "pause" ? "control-dialog" : "control-dialog danger"} role="dialog"><p className="card-label">参数绑定确认</p><h3 id="control-dialog-title">{pendingControl.kind === "pause" ? "暂停这个任务？" : pendingControl.kind === "cancel" ? "取消这个任务？" : pendingControl.decision === "confirmed_not_executed" ? "确认外部操作未执行？" : "接受潜在副作用并取消？"}</h3><p>{pendingControl.kind === "pause" ? "任务会在当前原子步骤结束后暂停，不会丢弃 Checkpoint。" : pendingControl.kind === "cancel" ? "取消不可恢复为同一个运行；已产生的外部副作用不会自动回滚。" : "此决议将绑定当前 Attempt、Checkpoint 与请求指纹，并永久写入审计记录。"}</p><dl><div><dt>Goal</dt><dd>{pendingControl.entry.goal.title}</dd></div><div><dt>Session</dt><dd><code>{pendingControl.entry.session.id}</code></dd></div>{pendingControl.kind === "resolve" && <div><dt>Attempt</dt><dd><code>{pendingControl.entry.attempt?.id}</code></dd></div>}</dl>{pendingControl.kind === "resolve" && <div className="reconcile-detail" role="group" aria-label="对账上下文"><p className="reconcile-summary">{attemptDetailBusy ? "对账历史加载中…" : attemptResolutionSummary(attemptDetail)}</p>{attemptDetail && <p className="reconcile-risk" role="note">{attemptDetail.risk}</p>}{attemptDetail && attemptDetail.resolutions.length > 0 && <ul className="reconcile-history" aria-label="历史对账记录">{[...attemptDetail.resolutions].sort((a, b) => b.resolvedAtMs - a.resolvedAtMs).map((resolution) => <li key={resolution.id}><span className="reconcile-decision">{resolutionDecisionLabel(resolution.decision)}</span><span className="reconcile-actor">{resolution.actor}</span><time>{new Date(resolution.resolvedAtMs).toLocaleString("zh-CN")}</time>{resolution.reason && <em>{resolution.reason}</em>}</li>)}</ul>}</div>}{pendingControl.kind === "resolve" && <label><span>对账理由（必填）</span><textarea autoFocus maxLength={2048} onChange={(event) => setControlReason(event.target.value)} placeholder="说明你核对了什么证据，以及为什么选择此决议" value={controlReason} /></label>}<div><button disabled={controlBusy} onClick={() => setPendingControl(null)} type="button">返回检查</button><button className="primary-button" disabled={controlBusy || (pendingControl.kind === "resolve" && !controlReason.trim())} onClick={() => void executeControl()} type="button">{controlBusy ? "提交中…" : "确认提交"}</button></div></section></div>}
+    {pendingControl && <div className="control-dialog-backdrop"><section aria-labelledby="control-dialog-title" aria-modal="true" className={pendingControl.kind === "pause" || pendingControl.kind === "resume" ? "control-dialog" : "control-dialog danger"} role="dialog"><p className="card-label">参数绑定确认</p><h3 id="control-dialog-title">{pendingControl.kind === "pause" ? "暂停这个任务？" : pendingControl.kind === "resume" ? "恢复这个任务？" : pendingControl.kind === "cancel" ? "取消这个任务？" : pendingControl.decision === "confirmed_not_executed" ? "确认外部操作未执行？" : "接受潜在副作用并取消？"}</h3><p>{pendingControl.kind === "pause" ? "任务会在当前原子步骤结束后暂停，不会丢弃 Checkpoint。" : pendingControl.kind === "resume" ? "将从上一个 Checkpoint 继续执行剩余批次，沿用已授权的工作区与离线设置。" : pendingControl.kind === "cancel" ? "取消不可恢复为同一个运行；已产生的外部副作用不会自动回滚。" : "此决议将绑定当前 Attempt、Checkpoint 与请求指纹，并永久写入审计记录。"}</p><dl><div><dt>Goal</dt><dd>{pendingControl.entry.goal.title}</dd></div><div><dt>Session</dt><dd><code>{pendingControl.entry.session.id}</code></dd></div>{pendingControl.kind === "resolve" && <div><dt>Attempt</dt><dd><code>{pendingControl.entry.attempt?.id}</code></dd></div>}</dl>{pendingControl.kind === "resolve" && <div className="reconcile-detail" role="group" aria-label="对账上下文"><p className="reconcile-summary">{attemptDetailBusy ? "对账历史加载中…" : attemptResolutionSummary(attemptDetail)}</p>{attemptDetail && <p className="reconcile-risk" role="note">{attemptDetail.risk}</p>}{attemptDetail && attemptDetail.resolutions.length > 0 && <ul className="reconcile-history" aria-label="历史对账记录">{[...attemptDetail.resolutions].sort((a, b) => b.resolvedAtMs - a.resolvedAtMs).map((resolution) => <li key={resolution.id}><span className="reconcile-decision">{resolutionDecisionLabel(resolution.decision)}</span><span className="reconcile-actor">{resolution.actor}</span><time>{new Date(resolution.resolvedAtMs).toLocaleString("zh-CN")}</time>{resolution.reason && <em>{resolution.reason}</em>}</li>)}</ul>}</div>}{pendingControl.kind === "resolve" && <label><span>对账理由（必填）</span><textarea autoFocus maxLength={2048} onChange={(event) => setControlReason(event.target.value)} placeholder="说明你核对了什么证据，以及为什么选择此决议" value={controlReason} /></label>}<div><button disabled={controlBusy} onClick={() => setPendingControl(null)} type="button">返回检查</button><button className="primary-button" disabled={controlBusy || (pendingControl.kind === "resolve" && !controlReason.trim())} onClick={() => void executeControl()} type="button">{controlBusy ? "提交中…" : "确认提交"}</button></div></section></div>}
     {pendingDangerAck && <div className="control-dialog-backdrop"><section aria-labelledby="danger-grant-title" aria-describedby="danger-grant-desc" aria-modal="true" className={`control-dialog danger${authorizationTier === "full_device" ? " full-device" : ""}`} role="dialog">
       <p className="card-label">HIGH RISK AUTHORIZATION</p>
       <h3 id="danger-grant-title">{authorizationTier === "full_device" ? "确认完全设备访问？" : "确认无人值守授权？"}</h3>

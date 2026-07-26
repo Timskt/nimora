@@ -1,11 +1,11 @@
 # Nimora 全量实现状态与证据矩阵
 
-## 当前门禁（2026-07-25 本地验证 · 不得标 goal complete）
+## 当前门禁（2026-07-26 本地验证 · 不得标 goal complete）
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **439** passed（34 files） |
-| FE `pnpm exec vitest run src/components` | **403** passed（31 files） |
+| FE `pnpm exec vitest run`（全量） | **444** passed（34 files） |
+| FE `pnpm exec vitest run src/components` | **408** passed（31 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -23,6 +23,24 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-26 — Auto Mode 暂停会话「恢复运行」UI 接通（P0 断头路修复）
+
+### 断头路
+- **接通暂停会话恢复运行闭环（P0 断头路修复）**：`start_auto_mode_job`（继续暂停会话、按批次执行剩余回合）后端已注册、平台层 TS binding（`startAutoModeJob`）齐全，但**无任何组件调用**（仅存在于 `platform/desktop.ts` 与测试）。`AgentWorkspace.tsx` 的目标控制中心对 `paused`/`pausing` 会话**只有「取消任务」，没有恢复路径**——无人值守任务一旦安全暂停，就只能弃掉整个运行重来，`start_auto_mode_job` 这条「从上一个 Checkpoint 续跑」的能力从 UI 完全够不到。现补齐 pause →（人工核对）→ resume 闭环。
+
+### 接通方式
+- **暂停态卡片新增「恢复运行」主按钮**：`paused`/`pausing` 分支从「仅取消」升级为「恢复运行 + 取消任务」。恢复按钮由 `resumeControlLockReason` 逐条判定可用性——`pausing` 仍在收敛不给恢复、非 `paused` 不给、缺少 active 授权不给、授权未绑定绝对工作区路径不给，并把原因回显到 `title`。
+- **`PendingControl` 增加 `resume` 分支**，走非危险确认对话框（"恢复这个任务？" / "将从上一个 Checkpoint 继续执行剩余批次，沿用已授权的工作区与离线设置"）；`executeControl` 新增 resume 分派，调 `desktopApi.startAutoModeJob(buildResumeJobRequest(...))`，成功后发布 `running` 伙伴状态并重对账控制中心。
+- **请求由授权事实构造，不臆造工作区**：`buildResumeJobRequest` 从 `entry.grant.workspaceRoot` 取绝对路径（缺失即抛错、UI 侧已提前禁用），沿用当前 `offlineMode`/`maxTurnsPerBatch`（钳制 1..=64）与 Agent 思考强度策略。
+- **导出纯函数供测试**：`canResumeControlEntry` / `resumeControlLockReason` / `buildResumeJobRequest`（+4 用例、+15 断言，覆盖预条件矩阵、锁原因文案、轮次钳制、缺路径抛错）。
+- **浏览器预览可达**：mock `startAutoModeJob` 返回演示 running 快照，暂停演示条目可触发恢复对话框；`native:false` 提交仍被 `controlLockReason` 挡下（预览不提交真实控制操作）。
+
+### 门禁
+- FE 全量 vitest **444** passed（34 files，+5）· components **408** passed（31 files，+5）· `tsc -b` clean · `vite build` 通过。
+- **原生端到端 QA 仍强制**：真实暂停会话从 Checkpoint 续跑、批次预算收敛、离线续跑须在 Tauri 真机验收；不得宣称 goal complete。
 
 ---
 
