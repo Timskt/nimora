@@ -4,8 +4,8 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **450** passed（34 files） |
-| FE `pnpm exec vitest run src/components` | **411** passed（31 files） |
+| FE `pnpm exec vitest run`（全量） | **455** passed（34 files） |
+| FE `pnpm exec vitest run src/components` | **416** passed（31 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -23,6 +23,24 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-26 — 用户程序「核对授权」权威状态复核（Permission Status Audit）UI 接通（P0 断头路修复）
+
+### 断头路
+- **接通用户程序权威授权状态复核闭环（P0 断头路修复）**：`user_program_permission_status` 命令后端已注册、平台层 TS binding（`userProgramPermissionStatus`）齐全，但**无任何组件调用**（仅存在于 `platform/desktop.ts` 与测试）。`UserProgramManagementPanel` 一直以 `userProgramCatalog` 目录投影里的 `permissionGranted` 粗粒度布尔展示授权态，**无处按程序粒度向宿主重新核对权威状态**（版本 + 能力集合 + 是否授权）——目录投影若因并发授权/撤销/重装而漂移，用户只能盲目操作。现补齐 grant/revoke →（权威复核）→ 提示刷新的闭环。
+
+### 接通方式
+- **每个程序卡片新增「核对授权」入口**：调 `desktopApi.userProgramPermissionStatus(programId)` 拉取权威状态，与目录投影逐项比对（授权布尔、版本、能力集合排序后比较）。
+- **一致 vs 漂移分流**：一致时回显「权威授权状态一致：已授权/待授权 · v… · N 项能力」为普通通知；发现任一项漂移时以 `role="alert"` 错误样式提示「目录投影与权威状态不一致：…请刷新后再操作」，避免在陈旧投影上误授权/误执行。
+- **导出纯函数供测试**：`describePermissionAudit(entry, status)` 返回 `{ message, drift }`，覆盖 null 权威态、完全一致、授权漂移、版本漂移、能力集合漂移四类分支。
+- **浏览器预览可达**：`platform/desktop.ts` mock 的 `userProgramPermissionStatus` 由 `return null` 改为返回与演示目录条目一致的权威状态（`studio.demo.companion` v1.2.0 / granted），使「核对授权」在预览中可触发并回显「一致」。
+
+### 门禁
+- FE 全量 vitest **455** passed（34 files，+5）· components **416** passed（31 files，+5）· `tsc -b` clean · `vite build` 通过。
+- **原生端到端 QA 仍强制**：真实并发授权/撤销/重装后的投影漂移检出须在 Tauri 真机验收；不得宣称 goal complete。
+
 
 ---
 

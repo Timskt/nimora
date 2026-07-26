@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  describePermissionAudit,
   describeProgramStatus,
   formatMemoryBudget,
   summarizeProgramReceipt,
@@ -7,6 +8,7 @@ import {
 import type {
   UserProgramCatalogEntry,
   UserProgramExecutionReceipt,
+  UserProgramPermissionStatus,
 } from "../platform/desktop";
 
 function entry(overrides: Partial<UserProgramCatalogEntry>): UserProgramCatalogEntry {
@@ -66,5 +68,51 @@ describe("summarizeProgramReceipt", () => {
     });
     expect(summary).toContain("program:demo");
     expect(summary).toContain("2 条能力响应");
+  });
+});
+
+describe("describePermissionAudit", () => {
+  const base = entry({
+    programId: "studio.demo",
+    version: "1.2.0",
+    permissionGranted: true,
+    capabilities: ["read-pet-state", "store-local-data"],
+  });
+  const status: UserProgramPermissionStatus = {
+    programId: "studio.demo",
+    version: "1.2.0",
+    granted: true,
+    capabilities: ["store-local-data", "read-pet-state"],
+  };
+
+  it("reports no drift when authoritative status matches (order-insensitive)", () => {
+    const result = describePermissionAudit(base, status);
+    expect(result.drift).toBe(false);
+    expect(result.message).toContain("一致");
+    expect(result.message).toContain("2 项能力");
+  });
+
+  it("flags granted-state drift", () => {
+    const result = describePermissionAudit(base, { ...status, granted: false });
+    expect(result.drift).toBe(true);
+    expect(result.message).toContain("待授权");
+  });
+
+  it("flags version drift", () => {
+    const result = describePermissionAudit(base, { ...status, version: "1.3.0" });
+    expect(result.drift).toBe(true);
+    expect(result.message).toContain("v1.3.0");
+  });
+
+  it("flags capability-set drift", () => {
+    const result = describePermissionAudit(base, { ...status, capabilities: ["read-pet-state"] });
+    expect(result.drift).toBe(true);
+    expect(result.message).toContain("能力集合已变化");
+  });
+
+  it("stays non-drift but advisory when authoritative status is unavailable", () => {
+    const result = describePermissionAudit(base, null);
+    expect(result.drift).toBe(false);
+    expect(result.message).toContain("未返回权威授权状态");
   });
 });

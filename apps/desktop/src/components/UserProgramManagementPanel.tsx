@@ -3,6 +3,7 @@ import {
   desktopApi,
   type UserProgramCatalogEntry,
   type UserProgramExecutionReceipt,
+  type UserProgramPermissionStatus,
 } from "../platform/desktop";
 
 const capabilityLabels: Record<string, string> = {
@@ -24,6 +25,38 @@ export function summarizeProgramReceipt(
   receipt: UserProgramExecutionReceipt,
 ): string {
   return `${programId} 执行完成 · ${receipt.responses.length} 条能力响应`;
+}
+
+/**
+ * Compare the authoritative per-program permission status against the catalog
+ * projection to surface drift. Returns a Chinese owner-facing message plus a
+ * `drift` flag when granted-state, version, or capability set disagree.
+ */
+export function describePermissionAudit(
+  entry: UserProgramCatalogEntry,
+  status: UserProgramPermissionStatus | null,
+): { message: string; drift: boolean } {
+  if (!status) {
+    return { message: `${entry.programId} 未返回权威授权状态，目录投影暂不可核对`, drift: false };
+  }
+  const grantedDrift = status.granted !== entry.permissionGranted;
+  const versionDrift = status.version !== entry.version;
+  const projected = [...entry.capabilities].sort();
+  const authoritative = [...status.capabilities].sort();
+  const capabilityDrift = projected.length !== authoritative.length
+    || projected.some((capability, index) => capability !== authoritative[index]);
+  const drift = grantedDrift || versionDrift || capabilityDrift;
+  if (!drift) {
+    return {
+      message: `${entry.programId} 权威授权状态一致：${status.granted ? "已授权" : "待授权"} · v${status.version} · ${status.capabilities.length} 项能力`,
+      drift: false,
+    };
+  }
+  const parts: string[] = [];
+  if (grantedDrift) parts.push(`授权状态应为「${status.granted ? "已授权" : "待授权"}」`);
+  if (versionDrift) parts.push(`版本应为 v${status.version}`);
+  if (capabilityDrift) parts.push(`能力集合已变化（权威为 ${status.capabilities.length} 项）`);
+  return { message: `${entry.programId} 目录投影与权威状态不一致：${parts.join("；")}，请刷新后再操作`, drift: true };
 }
 
 export function formatMemoryBudget(bytes: number): string {
@@ -136,6 +169,18 @@ export function UserProgramManagementPanel({ disabled }: { disabled: boolean }) 
                   })}
                   type="button"
                 >撤销</button>
+                <button
+                  className="skill-action"
+                  disabled={disabled || rowBusy}
+                  onClick={() => void runGuarded(entry.programId, async () => {
+                    const status = await desktopApi.userProgramPermissionStatus(entry.programId);
+                    const audit = describePermissionAudit(entry, status);
+                    if (audit.drift) setError(audit.message);
+                    return audit.drift ? null : audit.message;
+                  })}
+                  title="向宿主重新核对该程序的权威授权状态，发现目录投影漂移时提示刷新"
+                  type="button"
+                >核对授权</button>
                 <button
                   className="skill-action skill-action-run"
                   disabled={disabled || rowBusy || !entry.permissionGranted}

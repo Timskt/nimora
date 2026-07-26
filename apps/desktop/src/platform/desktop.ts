@@ -2367,7 +2367,15 @@ export function createDesktopApi(
       async validateUserProgram() { return null; },
       async installUserProgram() { return null; },
       async rollbackUserProgram() { return null; },
-      async userProgramPermissionStatus() { return null; },
+      async userProgramPermissionStatus(programId: string) {
+        if (programId !== "studio.demo.companion") return null;
+        return {
+          programId,
+          version: "1.2.0",
+          capabilities: ["read-pet-state", "read-profile-state", "store-local-data", "invoke-safe-commands"],
+          granted: true,
+        };
+      },
       async userProgramCatalog() {
         return {
           programs: [
