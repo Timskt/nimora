@@ -4,8 +4,8 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **447** passed（34 files） |
-| FE `pnpm exec vitest run src/components` | **408** passed（31 files） |
+| FE `pnpm exec vitest run`（全量） | **450** passed（34 files） |
+| FE `pnpm exec vitest run src/components` | **411** passed（31 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -42,6 +42,25 @@
 ### 门禁
 - FE 全量 vitest **447** passed（34 files，+3）· components **408** passed（31 files）· `tsc -b` clean · `vite build` 通过。
 - **原生端到端 QA 仍强制**：真实批准队列计数、过期收敛、跨分区角标实时性须在 Tauri 真机验收；不得宣称 goal complete。
+
+---
+
+## 2026-07-26 — Auto Mode 暂停会话「单步推进」UI 接通（P0 断头路修复）
+
+### 断头路
+- **接通单步推进闭环（P0 断头路修复）**：`resume_auto_mode_turn`（只推进一个 Checkpoint、随后再次安全暂停）后端已注册、平台层 TS binding（`resumeAutoModeTurn`）齐全，但**无任何组件调用**（仅存在于 `platform/desktop.ts` 与测试）。此前「恢复运行」只接了批次 runner（`start_auto_mode_job`），谨慎的所有者**无法只走一步、核对结果、再决定是否继续**——`resume_auto_mode_turn` 这条单步语义从 UI 完全够不到。这对应 codex / claude-code 的「single-step / 逐步推进」控制，现补齐。
+
+### 接通方式
+- **暂停态卡片新增「单步推进」按钮**：与「恢复运行」共用 `resumeControlLockReason` 预条件（paused + active 授权 + 绝对工作区路径），`step` 分支调 `desktopApi.resumeAutoModeTurn(buildStepTurnRequest(...))`，只推进一个 Checkpoint。
+- **`PendingControl` 增加 `step` 分支**，走非危险确认对话框（"单步推进一次？" / "只推进一个 Checkpoint，执行完成后会再次安全暂停，便于你逐步核对每一步"）。
+- **回执按 turn 结果解释**：`describeAutoModeTurnResult` 把 `DesktopAutoModeTurnResult` 转中文（区分 completed / paused（含暂停原因）/ running，并标注是否命中上下文缓存），并据结果状态发布对应伙伴状态（completed→completed、paused→waiting_for_confirmation、running→running）。
+- **请求由授权事实构造**：`buildStepTurnRequest` 从 `entry.grant.workspaceRoot` 取绝对路径（缺失即抛错、UI 侧已提前禁用），沿用当前 `offlineMode` 与 Agent 思考强度策略；`maxOutputTokens` 交由后端默认（serde `default`）。
+- **导出纯函数供测试**：`buildStepTurnRequest` / `describeAutoModeTurnResult`（+3 用例，覆盖请求构造、缺路径抛错、三种 turn 状态 + 缓存命中文案）。
+- **浏览器预览可达**：mock `resumeAutoModeTurn` 返回演示 paused turn 结果，暂停演示条目可触发单步对话框；`native:false` 提交仍被 `controlLockReason` 挡下。
+
+### 门禁
+- FE 全量 vitest **450** passed（34 files，+3）· components **411** passed（31 files，+3）· `tsc -b` clean · `vite build` 通过。
+- **原生端到端 QA 仍强制**：真实单步推进一个 Checkpoint、再次安全暂停、缓存命中须在 Tauri 真机验收；不得宣称 goal complete。
 
 ---
 

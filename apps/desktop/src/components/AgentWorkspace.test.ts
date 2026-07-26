@@ -61,6 +61,8 @@ import {
   canResumeControlEntry,
   resumeControlLockReason,
   buildResumeJobRequest,
+  buildStepTurnRequest,
+  describeAutoModeTurnResult,
   providerReadinessGuidance,
   runTaskLockReason,
   unattendedStartFailureMessage,
@@ -764,5 +766,38 @@ describe("resume paused auto-mode control entry", () => {
       offline: true,
       maxTurnsPerBatch: 8,
     })).toThrow(/resume-missing-workspace-root/);
+  });
+
+  it("buildStepTurnRequest advances one turn bound to the session + grant root, omitting batch turns", () => {
+    const request = buildStepTurnRequest({
+      entry: { session: { id: "session-4" }, grant: activeGrant },
+      offline: true,
+    });
+    expect(request.sessionId).toBe("session-4");
+    expect(request.workspaceRoot).toBe("/Users/sky/project");
+    expect(request.offline).toBe(true);
+    expect("maxTurnsPerBatch" in request).toBe(false);
+    expect(request.reasoningPolicy).toBeUndefined();
+  });
+
+  it("buildStepTurnRequest attaches reasoning policy and throws without an absolute root", () => {
+    const request = buildStepTurnRequest({
+      entry: { session: { id: "session-5" }, grant: activeGrant },
+      offline: false,
+      reasoningPolicy: { mode: "fixed", effort: "low" } as never,
+    });
+    expect(request.reasoningPolicy).toEqual({ mode: "fixed", effort: "low" });
+    expect(() => buildStepTurnRequest({
+      entry: { session: { id: "session-6" }, grant: { status: "active", workspaceRoot: "relative" } },
+      offline: true,
+    })).toThrow(/resume-missing-workspace-root/);
+  });
+
+  it("describeAutoModeTurnResult reports checkpoint, pause/complete state, and cache reuse", () => {
+    const base = { spec: "nimora.desktop-auto-mode-turn/1", sessionId: "s", requestFingerprint: null } as const;
+    expect(describeAutoModeTurnResult({ ...base, checkpointSequence: 12, status: "completed", pauseReason: null, cacheHit: true })).toMatch(/收敛到 Checkpoint #12/);
+    expect(describeAutoModeTurnResult({ ...base, checkpointSequence: 12, status: "completed", pauseReason: null, cacheHit: true })).toMatch(/命中上下文缓存/);
+    expect(describeAutoModeTurnResult({ ...base, checkpointSequence: 8, status: "paused", pauseReason: "confirmation_required", cacheHit: false })).toMatch(/再次安全暂停/);
+    expect(describeAutoModeTurnResult({ ...base, checkpointSequence: 9, status: "running", pauseReason: null, cacheHit: false })).toMatch(/会话继续运行/);
   });
 });
