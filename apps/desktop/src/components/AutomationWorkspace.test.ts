@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentTaskCancellable, agentTaskStatusLabel, journalStatusLabel, liveRunCancellable, liveRunOutcomeNotice, statusLabel } from "./AutomationWorkspace";
+import { agentTaskCancellable, agentTaskStatusLabel, agentTaskStatusRefreshNotice, journalStatusLabel, liveRunCancellable, liveRunOutcomeNotice, mergeAgentTaskStatus, statusLabel } from "./AutomationWorkspace";
 import type { AutomationAgentJournalEntry, AutomationRun } from "../platform/desktop";
 
 function run(status: AutomationRun["status"]): AutomationRun {
@@ -119,5 +119,53 @@ describe("liveRunCancellable", () => {
   it("never offers cancellation for non-cancellable terminal runs", () => {
     expect(liveRunCancellable("condition_not_matched", [agentTask("submitted")])).toBe(false);
     expect(liveRunCancellable("cancelled", [agentTask("submitted")])).toBe(false);
+  });
+});
+
+
+function agentTaskWithId(status: AutomationAgentJournalEntry["status"], id: string): AutomationAgentJournalEntry {
+  const base = agentTask(status);
+  return { ...base, admission: { ...base.admission, task: { ...base.admission.task, id } } };
+}
+
+describe("mergeAgentTaskStatus", () => {
+  it("replaces the matching task in place when a fresh entry returns", () => {
+    const tasks = [agentTaskWithId("submitted", "task-a"), agentTaskWithId("submitted", "task-b")];
+    const latest = agentTaskWithId("completed", "task-a");
+    const merged = mergeAgentTaskStatus(tasks, latest, "task-a");
+    expect(merged).toHaveLength(2);
+    expect(merged[0]!.status).toBe("completed");
+    expect(merged[1]!.status).toBe("submitted");
+  });
+
+  it("drops the task when the ledger no longer has it", () => {
+    const tasks = [agentTaskWithId("submitted", "task-a"), agentTaskWithId("submitted", "task-b")];
+    const merged = mergeAgentTaskStatus(tasks, null, "task-a");
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.admission.task.id).toBe("task-b");
+  });
+
+  it("appends a late-arriving entry that was not yet tracked", () => {
+    const tasks = [agentTaskWithId("submitted", "task-a")];
+    const latest = agentTaskWithId("waiting_for_confirmation", "task-c");
+    const merged = mergeAgentTaskStatus(tasks, latest, "task-c");
+    expect(merged).toHaveLength(2);
+    expect(merged[1]!.admission.task.id).toBe("task-c");
+  });
+});
+
+describe("agentTaskStatusRefreshNotice", () => {
+  it("reports removal when the ledger no longer tracks the task", () => {
+    expect(agentTaskStatusRefreshNotice("submitted", null)).toContain("移除");
+  });
+
+  it("announces a status change with the new label", () => {
+    const latest = agentTaskWithId("completed", "task-a");
+    expect(agentTaskStatusRefreshNotice("submitted", latest)).toContain("已完成");
+  });
+
+  it("confirms no change when the status is unchanged", () => {
+    const latest = agentTaskWithId("submitted", "task-a");
+    expect(agentTaskStatusRefreshNotice("submitted", latest)).toContain("无变化");
   });
 });

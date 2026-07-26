@@ -238,6 +238,19 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
     }
   }
 
+  async function refreshAgentTaskStatus(entry: AutomationAgentJournalEntry) {
+    setBusy(true);
+    try {
+      const latest = await desktopApi.automationAgentTaskStatus(entry.admission.task.id);
+      setLiveAgentTasks((tasks) => mergeAgentTaskStatus(tasks, latest, entry.admission.task.id));
+      onNotice(agentTaskStatusRefreshNotice(entry.status, latest));
+    } catch {
+      onNotice("刷新 Agent 子任务状态失败，审计记录保持不变");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function runLive() {
     setBusy(true);
     try {
@@ -395,7 +408,10 @@ export function AutomationWorkspace({ disabled, onNotice }: { disabled: boolean;
               <div><strong>{agentTaskStatusLabel(task.status)}</strong><code>{task.model}</code></div>
               <small>{task.admission.task.id} · {new Date(task.updatedAtMs).toLocaleString("zh-CN")}</small>
               {task.error ? <em className="automation-step-error">{task.error}</em> : null}
-              {agentTaskCancellable(task.status) ? <button className="skill-action skill-action-danger" type="button" disabled={disabled || busy} onClick={() => void cancelLiveAgentTask(task)}>取消子任务</button> : null}
+              <div className="automation-agent-task-actions">
+                <button className="skill-action" type="button" disabled={disabled || busy} onClick={() => void refreshAgentTaskStatus(task)} title="从运行时账本按 taskId 复核该 Agent 子任务的权威状态">刷新状态</button>
+                {agentTaskCancellable(task.status) ? <button className="skill-action skill-action-danger" type="button" disabled={disabled || busy} onClick={() => void cancelLiveAgentTask(task)}>取消子任务</button> : null}
+              </div>
             </div>)}
           </div> : null}
         </div>}
@@ -446,6 +462,34 @@ export function agentTaskStatusLabel(status: AutomationAgentJournalEntry["status
 
 export function agentTaskCancellable(status: AutomationAgentJournalEntry["status"]): boolean {
   return status === "submitted" || status === "waiting_for_confirmation";
+}
+
+export function mergeAgentTaskStatus(
+  tasks: AutomationAgentJournalEntry[],
+  latest: AutomationAgentJournalEntry | null,
+  taskId: string,
+): AutomationAgentJournalEntry[] {
+  if (!latest) {
+    return tasks.filter((task) => task.admission.task.id !== taskId);
+  }
+  let replaced = false;
+  const next = tasks.map((task) => {
+    if (task.admission.task.id === taskId) {
+      replaced = true;
+      return latest;
+    }
+    return task;
+  });
+  return replaced ? next : [...next, latest];
+}
+
+export function agentTaskStatusRefreshNotice(
+  previous: AutomationAgentJournalEntry["status"],
+  latest: AutomationAgentJournalEntry | null,
+): string {
+  if (!latest) return "该 Agent 子任务已从运行时账本移除，列表已同步";
+  if (latest.status !== previous) return `Agent 子任务状态已更新为「${agentTaskStatusLabel(latest.status)}」`;
+  return `Agent 子任务状态仍为「${agentTaskStatusLabel(latest.status)}」，账本无变化`;
 }
 
 export function liveRunCancellable(

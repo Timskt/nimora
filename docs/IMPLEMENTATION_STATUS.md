@@ -4,8 +4,8 @@
 
 | 门禁 | 结果 |
 | --- | --- |
-| FE `pnpm exec vitest run`（全量） | **455** passed（34 files） |
-| FE `pnpm exec vitest run src/components` | **416** passed（31 files） |
+| FE `pnpm exec vitest run`（全量） | **461** passed（34 files） |
+| FE `pnpm exec vitest run src/components` | **422** passed（31 files） |
 | `cargo test -p nimora-desktop-context --lib` | **47** passed |
 | `cargo test -p nimora-runtime-core --lib behavior` | **30** passed |
 | `cargo test -p nimora-persistence-sqlite --lib authorization_grant` | **10** passed（含 at-rest encrypt dual-read） |
@@ -23,6 +23,23 @@
 | `tsc -b` | clean |
 
 **原生视觉 QA 仍强制**：透明/穿透/遮挡/多屏手感；不得宣称 goal complete。
+
+---
+
+## 2026-07-26 — 自动化 Agent 子任务「刷新状态」权威复核（Agent Task Status Audit）UI 接通（P0 断头路修复）
+
+### 断头路
+- **接通单个 Agent 子任务权威状态复核闭环（P0 断头路修复）**：`automation_agent_task_status` 命令后端已注册、平台层 TS binding（`automationAgentTaskStatus`）齐全，但**无任何组件调用**（仅存在于 `platform/desktop.ts` 与测试）。`AutomationWorkspace` 的 Agent 子任务列表一直只能靠 `automationRunAgentTasks`（按 runId 批量拉取）刷新，**无处按 taskId 粒度向运行时账本复核单条子任务的权威状态**——长耗时子任务提交后，用户只能整批重拉或盲等。现补齐单条子任务「刷新状态」的按 taskId 复核闭环。
+
+### 接通方式
+- **每条 Agent 子任务卡片新增「刷新状态」入口**：调 `desktopApi.automationAgentTaskStatus(taskId)` 按 taskId 拉取运行时账本权威条目，就地合并进现有列表。
+- **纯函数 `mergeAgentTaskStatus(tasks, latest, taskId)`**：命中则原地替换、账本已移除（返回 null）则从列表剔除、迟到条目则追加，避免整批重拉造成的列表抖动。
+- **纯函数 `agentTaskStatusRefreshNotice(previous, latest)`**：分流「已移除 / 状态已变更为 X / 状态未变化」三类回显。
+- **浏览器预览可达**：mock 的 `automationAgentTaskStatus` 在 succeeded 演示运行下返回与批量条目一致的权威状态，使「刷新状态」在预览中可触发并回显「状态未变化：已完成」。
+
+### 门禁
+- `tsc -b` clean；`vitest run AutomationWorkspace.test.ts` 16 passed（新增 mergeAgentTaskStatus / agentTaskStatusRefreshNotice 覆盖 +6）。
+- FE 全量 vitest **461** passed（34 files）；components vitest **422** passed（31 files）；`vite build` 通过。
 
 ---
 
